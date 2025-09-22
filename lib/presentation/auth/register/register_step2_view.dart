@@ -119,7 +119,7 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
                       _label('País'),
                       DropdownButtonFormField<String>(
                         key: const ValueKey('country'),
-                        value: _countries.contains(_country) ? _country : null,
+                        initialValue: _countries.contains(_country) ? _country : null,
                         decoration: _inputDecoration(),
                         hint: const Text(
                           'Selecciona un país',

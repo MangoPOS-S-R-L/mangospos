@@ -218,8 +218,9 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
                             ),
                           ),
                           onPressed: () {
-                            if (!(_formKey.currentState?.validate() ?? false))
+                            if (!(_formKey.currentState?.validate() ?? false)) {
                               return;
+                            }
 
                             // Normalizamos dominio
                             String dom = _domainCtl.text.trim().toLowerCase();
