@@ -74,7 +74,7 @@ class ZonesTablesViewModel extends Notifier<ZonesTablesState> {
 
   // ---------------- CRUD ----------------
   Future<void> addZone(String businessId, String name) async {
-    state = state.copyWith(loading: true);
+    state = state.copyWith(loading: true, error: null);
     try {
       final bizId = await resolveBusinessIdOrNull(sb, businessId);
       if (bizId == null) {
@@ -92,7 +92,7 @@ class ZonesTablesViewModel extends Notifier<ZonesTablesState> {
   }
 
   Future<void> addTable(String zoneId, String code) async {
-    state = state.copyWith(loading: true);
+    state = state.copyWith(loading: true, error: null);
     try {
       await sb
           .from('dining_tables')
