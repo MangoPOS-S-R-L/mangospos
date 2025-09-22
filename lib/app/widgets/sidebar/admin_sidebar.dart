@@ -1,102 +1,90 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:go_router/go_router.dart';
-import 'package:flutter_svg/flutter_svg.dart';
-import 'package:mangopos/app/widgets/sidebar/sidebar_item.dart';
-
-// importa tu clase AppRoutes
+import '../../theme/mango_colors.dart';
 import '../../router/routes.dart';
 
-class AdminSidebar extends StatelessWidget {
-  final double width;
-  const AdminSidebar({super.key, this.width = 96});
+class SidebarItem {
+  final String label;
+  final String route;
+  final String asset; // svg path
+  final double iconSize;
+  const SidebarItem({
+    required this.label,
+    required this.route,
+    required this.asset,
+    this.iconSize = 26,
+  });
+}
 
-  List<SidebarItem> get _mainItems => [
+class AdminSidebar extends StatelessWidget {
+  final bool expanded;
+  final double widthExpanded;
+  final double widthCollapsed;
+
+  const AdminSidebar({
+    super.key,
+    required this.expanded,
+    this.widthExpanded = 140,
+    this.widthCollapsed = 88,
+  });
+
+  List<SidebarItem> get _mainItems => const [
     SidebarItem(
       label: 'Dashboard',
-      icon: SvgPicture.asset(
-        'assets/icons/dashboard.svg',
-        width: 24,
-        height: 24,
-      ),
       route: AppRoutes.dashboard,
+      asset: 'assets/icons/dashboard.svg',
+      iconSize: 24,
     ),
     SidebarItem(
       label: 'Ventas',
-      icon: SvgPicture.asset(
-        'assets/icons/ventas_principal.svg',
-        width: 26,
-        height: 26,
-      ),
       route: AppRoutes.sales,
+      asset: 'assets/icons/ventas_principal.svg',
     ),
     SidebarItem(
       label: 'Caja',
-      icon: SvgPicture.asset(
-        'assets/icons/caja_principal.svg',
-        width: 26,
-        height: 26,
-      ),
       route: AppRoutes.cashier,
+      asset: 'assets/icons/caja_principal.svg',
     ),
     SidebarItem(
       label: 'Cocina',
-      icon: SvgPicture.asset(
-        'assets/icons/cocina_principal.svg',
-        width: 26,
-        height: 26,
-      ),
       route: AppRoutes.kitchen,
+      asset: 'assets/icons/cocina_principal.svg',
     ),
     SidebarItem(
       label: 'Clientes',
-      icon: SvgPicture.asset(
-        'assets/icons/clientes_principal.svg',
-        width: 26,
-        height: 26,
-      ),
       route: AppRoutes.customers,
+      asset: 'assets/icons/clientes_principal.svg',
     ),
     SidebarItem(
       label: 'Productos',
-      icon: SvgPicture.asset(
-        'assets/icons/productos_principal.svg',
-        width: 26,
-        height: 26,
-      ),
       route: AppRoutes.products,
+      asset: 'assets/icons/productos_principal.svg',
     ),
     SidebarItem(
       label: 'Reportes',
-      icon: SvgPicture.asset(
-        'assets/icons/reportes_principal.svg',
-        width: 26,
-        height: 26,
-      ),
       route: AppRoutes.reports,
+      asset: 'assets/icons/reportes_principal.svg',
     ),
   ];
 
-  SidebarItem get _settingsItem => SidebarItem(
+  SidebarItem get _settingsItem => const SidebarItem(
     label: 'Mas Ajustes',
-    icon: SvgPicture.asset(
-      'assets/icons/masajustes.svg',
-      width: 26,
-      height: 26,
-    ),
     route: AppRoutes.settings,
+    asset: 'assets/icons/masajustes.svg',
   );
 
   @override
   Widget build(BuildContext context) {
     final loc = GoRouterState.of(context).uri.toString();
+    final width = expanded ? widthExpanded : widthCollapsed;
+
     return Container(
       width: width,
-      color: Colors.white, // Cambiado a blanco
+      color: Colors.white,
       child: SafeArea(
         child: Column(
           children: [
-            // Items principales
             Expanded(
               child: ListView.separated(
                 padding: const EdgeInsets.symmetric(vertical: 16),
@@ -110,22 +98,39 @@ class AdminSidebar extends StatelessWidget {
                   return _Tile(
                     item: it,
                     active: active,
+                    expanded: expanded,
                     onTap: () => context.go(it.route),
                   );
                 },
               ),
             ),
 
-            // Separador visual
-            Container(
-              margin: const EdgeInsets.symmetric(horizontal: 16),
-              height: 1,
-              color: Colors.grey[300],
+            // Separador + título del grupo “Más Ajustes”
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Column(
+                crossAxisAlignment: expanded
+                    ? CrossAxisAlignment.start
+                    : CrossAxisAlignment.center,
+                children: [
+                  Container(height: 1, color: Colors.grey[300]),
+                  const SizedBox(height: 12),
+                  if (expanded)
+                    Text(
+                      'Mas Ajustes',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey[700],
+                      ),
+                    ),
+                ],
+              ),
             ),
 
-            // Item de configuración al final
+            // Item de ajustes
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 12),
+              padding: const EdgeInsets.only(bottom: 12),
               child: Builder(
                 builder: (context) {
                   final it = _settingsItem;
@@ -135,6 +140,7 @@ class AdminSidebar extends StatelessWidget {
                   return _Tile(
                     item: it,
                     active: active,
+                    expanded: expanded,
                     onTap: () => context.go(it.route),
                   );
                 },
@@ -147,61 +153,97 @@ class AdminSidebar extends StatelessWidget {
   }
 }
 
-class _Tile extends StatelessWidget {
+class _Tile extends StatefulWidget {
   final SidebarItem item;
   final bool active;
+  final bool expanded;
   final VoidCallback onTap;
-  const _Tile({required this.item, required this.active, required this.onTap});
+  const _Tile({
+    required this.item,
+    required this.active,
+    required this.expanded,
+    required this.onTap,
+  });
 
-  // Método helper para manejar ambos tipos de iconos
-  Widget _buildIcon() {
-    final color = active ? const Color(0xFFF7941A) : Colors.grey[500]!;
+  @override
+  State<_Tile> createState() => _TileState();
+}
 
-    if (item.icon is IconData) {
-      return Icon(item.icon as IconData, color: color);
-    } else if (item.icon is Widget) {
-      return ColorFiltered(
-        colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
-        child: item.icon as Widget,
-      );
-    }
-    return Icon(Icons.error, color: color); // fallback
-  }
+class _TileState extends State<_Tile> {
+  bool _hover = false;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(8),
-        onTap: onTap,
-        child: Container(
-          height: 72,
-          decoration: BoxDecoration(
-            color: active ? const Color(0xFFF7F7F7) : Colors.transparent,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: active ? const Color(0x80F7941A) : Colors.transparent,
-              width: 2,
-            ),
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _buildIcon(),
-              const SizedBox(height: 6),
-              Text(
-                item.label,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: active ? const Color(0xFFF7941A) : Colors.grey[700],
-                ),
-              ),
-            ],
+    final active = widget.active;
+    final expanded = widget.expanded;
+
+    final tileBg = active
+        ? const Color(0xFFF7F7F7)
+        : _hover
+        ? const Color(0xFFF9F9F9)
+        : Colors.transparent;
+
+    final borderColor = active ? const Color(0x80F7941A) : Colors.transparent;
+    final labelColor = active ? MangoColors.primaryOrange : Colors.grey[700]!;
+    final iconColor = active ? MangoColors.primaryOrange : Colors.grey[500]!;
+
+    final content = Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        // Icono SVG con tinte
+        ColorFiltered(
+          colorFilter: ColorFilter.mode(iconColor, BlendMode.srcIn),
+          child: SvgPicture.asset(
+            widget.item.asset,
+            width: widget.item.iconSize,
+            height: widget.item.iconSize,
           ),
         ),
+        const SizedBox(height: 6),
+        if (expanded)
+          Text(
+            widget.item.label,
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: labelColor,
+              height: 1.1,
+            ),
+          ),
+      ],
+    );
+
+    final tile = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          height: 88, // alto tipo “tile” grande como tu mock
+          decoration: BoxDecoration(
+            color: tileBg,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: borderColor, width: 2),
+          ),
+          child: content,
+        ),
       ),
+    );
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: expanded
+          ? tile
+          : Tooltip(
+              message: widget.item.label,
+              waitDuration: const Duration(milliseconds: 300),
+              child: tile,
+            ),
     );
   }
 }

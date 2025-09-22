@@ -268,7 +268,7 @@ class _LoginViewState extends ConsumerState<LoginView> {
 // --------------------- VIDEO PANE ---------------------
 class _VideoPane extends StatefulWidget {
   final double? height;
-  const _VideoPane({this.height, super.key});
+  const _VideoPane({this.height});
 
   @override
   State<_VideoPane> createState() => _VideoPaneState();

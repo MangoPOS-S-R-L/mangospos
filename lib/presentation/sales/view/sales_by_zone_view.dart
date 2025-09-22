@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
-import 'package:mangopos/presentation/sales/view/sales_by_zone_view.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
 import '../../../data/models/table_status.dart';
 
@@ -26,12 +25,61 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
   }
 
   @override
+  void dispose() {
+    _tab?.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final vm = ref.watch(byZoneVmProvider);
-    if (vm.loading) return const Center(child: CircularProgressIndicator());
-    if (vm.zones.isEmpty) return const Center(child: Text('No hay zonas'));
+    final zones = vm.zones;
+    final hasZones = zones.isNotEmpty;
 
-    _tab ??= TabController(length: vm.zones.length, vsync: this);
+    if (hasZones) {
+      if (_tab == null || _tab!.length != zones.length) {
+        final previousIndex = _tab?.index ?? 0;
+        _tab?.dispose();
+        final initialIndex = previousIndex < zones.length
+            ? previousIndex
+            : zones.length - 1;
+        _tab = TabController(
+          length: zones.length,
+          vsync: this,
+          initialIndex: initialIndex,
+        );
+      }
+    } else {
+      _tab?.dispose();
+      _tab = null;
+    }
+
+    Widget body;
+    if (!hasZones) {
+      if (vm.loading) {
+        body = const Center(child: CircularProgressIndicator());
+      } else if (vm.error != null) {
+        body = Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              'Error: ${vm.error}',
+              textAlign: TextAlign.center,
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: Colors.red),
+            ),
+          ),
+        );
+      } else {
+        body = const Center(child: Text('No hay zonas'));
+      }
+    } else {
+      body = TabBarView(
+        controller: _tab!,
+        children: [for (final z in zones) _ZoneGrid(zoneId: z.id)],
+      );
+    }
 
     return Scaffold(
       backgroundColor: MangoColors.bgLight,
@@ -39,17 +87,26 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
         title: const Text('Ventas · Por Zona'),
         backgroundColor: MangoColors.white,
         foregroundColor: MangoColors.darkGray,
-        bottom: TabBar(
-          controller: _tab,
-          isScrollable: true,
-          labelColor: MangoColors.primaryOrange,
-          unselectedLabelColor: MangoColors.muted,
-          tabs: [for (final z in vm.zones) Tab(text: z.name.toUpperCase())],
-        ),
+        bottom: hasZones
+            ? TabBar(
+                controller: _tab!,
+                isScrollable: true,
+                labelColor: MangoColors.primaryOrange,
+                unselectedLabelColor: MangoColors.muted,
+                tabs: [for (final z in zones) Tab(text: z.name.toUpperCase())],
+              )
+            : null,
       ),
-      body: TabBarView(
-        controller: _tab,
-        children: [for (final z in vm.zones) _ZoneGrid(zoneId: z.id)],
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          body,
+          if (vm.loading && hasZones)
+            const Align(
+              alignment: Alignment.topCenter,
+              child: SizedBox(height: 2, child: LinearProgressIndicator()),
+            ),
+        ],
       ),
     );
   }
@@ -63,26 +120,70 @@ class _ZoneGrid extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final vm = ref.watch(byZoneVmProvider);
     final tables = vm.statusByZone[zoneId];
+
     if (tables == null) {
       ref.read(byZoneVmProvider.notifier).loadZoneStatus(zoneId);
+      if (vm.error != null && !vm.loading) {
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              'Error: ${vm.error}',
+              textAlign: TextAlign.center,
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: Colors.red),
+            ),
+          ),
+        );
+      }
       return const Center(child: CircularProgressIndicator());
     }
+
     final w = MediaQuery.of(context).size.width;
-    final cross = w > 1400
+
+    // ==== BREAKPOINTS ====
+    // columnas (menos columnas -> cards más anchas)
+    final int cross = w >= 1800
         ? 8
-        : w > 900
+        : w >= 1500
+        ? 7
+        : w >= 1280
         ? 6
-        : 3;
+        : w >= 1080
+        ? 5
+        : w >= 820
+        ? 4
+        : w >= 560
+        ? 3
+        : 2;
+
+    // proporción ancho/alto (más bajo => más alta)
+    // ajustada por breakpoint para evitar overflow y mantener equilibrio
+    final double ratio = w >= 1800
+        ? 0.86
+        : w >= 1500
+        ? 0.82
+        : w >= 1280
+        ? 0.80
+        : w >= 1080
+        ? 0.78
+        : w >= 820
+        ? 0.76
+        : 0.74;
+
+    final double gap = w >= 1280 ? 18 : 14;
+
     return Padding(
       padding: const EdgeInsets.all(16),
       child: GridView.builder(
+        itemCount: tables.length,
         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: cross,
-          crossAxisSpacing: 14,
-          mainAxisSpacing: 14,
-          childAspectRatio: 1,
+          crossAxisSpacing: gap,
+          mainAxisSpacing: gap,
+          childAspectRatio: ratio,
         ),
-        itemCount: tables.length,
         itemBuilder: (_, i) => _TableCard(ts: tables[i]),
       ),
     );
@@ -96,6 +197,27 @@ class _TableCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final occupied = ts.sessionId != null;
+    final w = MediaQuery.of(context).size.width;
+
+    // Tamaños responsivos
+    final double codeSize = w >= 1500
+        ? 30
+        : w >= 1080
+        ? 28
+        : 26;
+
+    final double labelSize = w >= 1500 ? 17 : 16;
+
+    final double buttonHeight = w >= 1280
+        ? 44
+        : w >= 820
+        ? 42
+        : 40;
+
+    final EdgeInsets cardPadding = w >= 1280
+        ? const EdgeInsets.all(16)
+        : const EdgeInsets.all(14);
+
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -112,23 +234,35 @@ class _TableCard extends StatelessWidget {
           ),
         ],
       ),
-      padding: const EdgeInsets.all(14),
+      padding: cardPadding,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            ts.code,
-            style: const TextStyle(
-              fontWeight: FontWeight.w800,
-              fontSize: 28,
-              color: MangoColors.primaryOrange,
+          // Código de mesa adaptativo
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              ts.code,
+              maxLines: 1,
+              style: TextStyle(
+                fontWeight: FontWeight.w800,
+                fontSize: codeSize,
+                color: MangoColors.primaryOrange,
+              ),
             ),
           ),
           const SizedBox(height: 6),
+
           if (occupied) ...[
             Text(
               '${ts.ordersCount} Pedidos',
-              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: labelSize,
+              ),
             ),
             const SizedBox(height: 6),
             Row(
@@ -146,12 +280,11 @@ class _TableCard extends StatelessWidget {
               ],
             ),
           ] else ...[
-            const Spacer(),
-            const Text(
+            Text(
               'Disponible',
               style: TextStyle(
                 fontWeight: FontWeight.w700,
-                fontSize: 16,
+                fontSize: labelSize,
                 color: MangoColors.successGreen,
               ),
             ),
@@ -164,7 +297,9 @@ class _TableCard extends StatelessWidget {
               ],
             ),
           ],
+
           const Spacer(),
+
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
@@ -176,12 +311,18 @@ class _TableCard extends StatelessWidget {
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
-                padding: const EdgeInsets.symmetric(vertical: 10),
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                minimumSize: Size.fromHeight(buttonHeight),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                visualDensity: VisualDensity.compact,
               ),
               onPressed: () {
-                // Navegar al POS de esta mesa
+                // TODO: Navegar al POS de esta mesa
               },
-              child: Text(occupied ? 'Ver pedidos' : 'Abrir mesa'),
+              child: Text(
+                occupied ? 'Ver pedidos' : 'Abrir mesa',
+                style: TextStyle(fontSize: labelSize.toDouble()),
+              ),
             ),
           ),
         ],

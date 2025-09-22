@@ -1,7 +1,6 @@
 // lib/app/app_router.dart
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
 import 'package:mangopos/presentation/settings/zones_tables/view/zones_tables_view.dart';
 import '../../presentation/auth/login/login_view.dart';
 import '../../presentation/auth/register/register_step1_view.dart';
