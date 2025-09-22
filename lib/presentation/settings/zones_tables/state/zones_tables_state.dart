@@ -2,6 +2,8 @@ import '../../../../data/models/zone.dart';
 import '../../../../data/models/dining_table.dart';
 
 class ZonesTablesState {
+  static const Object _errorSentinel = Object();
+
   final bool loading;
   final String? error;
 
@@ -20,14 +22,20 @@ class ZonesTablesState {
 
   ZonesTablesState copyWith({
     bool? loading,
-    String? error,
+    Object? error = _errorSentinel,
     String? businessId,
     List<Zone>? zones,
     Map<String, List<DiningTable>>? tablesByZone,
   }) {
     return ZonesTablesState(
       loading: loading ?? this.loading,
-      error: error,
+      error: identical(error, _errorSentinel)
+          ? this.error
+          : error is String
+              ? error
+              : error == null
+                  ? null
+                  : this.error,
       businessId: businessId ?? this.businessId,
       zones: zones ?? this.zones,
       tablesByZone: tablesByZone ?? this.tablesByZone,
