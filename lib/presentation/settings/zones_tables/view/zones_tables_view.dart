@@ -242,21 +242,21 @@ class _ZonesTablesViewState extends ConsumerState<ZonesTablesView> {
     final c = TextEditingController();
     return showDialog<String>(
       context: ctx,
-      builder: (_) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
         title: Text(title),
         content: TextField(
           controller: c,
           autofocus: true,
           decoration: const InputDecoration(hintText: 'Escribe aquí'),
-          onSubmitted: (v) => Navigator.pop(ctx, v),
+          onSubmitted: (v) => Navigator.pop(dialogCtx, v),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx),
+            onPressed: () => Navigator.pop(dialogCtx),
             child: const Text('Cancelar'),
           ),
           ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, c.text),
+            onPressed: () => Navigator.pop(dialogCtx, c.text),
             child: const Text('Guardar'),
           ),
         ],
@@ -267,15 +267,15 @@ class _ZonesTablesViewState extends ConsumerState<ZonesTablesView> {
   Future<bool?> _confirm(BuildContext ctx, String title) async {
     return showDialog<bool>(
       context: ctx,
-      builder: (_) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
         title: Text(title),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
+            onPressed: () => Navigator.pop(dialogCtx, false),
             child: const Text('No'),
           ),
           ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
+            onPressed: () => Navigator.pop(dialogCtx, true),
             child: const Text('Sí, eliminar'),
           ),
         ],
