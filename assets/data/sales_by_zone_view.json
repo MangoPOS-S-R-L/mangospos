@@ -1,0 +1,19 @@
+{
+  "zones": [
+    {
+      "id": "zone-main-hall",
+      "name": "Salón Principal",
+      "sort_index": 1
+    },
+    {
+      "id": "zone-terrace",
+      "name": "Terraza",
+      "sort_index": 2
+    },
+    {
+      "id": "zone-bar",
+      "name": "Barra",
+      "sort_index": 3
+    }
+  ]
+}

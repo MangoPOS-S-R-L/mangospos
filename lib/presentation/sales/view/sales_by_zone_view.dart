@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
-import 'package:mangopos/presentation/sales/view/sales_by_zone_view.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
 import '../../../data/models/table_status.dart';
 
@@ -28,10 +27,16 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
   @override
   Widget build(BuildContext context) {
     final vm = ref.watch(byZoneVmProvider);
+    if (vm.error != null) {
+      return Center(child: Text('Error: ${vm.error}'));
+    }
     if (vm.loading) return const Center(child: CircularProgressIndicator());
     if (vm.zones.isEmpty) return const Center(child: Text('No hay zonas'));
 
-    _tab ??= TabController(length: vm.zones.length, vsync: this);
+    if (_tab == null || _tab!.length != vm.zones.length) {
+      _tab?.dispose();
+      _tab = TabController(length: vm.zones.length, vsync: this);
+    }
 
     return Scaffold(
       backgroundColor: MangoColors.bgLight,
@@ -52,6 +57,12 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
         children: [for (final z in vm.zones) _ZoneGrid(zoneId: z.id)],
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _tab?.dispose();
+    super.dispose();
   }
 }
 
