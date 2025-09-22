@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/presentation/sales/view/sales_by_zone_view.dart';
-import '../viewmodel/by_zone_viewmodel.dart';
+
 import '../../../data/models/table_status.dart';
 
 class SalesByZoneView extends ConsumerStatefulWidget {
@@ -13,22 +13,75 @@ class SalesByZoneView extends ConsumerStatefulWidget {
   ConsumerState<SalesByZoneView> createState() => _SalesByZoneViewState();
 }
 
-class _SalesByZoneViewState extends ConsumerState<SalesByZoneView> with SingleTickerProviderStateMixin {
+class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
+    with SingleTickerProviderStateMixin {
   TabController? _tab;
 
   @override
   void initState() {
     super.initState();
-    Future.microtask(() => ref.read(byZoneVmProvider.notifier).load(widget.businessId));
+    Future.microtask(
+      () => ref.read(byZoneVmProvider.notifier).load(widget.businessId),
+    );
+  }
+
+  @override
+  void dispose() {
+    _tab?.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final vm = ref.watch(byZoneVmProvider);
-    if (vm.loading) return const Center(child: CircularProgressIndicator());
-    if (vm.zones.isEmpty) return const Center(child: Text('No hay zonas'));
+    final zones = vm.zones;
+    final hasZones = zones.isNotEmpty;
 
-    _tab ??= TabController(length: vm.zones.length, vsync: this);
+    if (hasZones) {
+      if (_tab == null || _tab!.length != zones.length) {
+        final previousIndex = _tab?.index ?? 0;
+        _tab?.dispose();
+        final initialIndex = previousIndex < zones.length
+            ? previousIndex
+            : zones.length - 1;
+        _tab = TabController(
+          length: zones.length,
+          vsync: this,
+          initialIndex: initialIndex,
+        );
+      }
+    } else {
+      _tab?.dispose();
+      _tab = null;
+    }
+
+    Widget body;
+    if (!hasZones) {
+      if (vm.loading) {
+        body = const Center(child: CircularProgressIndicator());
+      } else if (vm.error != null) {
+        body = Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              'Error: ${vm.error}',
+              textAlign: TextAlign.center,
+              style: Theme.of(context)
+                  .textTheme
+                  .bodyMedium
+                  ?.copyWith(color: Colors.red),
+            ),
+          ),
+        );
+      } else {
+        body = const Center(child: Text('No hay zonas'));
+      }
+    } else {
+      body = TabBarView(
+        controller: _tab!,
+        children: [for (final z in zones) _ZoneGrid(zoneId: z.id)],
+      );
+    }
 
     return Scaffold(
       backgroundColor: MangoColors.bgLight,
@@ -36,17 +89,31 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView> with SingleTi
         title: const Text('Ventas · Por Zona'),
         backgroundColor: MangoColors.white,
         foregroundColor: MangoColors.darkGray,
-        bottom: TabBar(
-          controller: _tab,
-          isScrollable: true,
-          labelColor: MangoColors.primaryOrange,
-          unselectedLabelColor: MangoColors.muted,
-          tabs: [for (final z in vm.zones) Tab(text: z.name.toUpperCase())],
-        ),
+        bottom: hasZones
+            ? TabBar(
+                controller: _tab!,
+                isScrollable: true,
+                labelColor: MangoColors.primaryOrange,
+                unselectedLabelColor: MangoColors.muted,
+                tabs: [
+                  for (final z in zones) Tab(text: z.name.toUpperCase()),
+                ],
+              )
+            : null,
       ),
-      body: TabBarView(
-        controller: _tab,
-        children: [for (final z in vm.zones) _ZoneGrid(zoneId: z.id)],
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          body,
+          if (vm.loading && hasZones)
+            const Align(
+              alignment: Alignment.topCenter,
+              child: SizedBox(
+                height: 2,
+                child: LinearProgressIndicator(),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -62,6 +129,21 @@ class _ZoneGrid extends ConsumerWidget {
     final tables = vm.statusByZone[zoneId];
     if (tables == null) {
       ref.read(byZoneVmProvider.notifier).loadZoneStatus(zoneId);
+      if (vm.error != null && !vm.loading) {
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              'Error: ${vm.error}',
+              textAlign: TextAlign.center,
+              style: Theme.of(context)
+                  .textTheme
+                  .bodyMedium
+                  ?.copyWith(color: Colors.red),
+            ),
+          ),
+        );
+      }
       return const Center(child: CircularProgressIndicator());
     }
     final w = MediaQuery.of(context).size.width;
@@ -70,7 +152,11 @@ class _ZoneGrid extends ConsumerWidget {
       padding: const EdgeInsets.all(16),
       child: GridView.builder(
         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: cross, crossAxisSpacing: 14, mainAxisSpacing: 14, childAspectRatio: 1),
+          crossAxisCount: cross,
+          crossAxisSpacing: 14,
+          mainAxisSpacing: 14,
+          childAspectRatio: 1,
+        ),
         itemCount: tables.length,
         itemBuilder: (_, i) => _TableCard(ts: tables[i]),
       ),
