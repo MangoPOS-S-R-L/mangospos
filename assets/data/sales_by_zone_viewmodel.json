@@ -1,0 +1,90 @@
+{
+  "zone_status": {
+    "zone-main-hall": [
+      {
+        "table_id": "table-main-01",
+        "zone_id": "zone-main-hall",
+        "code": "M01",
+        "session_id": "session-main-01",
+        "orders_count": 3,
+        "minutes_open": 48
+      },
+      {
+        "table_id": "table-main-02",
+        "zone_id": "zone-main-hall",
+        "code": "M02",
+        "session_id": null,
+        "orders_count": 0,
+        "minutes_open": null
+      },
+      {
+        "table_id": "table-main-03",
+        "zone_id": "zone-main-hall",
+        "code": "M03",
+        "session_id": "session-main-03",
+        "orders_count": 1,
+        "minutes_open": 12
+      },
+      {
+        "table_id": "table-main-04",
+        "zone_id": "zone-main-hall",
+        "code": "M04",
+        "session_id": null,
+        "orders_count": 0,
+        "minutes_open": null
+      }
+    ],
+    "zone-terrace": [
+      {
+        "table_id": "table-terrace-01",
+        "zone_id": "zone-terrace",
+        "code": "T01",
+        "session_id": "session-terrace-01",
+        "orders_count": 2,
+        "minutes_open": 34
+      },
+      {
+        "table_id": "table-terrace-02",
+        "zone_id": "zone-terrace",
+        "code": "T02",
+        "session_id": null,
+        "orders_count": 0,
+        "minutes_open": null
+      },
+      {
+        "table_id": "table-terrace-03",
+        "zone_id": "zone-terrace",
+        "code": "T03",
+        "session_id": "session-terrace-03",
+        "orders_count": 4,
+        "minutes_open": 58
+      }
+    ],
+    "zone-bar": [
+      {
+        "table_id": "table-bar-01",
+        "zone_id": "zone-bar",
+        "code": "B01",
+        "session_id": "session-bar-01",
+        "orders_count": 1,
+        "minutes_open": 20
+      },
+      {
+        "table_id": "table-bar-02",
+        "zone_id": "zone-bar",
+        "code": "B02",
+        "session_id": null,
+        "orders_count": 0,
+        "minutes_open": null
+      },
+      {
+        "table_id": "table-bar-03",
+        "zone_id": "zone-bar",
+        "code": "B03",
+        "session_id": "session-bar-03",
+        "orders_count": 2,
+        "minutes_open": 41
+      }
+    ]
+  }
+}
