@@ -23,5 +23,16 @@ class AppRoutes {
 
   // 👇 subruta de Ajustes
 
+  // ---- Módulo Menú (Gestión de productos) ----
+  static const menu = '/menu';
+
+  // ---- Subrutas de Menú ----
+  static const menuMenus = '$menu/menus';
+  static const menuItems = '$menu/items';
+  static const menuCategories = '$menu/categories';
+  static const menuModifierGroups = '$menu/modifier-groups';
+  static const menuModifiers = '$menu/modifiers';
+
   static const settingsZonesTables = '$settings/zones-tables';
+  static const settingsTaxes = '$settings/taxes';
 }

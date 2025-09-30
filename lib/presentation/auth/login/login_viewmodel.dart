@@ -27,7 +27,9 @@ class LoginViewModel extends Notifier<LoginState> {
       return;
     }
     if (state.password.length < 6) {
-      state = state.copyWith(error: 'La contraseña debe tener al menos 6 caracteres');
+      state = state.copyWith(
+        error: 'La contraseña debe tener al menos 6 caracteres',
+      );
       return;
     }
 
@@ -43,7 +45,9 @@ class LoginViewModel extends Notifier<LoginState> {
 
       final user = response.user ?? supa.auth.currentUser;
       if (user == null) {
-        throw const AuthException('No se pudo iniciar sesión. Inténtalo de nuevo.');
+        throw const AuthException(
+          'No se pudo iniciar sesión. Inténtalo de nuevo.',
+        );
       }
 
       // Actualiza la sesión global
@@ -61,5 +65,6 @@ class LoginViewModel extends Notifier<LoginState> {
   }
 }
 
-final loginVmProvider =
-    NotifierProvider<LoginViewModel, LoginState>(LoginViewModel.new);
+final loginVmProvider = NotifierProvider<LoginViewModel, LoginState>(
+  LoginViewModel.new,
+);

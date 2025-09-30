@@ -1,7 +1,11 @@
 // lib/app/app_router.dart
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:mangopos/presentation/settings/zones_tables/view/zones_tables_view.dart';
+import 'package:mangopos/presentation/settings/more%20settings/menus/categories/view/categories_view.dart';
+import 'package:mangopos/presentation/settings/more%20settings/menus/menu%20items/view/menu_items_view.dart';
+import 'package:mangopos/presentation/settings/more%20settings/menus/menus/view/menus_view.dart';
+import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/view/taxes_view.dart';
+import 'package:mangopos/presentation/settings/more%20settings/system%20settings/zones_tables/view/zones_tables_view.dart';
 import '../../presentation/auth/login/login_view.dart';
 import '../../presentation/auth/register/register_step1_view.dart';
 import '../../presentation/auth/register/register_step2_view.dart';
@@ -19,6 +23,14 @@ import '../../presentation/sales/view/self_service_view.dart';
 
 // More Settings module
 import 'package:mangopos/presentation/settings/view/settings_view.dart';
+
+// Si ya tienes las vistas reales del módulo Menú, impórtalas y
+// reemplaza los _Placeholder donde corresponda.
+// import 'package:mangopos/presentation/menu/view/menus_view.dart';
+// import 'package:mangopos/presentation/menu/view/menu_items_view.dart';
+// import 'package:mangopos/presentation/menu/view/categories_view.dart';
+// import 'package:mangopos/presentation/menu/view/modifier_groups_view.dart';
+// import 'package:mangopos/presentation/menu/view/modifiers_view.dart';
 
 class AppRouter {
   static GoRouter router = GoRouter(
@@ -109,15 +121,88 @@ class AppRouter {
             builder: (_, __) => const SettingsView(),
           ),
 
-          // ✅ Subruta: Zonas y Mesas
           GoRoute(
             path: AppRoutes.settingsZonesTables,
             builder: (_, __) => const ZonesTablesView(businessId: 'auto'),
           ),
+
+          GoRoute(
+            path: AppRoutes.settingsTaxes,
+            builder: (_, __) => const TaxesView(businessId: 'auto'),
+          ),
+
+          // ===================== GESTIÓN DE PRODUCTOS (MENÚ) =====================
+          // Mantiene el mismo estilo de subrutas que usas en Sales/Settings.
+          ShellRoute(
+            builder: (_, __, child) => MenuShellView(child: child),
+            routes: [
+              // /menu -> redirige a /menu/menus
+              GoRoute(
+                path: AppRoutes.menu,
+                redirect: (_, __) => AppRoutes.menuMenus,
+              ),
+
+              // /menu/menus
+              GoRoute(
+                path: AppRoutes.menuMenus,
+                builder: (_, __) => const MenusView(
+                  businessId: 'auto',
+                ), // <-- MenusView() real aquí
+                // builder: (_, __) => const MenusView(businessId: 'auto'),
+              ),
+
+              // /menu/items
+              GoRoute(
+                path: AppRoutes.menuItems,
+                builder: (_, __) => const MenuItemsView(businessId: 'auto'),
+              ),
+
+              // /menu/categories
+              GoRoute(
+                path: AppRoutes.menuCategories,
+                builder: (_, __) => const CategoriesView(
+                  businessId: 'auto',
+                ), // <-- CategoriesView()
+                // builder: (_, __) => const CategoriesView(businessId: 'auto'),
+              ),
+
+              // /menu/modifier-groups
+              GoRoute(
+                path: AppRoutes.menuModifierGroups,
+                builder: (_, __) => const _Placeholder(
+                  'Grupos de modificadores',
+                ), // <-- ModifierGroupsView()
+                // builder: (_, __) => const ModifierGroupsView(businessId: 'auto'),
+              ),
+
+              // /menu/modifiers
+              GoRoute(
+                path: AppRoutes.menuModifiers,
+                builder: (_, __) => const _Placeholder(
+                  'Modificadores de artículo',
+                ), // <-- ModifiersView()
+                // builder: (_, __) => const ModifiersView(businessId: 'auto'),
+              ),
+            ],
+          ),
+          // =======================================================================
         ],
       ),
     ],
   );
+}
+
+// Shell sencillo para el módulo Menú (cámbialo por algo más elaborado si quieres)
+class MenuShellView extends StatelessWidget {
+  final Widget child;
+  const MenuShellView({super.key, required this.child});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Gestión de productos')),
+      body: child,
+    );
+  }
 }
 
 // Placeholder temporal para los módulos que aún no tienen vista real
@@ -126,5 +211,12 @@ class _Placeholder extends StatelessWidget {
   const _Placeholder(this.label);
 
   @override
-  Widget build(BuildContext context) => Center(child: Text(label));
+  Widget build(BuildContext context) => Scaffold(
+    body: Center(
+      child: Text(
+        label,
+        style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+      ),
+    ),
+  );
 }

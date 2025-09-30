@@ -1,5 +1,5 @@
-import '../../../../data/models/zone.dart';
-import '../../../../data/models/dining_table.dart';
+import '../../../../../../data/models/zone.dart';
+import '../../../../../../data/models/dining_table.dart';
 
 class ZonesTablesState {
   static const Object _errorSentinel = Object();

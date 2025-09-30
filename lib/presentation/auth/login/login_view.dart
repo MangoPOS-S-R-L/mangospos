@@ -7,7 +7,6 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
 import 'login_viewmodel.dart';
-import 'login_state.dart';
 
 // --- Colores MangoPOS ---
 const _orange = Color(0xFFF7941A);

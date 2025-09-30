@@ -4,9 +4,9 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../../../data/models/dining_table.dart';
-import '../../../../data/repositories/zones_repository.dart';
-import '../../../../data/utils/business_id_resolver.dart';
+import '../../../../../../data/models/dining_table.dart';
+import '../../../../../../data/repositories/zones_repository.dart';
+import '../../../../../../data/utils/business_id_resolver.dart';
 import '../state/zones_tables_state.dart';
 
 final zonesRepoProvider =

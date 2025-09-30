@@ -14,20 +14,107 @@ class SalesByZoneView extends ConsumerStatefulWidget {
 
 class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
     with SingleTickerProviderStateMixin {
-  TabController? _tab;
+  TabController? _tabController;
+  int _previousZoneCount = 0;
 
   @override
   void initState() {
     super.initState();
-    Future.microtask(
-      () => ref.read(byZoneVmProvider.notifier).load(widget.businessId),
-    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(byZoneVmProvider.notifier).load(widget.businessId);
+    });
   }
 
   @override
   void dispose() {
-    _tab?.dispose();
+    _tabController?.dispose();
     super.dispose();
+  }
+
+  void _updateTabController(List zones) {
+    final currentZoneCount = zones.length;
+
+    if (currentZoneCount == 0) {
+      _tabController?.dispose();
+      _tabController = null;
+      _previousZoneCount = 0;
+      return;
+    }
+
+    if (_tabController == null || _previousZoneCount != currentZoneCount) {
+      final previousIndex = _tabController?.index ?? 0;
+      _tabController?.dispose();
+
+      final initialIndex = previousIndex < currentZoneCount
+          ? previousIndex
+          : currentZoneCount - 1;
+
+      _tabController = TabController(
+        length: currentZoneCount,
+        vsync: this,
+        initialIndex: initialIndex,
+      );
+
+      _previousZoneCount = currentZoneCount;
+    }
+  }
+
+  Widget _buildEmptyState(String message, {IconData? icon}) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (icon != null) ...[
+              Icon(icon, size: 64, color: MangoColors.muted),
+              const SizedBox(height: 16),
+            ],
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                color: MangoColors.muted,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildErrorState(String error) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.error_outline, size: 64, color: Colors.red.shade400),
+            const SizedBox(height: 16),
+            Text(
+              'Error: $error',
+              textAlign: TextAlign.center,
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: Colors.red.shade600),
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              onPressed: () =>
+                  ref.read(byZoneVmProvider.notifier).load(widget.businessId),
+              icon: const Icon(Icons.refresh),
+              label: const Text('Reintentar'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: MangoColors.primaryOrange,
+                foregroundColor: Colors.white,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -36,77 +123,133 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
     final zones = vm.zones;
     final hasZones = zones.isNotEmpty;
 
-    if (hasZones) {
-      if (_tab == null || _tab!.length != zones.length) {
-        final previousIndex = _tab?.index ?? 0;
-        _tab?.dispose();
-        final initialIndex = previousIndex < zones.length
-            ? previousIndex
-            : zones.length - 1;
-        _tab = TabController(
-          length: zones.length,
-          vsync: this,
-          initialIndex: initialIndex,
-        );
-      }
-    } else {
-      _tab?.dispose();
-      _tab = null;
-    }
+    _updateTabController(zones);
 
     Widget body;
     if (!hasZones) {
       if (vm.loading) {
         body = const Center(child: CircularProgressIndicator());
       } else if (vm.error != null) {
-        body = Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              'Error: ${vm.error}',
-              textAlign: TextAlign.center,
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(color: Colors.red),
-            ),
-          ),
-        );
+        body = _buildErrorState(vm.error!);
       } else {
-        body = const Center(child: Text('No hay zonas'));
+        body = _buildEmptyState(
+          'No hay zonas configuradas',
+          icon: Icons.location_off,
+        );
       }
     } else {
       body = TabBarView(
-        controller: _tab!,
-        children: [for (final z in zones) _ZoneGrid(zoneId: z.id)],
+        controller: _tabController!,
+        children: zones.map((zone) => _ZoneGrid(zoneId: zone.id)).toList(),
       );
     }
 
     return Scaffold(
-      backgroundColor: MangoColors.bgLight,
-      appBar: AppBar(
-        title: const Text('Ventas · Por Zona'),
-        backgroundColor: MangoColors.white,
-        foregroundColor: MangoColors.darkGray,
-        bottom: hasZones
-            ? TabBar(
-                controller: _tab!,
-                isScrollable: true,
-                labelColor: MangoColors.primaryOrange,
-                unselectedLabelColor: MangoColors.muted,
-                tabs: [for (final z in zones) Tab(text: z.name.toUpperCase())],
-              )
-            : null,
-      ),
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          body,
-          if (vm.loading && hasZones)
-            const Align(
-              alignment: Alignment.topCenter,
-              child: SizedBox(height: 2, child: LinearProgressIndicator()),
-            ),
-        ],
+      backgroundColor: Colors.white,
+      appBar: hasZones && _tabController != null
+          ? AppBar(
+              backgroundColor: Colors.white,
+              elevation: 0,
+              automaticallyImplyLeading: false,
+              // ↑ AppBar un poquito más grande para dar aire vertical
+              toolbarHeight: 59,
+              titleSpacing: 0,
+              title: Row(
+                children: [
+                  Expanded(
+                    child: TabBar(
+                      controller: _tabController!,
+                      isScrollable: true,
+                      // ↑ Más espacio entre cada tab
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      labelPadding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      // ↑ Dejamos la indicación un poco “separada”
+                      indicatorPadding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 6,
+                      ),
+                      labelColor: MangoColors.primaryOrange,
+                      unselectedLabelColor: MangoColors.muted,
+                      indicatorSize: TabBarIndicatorSize.label,
+                      // ↑ Quitamos hover/splash en web
+                      overlayColor: WidgetStatePropertyAll<Color>(
+                        Colors.transparent,
+                      ),
+                      splashFactory: NoSplash.splashFactory,
+                      indicator: BoxDecoration(
+                        color: MangoColors.primaryOrange.withOpacity(0.10),
+                        border: Border.all(
+                          color: MangoColors.primaryOrange,
+                          width: 2,
+                        ),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      tabs: zones
+                          .map(
+                            (zone) => Tab(
+                              child: Container(
+                                // ↑ Más padding interno para que el borde no “coma” el texto
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 10,
+                                ),
+                                child: Text(
+                                  zone.name.toUpperCase(),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: .3,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                  ),
+                  // Botón refrescar sin sombra/hover
+                  IconButton(
+                    onPressed: () => ref
+                        .read(byZoneVmProvider.notifier)
+                        .load(widget.businessId),
+                    icon: const Icon(Icons.refresh),
+                    tooltip: 'Actualizar',
+                    style: const ButtonStyle(
+                      overlayColor: WidgetStatePropertyAll<Color>(
+                        Colors.transparent,
+                      ),
+                      splashFactory: NoSplash.splashFactory,
+                    ),
+                  ),
+                ],
+              ),
+            )
+          : null,
+      body: RefreshIndicator(
+        onRefresh: () async {
+          await ref.read(byZoneVmProvider.notifier).load(widget.businessId);
+        },
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            body,
+            if (vm.loading && hasZones)
+              const Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: SizedBox(
+                  height: 2,
+                  child: LinearProgressIndicator(
+                    backgroundColor: Colors.transparent,
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -123,68 +266,135 @@ class _ZoneGrid extends ConsumerWidget {
 
     if (tables == null) {
       ref.read(byZoneVmProvider.notifier).loadZoneStatus(zoneId);
-      if (vm.error != null && !vm.loading) {
-        return Center(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              'Error: ${vm.error}',
-              textAlign: TextAlign.center,
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(color: Colors.red),
-            ),
-          ),
-        );
-      }
-      return const Center(child: CircularProgressIndicator());
+      return const _LoadingGrid();
     }
 
-    final w = MediaQuery.of(context).size.width;
+    if (vm.error != null && !vm.loading) {
+      return _ErrorStateWidget(
+        error: vm.error!,
+        onRetry: () =>
+            ref.read(byZoneVmProvider.notifier).loadZoneStatus(zoneId),
+      );
+    }
 
-    // ==== BREAKPOINTS ====
-    // columnas (menos columnas -> cards más anchas)
-    final int cross = w >= 1800
-        ? 8
-        : w >= 1500
-        ? 7
-        : w >= 1280
-        ? 6
-        : w >= 1080
-        ? 5
-        : w >= 820
-        ? 4
-        : w >= 560
-        ? 3
-        : 2;
+    if (tables.isEmpty) {
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.table_restaurant, size: 64, color: MangoColors.muted),
+            SizedBox(height: 16),
+            Text(
+              'No hay mesas en esta zona',
+              style: TextStyle(
+                color: MangoColors.muted,
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
 
-    // proporción ancho/alto (más bajo => más alta)
-    // ajustada por breakpoint para evitar overflow y mantener equilibrio
-    final double ratio = w >= 1800
-        ? 0.86
-        : w >= 1500
-        ? 0.82
-        : w >= 1280
-        ? 0.80
-        : w >= 1080
-        ? 0.78
-        : w >= 820
-        ? 0.76
-        : 0.74;
+    return _ResponsiveTableGrid(tables: tables);
+  }
+}
 
-    final double gap = w >= 1280 ? 18 : 14;
+class _ResponsiveTableGrid extends StatelessWidget {
+  final List<TableStatus> tables;
+  const _ResponsiveTableGrid({required this.tables});
+
+  GridConfiguration _getGridConfiguration(double width) {
+    if (width >= 1800) return GridConfiguration(8, 0.86, 18);
+    if (width >= 1500) return GridConfiguration(7, 0.82, 18);
+    if (width >= 1280) return GridConfiguration(6, 0.80, 18);
+    if (width >= 1080) return GridConfiguration(5, 0.78, 16);
+    if (width >= 820) return GridConfiguration(4, 0.76, 16);
+    if (width >= 560) return GridConfiguration(3, 0.74, 14);
+    return GridConfiguration(2, 0.74, 14);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final width = MediaQuery.of(context).size.width;
+    final config = _getGridConfiguration(width);
 
     return Padding(
       padding: const EdgeInsets.all(16),
       child: GridView.builder(
         itemCount: tables.length,
+        physics: const AlwaysScrollableScrollPhysics(),
         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: cross,
-          crossAxisSpacing: gap,
-          mainAxisSpacing: gap,
-          childAspectRatio: ratio,
+          crossAxisCount: config.crossAxisCount,
+          crossAxisSpacing: config.spacing,
+          mainAxisSpacing: config.spacing,
+          childAspectRatio: config.aspectRatio,
         ),
-        itemBuilder: (_, i) => _TableCard(ts: tables[i]),
+        itemBuilder: (context, index) =>
+            _TableCard(ts: tables[index], screenWidth: width),
+      ),
+    );
+  }
+}
+
+class _LoadingGrid extends StatelessWidget {
+  const _LoadingGrid();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          CircularProgressIndicator(),
+          SizedBox(height: 16),
+          Text('Cargando mesas...', style: TextStyle(color: MangoColors.muted)),
+        ],
+      ),
+    );
+  }
+}
+
+class _ErrorStateWidget extends StatelessWidget {
+  final String error;
+  final VoidCallback onRetry;
+
+  const _ErrorStateWidget({required this.error, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.error_outline, size: 48, color: Colors.red.shade400),
+            const SizedBox(height: 12),
+            Text(
+              'Error: $error',
+              textAlign: TextAlign.center,
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: Colors.red.shade600),
+            ),
+            const SizedBox(height: 12),
+            ElevatedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh, size: 18),
+              label: const Text('Reintentar'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: MangoColors.primaryOrange,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -192,31 +402,37 @@ class _ZoneGrid extends ConsumerWidget {
 
 class _TableCard extends StatelessWidget {
   final TableStatus ts;
-  const _TableCard({required this.ts});
+  final double screenWidth;
+
+  const _TableCard({required this.ts, required this.screenWidth});
+
+  CardSizes _getCardSizes(double width) {
+    if (width >= 1500) return CardSizes(30, 17, 44, 16);
+    if (width >= 1280) return CardSizes(28, 16, 44, 16);
+    if (width >= 1080) return CardSizes(28, 16, 42, 14);
+    if (width >= 820) return CardSizes(26, 16, 42, 14);
+    return CardSizes(26, 16, 40, 14);
+  }
+
+  void _handleTableAction(BuildContext context) {
+    final occupied = ts.sessionId != null;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          occupied
+              ? 'Navegando a pedidos de mesa ${ts.code}'
+              : 'Abriendo mesa ${ts.code}',
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final occupied = ts.sessionId != null;
-    final w = MediaQuery.of(context).size.width;
-
-    // Tamaños responsivos
-    final double codeSize = w >= 1500
-        ? 30
-        : w >= 1080
-        ? 28
-        : 26;
-
-    final double labelSize = w >= 1500 ? 17 : 16;
-
-    final double buttonHeight = w >= 1280
-        ? 44
-        : w >= 820
-        ? 42
-        : 40;
-
-    final EdgeInsets cardPadding = w >= 1280
-        ? const EdgeInsets.all(16)
-        : const EdgeInsets.all(14);
+    final sizes = _getCardSizes(screenWidth);
 
     return Container(
       decoration: BoxDecoration(
@@ -226,19 +442,19 @@ class _TableCard extends StatelessWidget {
           color: occupied ? MangoColors.primaryOrange : MangoColors.cardBorder,
           width: 2,
         ),
-        boxShadow: const [
+        boxShadow: [
           BoxShadow(
-            color: Color(0x12000000),
-            blurRadius: 8,
-            offset: Offset(0, 3),
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+            spreadRadius: 0,
           ),
         ],
       ),
-      padding: cardPadding,
+      padding: EdgeInsets.all(sizes.cardPadding),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Código de mesa adaptativo
           FittedBox(
             fit: BoxFit.scaleDown,
             alignment: Alignment.centerLeft,
@@ -247,21 +463,20 @@ class _TableCard extends StatelessWidget {
               maxLines: 1,
               style: TextStyle(
                 fontWeight: FontWeight.w800,
-                fontSize: codeSize,
+                fontSize: sizes.codeSize,
                 color: MangoColors.primaryOrange,
               ),
             ),
           ),
           const SizedBox(height: 6),
-
           if (occupied) ...[
             Text(
-              '${ts.ordersCount} Pedidos',
+              '${ts.ordersCount ?? 0} ${ts.ordersCount == 1 ? 'Pedido' : 'Pedidos'}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 fontWeight: FontWeight.w700,
-                fontSize: labelSize,
+                fontSize: sizes.labelSize,
               ),
             ),
             const SizedBox(height: 6),
@@ -273,9 +488,12 @@ class _TableCard extends StatelessWidget {
                   color: MangoColors.muted,
                 ),
                 const SizedBox(width: 6),
-                Text(
-                  ts.minutesOpen == null ? '—' : '${ts.minutesOpen} min',
-                  style: const TextStyle(color: MangoColors.muted),
+                Flexible(
+                  child: Text(
+                    ts.minutesOpen == null ? '—' : '${ts.minutesOpen} min',
+                    style: const TextStyle(color: MangoColors.muted),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
               ],
             ),
@@ -284,22 +502,20 @@ class _TableCard extends StatelessWidget {
               'Disponible',
               style: TextStyle(
                 fontWeight: FontWeight.w700,
-                fontSize: labelSize,
+                fontSize: sizes.labelSize,
                 color: MangoColors.successGreen,
               ),
             ),
             const SizedBox(height: 4),
-            Row(
-              children: const [
+            const Row(
+              children: [
                 Icon(Icons.access_time, size: 16, color: MangoColors.muted),
                 SizedBox(width: 6),
                 Text('00:00', style: TextStyle(color: MangoColors.muted)),
               ],
             ),
           ],
-
           const Spacer(),
-
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
@@ -312,16 +528,17 @@ class _TableCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 padding: const EdgeInsets.symmetric(vertical: 8),
-                minimumSize: Size.fromHeight(buttonHeight),
+                minimumSize: Size.fromHeight(sizes.buttonHeight),
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 visualDensity: VisualDensity.compact,
               ),
-              onPressed: () {
-                // TODO: Navegar al POS de esta mesa
-              },
+              onPressed: () => _handleTableAction(context),
               child: Text(
                 occupied ? 'Ver pedidos' : 'Abrir mesa',
-                style: TextStyle(fontSize: labelSize.toDouble()),
+                style: TextStyle(
+                  fontSize: sizes.labelSize,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           ),
@@ -329,4 +546,26 @@ class _TableCard extends StatelessWidget {
       ),
     );
   }
+}
+
+class GridConfiguration {
+  final int crossAxisCount;
+  final double aspectRatio;
+  final double spacing;
+
+  const GridConfiguration(this.crossAxisCount, this.aspectRatio, this.spacing);
+}
+
+class CardSizes {
+  final double codeSize;
+  final double labelSize;
+  final double buttonHeight;
+  final double cardPadding;
+
+  const CardSizes(
+    this.codeSize,
+    this.labelSize,
+    this.buttonHeight,
+    this.cardPadding,
+  );
 }
