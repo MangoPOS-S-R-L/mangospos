@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
+import 'package:http/http.dart' as http; // ✅ check internet
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../app/theme/mango_colors.dart';
@@ -41,7 +42,7 @@ class _MainShellState extends State<MainShell> {
       backgroundColor: const Color(0xFFF2F2F2),
       body: Column(
         children: [
-          // ======= APP BAR REORGANIZADO =======
+          // ======= APP BAR =======
           Container(
             height: 84,
             width: double.infinity,
@@ -58,11 +59,11 @@ class _MainShellState extends State<MainShell> {
             ),
             child: Row(
               children: [
-                // ===== Logo más grande =====
+                // Logo
                 const _Logo(),
                 const SizedBox(width: 24),
 
-                // ===== Menú principal =====
+                // Menú principal
                 Expanded(
                   child: SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
@@ -124,7 +125,7 @@ class _MainShellState extends State<MainShell> {
 
                 const SizedBox(width: 24),
 
-                // ===== Sección derecha: Ajustes + Fecha/Hora + Usuario =====
+                // Sección derecha
                 Row(
                   children: [
                     // Mas Ajustes
@@ -141,7 +142,7 @@ class _MainShellState extends State<MainShell> {
                         ),
                       ),
 
-                      // Chips de fecha/hora
+                      // Chip de FECHA
                       _Chip(
                         child: Row(
                           children: [
@@ -161,26 +162,11 @@ class _MainShellState extends State<MainShell> {
                           ],
                         ),
                       ),
+
                       const SizedBox(width: 8),
-                      _Chip(
-                        child: Row(
-                          children: [
-                            const Icon(
-                              Icons.access_time_rounded,
-                              size: 16,
-                              color: MangoColors.primaryOrange,
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              _fmtTime(_now),
-                              style: const TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+
+                      // ✅ Indicador de Conexión (reemplaza la hora)
+                      const _ConnectionIndicator(),
 
                       // Divisor antes del usuario
                       SizedBox(
@@ -236,16 +222,9 @@ class _MainShellState extends State<MainShell> {
     ];
     return '${wk[d.weekday - 1]}, ${d.day} ${mo[d.month - 1]} ${d.year}';
   }
-
-  static String _fmtTime(DateTime d) {
-    final h = d.hour % 12 == 0 ? 12 : d.hour % 12;
-    final m = d.minute.toString().padLeft(2, '0');
-    final ampm = d.hour >= 12 ? 'PM' : 'AM';
-    return '$h:$m $ampm';
-  }
 }
 
-// ===== ITEM DEL MENÚ CON RECUADRO DE CLICK =====
+// ===== ITEM DEL MENÚ =====
 class _TopNavItem extends StatelessWidget {
   final String label;
   final String route;
@@ -317,7 +296,7 @@ class _TopNavItem extends StatelessWidget {
   }
 }
 
-// ===== BOTÓN MAS AJUSTES CON ESTILO DE MENÚ =====
+// ===== BOTÓN MAS AJUSTES =====
 class _SettingsButton extends StatelessWidget {
   const _SettingsButton();
 
@@ -379,7 +358,7 @@ class _SettingsButton extends StatelessWidget {
   }
 }
 
-// ===== CHIP MEJORADO =====
+// ===== CHIP (para fecha) =====
 class _Chip extends StatelessWidget {
   final Widget child;
   const _Chip({required this.child});
@@ -398,7 +377,86 @@ class _Chip extends StatelessWidget {
   }
 }
 
-// ===== LOGO MÁS GRANDE =====
+// ===== Caja cuadrada para el icono =====
+class _SquareIconBox extends StatelessWidget {
+  final Widget child;
+  final double size;
+  const _SquareIconBox({required this.child, this.size = 36});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7F7F9),
+        border: Border.all(color: const Color(0xFFEAEAEA)),
+        borderRadius: BorderRadius.circular(15),
+      ),
+      alignment: Alignment.center,
+      child: child,
+    );
+  }
+}
+
+// ===== Indicador de conexión (solo icono) =====
+class _ConnectionIndicator extends StatefulWidget {
+  const _ConnectionIndicator();
+
+  @override
+  State<_ConnectionIndicator> createState() => _ConnectionIndicatorState();
+}
+
+class _ConnectionIndicatorState extends State<_ConnectionIndicator> {
+  bool _online = true;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkNow();
+    _timer = Timer.periodic(const Duration(seconds: 5), (_) => _checkNow());
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _checkNow() async {
+    final ok = await _hasInternet();
+    if (mounted && ok != _online) setState(() => _online = ok);
+  }
+
+  Future<bool> _hasInternet() async {
+    try {
+      final res = await http
+          .head(Uri.parse('https://www.gstatic.com/generate_204'))
+          .timeout(const Duration(seconds: 2));
+      return res.statusCode == 204 || res.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _online ? MangoColors.successGreen : Colors.redAccent;
+
+    return _SquareIconBox(
+      size: 44,
+      child: SvgPicture.asset(
+        'assets/icons/conexion.svg',
+        width: 26,
+        height: 26,
+        colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
+      ),
+    );
+  }
+}
+
+// ===== LOGO =====
 class _Logo extends StatelessWidget {
   const _Logo();
 
@@ -412,7 +470,7 @@ class _Logo extends StatelessWidget {
   }
 }
 
-// ===== USER INFO MEJORADA =====
+// ===== USER INFO =====
 class _UserInfo extends StatelessWidget {
   const _UserInfo();
 
@@ -453,9 +511,8 @@ class _UserInfo extends StatelessWidget {
           .limit(1)
           .maybeSingle();
       if (ub != null) {
-        if (ub['business_id'] != null) {
+        if (ub['business_id'] != null)
           businessId = ub['business_id'].toString();
-        }
         if (ub['role'] != null) role = ub['role'].toString().toLowerCase();
         if (ub['permissions'] != null) rawPerms = (ub['permissions'] as List);
       }

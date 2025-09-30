@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'dart:typed_data';
-
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart'; // kIsWeb
 import 'package:flutter/material.dart';
@@ -774,27 +773,54 @@ class _NewItemDialogState extends ConsumerState<_NewItemDialog> {
                             ),
                           ),
                           onPressed: () async {
-                            final r = await FilePicker.platform.pickFiles(
-                              type: FileType.image,
-                              withData: kIsWeb,
-                            );
-                            if (r != null) {
+                            try {
+                              final r = await FilePicker.platform.pickFiles(
+                                type: FileType.custom,
+                                allowedExtensions: [
+                                  'png',
+                                  'jpg',
+                                  'jpeg',
+                                  'webp',
+                                  'gif',
+                                ],
+                                allowMultiple: false,
+                                withData: kIsWeb, // Solo obtener bytes en web
+                              );
+
+                              if (r == null || r.files.isEmpty) return;
+
                               if (kIsWeb) {
-                                setState(() {
-                                  _pickedImageBytes = r.files.single.bytes;
-                                  _pickedImageFile = null;
-                                });
-                              } else {
-                                final p = r.files.single.path;
-                                if (p != null) {
+                                // Web: usar bytes
+                                final bytes = r.files.single.bytes;
+                                if (bytes != null && bytes.isNotEmpty) {
                                   setState(() {
-                                    _pickedImageFile = File(p);
+                                    _pickedImageBytes = bytes;
+                                    _pickedImageFile = null;
+                                  });
+                                }
+                              } else {
+                                // Móvil/Desktop: usar path
+                                final path = r.files.single.path;
+                                if (path != null && path.isNotEmpty) {
+                                  setState(() {
+                                    _pickedImageFile = File(path);
                                     _pickedImageBytes = null;
                                   });
                                 }
                               }
+                            } catch (e) {
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      'No se pudo abrir el selector: $e',
+                                    ),
+                                  ),
+                                );
+                              }
                             }
                           },
+
                           icon: const Icon(Icons.image),
                           label: const Text('Elegir imagen'),
                         ),
