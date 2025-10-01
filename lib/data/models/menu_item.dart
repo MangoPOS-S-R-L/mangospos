@@ -87,31 +87,31 @@ class MenuItem {
   });
 
   factory MenuItem.fromMap(Map<String, dynamic> m) {
-    double _toDouble(dynamic v) {
+    double toDouble(dynamic v) {
       if (v == null) return 0.0;
       if (v is num) return v.toDouble();
       return double.tryParse(v.toString()) ?? 0.0;
     }
 
-    double? _toDoubleOpt(dynamic v) {
+    double? toDoubleOpt(dynamic v) {
       if (v == null) return null;
       if (v is num) return v.toDouble();
       return double.tryParse(v.toString());
     }
 
-    int _toInt(dynamic v) {
+    int toInt(dynamic v) {
       if (v == null) return 0;
       if (v is num) return v.toInt();
       return int.tryParse(v.toString()) ?? 0;
     }
 
-    bool _toBool(dynamic v) {
+    bool toBool(dynamic v) {
       if (v is bool) return v;
       final s = v?.toString().toLowerCase();
       return s == 'true' || s == 't' || s == '1';
     }
 
-    DateTime? _toDate(dynamic v) {
+    DateTime? toDate(dynamic v) {
       if (v == null) return null;
       if (v is DateTime) return v;
       return DateTime.tryParse(v.toString());
@@ -124,18 +124,18 @@ class MenuItem {
       description: m['description'] as String?,
       categoryId: m['category_id'] as String?,
       soldBy: _soldByFromString(m['sold_by'] as String?), // 👈
-      price: _toDouble(m['price']),
-      cost: _toDoubleOpt(m['cost']), // 👈
+      price: toDouble(m['price']),
+      cost: toDoubleOpt(m['cost']), // 👈
       sku: m['sku'] as String?,
       barcode: m['barcode'] as String?, // 👈
-      prepMinutes: _toInt(m['prep_minutes']),
-      hasVariants: _toBool(m['has_variants']),
-      isActive: _toBool(m['is_active']),
+      prepMinutes: toInt(m['prep_minutes']),
+      hasVariants: toBool(m['has_variants']),
+      isActive: toBool(m['is_active']),
       imagePath: m['image_path'] as String?,
       imageUrl: m['image_url'] as String?,
-      hasPrep: _toBool(m['has_prep']),
-      createdAt: _toDate(m['created_at']),
-      updatedAt: _toDate(m['updated_at']),
+      hasPrep: toBool(m['has_prep']),
+      createdAt: toDate(m['created_at']),
+      updatedAt: toDate(m['updated_at']),
       categoryName: m['category_name'] as String?,
       menuName: m['menu_name'] as String?,
       menuId: m['menu_id'] as String?,

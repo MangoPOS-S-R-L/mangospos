@@ -35,4 +35,10 @@ class AppRoutes {
 
   static const settingsZonesTables = '$settings/zones-tables';
   static const settingsTaxes = '$settings/taxes';
+  static const printingBase = '$settings/printing';
+
+   // ---- Gestión de impresión (sin businessId en URL) ----
+  static const printingPrinters = '$settings/printing/printers';
+  static const printingAreas    = '$settings/printing/areas';
+
 }

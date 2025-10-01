@@ -158,7 +158,7 @@ class MenuItemRepository {
         .eq('menu_id', menuId)
         .order('position', ascending: false)
         .limit(1);
-    if (res is List && res.isNotEmpty && res.first['position'] != null) {
+    if (res.isNotEmpty && res.first['position'] != null) {
       return (res.first['position'] as int) + 1;
     }
     return 0;

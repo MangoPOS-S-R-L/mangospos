@@ -8,7 +8,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 
 import '../state/menu_items_state.dart';
-import '../../../../../../data/models/menu_item.dart';
 import '../../../../../../data/repositories/menu_item_repository.dart';
 import '../../../../../../data/repositories/category_repository.dart';
 import '../../../../../../data/repositories/menu_repository.dart';

@@ -35,7 +35,7 @@ class MenuRepository {
         .insert(data.toInsert())
         .select()
         .single();
-    return Menu.fromMap(res as Map<String, dynamic>);
+    return Menu.fromMap(res);
   }
 
   Future<void> update(String id, Map<String, dynamic> patch) async {

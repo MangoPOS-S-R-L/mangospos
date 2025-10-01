@@ -511,8 +511,9 @@ class _UserInfo extends StatelessWidget {
           .limit(1)
           .maybeSingle();
       if (ub != null) {
-        if (ub['business_id'] != null)
+        if (ub['business_id'] != null) {
           businessId = ub['business_id'].toString();
+        }
         if (ub['role'] != null) role = ub['role'].toString().toLowerCase();
         if (ub['permissions'] != null) rawPerms = (ub['permissions'] as List);
       }

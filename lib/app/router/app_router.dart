@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/categories/view/categories_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/menu%20items/view/menu_items_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/menus/view/menus_view.dart';
+import 'package:mangopos/presentation/settings/more%20settings/printing/areas/view/printers_view.dart.dart';
+import 'package:mangopos/presentation/settings/more%20settings/printing/printers/view/print_areas_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/view/taxes_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/zones_tables/view/zones_tables_view.dart';
 import '../../presentation/auth/login/login_view.dart';
@@ -23,6 +25,8 @@ import '../../presentation/sales/view/self_service_view.dart';
 
 // More Settings module
 import 'package:mangopos/presentation/settings/view/settings_view.dart';
+
+// ====== Gestión de impresión (imports) ======
 
 // Si ya tienes las vistas reales del módulo Menú, impórtalas y
 // reemplaza los _Placeholder donde corresponda.
@@ -120,19 +124,16 @@ class AppRouter {
             path: AppRoutes.settings,
             builder: (_, __) => const SettingsView(),
           ),
-
           GoRoute(
             path: AppRoutes.settingsZonesTables,
             builder: (_, __) => const ZonesTablesView(businessId: 'auto'),
           ),
-
           GoRoute(
             path: AppRoutes.settingsTaxes,
             builder: (_, __) => const TaxesView(businessId: 'auto'),
           ),
 
           // ===================== GESTIÓN DE PRODUCTOS (MENÚ) =====================
-          // Mantiene el mismo estilo de subrutas que usas en Sales/Settings.
           ShellRoute(
             builder: (_, __, child) => MenuShellView(child: child),
             routes: [
@@ -145,10 +146,7 @@ class AppRouter {
               // /menu/menus
               GoRoute(
                 path: AppRoutes.menuMenus,
-                builder: (_, __) => const MenusView(
-                  businessId: 'auto',
-                ), // <-- MenusView() real aquí
-                // builder: (_, __) => const MenusView(businessId: 'auto'),
+                builder: (_, __) => const MenusView(businessId: 'auto'),
               ),
 
               // /menu/items
@@ -160,28 +158,40 @@ class AppRouter {
               // /menu/categories
               GoRoute(
                 path: AppRoutes.menuCategories,
-                builder: (_, __) => const CategoriesView(
-                  businessId: 'auto',
-                ), // <-- CategoriesView()
-                // builder: (_, __) => const CategoriesView(businessId: 'auto'),
+                builder: (_, __) => const CategoriesView(businessId: 'auto'),
               ),
 
               // /menu/modifier-groups
               GoRoute(
                 path: AppRoutes.menuModifierGroups,
-                builder: (_, __) => const _Placeholder(
-                  'Grupos de modificadores',
-                ), // <-- ModifierGroupsView()
-                // builder: (_, __) => const ModifierGroupsView(businessId: 'auto'),
+                builder: (_, __) =>
+                    const _Placeholder('Grupos de modificadores'),
               ),
 
               // /menu/modifiers
               GoRoute(
                 path: AppRoutes.menuModifiers,
-                builder: (_, __) => const _Placeholder(
-                  'Modificadores de artículo',
-                ), // <-- ModifiersView()
-                // builder: (_, __) => const ModifiersView(businessId: 'auto'),
+                builder: (_, __) =>
+                    const _Placeholder('Modificadores de artículo'),
+              ),
+            ],
+          ),
+          // =======================================================================
+
+          // ===================== GESTIÓN DE IMPRESIÓN =====================
+          ShellRoute(
+            builder: (_, __, child) => PrintingShellView(child: child),
+            routes: [
+              // /settings/printing/printers
+              GoRoute(
+                path: AppRoutes.printingPrinters,
+                builder: (_, __) =>
+                    const PrintingPrintersView(businessId: 'auto'),
+              ),
+              // /settings/printing/areas
+              GoRoute(
+                path: AppRoutes.printingAreas,
+                builder: (_, __) => const PrintingAreasView(businessId: 'auto'),
               ),
             ],
           ),
@@ -200,6 +210,19 @@ class MenuShellView extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Gestión de productos')),
+      body: child,
+    );
+  }
+}
+
+// ✅ Shell para Gestión de impresión (anidado)
+class PrintingShellView extends StatelessWidget {
+  final Widget child;
+  const PrintingShellView({super.key, required this.child});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Gestión de impresión')),
       body: child,
     );
   }

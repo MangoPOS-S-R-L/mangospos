@@ -748,7 +748,7 @@ class _NewItemDialogState extends ConsumerState<_NewItemDialog> {
                       },
                       title: const Text('Tiene variaciones'),
                       contentPadding: EdgeInsets.zero,
-                      activeColor: MangoColors.successGreen,
+                      activeThumbColor: MangoColors.successGreen,
                     ),
 
                     SwitchListTile(
@@ -756,7 +756,7 @@ class _NewItemDialogState extends ConsumerState<_NewItemDialog> {
                       onChanged: (v) => setState(() => _isActive = v),
                       title: const Text('Disponible'),
                       contentPadding: EdgeInsets.zero,
-                      activeColor: MangoColors.successGreen,
+                      activeThumbColor: MangoColors.successGreen,
                     ),
 
                     const SizedBox(height: 12),
@@ -1023,10 +1023,10 @@ class _TaxesBlock extends StatelessWidget {
                     horizontal: 16,
                     vertical: 4,
                   ),
-                  activeColor: MangoColors.successGreen,
+                  activeThumbColor: MangoColors.successGreen,
                 ),
               );
-            }).toList(),
+            }),
         ],
       ),
     );

@@ -1,5 +1,4 @@
 import 'dart:typed_data';
-import 'package:mime/mime.dart';
 import 'package:path/path.dart' as p;
 import 'package:supabase_flutter/supabase_flutter.dart';
 

@@ -249,7 +249,7 @@ class _TaxesTable extends ConsumerWidget {
                             onChanged: (v) => ref
                                 .read(taxesVmProvider.notifier)
                                 .toggleActive(t.id, v),
-                            activeColor: MangoColors.successGreen,
+                            activeThumbColor: MangoColors.successGreen,
                           ),
                         ],
                       ),
@@ -493,7 +493,7 @@ class _TaxFormDialogState extends ConsumerState<_TaxFormDialog> {
                             Switch(
                               value: _isActive,
                               onChanged: (v) => setState(() => _isActive = v),
-                              activeColor: MangoColors.successGreen,
+                              activeThumbColor: MangoColors.successGreen,
                             ),
                           ],
                         ),

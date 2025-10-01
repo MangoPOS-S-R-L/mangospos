@@ -48,7 +48,7 @@ class SettingsView extends StatelessWidget {
                 icon: Icons.table_restaurant_outlined,
               ),
               SettingsItem(
-                title: 'Elementos de menú',
+                title: 'Productos o Articulos',
                 route: AppRoutes.menuItems.replaceFirst(
                   ':businessId',
                   businessId,
@@ -83,6 +83,31 @@ class SettingsView extends StatelessWidget {
           ),
           const SizedBox(height: 14),
 
+          // ---------------- CARD: Gestión de impresión ----------------
+          SettingsCard(
+            title: 'Gestión de impresión',
+            icon: Icons.print_outlined,
+            items: [
+              SettingsItem(
+                title: 'Impresoras',
+                route: AppRoutes.printingPrinters.replaceFirst(
+                  ':businessId',
+                  businessId,
+                ),
+                icon: Icons.local_printshop_outlined,
+              ),
+              SettingsItem(
+                title: 'Áreas donde se preparan los productos',
+                route: AppRoutes.printingAreas.replaceFirst(
+                  ':businessId',
+                  businessId,
+                ),
+                icon: Icons.dashboard_customize_outlined,
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+
           // ---------------- CARD: Ajustes del sistema (tu lista anterior) ------------
           SettingsCard(
             title: 'Ajustes del sistema',
@@ -100,7 +125,6 @@ class SettingsView extends StatelessWidget {
                 route: AppRoutes.settingsTaxes,
                 icon: Icons.percent_outlined,
               ),
-
               SettingsItem(
                 title: 'Tarjetas.',
                 icon: Icons.credit_card_outlined,
@@ -199,7 +223,7 @@ class SettingsCard extends StatelessWidget {
           const SizedBox(height: 8),
           const Divider(height: 1, color: MangoColors.cardBorder),
           const SizedBox(height: 8),
-          ...items.map((e) => _SettingsRow(data: e)).toList(),
+          ...items.map((e) => _SettingsRow(data: e)),
         ],
       ),
     );
