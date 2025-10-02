@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/areas/viewmodel/printers_viewmodel.dart';
 
 class PrintingPrintersView extends ConsumerWidget {
@@ -17,16 +18,23 @@ class PrintingPrintersView extends ConsumerWidget {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (vm.errorMessage != null) {
+    if (vm.errorMessage != null && vm.items.isEmpty) {
       return _ErrorBox(
         message: vm.errorMessage!,
         onRetry: vmCtrl.refresh,
       );
     }
 
+    final errorMessage = vm.errorMessage;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (errorMessage != null && vm.items.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+            child: _InlineError(message: errorMessage),
+          ),
         // Acciones de cabecera
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
@@ -66,6 +74,8 @@ class PrintingPrintersView extends ConsumerWidget {
                   itemBuilder: (context, i) {
                     final p = vm.items[i];
                     final selected = vm.selectedIds.contains(p.id);
+                    final ip = p.ip ?? '';
+                    final mac = p.mac ?? '';
                     return InkWell(
                       onLongPress: () => vmCtrl.toggleSelect(p.id),
                       child: Container(
@@ -104,9 +114,9 @@ class PrintingPrintersView extends ConsumerWidget {
                               spacing: 16,
                               runSpacing: 8,
                               children: [
-                                _MetaChip(label: 'IP', value: p.ip.isEmpty ? '—' : p.ip),
-                                _MetaChip(label: 'MAC', value: p.mac.isEmpty ? '—' : p.mac),
-                                _MetaChip(label: 'Tipo', value: p.type),
+                                _MetaChip(label: 'IP', value: ip.isEmpty ? '—' : ip),
+                                _MetaChip(label: 'MAC', value: mac.isEmpty ? '—' : mac),
+                                _MetaChip(label: 'Tipo', value: p.type.label),
                               ],
                             ),
 
@@ -121,7 +131,8 @@ class PrintingPrintersView extends ConsumerWidget {
                                   label: const Text('Imprimir muestra'),
                                 ),
                                 OutlinedButton.icon(
-                                  onPressed: () => _showPrinterInfo(context, p.name, p.ip, p.mac, p.type),
+                                  onPressed: () =>
+                                      _showPrinterInfo(context, p.name, ip, mac, p.type.label),
                                   icon: const Icon(Icons.settings_outlined),
                                   label: const Text('Configurar'),
                                 ),
@@ -178,13 +189,13 @@ class PrintingPrintersView extends ConsumerWidget {
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
           FilledButton(
             onPressed: () async {
-              await vmCtrl.createPrinter(
+              final created = await vmCtrl.createPrinter(
                 name: nameCtrl.text,
                 ip: ipCtrl.text,
                 mac: macCtrl.text,
                 type: type,
               );
-              if (context.mounted) Navigator.pop(context);
+              if (created && context.mounted) Navigator.pop(context);
             },
             child: const Text('Guardar'),
           ),
@@ -290,6 +301,32 @@ class _ErrorBox extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _InlineError extends StatelessWidget {
+  const _InlineError({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFE5E5),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.redAccent.withOpacity(0.4)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.error_outline, color: Colors.redAccent),
+          const SizedBox(width: 8),
+          Expanded(child: Text(message)),
+        ],
       ),
     );
   }

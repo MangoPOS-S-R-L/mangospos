@@ -1,137 +1,153 @@
-// lib/presentation/settings/printing/viewmodel/printers_viewmodel.dart
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'package:mangopos/core/business/business_resolver.dart';
-
 @immutable
-class PrintersVMState {
-  final List<PrinterDevice> items;
-  final bool isLoading;
-  final String? error;
-  final Set<String> selected;
-  const PrintersVMState({
+class PrintingPrintersState {
+  const PrintingPrintersState({
     this.items = const [],
     this.isLoading = false,
-    this.error,
-    this.selected = const {},
+    this.errorMessage,
+    this.selectedIds = const {},
   });
 
-  PrintersVMState copyWith({
+  final List<PrinterDevice> items;
+  final bool isLoading;
+  final String? errorMessage;
+  final Set<String> selectedIds;
+
+  PrintingPrintersState copyWith({
     List<PrinterDevice>? items,
     bool? isLoading,
-    String? error,
-    Set<String>? selected,
-  }) =>
-      PrintersVMState(
-        items: items ?? this.items,
-        isLoading: isLoading ?? this.isLoading,
-        error: error,
-        selected: selected ?? this.selected,
-      );
+    String? errorMessage,
+    Set<String>? selectedIds,
+  }) {
+    return PrintingPrintersState(
+      items: items ?? this.items,
+      isLoading: isLoading ?? this.isLoading,
+      errorMessage: errorMessage,
+      selectedIds: selectedIds ?? this.selectedIds,
+    );
+  }
 }
 
-final printersVMRepoProvider = Provider<PrintingRepository>((ref) {
+final printingPrintersRepositoryProvider = Provider<PrintingRepository>((ref) {
   final client = Supabase.instance.client;
   return PrintingRepository(client);
 });
 
-final printersVMProvider =
-    StateNotifierProvider.family<PrintersViewModel, PrintersVMState, String>(
-  (ref, businessIdOrAuto) => PrintersViewModel(ref, businessIdOrAuto),
+final printingPrintersViewModelProvider = StateNotifierProvider.family<
+    PrintingPrintersViewModel,
+    PrintingPrintersState,
+    String>(
+  (ref, businessIdOrAuto) =>
+      PrintingPrintersViewModel(ref, businessIdOrAuto)..load(),
 );
 
-class PrintersViewModel extends StateNotifier<PrintersVMState> {
-  final Ref ref;
-  final String businessIdOrAuto;
-  PrintersViewModel(this.ref, this.businessIdOrAuto)
-      : super(const PrintersVMState(isLoading: true)) {
-    _load();
-  }
+class PrintingPrintersViewModel extends StateNotifier<PrintingPrintersState> {
+  PrintingPrintersViewModel(this._ref, this._businessIdOrAuto)
+      : super(const PrintingPrintersState(isLoading: true));
 
-  PrintingRepository get _repo => ref.read(printersVMRepoProvider);
+  final Ref _ref;
+  final String _businessIdOrAuto;
 
-  Future<String> _bid() async {
-    if (businessIdOrAuto.isEmpty || businessIdOrAuto == 'auto') {
+  PrintingRepository get _repo =>
+      _ref.read(printingPrintersRepositoryProvider);
+
+  Future<String> _resolveBusinessId() async {
+    if (_businessIdOrAuto.isEmpty || _businessIdOrAuto == 'auto') {
       return BusinessResolver.resolveActiveBusinessId();
     }
-    return businessIdOrAuto;
+    return _businessIdOrAuto;
   }
 
-  Future<void> _load() async {
-    state = state.copyWith(isLoading: true, error: null);
+  Future<void> load() async {
+    state = state.copyWith(isLoading: true, errorMessage: null);
     try {
-      final bid = await _bid();
-      final items = await _repo.getPrinters(bid);
+      final businessId = await _resolveBusinessId();
+      final items = await _repo.getPrinters(businessId);
       state = state.copyWith(items: items, isLoading: false);
-    } catch (e) {
-      state = state.copyWith(isLoading: false, error: e.toString());
+    } catch (error) {
+      state = state.copyWith(
+        isLoading: false,
+        errorMessage: error.toString(),
+      );
     }
   }
 
-  Future<void> refresh() => _load();
+  Future<void> refresh() => load();
 
-  Future<bool> addPrinter({
+  Future<void> discoverOnLAN() async {
+    // Placeholder for future LAN discovery implementation.
+  }
+
+  Future<bool> createPrinter({
     required String name,
-    String ip = '',
-    String mac = '',
-    PrinterConn conn = PrinterConn.network,
-    PrinterBrand brand = PrinterBrand.generic,
-    String? notes,
+    String? ip,
+    String? mac,
+    String type = 'network',
   }) async {
+    final trimmedName = name.trim();
+    if (trimmedName.isEmpty) {
+      state = state.copyWith(errorMessage: 'El nombre de la impresora es obligatorio.');
+      return false;
+    }
     try {
-      state = state.copyWith(isLoading: true, error: null);
-      final bid = await _bid();
-      await _repo.insertPrinter(PrinterDevice(
-        id: 'temp', // lo genera el backend
-        businessId: bid,
-        name: name.trim(),
-        ip: ip.trim(),
-        mac: mac.trim(),
-        conn: conn,
-        brand: brand,
-        online: false,
-        notes: notes,
-      ));
-      await _load();
+      state = state.copyWith(isLoading: true, errorMessage: null);
+      final businessId = await _resolveBusinessId();
+      final trimmedIp = (ip ?? '').trim();
+      final trimmedMac = (mac ?? '').trim();
+      await _repo.createPrinter(
+        businessId: businessId,
+        name: trimmedName,
+        ip: trimmedIp.isEmpty ? null : trimmedIp,
+        mac: trimmedMac.isEmpty ? null : trimmedMac,
+        type: PrinterTypeX.fromName(type),
+      );
+      await load();
       return true;
-    } catch (e) {
-      state = state.copyWith(isLoading: false, error: e.toString());
+    } catch (error) {
+      state = state.copyWith(isLoading: false, errorMessage: error.toString());
       return false;
     }
   }
 
   Future<bool> deletePrinter(String printerId) async {
     try {
-      state = state.copyWith(isLoading: true, error: null);
+      state = state.copyWith(isLoading: true, errorMessage: null);
       await _repo.deletePrinter(printerId);
-      await _load();
+      await load();
       return true;
-    } catch (e) {
-      state = state.copyWith(isLoading: false, error: e.toString());
+    } catch (error) {
+      state = state.copyWith(isLoading: false, errorMessage: error.toString());
       return false;
     }
   }
 
-  Future<bool> printTest(String printerId) async {
+  Future<bool> printSample(String printerId) async {
     try {
       await _repo.enqueueTestPrint(printerId);
       return true;
-    } catch (e) {
-      state = state.copyWith(error: e.toString());
+    } catch (error) {
+      state = state.copyWith(errorMessage: error.toString());
       return false;
     }
   }
 
-  // selección múltiple
   void toggleSelect(String id) {
-    final next = Set<String>.from(state.selected);
-    next.contains(id) ? next.remove(id) : next.add(id);
-    state = state.copyWith(selected: next);
+    final next = Set<String>.from(state.selectedIds);
+    if (next.contains(id)) {
+      next.remove(id);
+    } else {
+      next.add(id);
+    }
+    state = state.copyWith(selectedIds: next);
   }
 
-  void clearSelection() => state = state.copyWith(selected: {});
+  void clearSelection() {
+    state = state.copyWith(selectedIds: <String>{});
+  }
 }

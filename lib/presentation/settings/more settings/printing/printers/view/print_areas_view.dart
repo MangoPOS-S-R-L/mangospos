@@ -17,12 +17,14 @@ class PrintingAreasView extends ConsumerWidget {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (vm.errorMessage != null) {
+    if (vm.errorMessage != null && vm.items.isEmpty) {
       return _ErrorBox(
         message: vm.errorMessage!,
         onRetry: vmCtrl.refresh,
       );
     }
+
+    final errorMessage = vm.errorMessage;
 
     final isWide = MediaQuery.of(context).size.width >= 900;
     final cross = isWide ? 3 : 2;
@@ -30,6 +32,11 @@ class PrintingAreasView extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (errorMessage != null && vm.items.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+            child: _InlineError(message: errorMessage),
+          ),
         // Acciones de cabecera
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
@@ -96,7 +103,7 @@ class PrintingAreasView extends ConsumerWidget {
                                 ),
                               ),
                               Text(
-                                '${a.productsCount ?? 0} productos',
+                                '${a.productsCount} productos',
                                 style: const TextStyle(color: Colors.black54),
                               ),
                             ]),
@@ -106,7 +113,13 @@ class PrintingAreasView extends ConsumerWidget {
                               runSpacing: 8,
                               children: [
                                 OutlinedButton.icon(
-                                  onPressed: () => _showAssignPrinterDialog(context, ref, vmCtrl, a.id),
+                                  onPressed: () => _showAssignPrinterDialog(
+                                    context,
+                                    ref,
+                                    vmCtrl,
+                                    a.id,
+                                    businessId,
+                                  ),
                                   icon: const Icon(Icons.print_outlined),
                                   label: const Text('Asignar impresora'),
                                 ),
@@ -149,8 +162,8 @@ class PrintingAreasView extends ConsumerWidget {
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
           FilledButton(
             onPressed: () async {
-              await vmCtrl.createArea(name: nameCtrl.text);
-              if (context.mounted) Navigator.pop(context);
+              final created = await vmCtrl.createArea(name: nameCtrl.text);
+              if (created && context.mounted) Navigator.pop(context);
             },
             child: const Text('Guardar'),
           ),
@@ -197,9 +210,10 @@ class PrintingAreasView extends ConsumerWidget {
     WidgetRef ref,
     PrintingAreasViewModel vmCtrl,
     String areaId,
+    String businessId,
   ) {
-    final printersVM = ref.read(printingPrintersViewModelProvider('auto'));
-    final printers = printersVM.items;
+    final printersState = ref.read(printingPrintersViewModelProvider(businessId));
+    final printers = printersState.items;
 
     showDialog(
       context: context,
@@ -207,26 +221,35 @@ class PrintingAreasView extends ConsumerWidget {
         String? selectedId;
         return AlertDialog(
           title: const Text('Asignar impresora'),
-          content: printers.isEmpty
-              ? const Text('No hay impresoras registradas.')
-              : SizedBox(
-                  width: 380,
-                  child: DropdownButtonFormField<String>(
-                    value: selectedId,
-                    items: printers
-                        .map((p) => DropdownMenuItem<String>(
-                              value: p.id,
-                              child: Text('${p.name}  (${p.ip.isEmpty ? "sin IP" : p.ip})'),
-                            ))
-                        .toList(),
-                    onChanged: (v) => selectedId = v,
-                    decoration: const InputDecoration(labelText: 'Selecciona una impresora'),
+          content: printersState.isLoading
+              ? const SizedBox(
+                  height: 120,
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              : printers.isEmpty
+                  ? const Text('No hay impresoras registradas.')
+                  : SizedBox(
+                      width: 380,
+                      child: DropdownButtonFormField<String>(
+                          value: selectedId,
+                          items: printers
+                              .map((p) {
+                                final ipValue = p.ip ?? '';
+                                final ipLabel = ipValue.isEmpty ? 'sin IP' : ipValue;
+                                return DropdownMenuItem<String>(
+                                  value: p.id,
+                                  child: Text('${p.name}  ($ipLabel)'),
+                                );
+                              })
+                              .toList(),
+                          onChanged: (v) => selectedId = v,
+                          decoration: const InputDecoration(labelText: 'Selecciona una impresora'),
+                        ),
                   ),
-                ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
             FilledButton(
-              onPressed: printers.isEmpty
+              onPressed: printers.isEmpty || printersState.isLoading
                   ? null
                   : () async {
                       if (selectedId == null) return;
@@ -291,6 +314,32 @@ class _ErrorBox extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _InlineError extends StatelessWidget {
+  const _InlineError({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFE5E5),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.redAccent.withOpacity(0.4)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.error_outline, color: Colors.redAccent),
+          const SizedBox(width: 8),
+          Expanded(child: Text(message)),
+        ],
       ),
     );
   }

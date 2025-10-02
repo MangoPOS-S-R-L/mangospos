@@ -1,91 +1,161 @@
-// lib/data/printing/models.dart
 import 'package:meta/meta.dart';
 
-enum PrinterConn { network, bluetooth, usb }
-enum PrinterBrand { generic, epson, bematech, star }
+/// Connection types supported by the printing service.
+enum PrinterType { network, bluetooth, usb }
+
+extension PrinterTypeX on PrinterType {
+  static PrinterType fromName(String? value) {
+    if (value == null) return PrinterType.network;
+    return PrinterType.values.firstWhere(
+      (type) => type.name == value,
+      orElse: () => PrinterType.network,
+    );
+  }
+
+  String get label {
+    switch (this) {
+      case PrinterType.network:
+        return 'network';
+      case PrinterType.bluetooth:
+        return 'bluetooth';
+      case PrinterType.usb:
+        return 'usb';
+    }
+  }
+}
 
 @immutable
 class PrinterDevice {
-  final String id;            // uuid
-  final String businessId;    // fk
-  final String name;          // "TP300 PROMaria"
-  final String ip;            // puede ser ""
-  final String mac;           // "00-1A-CD-DE-55-BC"
-  final PrinterConn conn;     // network|bluetooth|usb
-  final PrinterBrand brand;   // generic|...
-  final bool online;          // ping lógico
-  final DateTime? lastSeen;
-  final int? statusRssi;      // opcional para BT/WiFi
-  final String? notes;
-
   const PrinterDevice({
     required this.id,
     required this.businessId,
     required this.name,
-    required this.ip,
-    required this.mac,
-    required this.conn,
-    required this.brand,
+    this.ip,
+    this.mac,
+    required this.type,
     required this.online,
     this.lastSeen,
-    this.statusRssi,
-    this.notes,
+    required this.createdAt,
   });
 
-  factory PrinterDevice.fromMap(Map m) => PrinterDevice(
-    id: m['id'],
-    businessId: m['business_id'],
-    name: m['name'] ?? 'Printer',
-    ip: m['ip'] ?? '',
-    mac: m['mac'] ?? '',
-    conn: PrinterConn.values.byName((m['conn'] ?? 'network') as String),
-    brand: PrinterBrand.values.byName((m['brand'] ?? 'generic') as String),
-    online: (m['online'] ?? false) as bool,
-    lastSeen: m['last_seen'] == null ? null : DateTime.parse(m['last_seen']),
-    statusRssi: m['status_rssi'],
-    notes: m['notes'],
-  );
+  final String id;
+  final String businessId;
+  final String name;
+  final String? ip;
+  final String? mac;
+  final PrinterType type;
+  final bool online;
+  final DateTime? lastSeen;
+  final DateTime createdAt;
 
-  Map<String, dynamic> toMap() => {
-    'id': id,
-    'business_id': businessId,
-    'name': name,
-    'ip': ip,
-    'mac': mac,
-    'conn': conn.name,
-    'brand': brand.name,
-    'online': online,
-    'last_seen': lastSeen?.toIso8601String(),
-    'status_rssi': statusRssi,
-    'notes': notes,
-  };
+  factory PrinterDevice.fromMap(Map<String, dynamic> map) {
+    return PrinterDevice(
+      id: map['id'] as String,
+      businessId: map['business_id'] as String,
+      name: (map['name'] as String?) ?? 'Printer',
+      ip: map['ip']?.toString(),
+      mac: map['mac'] as String?,
+      type: PrinterTypeX.fromName(map['type'] as String?),
+      online: (map['online'] as bool?) ?? false,
+      lastSeen: map['last_seen'] == null
+          ? null
+          : DateTime.parse(map['last_seen'] as String),
+      createdAt: map['created_at'] == null
+          ? DateTime.now()
+          : DateTime.parse(map['created_at'] as String),
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    final ipValue = ip;
+    final macValue = mac;
+    return {
+      'id': id,
+      'business_id': businessId,
+      'name': name,
+      'ip': ipValue == null || ipValue.isEmpty ? null : ipValue,
+      'mac': macValue == null || macValue.isEmpty ? null : macValue,
+      'type': type.name,
+      'online': online,
+      'last_seen': lastSeen?.toIso8601String(),
+    };
+  }
 }
 
 @immutable
 class PrintArea {
-  final String id;           // uuid
-  final String businessId;
-  final String title;        // "Cocina", "Barra", "Horno"
-  final int productCount;    // cache de cantidad de productos del área (opcional)
   const PrintArea({
     required this.id,
     required this.businessId,
-    required this.title,
-    required this.productCount,
+    required this.name,
+    required this.createdAt,
+    this.productsCount = 0,
   });
 
-  factory PrintArea.fromMap(Map m) => PrintArea(
-    id: m['id'],
-    businessId: m['business_id'],
-    title: m['title'],
-    productCount: (m['product_count'] ?? 0) as int,
-  );
+  final String id;
+  final String businessId;
+  final String name;
+  final DateTime createdAt;
+  final int productsCount;
+
+  factory PrintArea.fromMap(Map<String, dynamic> map) {
+    return PrintArea(
+      id: map['id'] as String,
+      businessId: map['business_id'] as String,
+      name: map['name'] as String,
+      createdAt: map['created_at'] == null
+          ? DateTime.now()
+          : DateTime.parse(map['created_at'] as String),
+      productsCount: (map['products_count'] as int?) ?? 0,
+    );
+  }
 }
 
 @immutable
-class AreaPrinter { // tabla pivote
+class PrintAreaPrinter {
+  const PrintAreaPrinter({
+    required this.id,
+    required this.businessId,
+    required this.areaId,
+    required this.printerId,
+    this.enabled = true,
+    this.printsOrders = true,
+    this.printsPrebills = false,
+    this.printsReceipts = false,
+  });
+
+  final String id;
+  final String businessId;
   final String areaId;
   final String printerId;
-  const AreaPrinter({required this.areaId, required this.printerId});
-  Map<String, dynamic> toMap() => {'area_id': areaId, 'printer_id': printerId};
+  final bool enabled;
+  final bool printsOrders;
+  final bool printsPrebills;
+  final bool printsReceipts;
+
+  factory PrintAreaPrinter.fromMap(Map<String, dynamic> map) {
+    return PrintAreaPrinter(
+      id: map['id'] as String,
+      businessId: map['business_id'] as String,
+      areaId: map['area_id'] as String,
+      printerId: map['printer_id'] as String,
+      enabled: (map['enabled'] as bool?) ?? true,
+      printsOrders: (map['prints_orders'] as bool?) ?? true,
+      printsPrebills: (map['prints_prebills'] as bool?) ?? false,
+      printsReceipts: (map['prints_receipts'] as bool?) ?? false,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'business_id': businessId,
+      'area_id': areaId,
+      'printer_id': printerId,
+      'enabled': enabled,
+      'prints_orders': printsOrders,
+      'prints_prebills': printsPrebills,
+      'prints_receipts': printsReceipts,
+    };
+  }
 }
