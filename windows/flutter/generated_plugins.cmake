@@ -6,6 +6,8 @@ list(APPEND FLUTTER_PLUGIN_LIST
   app_links
   media_kit_libs_windows_video
   media_kit_video
+  permission_handler_windows
+  universal_ble
   url_launcher_windows
   volume_controller
 )

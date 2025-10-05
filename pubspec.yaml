@@ -47,6 +47,13 @@ dependencies:
   flutter_svg: ^2.2.1
   file_picker: ^10.3.3
   image_picker_for_web: ^3.1.0
+  ping_discover_network_forked: ^0.0.1
+  network_info_plus: ^7.0.0
+  flutter_blue_plus: ^2.0.0
+  permission_handler: ^12.0.1
+  flutter_blue_plus_windows: ^1.16.0
+  universal_ble: ^0.21.1
+  web_socket_channel: ^3.0.3
 
 dev_dependencies:
   flutter_test:

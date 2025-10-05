@@ -1,11 +1,10 @@
+// lib/presentation/settings/printing/state/printers_state.dart
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:mangopos/core/business/business_resolver.dart';
-import 'package:mangopos/data/printing/models.dart';
-import 'package:mangopos/data/printing/printing_repository.dart';
 
 /// Repo provider (inyecta SupabaseClient)
 final printersRepoProvider = Provider<PrintingRepository>((ref) {
@@ -13,18 +12,17 @@ final printersRepoProvider = Provider<PrintingRepository>((ref) {
   return PrintingRepository(client);
 });
 
-/// Lista read-only de impresoras (útil para combos, selects, etc.)
+/// Lista “read-only” de impresoras (útil para combos, etc.)
 final printersListProvider =
     FutureProvider.family<List<PrinterDevice>, String>((ref, businessIdOrAuto) async {
   final repo = ref.read(printersRepoProvider);
-  final bid = await _resolveBusinessId(businessIdOrAuto);
+  final bid = await _ensureBid(businessIdOrAuto);
   return repo.getPrinters(bid);
 });
 
-/// Helper para resolver el negocio activo si se pasa 'auto' o vacío.
-Future<String> _resolveBusinessId(String businessIdOrAuto) async {
-  if (businessIdOrAuto.isEmpty || businessIdOrAuto == 'auto') {
-    return await BusinessResolver.resolveActiveBusinessId();
-  }
-  return businessIdOrAuto;
+Future<String> _ensureBid(String businessIdOrAuto) async {
+  // usa tu BusinessResolver.ensure(...)
+  return BusinessResolver.ensure(
+    (businessIdOrAuto.isEmpty) ? 'auto' : businessIdOrAuto,
+  );
 }

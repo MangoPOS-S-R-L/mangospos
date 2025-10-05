@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
-import 'package:mangopos/presentation/settings/more%20settings/printing/areas/viewmodel/printers_viewmodel.dart';
-import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/print_areas_viewmodel.dart';
+import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
+import 'package:mangopos/presentation/settings/more%20settings/printing/areas/viewmodel/print_areas_viewmodel.dart';
 
 class PrintingAreasView extends ConsumerWidget {
   final String businessId;
@@ -10,19 +10,18 @@ class PrintingAreasView extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final vm = ref.watch(printingAreasViewModelProvider(businessId));
-    final vmCtrl = ref.read(printingAreasViewModelProvider(businessId).notifier);
+    final vm = ref.watch(printingAreasViewModelProvider);
+    final vmCtrl = ref.read(printingAreasViewModelProvider.notifier);
 
     if (vm.isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (vm.errorMessage != null) {
-      return _ErrorBox(
-        message: vm.errorMessage!,
-        onRetry: vmCtrl.refresh,
-      );
+    if (vm.errorMessage != null && vm.items.isEmpty) {
+      return _ErrorBox(message: vm.errorMessage!, onRetry: vmCtrl.refresh);
     }
+
+    final errorMessage = vm.errorMessage;
 
     final isWide = MediaQuery.of(context).size.width >= 900;
     final cross = isWide ? 3 : 2;
@@ -30,6 +29,11 @@ class PrintingAreasView extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (errorMessage != null && vm.items.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+            child: _InlineError(message: errorMessage),
+          ),
         // Acciones de cabecera
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
@@ -74,53 +78,83 @@ class PrintingAreasView extends ConsumerWidget {
                       onLongPress: () => vmCtrl.toggleSelect(a.id),
                       child: Container(
                         decoration: BoxDecoration(
-                          color: selected ? const Color(0xFFFFF3E6) : MangoColors.white,
+                          color: selected
+                              ? const Color(0xFFFFF3E6)
+                              : MangoColors.white,
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(color: MangoColors.cardBorder),
                           boxShadow: const [
-                            BoxShadow(color: Color(0x12000000), blurRadius: 8, offset: Offset(0, 3)),
+                            BoxShadow(
+                              color: Color(0x12000000),
+                              blurRadius: 8,
+                              offset: Offset(0, 3),
+                            ),
                           ],
                         ),
                         padding: const EdgeInsets.all(14),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Row(children: [
-                              const Icon(Icons.room_service_outlined, size: 22),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  a.name,
-                                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                                  overflow: TextOverflow.ellipsis,
+                            Row(
+                              children: [
+                                const Icon(
+                                  Icons.room_service_outlined,
+                                  size: 22,
                                 ),
-                              ),
-                              Text(
-                                '${a.productsCount ?? 0} productos',
-                                style: const TextStyle(color: Colors.black54),
-                              ),
-                            ]),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    a.name,
+                                    style: const TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                Text(
+                                  '${a.productsCount} productos',
+                                  style: const TextStyle(color: Colors.black54),
+                                ),
+                              ],
+                            ),
                             const Spacer(),
                             Wrap(
                               spacing: 10,
                               runSpacing: 8,
                               children: [
                                 OutlinedButton.icon(
-                                  onPressed: () => _showAssignPrinterDialog(context, ref, vmCtrl, a.id),
+                                  onPressed: () => _showAssignPrinterDialog(
+                                    context,
+                                    ref,
+                                    vmCtrl,
+                                    a.id,
+                                    businessId,
+                                  ),
                                   icon: const Icon(Icons.print_outlined),
                                   label: const Text('Asignar impresora'),
                                 ),
                                 OutlinedButton.icon(
-                                  onPressed: () => _showAreaConfig(context, a.name),
+                                  onPressed: () =>
+                                      _showAreaConfig(context, a.name),
                                   icon: const Icon(Icons.settings_outlined),
                                   label: const Text('Configurar'),
                                 ),
                                 TextButton.icon(
-                                  onPressed: () => _confirmDeleteArea(context, onConfirm: () {
-                                    vmCtrl.deleteArea(a.id);
-                                  }),
-                                  icon: const Icon(Icons.delete_outline, color: Colors.red),
-                                  label: const Text('Eliminar', style: TextStyle(color: Colors.red)),
+                                  onPressed: () => _confirmDeleteArea(
+                                    context,
+                                    onConfirm: () {
+                                      vmCtrl.deleteArea(a.id);
+                                    },
+                                  ),
+                                  icon: const Icon(
+                                    Icons.delete_outline,
+                                    color: Colors.red,
+                                  ),
+                                  label: const Text(
+                                    'Eliminar',
+                                    style: TextStyle(color: Colors.red),
+                                  ),
                                 ),
                               ],
                             ),
@@ -146,11 +180,14 @@ class PrintingAreasView extends ConsumerWidget {
           decoration: const InputDecoration(labelText: 'Nombre del área'),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancelar'),
+          ),
           FilledButton(
             onPressed: () async {
-              await vmCtrl.createArea(name: nameCtrl.text);
-              if (context.mounted) Navigator.pop(context);
+              final created = await vmCtrl.createArea(name: nameCtrl.text);
+              if (created && context.mounted) Navigator.pop(context);
             },
             child: const Text('Guardar'),
           ),
@@ -159,14 +196,22 @@ class PrintingAreasView extends ConsumerWidget {
     );
   }
 
-  void _confirmDeleteArea(BuildContext context, {required VoidCallback onConfirm}) {
+  void _confirmDeleteArea(
+    BuildContext context, {
+    required VoidCallback onConfirm,
+  }) {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Eliminar área'),
-        content: const Text('Esta acción no se puede deshacer. ¿Deseas continuar?'),
+        content: const Text(
+          'Esta acción no se puede deshacer. ¿Deseas continuar?',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancelar'),
+          ),
           FilledButton(
             onPressed: () {
               onConfirm();
@@ -184,8 +229,15 @@ class PrintingAreasView extends ConsumerWidget {
       context: context,
       builder: (_) => AlertDialog(
         title: Text(areaName),
-        content: const Text('Configuraciones del área (copias, tipos de impresión, etc.)'),
-        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cerrar'))],
+        content: const Text(
+          'Configuraciones del área (copias, tipos de impresión, etc.)',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cerrar'),
+          ),
+        ],
       ),
     );
   }
@@ -197,9 +249,10 @@ class PrintingAreasView extends ConsumerWidget {
     WidgetRef ref,
     PrintingAreasViewModel vmCtrl,
     String areaId,
+    String businessId,
   ) {
-    final printersVM = ref.read(printingPrintersViewModelProvider('auto'));
-    final printers = printersVM.items;
+    final printersState = ref.read(printingPrintersViewModelProvider);
+    final printers = printersState.items;
 
     showDialog(
       context: context,
@@ -207,30 +260,45 @@ class PrintingAreasView extends ConsumerWidget {
         String? selectedId;
         return AlertDialog(
           title: const Text('Asignar impresora'),
-          content: printers.isEmpty
+          content: printersState.isLoading
+              ? const SizedBox(
+                  height: 120,
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              : printers.isEmpty
               ? const Text('No hay impresoras registradas.')
               : SizedBox(
                   width: 380,
                   child: DropdownButtonFormField<String>(
                     value: selectedId,
-                    items: printers
-                        .map((p) => DropdownMenuItem<String>(
-                              value: p.id,
-                              child: Text('${p.name}  (${p.ip.isEmpty ? "sin IP" : p.ip})'),
-                            ))
-                        .toList(),
+                    items: printers.map((p) {
+                      final ipValue = p.ip ?? '';
+                      final ipLabel = ipValue.isEmpty ? 'sin IP' : ipValue;
+                      return DropdownMenuItem<String>(
+                        value: p.id,
+                        child: Text('${p.name}  ($ipLabel)'),
+                      );
+                    }).toList(),
                     onChanged: (v) => selectedId = v,
-                    decoration: const InputDecoration(labelText: 'Selecciona una impresora'),
+                    decoration: const InputDecoration(
+                      labelText: 'Selecciona una impresora',
+                    ),
                   ),
                 ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar'),
+            ),
             FilledButton(
-              onPressed: printers.isEmpty
+              onPressed: printers.isEmpty || printersState.isLoading
                   ? null
                   : () async {
                       if (selectedId == null) return;
-                      await vmCtrl.linkAreaPrinter(areaId: areaId, printerId: selectedId!);
+                      await vmCtrl.linkAreaPrinter(
+                        areaId: areaId,
+                        printerId: selectedId!,
+                      );
                       if (context.mounted) Navigator.pop(context);
                     },
               child: const Text('Asignar'),
@@ -253,7 +321,11 @@ class _EmptyHint extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: const [
-            Icon(Icons.dashboard_customize_outlined, size: 56, color: Colors.black45),
+            Icon(
+              Icons.dashboard_customize_outlined,
+              size: 56,
+              color: Colors.black45,
+            ),
             SizedBox(height: 10),
             Text(
               'No hay áreas creadas.\nAgrega una para comenzar.',
@@ -291,6 +363,32 @@ class _ErrorBox extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _InlineError extends StatelessWidget {
+  const _InlineError({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFE5E5),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.redAccent.withOpacity(0.4)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.error_outline, color: Colors.redAccent),
+          const SizedBox(width: 8),
+          Expanded(child: Text(message)),
+        ],
       ),
     );
   }
