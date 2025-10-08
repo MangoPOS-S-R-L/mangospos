@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:io' show Platform, Process;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // <-- NECESARIO para bloquear orientación
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:media_kit/media_kit.dart';
@@ -19,12 +20,6 @@ const int agentPort = 3000;
 /// Si usas Node:
 ///   - executable: 'node'
 ///   - args: ['agent.js']
-///   - workingDir: 'D:\\MangoPos\\Dev\\supabase\\printer-service'
-///
-/// Si tienes un binario empaquetado (recomendado para producción desktop):
-///   - executable: 'printer-service.exe' (o './printer-service' en mac/linux)
-///   - args: []
-///   - workingDir: carpeta donde está el binario
 const String agentExecutableWindows = 'node'; // o 'printer-service.exe'
 const List<String> agentArgsWindows = ['agent.js']; // [] si usas .exe
 const String agentWorkingDirWindows =
@@ -61,7 +56,6 @@ Future<void> _ensurePrinterAgentStarted() async {
 
   if (kIsWeb) {
     // En Web no podemos lanzar procesos. Solo “precalienta” con varios /health.
-    // Esto reduce la latencia del primer discover.
     // ignore: avoid_print
     print(
       '[Agent] Web: no se puede iniciar proceso; intentando precalentar /health…',
@@ -136,11 +130,24 @@ Future<void> _ensurePrinterAgentStarted() async {
   );
 }
 
+Future<void> _lockLandscapeIfMobile() async {
+  // Bloquea SOLO en Android/iOS. No afecta Web ni Desktop.
+  if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+    await SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+  }
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await Supabase.initialize(url: Env.supabaseUrl, anonKey: Env.supabaseAnonKey);
   MediaKit.ensureInitialized();
+
+  // 🔒 Bloquear orientación a horizontal (Android/iOS)
+  await _lockLandscapeIfMobile();
 
   // 🔸 Arranca o “precalienta” el agente ANTES de montar el árbol de widgets
   await _ensurePrinterAgentStarted();
@@ -154,7 +161,7 @@ class MyApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return MaterialApp.router(
-      title: 'MangoPOSs',
+      title: 'MangoPOS',
       debugShowCheckedModeBanner: false,
       routerConfig: AppRouter.router,
       theme: ThemeData(primaryColor: const Color(0xFFF7941A)),

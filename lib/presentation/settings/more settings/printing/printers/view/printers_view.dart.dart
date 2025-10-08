@@ -257,7 +257,7 @@ class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
                     ),
                     const SizedBox(height: 12),
                     Text(
-                      '${_searchProgress}%',
+                      '$_searchProgress%',
                       style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,

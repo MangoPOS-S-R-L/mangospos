@@ -312,7 +312,7 @@ class PrintingRepository {
         .eq('ip', ip)
         .maybeSingle();
     if (row == null) return null;
-    return PrinterDevice.fromMap(row as Map<String, dynamic>);
+    return PrinterDevice.fromMap(row);
   }
 
   Future<PrinterDevice> _upsertNetworkPrinter({
@@ -335,6 +335,6 @@ class PrintingRepository {
         .select()
         .single();
 
-    return PrinterDevice.fromMap(inserted as Map<String, dynamic>);
+    return PrinterDevice.fromMap(inserted);
   }
 }

@@ -77,6 +77,8 @@ class PrinterService {
 
 // Widget de ejemplo
 class PrinterWidget extends StatefulWidget {
+  const PrinterWidget({super.key});
+
   @override
   _PrinterWidgetState createState() => _PrinterWidgetState();
 }

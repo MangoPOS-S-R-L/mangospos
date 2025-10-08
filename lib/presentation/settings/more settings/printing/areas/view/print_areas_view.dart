@@ -270,7 +270,7 @@ class PrintingAreasView extends ConsumerWidget {
               : SizedBox(
                   width: 380,
                   child: DropdownButtonFormField<String>(
-                    value: selectedId,
+                    initialValue: selectedId,
                     items: printers.map((p) {
                       final ipValue = p.ip ?? '';
                       final ipLabel = ipValue.isEmpty ? 'sin IP' : ipValue;

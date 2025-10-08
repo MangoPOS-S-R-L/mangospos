@@ -285,6 +285,8 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
     }
   }
 
+  
+
   // ----------------- Selección -----------------
   void toggleSelect(String id) {
     final next = Set<String>.from(state.selectedIds);
@@ -486,8 +488,9 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
 
     try {
       final perms = await _ensureBtPermissions();
-      if (!perms)
+      if (!perms) {
         throw Exception('Permisos de Bluetooth denegados o no disponibles.');
+      }
 
       BluetoothAdapterState adapterState;
       try {
@@ -505,7 +508,9 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
 
       final found = <BluetoothDevice>{};
       final sub = FlutterBluePlus.scanResults.listen((results) {
-        for (final r in results) found.add(r.device);
+        for (final r in results) {
+          found.add(r.device);
+        }
       });
 
       try {
@@ -642,8 +647,8 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
               value: _activeJobId!,
             ),
             callback: (payload) async {
-              final status = payload.newRecord?['status'] as String?;
-              final errMsg = payload.newRecord?['error'] as String?;
+              final status = payload.newRecord['status'] as String?;
+              final errMsg = payload.newRecord['error'] as String?;
               if (status == 'done') {
                 await _refreshWithoutChangingDiscoveryState();
                 _finishDiscovery();
@@ -690,8 +695,9 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       }
       final gatewayIp = await NetworkInfo().getWifiGatewayIP();
 
-      if (deviceIp == null)
+      if (deviceIp == null) {
         throw Exception('No hay IP local. Conéctate a la red.');
+      }
 
       final base = _subnetBaseFromIp(deviceIp);
       final myLast = int.parse(deviceIp.split('.').last);
@@ -788,7 +794,7 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       try {
         final since = _jobStartAt ?? started;
         final items = await _repo.getPrinters(businessId);
-        final hasNew = items.any((p) => (p.createdAt?.isAfter(since) ?? false));
+        final hasNew = items.any((p) => (p.createdAt.isAfter(since) ?? false));
         if (hasNew) state = state.copyWith(items: items);
 
         if (_activeJobId != null) {
@@ -926,6 +932,7 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       return false;
     }
   }
+  
 
   Future<bool> _ensureBtPermissions() async {
     try {
