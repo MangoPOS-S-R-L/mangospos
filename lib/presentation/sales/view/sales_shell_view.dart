@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/utils/responsive_utils.dart';
+import 'package:mangopos/widgets/responsive/responsive_icon.dart';
 
 enum SalesTab { byZone, manual, quick, delivery, selfService }
 
@@ -14,22 +16,34 @@ class SalesShellView extends StatelessWidget {
   Widget build(BuildContext context) {
     final route = GoRouterState.of(context).uri.toString();
     final selected = _selectedFromRoute(route);
+    final rawMenuWidth = context.isDesktop
+        ? context.wp(12)
+        : context.isTablet
+            ? context.wp(16)
+            : context.wp(28);
+    final menuWidth = rawMenuWidth.clamp(90.0, 200.0) as double;
+    final sidePadding = context.wp(context.isDesktop ? 1.5 : 2.8);
+    final headerHeight = context.hp(context.isMobile ? 6 : 5);
 
     return Scaffold(
       backgroundColor: Colors.white,
-      body: Row(
-        children: [
+      body: SafeArea(
+        child: Row(
+          children: [
           // ======= SUBMENÚ COMPACTO =======
           Material(
             color: Colors.white,
             child: ConstrainedBox(
-              constraints: const BoxConstraints(minWidth: 90, maxWidth: 120),
+              constraints: BoxConstraints(
+                minWidth: menuWidth,
+                maxWidth: menuWidth,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   // Encabezado con altura fija de 72
                   Container(
-                    height: 58,
+                    height: headerHeight,
                     alignment: Alignment.center,
                     child: Text(
                       'VENTAS',
@@ -38,17 +52,18 @@ class SalesShellView extends StatelessWidget {
                         color: Colors.grey.shade600,
                         fontWeight: FontWeight.w800,
                         letterSpacing: .3,
+                        fontSize: context.sp(12),
                       ),
                     ),
                   ),
-                  const _SideDivider(),
+                  _SideDivider(padding: sidePadding),
 
                   // Opciones
                   Expanded(
                     child: ListView(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 12,
+                      padding: EdgeInsets.symmetric(
+                        horizontal: sidePadding,
+                        vertical: context.hp(1.2),
                       ),
                       children: [
                         _SalesNavItemVertical(
@@ -91,13 +106,14 @@ class SalesShellView extends StatelessWidget {
           ),
 
           // Divider vertical
-          const _VerticalSeparator(),
+          _VerticalSeparator(padding: context.hp(1)),
 
           // ======= CONTENIDO =======
           Expanded(
             child: Container(color: Colors.white, child: child),
           ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -112,17 +128,31 @@ class SalesShellView extends StatelessWidget {
 }
 
 class _SideDivider extends StatelessWidget {
-  const _SideDivider();
+  final double padding;
+  const _SideDivider({required this.padding});
   @override
-  Widget build(BuildContext context) =>
-      Divider(height: 1, thickness: 1, color: Colors.grey.shade200);
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: padding),
+      child: Divider(height: 1, thickness: 1, color: Colors.grey.shade200),
+    );
+  }
 }
 
 class _VerticalSeparator extends StatelessWidget {
-  const _VerticalSeparator();
+  final double padding;
+  const _VerticalSeparator({required this.padding});
   @override
-  Widget build(BuildContext context) =>
-      Container(width: 1, height: double.infinity, color: Colors.grey.shade200);
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: padding),
+      child: Container(
+        width: 1,
+        height: double.infinity,
+        color: Colors.grey.shade200,
+      ),
+    );
+  }
 }
 
 /// Ítem de navegación compacto
@@ -154,7 +184,7 @@ class _SalesNavItemVertical extends StatelessWidget {
     return Opacity(
       opacity: opacity,
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
+        padding: EdgeInsets.symmetric(vertical: context.hp(0.8)),
         child: InkWell(
           onTap: disabled ? null : onTap,
           borderRadius: BorderRadius.circular(12),
@@ -162,7 +192,10 @@ class _SalesNavItemVertical extends StatelessWidget {
           hoverColor: Colors.transparent,
           highlightColor: Colors.transparent,
           child: Ink(
-            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
+            padding: EdgeInsets.symmetric(
+              vertical: context.hp(0.9),
+              horizontal: context.wp(1.2),
+            ),
             decoration: BoxDecoration(
               color: bg,
               borderRadius: BorderRadius.circular(12),
@@ -171,8 +204,8 @@ class _SalesNavItemVertical extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(icon, color: fg, size: 26),
-                const SizedBox(height: 6),
+                ResponsiveIcon(icon: icon, color: fg, size: 26),
+                SizedBox(height: context.hp(0.6)),
                 Text(
                   label,
                   textAlign: TextAlign.center,
@@ -180,7 +213,7 @@ class _SalesNavItemVertical extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: fg,
-                    fontSize: 12,
+                    fontSize: context.sp(12),
                     fontWeight: FontWeight.w600,
                   ),
                 ),
