@@ -9,6 +9,7 @@ import '../state/by_zone_state.dart';
 final zonesRepoProvider = Provider(
   (ref) => ZonesRepository(Supabase.instance.client),
 );
+
 final byZoneVmProvider = NotifierProvider<ByZoneViewModel, ByZoneState>(
   ByZoneViewModel.new,
 );
@@ -84,11 +85,20 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
   }
 
   void _subscribeRealtime(ZonesRepository repo, String businessId) {
-    if (_rt != null && _rtBusinessId == businessId) {
-      return;
-    }
+    if (_rt != null && _rtBusinessId == businessId) return;
     _rt?.unsubscribe();
     _rt = repo.subscribe(() => load(businessId));
     _rtBusinessId = businessId;
+  }
+
+  // 👇 Nuevo: marcar/desmarcar una mesa como "abriendo"
+  void setOpening(String tableId, bool value) {
+    final set = {...state.openingTables};
+    if (value) {
+      set.add(tableId);
+    } else {
+      set.remove(tableId);
+    }
+    state = state.copyWith(openingTables: set);
   }
 }

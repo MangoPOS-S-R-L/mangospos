@@ -8,12 +8,16 @@ class ByZoneState {
   final String? error;
   final String? businessId;
 
+  /// 👇 nuevo: mesas en proceso de abrir (para deshabilitar botón y mostrar loader)
+  final Set<String> openingTables;
+
   const ByZoneState({
     this.zones = const [],
     this.statusByZone = const {},
     this.loading = false,
     this.error,
     this.businessId,
+    this.openingTables = const {},
   });
 
   ByZoneState copyWith({
@@ -22,6 +26,7 @@ class ByZoneState {
     bool? loading,
     String? error,
     String? businessId,
+    Set<String>? openingTables,
   }) {
     return ByZoneState(
       zones: zones ?? this.zones,
@@ -29,6 +34,7 @@ class ByZoneState {
       loading: loading ?? this.loading,
       error: error,
       businessId: businessId ?? this.businessId,
+      openingTables: openingTables ?? this.openingTables,
     );
   }
 }
