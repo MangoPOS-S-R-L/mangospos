@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/presentation/sales/view/table_order_screen.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:mangopos/presentation/sales/view/menu_browser_sheet.dart'; // ← nuevo
 import '../../../data/models/table_status.dart';
 
 class SalesByZoneView extends ConsumerStatefulWidget {
@@ -420,17 +422,16 @@ class _TableCard extends ConsumerWidget {
 
     byZone.setOpening(ts.tableId, true);
     try {
+      // abre/continúa la sesión de la mesa
       await ref.read(currentOrderProvider.notifier).openTable(ts.tableId);
 
       if (context.mounted) {
-        await showModalBottomSheet(
-          context: context,
-          isScrollControlled: true,
-          useSafeArea: true,
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        // Navega a pantalla completa (reemplaza la actual)
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) =>
+                TableOrderScreen(tableId: ts.tableId, tableCode: ts.code),
           ),
-          builder: (_) => const _OrderSheet(),
         );
       }
     } finally {
@@ -447,226 +448,135 @@ class _TableCard extends ConsumerWidget {
         .openingTables
         .contains(ts.tableId);
 
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
+    // La card completa ahora es clickeable
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: occupied ? MangoColors.primaryOrange : MangoColors.cardBorder,
-          width: 2,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-            spreadRadius: 0,
-          ),
-        ],
-      ),
-      padding: EdgeInsets.all(sizes.cardPadding),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.centerLeft,
-            child: Text(
-              ts.code,
-              maxLines: 1,
-              style: TextStyle(
-                fontWeight: FontWeight.w800,
-                fontSize: sizes.codeSize,
-                color: MangoColors.primaryOrange,
-              ),
+        onTap: opening ? null : () => _handleTableAction(context, ref),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: occupied
+                  ? MangoColors.primaryOrange
+                  : MangoColors.cardBorder,
+              width: 2,
             ),
-          ),
-          const SizedBox(height: 6),
-          if (occupied) ...[
-            Text(
-              '${ts.ordersCount ?? 0} ${ts.ordersCount == 1 ? 'Pedido' : 'Pedidos'}',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontWeight: FontWeight.w700,
-                fontSize: sizes.labelSize,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.08),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+                spreadRadius: 0,
               ),
-            ),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                const Icon(
-                  Icons.access_time,
-                  size: 16,
-                  color: MangoColors.muted,
-                ),
-                const SizedBox(width: 6),
-                Flexible(
-                  child: Text(
-                    ts.minutesOpen == null ? '—' : '${ts.minutesOpen} min',
-                    style: const TextStyle(color: MangoColors.muted),
-                    overflow: TextOverflow.ellipsis,
+            ],
+          ),
+          padding: EdgeInsets.all(sizes.cardPadding),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  ts.code,
+                  maxLines: 1,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: sizes.codeSize,
+                    color: MangoColors.primaryOrange,
                   ),
                 ),
-              ],
-            ),
-          ] else ...[
-            Text(
-              'Disponible',
-              style: TextStyle(
-                fontWeight: FontWeight.w700,
-                fontSize: sizes.labelSize,
-                color: MangoColors.successGreen,
               ),
-            ),
-            const SizedBox(height: 4),
-            const Row(
-              children: [
-                Icon(Icons.access_time, size: 16, color: MangoColors.muted),
-                SizedBox(width: 6),
-                Text('00:00', style: TextStyle(color: MangoColors.muted)),
-              ],
-            ),
-          ],
-          const Spacer(),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: occupied
-                    ? MangoColors.primaryOrange
-                    : MangoColors.darkGray,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
+              const SizedBox(height: 6),
+              if (occupied) ...[
+                Text(
+                  '${ts.ordersCount ?? 0} ${ts.ordersCount == 1 ? 'Pedido' : 'Pedidos'}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: sizes.labelSize,
+                  ),
                 ),
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                minimumSize: Size.fromHeight(sizes.buttonHeight),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                visualDensity: VisualDensity.compact,
-              ),
-              onPressed: opening
-                  ? null
-                  : () => _handleTableAction(context, ref),
-              child: opening
-                  ? const SizedBox(
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.access_time,
+                      size: 16,
+                      color: MangoColors.muted,
+                    ),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        ts.minutesOpen == null ? '—' : '${ts.minutesOpen} min',
+                        style: const TextStyle(color: MangoColors.muted),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ] else ...[
+                Text(
+                  'Disponible',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: sizes.labelSize,
+                    color: MangoColors.successGreen,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const Row(
+                  children: [
+                    Icon(Icons.access_time, size: 16, color: MangoColors.muted),
+                    SizedBox(width: 6),
+                    Text('00:00', style: TextStyle(color: MangoColors.muted)),
+                  ],
+                ),
+              ],
+              const Spacer(),
+              // Pie de card con indicador de acción
+              Row(
+                children: [
+                  if (opening) ...[
+                    const SizedBox(
                       height: 18,
                       width: 18,
                       child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : Text(
-                      occupied ? 'Ver pedidos' : 'Abrir mesa',
-                      style: TextStyle(
-                        fontSize: sizes.labelSize,
-                        fontWeight: FontWeight.w600,
-                      ),
                     ),
-            ),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'Abriendo...',
+                      style: TextStyle(color: MangoColors.muted),
+                    ),
+                  ] else ...[
+                    const Spacer(),
+                    const Icon(
+                      Icons.touch_app,
+                      color: MangoColors.muted,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 6),
+                    const Text(
+                      'Toca para gestionar',
+                      style: TextStyle(color: MangoColors.muted, fontSize: 12),
+                    ),
+                  ],
+                ],
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
 }
 
-class _OrderSheet extends ConsumerWidget {
-  const _OrderSheet();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final s = ref.watch(currentOrderProvider);
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Mesa — Pedido'),
-        backgroundColor: MangoColors.primaryOrange,
-        actions: [
-          Switch.adaptive(
-            value: s.takeout,
-            onChanged: (v) =>
-                ref.read(currentOrderProvider.notifier).toggleTakeout(v),
-          ),
-          const SizedBox(width: 8),
-          const Center(child: Text('Para llevar')),
-          const SizedBox(width: 8),
-        ],
-      ),
-      body: s.loading
-          ? const Center(child: CircularProgressIndicator())
-          : Column(
-              children: [
-                if (s.order != null)
-                  Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Row(
-                      children: [
-                        Text(
-                          'Total: RD\$ ${s.order!.total.toStringAsFixed(2)}',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 18,
-                          ),
-                        ),
-                        const Spacer(),
-                        ElevatedButton.icon(
-                          onPressed: () => ref
-                              .read(currentOrderProvider.notifier)
-                              .closeOrderPaid(),
-                          icon: const Icon(Icons.credit_score),
-                          label: const Text('Pagar'),
-                        ),
-                      ],
-                    ),
-                  ),
-                Expanded(
-                  child: ListView.separated(
-                    itemCount: s.items.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
-                    itemBuilder: (_, i) {
-                      final it = s.items[i];
-                      return ListTile(
-                        title: Text(it.productName),
-                        subtitle: Text(
-                          'Cant: ${it.qty} • ${it.isTakeout ? "Para llevar" : "Aquí"}',
-                        ),
-                        trailing: Text('RD\$ ${it.total.toStringAsFixed(2)}'),
-                      );
-                    },
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: () async {
-                        // demo: agrega el primer item activo
-                        final c = Supabase.instance.client;
-                        final first = await c
-                            .from('menu_items')
-                            .select('id')
-                            .eq('is_active', true)
-                            .limit(1)
-                            .maybeSingle();
-                        if (first != null) {
-                          await ref
-                              .read(currentOrderProvider.notifier)
-                              .addItem(
-                                menuItemId: first['id'] as String,
-                                qty: 1,
-                              );
-                        }
-                      },
-                      icon: const Icon(Icons.add),
-                      label: const Text('Agregar producto rápido (demo)'),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-    );
-  }
-}
+// ── Helpers de layout ─────────────────────────────────────────────────────────
 
 class GridConfiguration {
   final int crossAxisCount;

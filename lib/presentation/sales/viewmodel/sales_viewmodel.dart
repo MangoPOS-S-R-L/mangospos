@@ -1,5 +1,4 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_riverpod/legacy.dart';
 import 'package:mangopos/data/models/order.dart';
 import 'package:mangopos/data/models/order_item.dart';
 import 'package:mangopos/data/repositories/sales_repository.dart';
@@ -10,21 +9,20 @@ final salesRepositoryProvider = Provider<SalesRepository>(
   (ref) => SalesRepository(Supabase.instance.client),
 );
 
-final currentOrderProvider =
-    StateNotifierProvider<SalesViewModel, CurrentOrderState>(
-      (ref) => SalesViewModel(ref.read),
-    );
+final currentOrderProvider = NotifierProvider<SalesViewModel, CurrentOrderState>(
+  SalesViewModel.new,
+);
 
-class SalesViewModel extends StateNotifier<CurrentOrderState> {
-  SalesViewModel(this._read) : super(const CurrentOrderState());
-  final Reader _read;
+class SalesViewModel extends Notifier<CurrentOrderState> {
+  @override
+  CurrentOrderState build() => const CurrentOrderState();
 
   Future<void> openTable(String tableId) async {
     state = state.copyWith(loading: true, error: null);
     try {
       final client = Supabase.instance.client;
       final userId = client.auth.currentUser?.id;
-      final result = await _read(salesRepositoryProvider).openTable(
+      final result = await ref.read(salesRepositoryProvider).openTable(
         tableId: tableId,
         userId: userId, // si es null, el RPC tiene fallback
         peopleCount: 1,
@@ -46,9 +44,11 @@ class SalesViewModel extends StateNotifier<CurrentOrderState> {
     try {
       final client = Supabase.instance.client;
       final userId = client.auth.currentUser?.id;
-      final res = await _read(
-        salesRepositoryProvider,
-      ).openManualOrQuick(origin: origin, userId: userId ?? '', peopleCount: 1);
+      final res = await ref
+          .read(
+            salesRepositoryProvider,
+          )
+          .openManualOrQuick(origin: origin, userId: userId ?? '', peopleCount: 1);
       await _loadOrderDetail(res['order_id'] as String);
     } catch (e) {
       state = state.copyWith(loading: false, error: e.toString());
@@ -64,7 +64,7 @@ class SalesViewModel extends StateNotifier<CurrentOrderState> {
   }) async {
     final orderId = state.order?.id;
     if (orderId == null) return;
-    await _read(salesRepositoryProvider).addItemFromMenu(
+    await ref.read(salesRepositoryProvider).addItemFromMenu(
       orderId: orderId,
       menuItemId: menuItemId,
       qty: qty,
@@ -78,7 +78,7 @@ class SalesViewModel extends StateNotifier<CurrentOrderState> {
   Future<void> toggleTakeout(bool value) async {
     final orderId = state.order?.id;
     if (orderId == null) return;
-    await _read(
+    await ref.read(
       salesRepositoryProvider,
     ).markOrderTakeout(orderId: orderId, takeout: value);
     state = state.copyWith(takeout: value);
@@ -86,7 +86,7 @@ class SalesViewModel extends StateNotifier<CurrentOrderState> {
   }
 
   Future<void> moveItemToCheck(String itemId, int pos) async {
-    await _read(
+    await ref.read(
       salesRepositoryProvider,
     ).moveItemToCheck(itemId: itemId, checkPosition: pos);
     final orderId = state.order?.id;
@@ -96,7 +96,7 @@ class SalesViewModel extends StateNotifier<CurrentOrderState> {
   Future<void> closeOrderPaid() async {
     final orderId = state.order?.id;
     if (orderId == null) return;
-    await _read(
+    await ref.read(
       salesRepositoryProvider,
     ).closeOrder(orderId: orderId, status: 'paid');
     // limpia el estado
@@ -104,7 +104,7 @@ class SalesViewModel extends StateNotifier<CurrentOrderState> {
   }
 
   Future<void> _loadOrderDetail(String orderId) async {
-    final repo = _read(salesRepositoryProvider);
+    final repo = ref.read(salesRepositoryProvider);
     final rows = await repo.getOrderDetail(orderId);
     // Map a Order + Items
     if (rows.isEmpty) {

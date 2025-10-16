@@ -47,8 +47,8 @@ class _MainShellState extends State<MainShell> {
           ? 9
           : 12,
     );
-    final topBarHeight = rawTopBarHeight < 64
-        ? 64.0
+    final topBarHeight = rawTopBarHeight < 80
+        ? 80.0
         : rawTopBarHeight > 96
         ? 96.0
         : rawTopBarHeight;
@@ -511,7 +511,7 @@ class _Logo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final logoHeight = context.hp(context.isMobile ? 5 : 4);
+    final logoHeight = context.hp(context.isMobile ? 6 : 5);
     return Image.asset(
       'assets/images/logo.png',
       height: logoHeight,
