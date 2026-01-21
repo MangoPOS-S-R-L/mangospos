@@ -1,0 +1,379 @@
+🥭 MANGOPOS — BACKEND MASTER REFERENCE
+
+Sistema POS Profesional – República Dominicana (DGII)
+Base de datos: PostgreSQL / Supabase
+
+0️⃣ PRINCIPIOS GENERALES
+
+Arquitectura multi-tenant (business_id en todo)
+
+Cumplimiento fiscal DGII (NCF / e-CF)
+
+Seguridad Row Level Security (RLS)
+
+Automatización con Functions + Triggers
+
+Preparado para POS táctil + KDS + Caja + Inventario
+
+1️⃣ ESTRUCTURA BASE DEL NEGOCIO
+1.1 Negocios y Membresías
+
+Tablas clave
+
+businesses
+
+user_businesses
+
+profiles
+
+Roles soportados
+
+owner
+admin
+cashier
+waiter
+kitchen
+manager
+
+2️⃣ MESAS, ZONAS Y SESIONES
+2.1 Zonas y Mesas
+
+zones → pertenece a businesses
+
+dining_tables → pertenece a zones
+
+2.2 Sesiones de Mesa (CRÍTICO)
+
+table_sessions
+
+✅ Optimización aplicada
+
+table_sessions.business_id agregado
+
+Trigger para autollenar desde zones
+
+Resultado
+
+orders → table_sessions.business_id
+
+
+👉 RLS simple, sin joins costosos
+
+3️⃣ ÓRDENES Y CUENTAS
+3.1 Órdenes
+
+orders
+
+order_items
+
+order_item_modifiers
+
+3.2 Subcuentas (Split Bill)
+
+order_checks
+
+📌 Notas importantes
+
+order_items.quantity → campo único (eliminado qty)
+
+Totales recalculados automáticamente por trigger
+
+4️⃣ CAJA Y MOVIMIENTOS
+4.1 Caja
+
+cash_registers
+
+cash_register_sessions
+
+cash_transactions
+
+Soporta:
+
+Apertura
+
+Cierre
+
+Movimientos manuales
+
+Auditoría completa
+
+5️⃣ PAGOS
+5.1 Métodos de Pago
+
+payment_methods
+
+cash
+card
+transfer
+qr
+
+5.2 Pagos
+
+payments
+
+Relacionados con:
+
+orders
+
+order_checks
+
+fiscal_documents
+
+cash_register_sessions
+
+6️⃣ SISTEMA FISCAL DGII (CRÍTICO)
+6.1 Tipos de NCF
+
+ENUM
+
+B01, B02, B14, B15, B16
+E31, E32, E33, E34, E44, E45
+
+6.2 Secuencias
+
+ncf_sequences
+
+6.3 Documentos Fiscales
+
+fiscal_documents
+
+fiscal_document_items
+
+Incluye:
+
+Cliente
+
+ITBIS
+
+Descuentos
+
+e-CF
+
+Anulación
+
+Notas de crédito/débito
+
+6.4 Configuración Fiscal
+
+fiscal_settings
+
+7️⃣ PRODUCTOS Y MENÚ
+7.1 Menú
+
+categories
+
+menu_items
+
+menus
+
+menu_item_links
+
+7.2 Modificadores
+
+modifier_groups
+
+modifiers
+
+menu_item_groups
+
+8️⃣ INVENTARIO
+8.1 Almacenes
+
+warehouses
+
+8.2 Insumos
+
+inventory_items
+
+inventory_stock
+
+inventory_movements
+
+8.3 Recetas
+
+recipes
+
+recipe_ingredients
+
+📌 Preparado para:
+
+Descuento automático
+
+Mermas
+
+Transferencias
+
+9️⃣ COMPRAS Y PROVEEDORES
+
+suppliers
+
+purchase_orders
+
+purchase_order_items
+
+Soporta:
+
+Recepción parcial
+
+Costeo
+
+Actualización de inventario
+
+🔟 CLIENTES Y FIDELIZACIÓN
+10.1 Clientes
+
+customers
+
+10.2 Fidelización
+
+loyalty_programs
+
+customer_points
+
+point_transactions
+
+1️⃣1️⃣ PROMOCIONES Y CUPONES
+11.1 Promociones
+
+promotions
+
+11.2 Cupones
+
+coupons
+
+coupon_usage
+
+Incluye:
+
+Límites
+
+Fechas
+
+Tracking automático
+
+1️⃣2️⃣ CRÉDITOS
+
+customer_credits
+
+credit_payments
+
+Soporta:
+
+Créditos fiscales
+
+Abonos parciales
+
+Estados automáticos
+
+1️⃣3️⃣ GIFT CARDS
+
+gift_cards
+
+gift_card_transactions
+
+1️⃣4️⃣ CONFIGURACIONES
+
+business_settings
+
+currencies
+
+Incluye:
+
+ITBIS
+
+Propina
+
+Delivery
+
+Idioma
+
+Timezone
+
+1️⃣5️⃣ STAFF Y TURNOS
+
+shifts
+
+attendance
+
+1️⃣6️⃣ IMPRESIÓN
+
+printers
+
+print_areas
+
+print_area_printers
+
+print_jobs
+
+📌 print_jobs.business_id corregido a UUID + FK
+
+1️⃣7️⃣ FUNCIONES CLAVE (SECURITY DEFINER)
+Seguridad
+
+user_has_business_access
+
+user_business_role
+
+has_business_role
+
+Negocio
+
+generate_ncf
+
+calculate_order_totals
+
+calculate_check_totals
+
+1️⃣8️⃣ TRIGGERS
+Automáticos
+
+Totales de órdenes
+
+Totales de subcuentas
+
+updated_at
+
+Uso de cupones
+
+Creación de datos por defecto
+
+1️⃣9️⃣ ROW LEVEL SECURITY (RLS)
+Principio
+TODAS las tablas con RLS habilitado
+
+Regla base
+
+SELECT → cualquier miembro del negocio
+
+INSERT/UPDATE/DELETE → solo roles permitidos
+
+Tablas con business_id directo
+USING user_has_business_access(auth.uid(), business_id)
+
+Tablas derivadas (orders, order_items)
+USING table_sessions.business_id
+
+2️⃣0️⃣ DATOS INICIALES AUTOMÁTICOS
+
+Al crear un negocio:
+
+Métodos de pago
+
+Moneda DOP
+
+ITBIS
+
+Zona principal
+
+Almacén principal
+
+Owner agregado automáticamente
+
+2️⃣1️⃣ ESTADO FINAL DEL SISTEMA
+
+✔ Multi-tenant seguro
+✔ DGII compliant
+✔ POS real (no demo)
+✔ Preparado para Flutter / Web / Tablet
+✔ Escalable
+✔ Auditoría completa

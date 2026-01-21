@@ -3,13 +3,22 @@ class TableStatus {
   final String? sessionId;
   final int ordersCount;
   final int? minutesOpen;
+  final int itemsCount;
+  final double total;
+  final int peopleCount;
   TableStatus({
     required this.tableId, required this.zoneId, required this.code,
     required this.sessionId, required this.ordersCount, required this.minutesOpen,
+    this.itemsCount = 0,
+    this.total = 0,
+    this.peopleCount = 0,
   });
   factory TableStatus.fromMap(Map<String,dynamic> r) => TableStatus(
     tableId: r['table_id'], zoneId: r['zone_id'], code: r['code'],
     sessionId: r['session_id'], ordersCount: r['orders_count'] ?? 0,
     minutesOpen: r['minutes_open'],
+    itemsCount: r['items_count'] ?? 0,
+    total: (r['total'] ?? 0).toDouble(),
+    peopleCount: r['people_count'] ?? 0,
   );
 }

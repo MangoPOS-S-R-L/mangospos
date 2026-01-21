@@ -1,0 +1,2434 @@
+🥭 PROMPT MAESTRO PARA LOVABLE — MANGOPOS (VIBE CODING)
+PROJECT CONTEXT
+Build a full-featured professional Point of Sale (POS) web application called MangoPOS, designed for restaurants and food businesses in the Dominican Republic. Completo en espaniol
+
+This is a commercial-grade SaaS POS system, not a demo.
+
+The app must strictly follow **Dominican billing and t ...
+
+Show more
+
+Thought for 19s
+Building MangoPOS - a professional POS system for Dominican restaurants with mango orange branding, enterprise UX, and DGII compliance structure.
+
+Design Vision:
+
+Warm mango orange (#F97316) as hero color
+Clean enterprise aesthetic inspired by Square/Toast POS
+Touch-friendly cards with soft shadows
+Fixed top nav, no global sidebar
+First Version Features:
+
+Complete navigation structure
+Dashboard with sales summary
+Ventas module with table management
+Caja module structure
+Cocina (KDS) view
+Basic Clientes & Productos screens
+Show all
+20 edits made
+MangoPOS está listo con todas las pantallas principales:
+
+Home: Dashboard con resumen de ventas, mesas activas y acciones rápidas
+Ventas: Gestión de mesas por zona con sidebar de modos (zona, manual, delivery)
+Caja: Apertura/cierre, movimientos e historial
+Cocina (KDS): Vista en tiempo real de comandas en espera y preparación
+Clientes: Tabla de clientes con búsqueda y estadísticas
+Productos: Gestión del menú con filtros por categoría
+Reportes: Hub de informes incluyendo sección fiscal DGII
+Más Ajustes: Hub modular de configuración del sistema
+El diseño usa naranja mango como color primario con una estética enterprise limpia y profesional.
+
+Próximas mejoras sugeridas:
+
+
+Code
+
+Migrate to modular POS routes
+Preview this version
+
+
+
+
+
+
+Jan 1
+at 3:53 PM
+isotipo png12isotipo.png
+
+Diagrama MANGOPOS Version Final.pdf
+PDF
+
+Asegurate que en las opciones, este todo lo que esta en este documento, ahi te envie el logo para que lo pongas
+
+
+Thought for 7s
+Voy a revisar el documento PDF y copiar el logo para actualizar la navegación.
+
+Show all
+1 edit made
+Ahora actualizaré la navegación con el logo y agregaré todas las opciones del documento. Según el PDF, necesito expandir las secciones de ajustes.
+
+Read
+Ajustes.tsx
+Ahora actualizaré el TopNavigation con el logo y la página de Ajustes con todas las secciones del documento PDF.
+
+Show all
+2 edits made
+Logo actualizado en la navegación y página de Ajustes expandida con todas las secciones del documento: Punto de Venta, Caja, Gestión de Productos, Comandas, Ajustes Generales, Almacenes, Compras, Impresión, Pagos, Crédito, Finanzas, Fidelización, Sistema, Comprobantes e Informes.
+
+
+Code
+
+Update UI nav logo and Ajustes menu
+Preview this version
+
+
+
+
+
+
+Jan 7
+at 4:07 PM
+Actúa como Product Designer + Frontend Engineer senior, especializado en sistemas POS para restaurantes reales. Tu objetivo es diseñar e implementar flujos completos de venta, optimizados para uso táctil, rapidez operativa y control de mesas.
+
+📌 CONTEXTO GENERAL
+
+Estoy desarrollando un sistema POS para restaurantes.
+
+🔸 Ya existe la pantalla principal de Venta por Salón / Mesas / Zonas (estilo Ma ...
+
+Show more
+
+
+Thought for 18s
+Voy a implementar los flujos completos de venta. Primero necesito ver los archivos existentes para conectar correctamente.
+
+Tasks
+Implementar flujos de venta POS
+Show all
+12 edits made
+¡Flujos de venta implementados! Ahora al tocar una mesa se abre la pantalla de pedido con:
+
+✅ Carrito lateral con productos, modificadores, cantidades y totales ✅ Catálogo de productos con categorías, búsqueda y tabs ✅ Modal de personalización con modificadores, notas rápidas y cantidades ✅ Modal de división de cuenta con asignación manual y partes iguales ✅ Modal de pago con efectivo, tarjeta, transferencia y teclado numérico ✅ Venta por salón completa con envío a cocina
+
+Toca cualquier mesa para probar el flujo completo.
+
+
+Code
+
+Integrate POS sale flow
+Previewing latest version
+
+
+
+
+
+
+Jan 7
+at 9:12 PM
+Podrias decirme como esta configurado la parte de ordenes, el flujo completo
+
+
+
+Thought for 12s
+Voy a revisar los archivos del flujo de órdenes para darte una explicación completa de cómo está configurado actualmente.
+
+Show all
+3 tools used
+Ahora déjame revisar los modales de pago y división de cuenta, junto con el hook del carrito:
+
+Show all
+3 tools used
+Excelente, ya tengo toda la información. Déjame mostrarte cómo está configurado el flujo completo de órdenes con un diagrama visual:
+
+📊 Flujo Completo de Órdenes en MangoPOS
+
+Diagram
+🔍 Detalle de cada componente
+1. TablesGrid.tsx - Punto de entrada
+
+// Estado de las mesas
+const [tables, setTables] = useState<Table[]>(initialTables);
+const [selectedTable, setSelectedTable] = useState<Table | null>(null);
+
+// Al seleccionar mesa → abre OrderScreen
+const handleTableClick = (table: Table) => {
+  setSelectedTable(table);
+};
+
+// Al completar orden → libera la mesa
+const handleOrderComplete = (tableId?: string) => {
+  if (tableId) {
+    setTables((prev) =>
+      prev.map((t) =>
+        t.id === tableId
+          ? { ...t, status: "disponible", guests: undefined, time: undefined, total: undefined }
+          : t
+      )
+    );
+  }
+  setSelectedTable(null);
+};
+2. OrderScreen.tsx - Orquestador principal
+Este es el cerebro del flujo. Integra todos los componentes:
+
+Estado	Descripción
+cart (useCart)	Hook que maneja items, subtotal, tax, total
+selectedProduct	Producto para personalizar en modal
+showPayment	Controla visibilidad del modal de pago
+showSplitBill	Controla visibilidad del modal de división
+orderSent	Indica si ya se envió a cocina
+subAccounts	Subcuentas creadas al dividir
+3. useCart Hook - Gestión del carrito
+
+// Funciones principales
+addItem(product, quantity, modifiers, notes)  // Agregar producto
+updateItemQuantity(itemId, quantity)          // Cambiar cantidad
+removeItem(itemId)                            // Eliminar item
+clearCart()                                   // Vaciar todo
+
+// Cálculos automáticos
+subtotal  // Suma de items
+tax       // ITBIS 18%
+total     // subtotal + tax
+itemCount // Total de unidades
+4. ProductCatalog.tsx - Selección de productos
+Tabs: Categorías | Menú | Favoritos
+Búsqueda: Filtro por nombre
+Al hacer clic en producto:
+Si hasModifiers = true → Abre ProductCustomizationModal
+Si hasModifiers = false → Agrega directo al carrito
+5. ProductCustomizationModal.tsx - Personalización
+Cantidad: Selector +/-
+Modificadores: RadioGroup (único) o Checkbox (múltiple)
+Notas: Chips rápidos + Textarea
+Validación: Verifica modificadores requeridos antes de confirmar
+6. Cart.tsx - Carrito lateral
+Acción	Condición	Botón
+Enviar a Cocina	Mesa + no enviado	onSendToKitchen
+Dividir Cuenta	Mesa + enviado	onSplitBill
+Pagar	Siempre disponible	onPay
+7. PaymentModal.tsx - Procesamiento de pago
+Métodos: Efectivo, Tarjeta, Transferencia
+Efectivo: Numpad + montos rápidos + cálculo de cambio
+Validación: No permite confirmar si monto < total (efectivo)
+8. SplitBillModal.tsx - División de cuenta
+División manual: Seleccionar items → asignar a subcuenta
+División igualitaria: Número de personas → divide automáticamente
+Recálculo: Subtotal, ITBIS y total por subcuenta
+⚠️ Limitaciones actuales identificadas
+No hay persistencia: Todo el estado está en memoria (se pierde al refrescar)
+No hay integración con cocina: handleSendToKitchen solo cambia un flag local
+**Subcuentas no se u
+This message was cancelled.
+
+
+
+
+
+Jan 7
+at 9:13 PM
+No quiero un diagrama, quiero que en texto me digas como funciona completo
+
+
+
+Thought for 12s
+Voy a revisar los archivos del flujo de órdenes para darte una explicación completa y detallada.
+
+Show all
+3 tools used
+Ahora déjame revisar los modales de pago y división:
+
+Show all
+3 tools used
+Perfecto. Ahora déjame ver el modal de personalización de productos también:
+
+Show all
+2 tools used
+Ya tengo toda la información. Aquí te explico el flujo completo de órdenes en texto:
+
+FLUJO COMPLETO DE ÓRDENES EN MANGOPOS
+1. PUNTO DE ENTRADA: PÁGINA DE VENTAS
+La página principal de ventas (/ventas) está compuesta por:
+
+VentasSidebar: Barra lateral izquierda con opciones de navegación (Por zona, Venta manual, Venta rápida, Delivery, Self service). Actualmente solo es visual, no tiene funcionalidad implementada.
+TablesGrid: Grilla principal de mesas que muestra las mesas organizadas por zonas (Salón Principal, Terraza, VIP).
+2. DATOS DE MESAS
+Las mesas están definidas como un array estático (initialTables) en TablesGrid.tsx con la siguiente estructura:
+
+
+{
+  id: string,           // Identificador único
+  code: string,         // Código visual (SP01, TR01, VIP01)
+  status: "disponible" | "ocupado" | "pagando",
+  guests?: number,      // Número de comensales
+  time?: string,        // Tiempo transcurrido
+  total?: number,       // Total acumulado
+  zone: string          // Zona: "salon", "terraza", "vip"
+}
+Las mesas se filtran dinámicamente según la zona activa (tabs en la parte superior).
+
+3. SELECCIÓN DE MESA
+Cuando el usuario hace clic en una mesa (handleTableClick):
+
+Se guarda la mesa seleccionada en el estado selectedTable
+Se renderiza condicionalmente el componente OrderScreen en lugar de la grilla de mesas
+Se pasa la información de la mesa al OrderScreen
+4. PANTALLA DE ORDEN (OrderScreen)
+Este es el componente central del flujo. Layout de dos columnas:
+
+Columna izquierda (380px fijos) - Componente Cart:
+
+Encabezado con nombre de mesa o "Venta Rápida"
+Lista de productos agregados con:
+Nombre del producto
+Modificadores seleccionados (con precio adicional si aplica)
+Notas especiales
+Controles de cantidad (+/-)
+Precio total del ítem
+Botón para eliminar
+Resumen financiero:
+Subtotal
+ITBIS (18%)
+Total
+Botones de acción:
+Enviar a Cocina (solo si es venta por mesa y no se ha enviado aún)
+Dividir Cuenta (solo si es venta por mesa y ya se envió a cocina)
+Pagar (siempre visible)
+Columna derecha - Componente ProductCatalog:
+
+Barra de búsqueda
+Tabs: Categorías, Menú, Favoritos
+Vista de categorías (si no hay categoría seleccionada)
+Vista de productos (al seleccionar una categoría o buscar)
+Cada producto muestra:
+Nombre
+Precio
+Badge "Con modificadores" si tiene modificadores
+5. HOOK useCart - GESTIÓN DEL CARRITO
+El hook useCart maneja todo el estado del carrito:
+
+Estado:
+
+items: Array de CartItem[]
+Funciones:
+
+addItem(product, quantity, modifiers, notes): Agrega un producto con sus modificadores y notas
+updateItemQuantity(itemId, quantity): Actualiza la cantidad. Si llega a 0, elimina el ítem
+removeItem(itemId): Elimina un ítem específico
+clearCart(): Vacía el carrito
+setItems(items): Reemplaza todos los ítems
+Cálculos derivados (useMemo):
+
+subtotal: Suma de todos los totalPrice de los ítems
+tax: subtotal * 0.18 (ITBIS 18%)
+total: subtotal + tax
+itemCount: Suma de todas las cantidades
+Estructura de CartItem:
+
+
+{
+  id: string,                    // ID único generado aleatoriamente
+  productId: string,             // ID del producto original
+  product: Product,              // Referencia al producto
+  quantity: number,              // Cantidad
+  selectedModifiers: SelectedModifier[],
+  notes: string,                 // Notas especiales
+  unitPrice: number,             // Precio base + modificadores
+  totalPrice: number             // unitPrice * quantity
+}
+6. SELECCIÓN DE PRODUCTO
+Cuando el usuario hace clic en un producto:
+
+Si el producto NO tiene modificadores (hasModifiers: false):
+
+Se agrega directamente al carrito con cantidad 1, sin modificadores, sin notas
+Se muestra toast de confirmación
+Si el producto TIENE modificadores (hasModifiers: true):
+
+Se abre el modal ProductCustomizationModal
+7. MODAL DE PERSONALIZACIÓN (ProductCustomizationModal)
+Estado interno:
+
+quantity: Cantidad (inicia en 1)
+selectedModifiers: Map<groupId, Set<modifierId>>
+notes: Notas especiales
+Funcionalidades:
+
+Control de cantidad (+/-)
+Grupos de modificadores con reglas:
+required: Si es obligatorio seleccionar
+minSelection/maxSelection: Límites de selección
+Si maxSelection === 1: Usa RadioGroup (selección única)
+Si maxSelection > 1: Usa Checkboxes (selección múltiple)
+Notas rápidas predefinidas: "Sin azúcar", "Con azúcar", "Sin sal", etc.
+Campo de texto libre para notas adicionales
+Cálculo de precio dinámico:
+
+
+modifiersTotal = suma de precios de modificadores seleccionados
+unitPrice = product.price + modifiersTotal
+totalPrice = unitPrice * quantity
+Validación:
+
+Verifica que todos los grupos required tengan la selección mínima requerida
+El botón "Agregar al pedido" se deshabilita si no es válido
+Al confirmar:
+
+Se llama a cart.addItem() con todos los datos
+Se cierra el modal y se resetea el estado
+8. ENVÍO A COCINA
+Al presionar "Enviar a Cocina":
+
+Se cambia el estado orderSent a true
+Se muestra un toast de confirmación
+El botón "Enviar a Cocina" se oculta
+Se habilita el botón "Dividir Cuenta"
+NOTA IMPORTANTE: Actualmente NO hay integración real con cocina. Es solo un cambio de estado visual local.
+
+9. DIVISIÓN DE CUENTA (SplitBillModal)
+Estado interno:
+
+subAccounts: Array de subcuentas creadas
+selectedItems: Set de IDs de ítems seleccionados
+equalSplitCount: Número de personas para división igualitaria
+Flujo manual:
+
+Crear subcuenta con botón "Nueva"
+Seleccionar productos de la lista izquierda (checkbox)
+Asignar a una subcuenta con los botones que aparecen
+Los productos asignados desaparecen de la lista izquierda
+Cada subcuenta calcula su propio subtotal, tax y total
+Flujo división igualitaria:
+
+Clic en "Partes iguales"
+Ingresar número de personas
+Se crean N subcuentas automáticamente
+El total se divide entre todas (con ajuste de centavos en la primera)
+Al confirmar:
+
+Se guardan las subcuentas en el estado del OrderScreen
+Se muestra toast de confirmación
+NOTA: Actualmente las subcuentas se guardan pero NO se usan para el pago. El pago sigue siendo del total completo.
+
+10. PAGO (PaymentModal)
+Métodos de pago:
+
+Efectivo (con teclado numérico)
+Tarjeta
+Transferencia
+Para efectivo:
+
+Montos rápidos: RD$ 100, 200, 500, 1000, 2000, 5000
+Botón "Monto exacto"
+Teclado numérico para ingresar monto
+Cálculo de cambio automático
+Solo se puede confirmar si el monto recibido >= total
+Para tarjeta/transferencia:
+
+No requiere monto, se asume el total
+Al confirmar:
+
+Se llama a onConfirmPayment(method, amount)
+Se muestra toast con el cambio (si aplica)
+Se llama a onOrderComplete(tableId) que:
+Actualiza la mesa a status "disponible"
+Limpia guests, time, total
+Cierra el OrderScreen
+Vuelve a la grilla de mesas
+11. VENTA RÁPIDA
+Actualmente definida en el OrderScreen con isQuickSale={true}:
+
+Mismo flujo pero sin mesa asociada
+Sin botón "Enviar a Cocina"
+Sin opción de "Dividir Cuenta"
+El carrito muestra "Venta Rápida" en lugar del código de mesa
+NOTA: El sidebar de VentasSidebar tiene el botón "Venta rápida" pero NO está conectado funcionalmente. Solo el flujo desde mesas está implementado.
+
+LIMITACIONES ACTUALES
+Sin persistencia: Todo es estado local en React. Al refrescar se pierde.
+Sin integración con cocina real: "Enviar a cocina" solo cambia un estado visual.
+Venta rápida no accesible: El sidebar no tiene handlers implementados.
+División de cuenta incompleta: Se crean subcuentas pero el pago no las considera.
+Sin clientes: El botón "Asignar cliente" no hace nada.
+Sin comprobantes fiscales: No hay generación de NCF ni facturación.
+Mesas estáticas: Las mesas son datos mock, no vienen de base de datos.
+Sin timer real: Los tiempos de las mesas ocupadas son estáticos.
+¿Te gustaría que prepare un plan para implementar alguna mejora específica, como la persistencia de datos, la integración real del flujo de venta rápida, o la conexión con base de datos?
+
+
+
+
+
+
+Jan 7
+at 9:16 PM
+Podrias darme un prompt para copiar ese UI que hiciste en mi programa local en flutter?
+
+
+
+Thought for 9s
+Entendido, te preparo un prompt completo que describe toda la UI del módulo de Ventas para que puedas replicarlo en Flutter. Déjame revisar los detalles visuales de los componentes principales.
+
+Show all
+7 tools used
+Perfecto, aquí tienes el prompt completo para replicar toda la UI de ventas de MangoPOS en Flutter:
+
+🥭 PROMPT PARA FLUTTER - UI DE VENTAS MANGOPOS
+CONTEXTO GENERAL
+Crea una aplicación Flutter que replique el módulo de ventas de un sistema POS para restaurantes. El diseño debe ser touch-friendly, optimizado para tablets y pantallas táctiles.
+
+PALETA DE COLORES
+
+// Colores principales
+const Color primary = Color(0xFFF97316);         // Mango Orange (HSL: 25, 95%, 53%)
+const Color primaryForeground = Colors.white;
+
+// Fondos
+const Color background = Color(0xFFFAF9F8);      // Fondo general (HSL: 30, 20%, 98%)
+const Color cardBackground = Colors.white;
+const Color secondary = Color(0xFFF3F1EF);       // Gris cálido (HSL: 30, 15%, 95%)
+
+// Textos
+const Color foreground = Color(0xFF1C1917);      // Texto principal
+const Color mutedForeground = Color(0xFF78716C); // Texto secundario
+
+// Estados
+const Color success = Color(0xFF22C55E);         // Verde
+const Color warning = Color(0xFFF59E0B);         // Ámbar/Amarillo
+const Color destructive = Color(0xFFEF4444);     // Rojo
+const Color info = Color(0xFF3B82F6);            // Azul
+
+// Bordes
+const Color border = Color(0xFFE5E2DE);          // HSL: 30, 15%, 88%
+TIPOGRAFÍA
+Fuente: Plus Jakarta Sans (Google Fonts)
+Pesos: 400 (regular), 500 (medium), 600 (semibold), 700 (bold), 800 (extrabold)
+COMPONENTES DE DISEÑO
+Border Radius
+Cards: 12px (BorderRadius.circular(12))
+Botones: 8px
+Badges: Full rounded (BorderRadius.circular(999))
+Inputs: 8px
+Sombras
+
+// Sombra suave para cards
+BoxShadow shadowCard = BoxShadow(
+  color: Colors.black.withOpacity(0.05),
+  blurRadius: 12,
+  offset: Offset(0, 4),
+);
+
+// Sombra elevada
+BoxShadow shadowElevated = BoxShadow(
+  color: Colors.black.withOpacity(0.15),
+  blurRadius: 24,
+  offset: Offset(0, 8),
+);
+PANTALLA PRINCIPAL: GRID DE MESAS
+Layout: Pantalla con Sidebar izquierdo + Contenido principal
+
+Sidebar Izquierdo (ancho: 224px / 14rem)
+Fondo: cardBackground con borde derecho
+Opciones de navegación (botones verticales):
+"Por zona" (icono Layout)
+"Venta manual" (icono FileText)
+"Venta rápida" (icono Zap) - resaltado en naranja
+"Delivery" (icono Truck)
+"Self service" (icono Smartphone)
+Cada opción: padding 12px, border-radius 8px, texto 14px medium
+Opción activa: fondo primary, texto blanco
+Contenido Principal
+Tabs superiores: "Salón Principal", "Terraza", "VIP"
+Contador: "X disponibles / Y ocupadas" (badges verde y ámbar)
+Grid de mesas: 4-5 columnas, gap 16px
+TableCard (Tarjeta de Mesa)
+┌─────────────────────────────┐
+│ ▌ SP01          RD$ 2,450   │  <- Borde izquierdo color según estado
+│   Ocupado                    │
+│ ─────────────────────────── │
+│ 👥 4    ⏱️ 45 min            │
+└─────────────────────────────┘
+Estructura:
+
+Borde izquierdo 4px: verde (disponible) o ámbar (ocupado)
+Código de mesa: texto 18px bold
+Estado: texto 12px (verde "Disponible" / ámbar "Ocupado")
+Si ocupada: total en la esquina superior derecha
+Línea divisoria
+Si ocupada: iconos de huéspedes y tiempo
+Si disponible: "Toca para asignar"
+PANTALLA DE ORDEN (Al tocar una mesa)
+Layout: 2 columnas (Carrito izquierda 380px, Catálogo derecha flex)
+
+COLUMNA IZQUIERDA: CARRITO
+Header:
+
+Título: "Mesa SP01" o "Venta Rápida" (18px bold)
+Subtítulo: "X productos" (14px, gris)
+Botón basura (rojo) para limpiar carrito
+Lista de Productos (ScrollArea):
+
+┌─────────────────────────────────┐
+│ Café Americano Grande           │
+│ + Leche de almendras  +RD$ 25   │
+│ "Sin azúcar"                    │
+│ ─────────────────────────────── │
+│  [−]  2  [+]        RD$ 350     │
+└─────────────────────────────────┘
+Cada item:
+
+Fondo: secondary con 50% opacidad
+Border-radius: 8px
+Nombre producto: texto 14px medium
+Modificadores: texto 12px gris, precio extra en naranja
+Notas: texto 12px italic gris
+Controles cantidad: botones outline 32x32px
+Precio total item: texto 14px semibold
+Estado vacío: "No hay productos en el carrito" centrado
+
+Footer - Totales:
+
+Subtotal                RD$ 1,250
+ITBIS (18%)              RD$ 225
+────────────────────────────────
+Total                   RD$ 1,475  <- Naranja, 18px bold
+Botones de Acción (full width, altura 48px):
+
+"Enviar a Cocina" (naranja, icono ChefHat) - solo si hay mesa
+"Dividir Cuenta" (outline, icono Split) - solo después de enviar
+"Pagar RD$ X,XXX" (naranja o default)
+COLUMNA DERECHA: CATÁLOGO DE PRODUCTOS
+Header:
+
+Botón atrás (flecha izquierda)
+Título: "Mesa SP01" o "Venta Rápida"
+Subtítulo: "Nueva orden" o "Pedido activo • 45 min"
+Botón derecha: "Asignar cliente"
+Barra de búsqueda:
+
+Icono lupa a la izquierda
+Placeholder: "Buscar productos..."
+Fondo: secondary, sin borde
+Tabs: "Categorías" | "Menú" | "Favoritos"
+
+Grid de Categorías (cuando no hay categoría seleccionada):
+
+┌────────────────────┐
+│ 🍔                 │
+│ Platos Fuertes     │
+│ 12 productos       │
+└────────────────────┘
+4-5 columnas
+Fondo blanco, borde sutil
+Emoji/icono, nombre, contador de productos
+Grid de Productos (cuando hay categoría seleccionada):
+
+┌────────────────────┐
+│ Hamburguesa        │
+│ Clásica            │
+│                    │
+│ RD$ 450            │
+│ [CON MODIFICADORES]│  <- Badge naranja si tiene
+└────────────────────┘
+3-4 columnas
+Nombre producto: 14px medium
+Precio: 16px bold naranja
+Badge modificadores: fondo naranja/10%, texto naranja, rounded full
+MODAL: PERSONALIZACIÓN DE PRODUCTO
+Tamaño: max-width 480px, max-height 90vh
+
+Header:
+
+Título producto: 20px bold
+Precio base: 24px bold naranja
+Contenido (scrollable):
+
+Selector de cantidad:
+
+┌─────────────────────────────────┐
+│ Cantidad            [−] 2 [+]   │
+└─────────────────────────────────┘
+Fondo: secondary/50, border-radius 12px, padding 16px
+Grupos de Modificadores:
+
+Tamaño  [Requerido]  [Máx. 1]
+
+○ Pequeño
+○ Mediano                    +RD$ 50
+● Grande                     +RD$ 100
+Para selección única: RadioButtons Para selección múltiple: Checkboxes
+
+Cada opción:
+
+Fondo: secondary/30, padding 12px, border-radius 8px
+Precio adicional alineado a la derecha en naranja
+Notas rápidas (chips):
+
+[Sin azúcar] [Con azúcar] [Sin sal] [Extra picante] ...
+Chips con borde, border-radius full
+Seleccionados: fondo naranja, texto blanco
+Textarea de notas:
+
+Placeholder: "Escribe instrucciones adicionales..."
+2 filas
+Footer:
+
+Total calculado: 24px bold naranja
+Botones: "Cancelar" (outline) | "Agregar al pedido" (naranja)
+Botón agregar deshabilitado si faltan modificadores requeridos
+MODAL: PAGO
+Tamaño: max-width 672px (2xl)
+
+Layout: 2 columnas
+
+Columna Izquierda
+Métodos de pago (3 botones en grid):
+
+┌──────────┐ ┌──────────┐ ┌──────────┐
+│   💵     │ │   💳     │ │   📱     │
+│ Efectivo │ │ Tarjeta  │ │ Transfer │
+└──────────┘ └──────────┘ └──────────┘
+Seleccionado: borde naranja, fondo naranja/10%
+Montos rápidos (solo efectivo):
+
+[RD$ 100] [RD$ 200] [RD$ 500]
+[RD$ 1,000] [RD$ 2,000] [RD$ 5,000]
+[Monto exacto (RD$ 1,475)]
+Numpad (solo efectivo):
+
+┌─────────────────────────────────┐
+│            RD$ 2,000            │  <- Monto recibido
+└─────────────────────────────────┘
+
+[1] [2] [3]
+[4] [5] [6]
+[7] [8] [9]
+[0] [00] [⌫]
+Botones: outline, altura 56px, texto 20px semibold
+Columna Derecha
+Resumen:
+
+Total a pagar          RD$ 1,475
+Monto recibido         RD$ 2,000
+─────────────────────────────────
+Cambio                   RD$ 525  <- Verde si positivo
+Botones:
+
+"Confirmar Pago" (verde, altura 56px, icono check)
+"Cancelar" (outline)
+MODAL: DIVISIÓN DE CUENTA
+Tamaño: max-width 896px (4xl), altura 60vh
+
+Layout: 2 columnas
+
+Columna Izquierda - Productos del Pedido
+Header:
+
+"Productos del Pedido"
+"X productos sin asignar"
+Lista de productos:
+
+┌─────────────────────────────────┐
+│ ☑️ Café Americano x2    RD$ 300 │
+└─────────────────────────────────┘
+Checkbox + Nombre + Cantidad + Precio
+Seleccionados: borde naranja, fondo naranja/5%
+Footer (si hay items seleccionados):
+
+Asignar 2 productos a:
+[→ Cuenta 1] [→ Cuenta 2]
+Columna Derecha - Subcuentas
+Header:
+
+"Subcuentas" / "X subcuentas creadas"
+Botones: "Partes iguales" (icono Divide) | "Nueva" (icono Plus)
+División en partes iguales (panel expandible):
+
+┌─────────────────────────────────────────┐
+│ 👥 Número de personas: [2] [Dividir]    │
+└─────────────────────────────────────────┘
+Fondo: warning/10%
+Lista de subcuentas:
+
+┌─────────────────────────────────┐
+│ Cuenta 1                    🗑️  │
+├─────────────────────────────────┤
+│ × Café Americano x1      RD$ 150│
+│ × Hamburguesa x1         RD$ 450│
+│ ─────────────────────────────── │
+│ Subtotal                 RD$ 600│
+│ ITBIS                    RD$ 108│
+│ Total                    RD$ 708│
+└─────────────────────────────────┘
+Estado vacío:
+
+"Aún no has agregado subcuentas."
+"Crea una subcuenta para asignar productos"
+Footer:
+
+"Cancelar División" (outline)
+"Aplicar División" (naranja)
+TIPOS DE DATOS (MODELS)
+
+class Product {
+  final String id;
+  final String name;
+  final double price;
+  final String categoryId;
+  final bool hasModifiers;
+  final List<ModifierGroup>? modifierGroups;
+}
+
+class ModifierGroup {
+  final String id;
+  final String name;
+  final bool required;
+  final int minSelection;
+  final int maxSelection;
+  final List<Modifier> modifiers;
+}
+
+class Modifier {
+  final String id;
+  final String name;
+  final double price;
+}
+
+class CartItem {
+  final String id;
+  final Product product;
+  final int quantity;
+  final List<SelectedModifier> selectedModifiers;
+  final String notes;
+  final double totalPrice;
+}
+
+class Table {
+  final String id;
+  final String code;
+  final String status; // "disponible", "ocupado", "pagando"
+  final String zone;
+  final int? guests;
+  final String? time;
+  final double? total;
+}
+
+class SubAccount {
+  final String id;
+  final String name;
+  final List<CartItem> items;
+  final double subtotal;
+  final double tax;
+  final double total;
+  final bool paid;
+}
+LÓGICA DE NEGOCIO
+Impuesto ITBIS: 18% del subtotal
+Total = Subtotal + (Subtotal × 0.18)
+Formato moneda: "RD$ X,XXX" con separador de miles
+Carrito:
+Mismo producto con diferentes modificadores = items separados
+Cantidad mínima: 1
+Al llegar a 0, se elimina el item
+División de cuenta:
+Un producto solo puede asignarse a UNA subcuenta
+División equitativa incluye ajuste de centavos al primero
+ANIMACIONES SUGERIDAS
+fadeIn: opacidad 0→1, 300ms ease-out
+slideUp: translateY 10px→0, 300ms ease-out
+Cards interactivas: hover con shadow más pronunciada y translateY -2px
+¿Necesitas que profundice en algún componente específico o que te genere código Flutter para alguna pantalla en particular?
+
+
+
+
+
+
+Jan 7
+at 9:23 PM
+-- WARNING: This schema is for context only and is not meant to be run.
+
+-- Table order and constraints may not be valid for execution.
+
+CREATE TABLE public.agent_nodes (
+
+id uuid NOT NULL DEFAULT gen_random_uuid(),
+
+business_id uuid NOT NULL,
+
+site_code text NOT NULL,
+
+name text,
+
+api_key_hash text NOT NULL,
+
+is_active boolean NOT NULL DEFAULT true,
+
+last_seen timestamp with time zo ...
+
+Show more
+
+
+Thought for 27s
+Voy a analizar tu esquema actual y determinar qué falta para completar el sistema POS. Déjame revisar los archivos del frontend para asegurarme de que todo esté alineado.
+
+Show all
+3 tools used
+Excelente. Ahora déjame revisar más archivos para entender completamente lo que necesitas:
+
+Show all
+2 tools used
+Ahora tengo una visión completa. Analizando tu esquema actual vs. lo que necesita el sistema MangoPOS, aquí está mi análisis detallado:
+
+Análisis del Esquema Actual
+Lo que ya tienes (bien estructurado):
+Modulo	Tablas Existentes	Estado
+Negocios	businesses, user_businesses, memberships	OK
+Usuarios	profiles	OK
+Productos	menu_items, categories, menus, menu_item_links	OK
+Modificadores	modifier_groups, modifiers, menu_item_groups	OK
+Mesas	zones, dining_tables, table_sessions	OK
+Ordenes	orders, order_items, order_item_modifiers, order_checks	OK
+Caja	cash_registers, cash_register_sessions, cash_transactions	OK
+Impuestos	taxes, menu_item_taxes	OK
+Clientes	customers	OK
+Impresion	printers, print_areas, print_area_printers, print_jobs	OK
+Lo que FALTA para completar el sistema:
+1. Sistema Fiscal (NCF/e-CF) - DGII
+Esto es CRITICO para operar legalmente en Republica Dominicana:
+
+ncf_types - Tipos de comprobantes (B01, B02, B14, B15, E31, E32)
+ncf_sequences - Secuencias y rangos autorizados
+fiscal_documents - Documentos fiscales emitidos
+fiscal_settings - Configuracion fiscal del negocio
+2. Sistema de Pagos
+payment_methods - Metodos de pago configurados
+payments - Pagos realizados por orden/check
+3. Inventario
+warehouses - Almacenes/bodegas
+inventory_items - Items de inventario (insumos)
+inventory_movements - Movimientos de stock
+recipes - Recetas de productos
+recipe_ingredients - Ingredientes de recetas
+4. Compras
+suppliers - Proveedores
+purchase_orders - Ordenes de compra
+purchase_order_items - Items de ordenes de compra
+5. Fidelizacion
+loyalty_programs - Programas de fidelidad
+customer_points - Puntos de clientes
+promotions - Promociones
+coupons - Cupones
+6. Creditos
+customer_credits - Creditos otorgados a clientes
+credit_payments - Pagos de creditos
+7. Configuraciones
+business_settings - Configuraciones generales
+currencies - Monedas
+8. Personal
+shifts - Turnos de trabajo
+attendance - Asistencia
+9. RLS Policies y Funciones
+Politicas de seguridad para todas las tablas
+Funciones auxiliares (generacion de NCF, calculos, etc.)
+Triggers para automatizaciones
+Tienes un esquema muy bien estructurado. Lo que falta principalmente son:
+
+Sistema Fiscal DGII (obligatorio para RD)
+Pagos (necesario para cerrar ventas)
+Inventario (para control de stock)
+RLS Policies (seguridad)
+Plan
+Plan Completo: Tablas y Configuracion Faltante para MangoPOS
+Fase 1: Sistema de Pagos (Prioridad Alta)
+Tabla payment_methods:
+
+
+CREATE TABLE public.payment_methods (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL REFERENCES public.businesses(id),
+  name text NOT NULL,
+  code text NOT NULL, -- 'cash', 'card', 'transfer', 'qr'
+  is_active boolean DEFAULT true,
+  requires_reference boolean DEFAULT false,
+  icon text,
+  position integer DEFAULT 0,
+  created_at timestamptz DEFAULT now()
+);
+Tabla payments:
+
+
+CREATE TABLE public.payments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL REFERENCES public.businesses(id),
+  order_id uuid REFERENCES public.orders(id),
+  check_id uuid REFERENCES public.order_checks(id),
+  fiscal_document_id uuid, -- Se relacionara con fiscal_documents
+  payment_method_id uuid REFERENCES public.payment_methods(id),
+  amount numeric NOT NULL,
+  reference text,
+  change_amount numeric DEFAULT 0,
+  status text DEFAULT 'completed' CHECK (status IN ('pending', 'completed', 'refunded', 'cancelled')),
+  processed_by uuid REFERENCES auth.users(id),
+  session_id uuid REFERENCES public.cash_register_sessions(id),
+  created_at timestamptz DEFAULT now()
+);
+Fase 2: Sistema Fiscal DGII (Obligatorio para RD)
+Enum para tipos de NCF:
+
+
+CREATE TYPE public.ncf_type AS ENUM (
+  'B01', -- Credito Fiscal
+  'B02', -- Consumidor Final
+  'B14', -- Gubernamental
+  'B15', -- Regimenes Especiales
+  'B16', -- Exportaciones
+  'E31', -- e-CF Credito Fiscal
+  'E32', -- e-CF Consumidor Final
+  'E33', -- e-CF Notas de Debito
+  'E34', -- e-CF Notas de Credito
+  'E44', -- e-CF Regimenes Especiales
+  'E45'  -- e-CF Gubernamental
+);
+Tabla ncf_sequences:
+
+
+CREATE TABLE public.ncf_sequences (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL REFERENCES public.businesses(id),
+  ncf_type ncf_type NOT NULL,
+  serie text NOT NULL, -- Ej: 'B01'
+  prefix text NOT NULL, -- Ej: 'B0100000001'
+  range_start bigint NOT NULL,
+  range_end bigint NOT NULL,
+  current_number bigint NOT NULL,
+  expiration_date date,
+  is_active boolean DEFAULT true,
+  authorized_by text, -- DGII authorization reference
+  created_at timestamptz DEFAULT now(),
+  UNIQUE(business_id, ncf_type, serie)
+);
+Tabla fiscal_documents:
+
+
+CREATE TABLE public.fiscal_documents (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL REFERENCES public.businesses(id),
+  order_id uuid REFERENCES public.orders(id),
+  payment_id uuid REFERENCES public.payments(id),
+  customer_id uuid REFERENCES public.customers(id),
+  
+  -- Datos NCF
+  ncf_type ncf_type NOT NULL,
+  ncf_number text NOT NULL UNIQUE,
+  ncf_sequence_id uuid REFERENCES public.ncf_sequences(id),
+  
+  -- Datos del cliente
+  customer_rnc text,
+  customer_name text NOT NULL,
+  customer_address text,
+  
+  -- Totales
+  subtotal numeric NOT NULL DEFAULT 0,
+  discount numeric NOT NULL DEFAULT 0,
+  tax_exempt numeric NOT NULL DEFAULT 0,
+  taxable_amount numeric NOT NULL DEFAULT 0,
+  itbis_amount numeric NOT NULL DEFAULT 0,
+  service_fee numeric NOT NULL DEFAULT 0,
+  tip numeric NOT NULL DEFAULT 0,
+  total numeric NOT NULL DEFAULT 0,
+  
+  -- e-CF (Factura Electronica)
+  is_electronic boolean DEFAULT false,
+  ecf_tracking_number text,
+  ecf_security_code text,
+  ecf_signed_at timestamptz,
+  ecf_xml text,
+  ecf_status text DEFAULT 'pending' CHECK (ecf_status IN ('pending', 'sent', 'accepted', 'rejected')),
+  
+  -- Estado
+  status text DEFAULT 'active' CHECK (status IN ('active', 'cancelled', 'modified')),
+  cancelled_by uuid REFERENCES auth.users(id),
+  cancelled_at timestamptz,
+  cancellation_reason text,
+  
+  -- Referencias (para notas de credito/debito)
+  related_document_id uuid REFERENCES public.fiscal_documents(id),
+  
+  issued_by uuid REFERENCES auth.users(id),
+  issued_at timestamptz DEFAULT now(),
+  created_at timestamptz DEFAULT now()
+);
+Tabla fiscal_document_items:
+
+
+CREATE TABLE public.fiscal_document_items (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  document_id uuid NOT NULL REFERENCES public.fiscal_documents(id) ON DELETE CASCADE,
+  order_item_id uuid REFERENCES public.order_items(id),
+  product_name text NOT NULL,
+  quantity numeric NOT NULL,
+  unit_price numeric NOT NULL,
+  discount numeric DEFAULT 0,
+  is_tax_exempt boolean DEFAULT false,
+  tax_rate numeric DEFAULT 18,
+  tax_amount numeric DEFAULT 0,
+  total numeric NOT NULL
+);
+Tabla fiscal_settings:
+
+
+CREATE TABLE public.fiscal_settings (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL UNIQUE REFERENCES public.businesses(id),
+  rnc text NOT NULL,
+  business_legal_name text NOT NULL,
+  establishment_number text, -- Numero de establecimiento DGII
+  ecf_enabled boolean DEFAULT false,
+  ecf_certificate_path text,
+  ecf_certificate_password_hash text,
+  ecf_environment text DEFAULT 'test' CHECK (ecf_environment IN ('test', 'production')),
+  default_ncf_type ncf_type DEFAULT 'B02',
+  auto_print_fiscal boolean DEFAULT true,
+  updated_at timestamptz DEFAULT now()
+);
+Fase 3: Inventario
+Tabla warehouses:
+
+
+CREATE TABLE public.warehouses (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL REFERENCES public.businesses(id),
+  name text NOT NULL,
+  address text,
+  is_main boolean DEFAULT false,
+  is_active boolean DEFAULT true,
+  created_at timestamptz DEFAULT now()
+);
+Tabla inventory_items:
+
+
+CREATE TABLE public.inventory_items (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL REFERENCES public.businesses(id),
+  sku text,
+  name text NOT NULL,
+  description text,
+  unit text DEFAULT 'unidad', -- unidad, kg, lb, litro, etc.
+  cost numeric DEFAULT 0,
+  min_stock numeric DEFAULT 0,
+  max_stock numeric,
+  is_active boolean DEFAULT true,
+  created_at timestamptz DEFAULT now()
+);
+Tabla inventory_stock:
+
+
+CREATE TABLE public.inventory_stock (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  warehouse_id uuid NOT NULL REFERENCES public.warehouses(id),
+  item_id uuid NOT NULL REFERENCES public.inventory_items(id),
+  quantity numeric NOT NULL DEFAULT 0,
+  last_updated timestamptz DEFAULT now(),
+  UNIQUE(warehouse_id, item_id)
+);
+Tabla inventory_movements:
+
+
+CREATE TYPE public.movement_type AS ENUM (
+  'purchase', 'sale', 'adjustment', 'transfer_in', 'transfer_out', 'waste', 'return'
+);
+
+CREATE TABLE public.inventory_movements (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL REFERENCES public.businesses(id),
+  warehouse_id uuid NOT NULL REFERENCES public.warehouses(id),
+  item_id uuid NOT NULL REFERENCES public.inventory_items(id),
+  movement_type movement_type NOT NULL,
+  quantity numeric NOT NULL, -- positivo o negativo
+  cost_per_unit numeric,
+  reference_id uuid, -- order_id, purchase_order_id, etc.
+  reference_type text, -- 'order', 'purchase', 'adjustment'
+  notes text,
+  created_by uuid REFERENCES auth.users(id),
+  created_at timestamptz DEFAULT now()
+);
+Tabla recipes:
+
+
+CREATE TABLE public.recipes (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  menu_item_id uuid NOT NULL REFERENCES public.menu_items(id),
+  yield_quantity numeric DEFAULT 1,
+  instructions text,
+  created_at timestamptz DEFAULT now()
+);
+Tabla recipe_ingredients:
+
+
+CREATE TABLE public.recipe_ingredients (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  recipe_id uuid NOT NULL REFERENCES public.recipes(id) ON DELETE CASCADE,
+  inventory_item_id uuid NOT NULL REFERENCES public.inventory_items(id),
+  quantity numeric NOT NULL,
+  unit text NOT NULL
+);
+Fase 4: Proveedores y Compras
+Tabla suppliers:
+
+
+CREATE TABLE public.suppliers (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL REFERENCES public.businesses(id),
+  name text NOT NULL,
+  rnc text,
+  contact_name text,
+  phone text,
+  email text,
+  address text,
+  payment_terms text,
+  notes text,
+  is_active boolean DEFAULT true,
+  created_at timestamptz DEFAULT now()
+);
+Tabla purchase_orders:
+
+
+CREATE TYPE public.purchase_status AS ENUM (
+  'draft', 'sent', 'partial', 'received', 'cancelled'
+);
+
+CREATE TABLE public.purchase_orders (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL REFERENCES public.businesses(id),
+  supplier_id uuid REFERENCES public.suppliers(id),
+  warehouse_id uuid REFERENCES public.warehouses(id),
+  order_number text NOT NULL,
+  status purchase_status DEFAULT 'draft',
+  subtotal numeric DEFAULT 0,
+  tax numeric DEFAULT 0,
+  total numeric DEFAULT 0,
+  notes text,
+  expected_date date,
+  received_date date,
+  created_by uuid REFERENCES auth.users(id),
+  created_at timestamptz DEFAULT now()
+);
+Tabla purchase_order_items:
+
+
+CREATE TABLE public.purchase_order_items (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  purchase_order_id uuid NOT NULL REFERENCES public.purchase_orders(id) ON DELETE CASCADE,
+  inventory_item_id uuid REFERENCES public.inventory_items(id),
+  description text,
+  quantity_ordered numeric NOT NULL,
+  quantity_received numeric DEFAULT 0,
+  unit_cost numeric NOT NULL,
+  tax_rate numeric DEFAULT 18,
+  total numeric NOT NULL
+);
+Fase 5: Fidelizacion
+Tabla loyalty_programs:
+
+
+CREATE TABLE public.loyalty_programs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL REFERENCES public.businesses(id),
+  name text NOT NULL,
+  points_per_currency numeric DEFAULT 1, -- puntos por cada RD$
+  points_value numeric DEFAULT 0.01, -- valor en RD$ de cada punto
+  is_active boolean DEFAULT true,
+  created_at timestamptz DEFAULT now()
+);
+Tabla customer_points:
+
+
+CREATE TABLE public.customer_points (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  customer_id uuid NOT NULL REFERENCES public.customers(id),
+  program_id uuid NOT NULL REFERENCES public.loyalty_programs(id),
+  points_balance numeric DEFAULT 0,
+  total_earned numeric DEFAULT 0,
+  total_redeemed numeric DEFAULT 0,
+  updated_at timestamptz DEFAULT now()
+);
+Tabla point_transactions:
+
+
+CREATE TABLE public.point_transactions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  customer_points_id uuid NOT NULL REFERENCES public.customer_points(id),
+  order_id uuid REFERENCES public.orders(id),
+  points numeric NOT NULL, -- positivo=ganados, negativo=canjeados
+  description text,
+  created_at timestamptz DEFAULT now()
+);
+Tabla promotions:
+
+
+CREATE TABLE public.promotions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL REFERENCES public.businesses(id),
+  name text NOT NULL,
+  description text,
+  discount_type text CHECK (discount_type IN ('percentage', 'fixed', 'bogo')),
+  discount_value numeric,
+  min_purchase numeric DEFAULT 0,
+  start_date timestamptz,
+  end_date timestamptz,
+  is_active boolean DEFAULT true,
+  created_at timestamptz DEFAULT now()
+);
+Tabla coupons:
+
+
+CREATE TABLE public.coupons (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL REFERENCES public.businesses(id),
+  code text NOT NULL UNIQUE,
+  promotion_id uuid REFERENCES public.promotions(id),
+  discount_type text CHECK (discount_type IN ('percentage', 'fixed')),
+  discount_value numeric,
+  usage_limit integer,
+  times_used integer DEFAULT 0,
+  min_purchase numeric DEFAULT 0,
+  valid_from timestamptz,
+  valid_until timestamptz,
+  is_active boolean DEFAULT true,
+  created_at timestamptz DEFAULT now()
+);
+Fase 6: Creditos de Clientes
+Tabla customer_credits:
+
+
+CREATE TABLE public.customer_credits (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL REFERENCES public.businesses(id),
+  customer_id uuid NOT NULL REFERENCES public.customers(id),
+  order_id uuid REFERENCES public.orders(id),
+  fiscal_document_id uuid REFERENCES public.fiscal_documents(id),
+  original_amount numeric NOT NULL,
+  balance numeric NOT NULL,
+  due_date date,
+  status text DEFAULT 'pending' CHECK (status IN ('pending', 'partial', 'paid', 'overdue', 'cancelled')),
+  notes text,
+  created_by uuid REFERENCES auth.users(id),
+  created_at timestamptz DEFAULT now()
+);
+Tabla credit_payments:
+
+
+CREATE TABLE public.credit_payments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  credit_id uuid NOT NULL REFERENCES public.customer_credits(id),
+  amount numeric NOT NULL,
+  payment_method_id uuid REFERENCES public.payment_methods(id),
+  reference text,
+  received_by uuid REFERENCES auth.users(id),
+  session_id uuid REFERENCES public.cash_register_sessions(id),
+  created_at timestamptz DEFAULT now()
+);
+Fase 7: Configuraciones y Monedas
+Tabla currencies:
+
+
+CREATE TABLE public.currencies (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL REFERENCES public.businesses(id),
+  code text NOT NULL, -- 'DOP', 'USD', 'EUR'
+  name text NOT NULL,
+  symbol text NOT NULL,
+  exchange_rate numeric DEFAULT 1,
+  is_default boolean DEFAULT false,
+  is_active boolean DEFAULT true,
+  UNIQUE(business_id, code)
+);
+Tabla business_settings:
+
+
+CREATE TABLE public.business_settings (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL UNIQUE REFERENCES public.businesses(id),
+  
+  -- General
+  timezone text DEFAULT 'America/Santo_Domingo',
+  language text DEFAULT 'es',
+  date_format text DEFAULT 'DD/MM/YYYY',
+  
+  -- POS
+  default_tax_rate numeric DEFAULT 18,
+  auto_print_order boolean DEFAULT true,
+  auto_print_receipt boolean DEFAULT true,
+  require_customer boolean DEFAULT false,
+  allow_negative_stock boolean DEFAULT false,
+  
+  -- Service
+  service_fee_enabled boolean DEFAULT false,
+  service_fee_rate numeric DEFAULT 10,
+  tip_enabled boolean DEFAULT true,
+  
+  -- Delivery
+  delivery_enabled boolean DEFAULT false,
+  delivery_fee numeric DEFAULT 0,
+  min_delivery_order numeric DEFAULT 0,
+  
+  updated_at timestamptz DEFAULT now()
+);
+Fase 8: Turnos y Asistencia
+Tabla shifts:
+
+
+CREATE TABLE public.shifts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL REFERENCES public.businesses(id),
+  name text NOT NULL,
+  start_time time NOT NULL,
+  end_time time NOT NULL,
+  days_of_week integer[] DEFAULT ARRAY[1,2,3,4,5], -- 0=domingo, 6=sabado
+  is_active boolean DEFAULT true,
+  created_at timestamptz DEFAULT now()
+);
+Tabla attendance:
+
+
+CREATE TABLE public.attendance (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL REFERENCES public.businesses(id),
+  user_id uuid NOT NULL REFERENCES auth.users(id),
+  shift_id uuid REFERENCES public.shifts(id),
+  clock_in timestamptz NOT NULL,
+  clock_out timestamptz,
+  break_minutes integer DEFAULT 0,
+  notes text,
+  created_at timestamptz DEFAULT now()
+);
+Fase 9: Gift Cards y Notas de Credito
+Tabla gift_cards:
+
+
+CREATE TABLE public.gift_cards (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL REFERENCES public.businesses(id),
+  code text NOT NULL UNIQUE,
+  initial_balance numeric NOT NULL,
+  current_balance numeric NOT NULL,
+  customer_id uuid REFERENCES public.customers(id),
+  expires_at date,
+  is_active boolean DEFAULT true,
+  created_at timestamptz DEFAULT now()
+);
+Tabla gift_card_transactions:
+
+
+CREATE TABLE public.gift_card_transactions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  gift_card_id uuid NOT NULL REFERENCES public.gift_cards(id),
+  order_id uuid REFERENCES public.orders(id),
+  amount numeric NOT NULL, -- positivo=carga, negativo=uso
+  balance_after numeric NOT NULL,
+  created_at timestamptz DEFAULT now()
+);
+Fase 10: RLS Policies (Seguridad)
+Funcion auxiliar para verificar membresia:
+
+
+CREATE OR REPLACE FUNCTION public.user_has_business_access(
+  _user_id uuid, 
+  _business_id uuid
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.user_businesses
+    WHERE user_id = _user_id 
+    AND business_id = _business_id
+  ) OR EXISTS (
+    SELECT 1 FROM public.businesses
+    WHERE id = _business_id 
+    AND owner_id = _user_id
+  )
+$$;
+Funcion para verificar rol:
+
+
+CREATE OR REPLACE FUNCTION public.user_business_role(
+  _user_id uuid, 
+  _business_id uuid
+)
+RETURNS text
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT COALESCE(
+    (SELECT role FROM public.user_businesses 
+     WHERE user_id = _user_id AND business_id = _business_id),
+    (SELECT 'owner' FROM public.businesses 
+     WHERE id = _business_id AND owner_id = _user_id)
+  )
+$$;
+Ejemplo de RLS para orders:
+
+
+ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
+
+-- Users can view orders from their business
+CREATE POLICY "Users can view business orders" ON public.orders
+  FOR SELECT TO authenticated
+  USING (
+    public.user_has_business_access(
+      auth.uid(), 
+      (SELECT session.business_id FROM public.table_sessions session 
+       JOIN public.dining_tables dt ON session.table_id = dt.id
+       JOIN public.zones z ON dt.zone_id = z.id
+       WHERE session.id = orders.session_id)
+    )
+  );
+
+-- Similar policies for INSERT, UPDATE, DELETE
+RLS para payment_methods:
+
+
+ALTER TABLE public.payment_methods ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view business payment methods" ON public.payment_methods
+  FOR SELECT TO authenticated
+  USING (public.user_has_business_access(auth.uid(), business_id));
+
+CREATE POLICY "Admins can manage payment methods" ON public.payment_methods
+  FOR ALL TO authenticated
+  USING (public.user_business_role(auth.uid(), business_id) IN ('owner', 'admin'))
+  WITH CHECK (public.user_business_role(auth.uid(), business_id) IN ('owner', 'admin'));
+Fase 11: Funciones Utilitarias
+Funcion para generar NCF:
+
+
+CREATE OR REPLACE FUNCTION public.generate_ncf(
+  _business_id uuid,
+  _ncf_type ncf_type
+)
+RETURNS text
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  _sequence RECORD;
+  _new_number bigint;
+  _ncf text;
+BEGIN
+  -- Obtener y bloquear la secuencia
+  SELECT * INTO _sequence
+  FROM public.ncf_sequences
+  WHERE business_id = _business_id
+    AND ncf_type = _ncf_type
+    AND is_active = true
+    AND current_number < range_end
+    AND (expiration_date IS NULL OR expiration_date > CURRENT_DATE)
+  FOR UPDATE;
+  
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'No NCF sequence available for type %', _ncf_type;
+  END IF;
+  
+  -- Incrementar numero
+  _new_number := _sequence.current_number + 1;
+  
+  -- Actualizar secuencia
+  UPDATE public.ncf_sequences
+  SET current_number = _new_number
+  WHERE id = _sequence.id;
+  
+  -- Formatear NCF
+  _ncf := _sequence.prefix || LPAD(_new_number::text, 8, '0');
+  
+  RETURN _ncf;
+END;
+$$;
+Funcion para calcular totales de orden:
+
+
+CREATE OR REPLACE FUNCTION public.calculate_order_totals(
+  _order_id uuid
+)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  _subtotal numeric;
+  _tax numeric;
+  _discounts numeric;
+  _total numeric;
+BEGIN
+  SELECT 
+    COALESCE(SUM(subtotal), 0),
+    COALESCE(SUM(tax), 0),
+    COALESCE(SUM(discounts), 0)
+  INTO _subtotal, _tax, _discounts
+  FROM public.order_items
+  WHERE order_id = _order_id;
+  
+  _total := _subtotal + _tax - _discounts;
+  
+  UPDATE public.orders
+  SET 
+    subtotal = _subtotal,
+    tax = _tax,
+    discounts = _discounts,
+    total = _total
+  WHERE id = _order_id;
+END;
+$$;
+Fase 12: Triggers
+Trigger para actualizar totales de orden:
+
+
+CREATE OR REPLACE FUNCTION public.trigger_update_order_totals()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  PERFORM public.calculate_order_totals(
+    COALESCE(NEW.order_id, OLD.order_id)
+  );
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER order_items_totals_trigger
+AFTER INSERT OR UPDATE OR DELETE ON public.order_items
+FOR EACH ROW
+EXECUTE FUNCTION public.trigger_update_order_totals();
+Trigger para descontar inventario:
+
+
+CREATE OR REPLACE FUNCTION public.trigger_inventory_on_order_sent()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  -- Solo cuando el status cambia a 'sent'
+  IF NEW.status = 'sent' AND OLD.status != 'sent' THEN
+    -- Logica para descontar inventario basado en recetas
+    -- Se implementara cuando se integre el inventario
+    NULL;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+Resumen de Implementacion
+Crear los ENUMs primero (ncf_type, movement_type, purchase_status)
+Crear tablas en orden de dependencias
+Habilitar RLS en todas las tablas
+Crear funciones auxiliares de seguridad
+Crear policies de RLS
+Crear funciones de negocio (generate_ncf, calculate_totals)
+Crear triggers para automatizaciones
+Insertar datos iniciales (payment_methods, currencies, etc.)
+Datos Iniciales Sugeridos
+
+-- Metodos de pago por defecto
+INSERT INTO public.payment_methods (business_id, name, code, position) VALUES
+  ('BUSINESS_ID', 'Efectivo', 'cash', 1),
+  ('BUSINESS_ID', 'Tarjeta', 'card', 2),
+  ('BUSINESS_ID', 'Transferencia', 'transfer', 3);
+
+-- Moneda por defecto
+INSERT INTO public.currencies (business_id, code, name, symbol, is_default) VALUES
+  ('BUSINESS_ID', 'DOP', 'Peso Dominicano', 'RD$', true);
+
+
+
+
+
+Jan 7
+at 11:06 PM
+Error: Failed to run sql query: ERROR: 42703: column session.business_id does not exist
+
+
+
+Thought for 14s
+Tienes razón. El error ocurre porque table_sessions no tiene una columna business_id directamente. Necesitamos obtener el business_id a través de la cadena de relaciones: table_sessions → dining_tables → zones → business_id.
+
+Déjame verificar la estructura correcta:
+
+Searched for
+table_sessions
+Basándome en el schema que compartiste, el problema está claro:
+
+El Problema
+La tabla table_sessions NO tiene columna business_id. La ruta correcta para obtener el business_id es:
+
+table_sessions → dining_tables (via table_id) → zones (via zone_id) → business_id
+Política RLS Corregida
+Aquí está el SQL corregido para la política de orders:
+
+
+-- Primero, crear la función auxiliar si no existe
+CREATE OR REPLACE FUNCTION public.user_has_business_access(
+  _user_id uuid, 
+  _business_id uuid
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.user_businesses
+    WHERE user_id = _user_id 
+    AND business_id = _business_id
+  ) OR EXISTS (
+    SELECT 1 FROM public.businesses
+    WHERE id = _business_id 
+    AND owner_id = _user_id
+  )
+$$;
+
+-- Ahora la política corregida para orders
+ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view business orders" ON public.orders
+  FOR SELECT TO authenticated
+  USING (
+    public.user_has_business_access(
+      auth.uid(), 
+      (
+        SELECT z.business_id 
+        FROM public.table_sessions ts
+        JOIN public.dining_tables dt ON ts.table_id = dt.id
+        JOIN public.zones z ON dt.zone_id = z.id
+        WHERE ts.id = orders.session_id
+      )
+    )
+  );
+
+-- Política para INSERT
+CREATE POLICY "Users can create orders in their business" ON public.orders
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    public.user_has_business_access(
+      auth.uid(), 
+      (
+        SELECT z.business_id 
+        FROM public.table_sessions ts
+        JOIN public.dining_tables dt ON ts.table_id = dt.id
+        JOIN public.zones z ON dt.zone_id = z.id
+        WHERE ts.id = session_id
+      )
+    )
+  );
+
+-- Política para UPDATE
+CREATE POLICY "Users can update orders in their business" ON public.orders
+  FOR UPDATE TO authenticated
+  USING (
+    public.user_has_business_access(
+      auth.uid(), 
+      (
+        SELECT z.business_id 
+        FROM public.table_sessions ts
+        JOIN public.dining_tables dt ON ts.table_id = dt.id
+        JOIN public.zones z ON dt.zone_id = z.id
+        WHERE ts.id = orders.session_id
+      )
+    )
+  );
+Alternativa Más Eficiente
+Para evitar los JOINs repetitivos en cada policy, podrías considerar agregar una columna business_id a table_sessions (desnormalización controlada):
+
+
+-- Opción: Agregar business_id a table_sessions para simplificar queries
+ALTER TABLE public.table_sessions 
+ADD COLUMN business_id uuid REFERENCES public.businesses(id);
+
+-- Crear un trigger para auto-llenar business_id
+CREATE OR REPLACE FUNCTION public.set_session_business_id()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  SELECT z.business_id INTO NEW.business_id
+  FROM public.dining_tables dt
+  JOIN public.zones z ON dt.zone_id = z.id
+  WHERE dt.id = NEW.table_id;
+  
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER set_session_business_id_trigger
+BEFORE INSERT ON public.table_sessions
+FOR EACH ROW
+EXECUTE FUNCTION public.set_session_business_id();
+¿Quieres que prepare un plan completo con todas las políticas RLS corregidas usando la ruta correcta de JOINs, o prefieres la alternativa de agregar business_id a table_sessions para simplificar las queries?
+
+
+
+
+
+
+Jan 7
+at 11:25 PM
+-- WARNING: This schema is for context only and is not meant to be run.
+
+-- Table order and constraints may not be valid for execution.
+
+CREATE TABLE public.agent_nodes (
+
+id uuid NOT NULL DEFAULT gen_random_uuid(),
+
+business_id uuid NOT NULL,
+
+site_code text NOT NULL,
+
+name text,
+
+api_key_hash text NOT NULL,
+
+is_active boolean NOT NULL DEFAULT true,
+
+last_seen timestamp with time zo ...
+
+Show more
+
+
+Thought for 22s
+Excelente, veo que has implementado prácticamente todas las tablas que sugerí. Déjame analizar la estructura completa:
+
+Análisis del Esquema Actual
+Lo que está muy bien implementado:
+Sistema de Pagos - payment_methods y payments con todas las relaciones correctas
+Sistema Fiscal DGII - ncf_sequences, fiscal_documents, fiscal_document_items, fiscal_settings completo para cumplimiento fiscal
+Inventario - warehouses, inventory_items, inventory_stock, inventory_movements, recipes, recipe_ingredients
+Proveedores/Compras - suppliers, purchase_orders, purchase_order_items
+Fidelización - loyalty_programs, customer_points, point_transactions
+Créditos - customer_credits, credit_payments
+Configuraciones - currencies, business_settings
+Staff - shifts, attendance
+Gift Cards - gift_cards, gift_card_transactions
+Observaciones y mejoras sugeridas:
+1. Falta business_id en table_sessions Esto complica las RLS policies. Actualmente para saber el business de una orden hay que hacer:
+
+orders → table_sessions → dining_tables → zones → business_id
+Sería más eficiente agregar business_id directo.
+
+2. Faltan las tablas promotions y coupons No las veo en el esquema actual.
+
+3. Tablas sin foreign key a businesses:
+
+taxes - tiene business_id pero falta el FK constraint
+customers - tiene business_id pero falta el FK constraint
+4. Falta configuración de RLS No veo políticas de Row Level Security habilitadas.
+
+5. Faltan funciones críticas:
+
+user_has_business_access() - para verificar acceso
+user_business_role() - para verificar rol
+generate_ncf() - para generar comprobantes fiscales
+calculate_order_totals() - para recalcular totales
+6. Faltan triggers:
+
+Actualizar totales de orden cuando cambian items
+Descontar inventario al enviar orden
+Actualizar updated_at automáticamente
+7. Campo duplicado en order_items: Tienes quantity (integer) y qty (numeric) - deberías usar solo uno.
+
+8. print_jobs.business_id es text: Debería ser uuid con FK a businesses.
+
+Quieres que prepare un plan para:
+
+Agregar business_id a table_sessions
+Crear las tablas promotions y coupons
+Crear todas las funciones auxiliares y de seguridad
+Configurar RLS policies para todas las tablas
+Crear los triggers necesarios
+Corregir los FK constraints faltantes
+Excelente, veo que has implementado prácticamente todas las tablas que sugerí. Déjame analizar la estructura completa:
+
+Análisis del Esquema Actual
+Lo que está muy bien implementado:
+Sistema de Pagos - payment_methods y payments con todas las relaciones correctas
+Sistema Fiscal DGII - ncf_sequences, fiscal_documents, fiscal_document_items, fiscal_settings completo para cumplimiento fiscal
+Inventario - warehouses, inventory_items, inventory_stock, inventory_movements, recipes, recipe_ingredients
+Proveedores/Compras - suppliers, purchase_orders, purchase_order_items
+Fidelización - loyalty_programs, customer_points, point_transactions
+Créditos - customer_credits, credit_payments
+Configuraciones - currencies, business_settings
+Staff - shifts, attendance
+Gift Cards - gift_cards, gift_card_transactions
+Observaciones y mejoras sugeridas:
+1. Falta business_id en table_sessions Esto complica las RLS policies. Actualmente para saber el business de una orden hay que hacer:
+
+orders → table_sessions → dining_tables → zones → business_id
+Sería más eficiente agregar business_id directo.
+
+2. Faltan las tablas promotions y coupons No las veo en el esquema actual.
+
+3. Tablas sin foreign key a businesses:
+
+taxes - tiene business_id pero falta el FK constraint
+customers - tiene business_id pero falta el FK constraint
+4. Falta configuración de RLS No veo políticas de Row Level Security habilitadas.
+
+5. Faltan funciones críticas:
+
+user_has_business_access() - para verificar acceso
+user_business_role() - para verificar rol
+generate_ncf() - para generar comprobantes fiscales
+calculate_order_totals() - para recalcular totales
+6. Faltan triggers:
+
+Actualizar totales de orden cuando cambian items
+Descontar inventario al enviar orden
+Actualizar updated_at automáticamente
+7. Campo duplicado en order_items: Tienes quantity (integer) y qty (numeric) - deberías usar solo uno.
+
+8. print_jobs.business_id es text: Debería ser uuid con FK a businesses.
+
+Quieres que prepare un plan para:
+
+Agregar business_id a table_sessions
+Crear las tablas promotions y coupons
+Crear todas las funciones auxiliares y de seguridad
+Configurar RLS policies para todas las tablas
+Crear los triggers necesarios
+Corregir los FK constraints faltantes
+Plan
+Plan: Completar Configuracion de Base de Datos MangoPOS
+Fase 1: Correcciones Estructurales
+1.1 Agregar business_id a table_sessions:
+
+
+ALTER TABLE public.table_sessions 
+ADD COLUMN business_id uuid REFERENCES public.businesses(id);
+
+-- Trigger para auto-poblar business_id
+CREATE OR REPLACE FUNCTION public.set_table_session_business_id()
+RETURNS trigger AS $$
+BEGIN
+  NEW.business_id := (
+    SELECT z.business_id 
+    FROM public.dining_tables dt
+    JOIN public.zones z ON dt.zone_id = z.id
+    WHERE dt.id = NEW.table_id
+  );
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER set_business_id_on_table_session
+BEFORE INSERT ON public.table_sessions
+FOR EACH ROW
+EXECUTE FUNCTION public.set_table_session_business_id();
+1.2 Corregir FK constraints faltantes:
+
+
+-- taxes
+ALTER TABLE public.taxes 
+ADD CONSTRAINT taxes_business_id_fkey 
+FOREIGN KEY (business_id) REFERENCES public.businesses(id);
+
+-- customers
+ALTER TABLE public.customers 
+ADD CONSTRAINT customers_business_id_fkey 
+FOREIGN KEY (business_id) REFERENCES public.businesses(id);
+1.3 Corregir print_jobs.business_id:
+
+
+ALTER TABLE public.print_jobs 
+ALTER COLUMN business_id TYPE uuid USING business_id::uuid;
+
+ALTER TABLE public.print_jobs 
+ADD CONSTRAINT print_jobs_business_id_fkey 
+FOREIGN KEY (business_id) REFERENCES public.businesses(id);
+1.4 Eliminar campo duplicado en order_items:
+
+
+-- Migrar datos de qty a quantity si es necesario
+UPDATE public.order_items SET quantity = qty::integer WHERE qty IS NOT NULL;
+ALTER TABLE public.order_items DROP COLUMN qty;
+Fase 2: Tablas Faltantes
+2.1 Crear tabla promotions:
+
+
+CREATE TABLE public.promotions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL REFERENCES public.businesses(id),
+  name text NOT NULL,
+  description text,
+  discount_type text CHECK (discount_type IN ('percentage', 'fixed', 'bogo')),
+  discount_value numeric,
+  min_purchase numeric DEFAULT 0,
+  applies_to text DEFAULT 'all' CHECK (applies_to IN ('all', 'category', 'product')),
+  target_ids uuid[], -- IDs de categorias o productos
+  start_date timestamptz,
+  end_date timestamptz,
+  days_of_week integer[], -- 0=domingo, 6=sabado
+  is_active boolean DEFAULT true,
+  created_at timestamptz DEFAULT now()
+);
+2.2 Crear tabla coupons:
+
+
+CREATE TABLE public.coupons (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL REFERENCES public.businesses(id),
+  code text NOT NULL,
+  promotion_id uuid REFERENCES public.promotions(id),
+  discount_type text CHECK (discount_type IN ('percentage', 'fixed')),
+  discount_value numeric,
+  usage_limit integer,
+  times_used integer DEFAULT 0,
+  min_purchase numeric DEFAULT 0,
+  valid_from timestamptz,
+  valid_until timestamptz,
+  is_active boolean DEFAULT true,
+  created_at timestamptz DEFAULT now(),
+  UNIQUE(business_id, code)
+);
+2.3 Crear tabla coupon_usage (para tracking):
+
+
+CREATE TABLE public.coupon_usage (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  coupon_id uuid NOT NULL REFERENCES public.coupons(id),
+  order_id uuid REFERENCES public.orders(id),
+  customer_id uuid REFERENCES public.customers(id),
+  discount_applied numeric NOT NULL,
+  used_at timestamptz DEFAULT now()
+);
+Fase 3: Funciones de Seguridad (Security Definer)
+3.1 Funcion para verificar acceso a negocio:
+
+
+CREATE OR REPLACE FUNCTION public.user_has_business_access(
+  _user_id uuid, 
+  _business_id uuid
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.user_businesses
+    WHERE user_id = _user_id 
+    AND business_id = _business_id
+  ) OR EXISTS (
+    SELECT 1 FROM public.businesses
+    WHERE id = _business_id 
+    AND owner_id = _user_id
+  )
+$$;
+3.2 Funcion para obtener rol en negocio:
+
+
+CREATE OR REPLACE FUNCTION public.user_business_role(
+  _user_id uuid, 
+  _business_id uuid
+)
+RETURNS text
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT COALESCE(
+    (SELECT role FROM public.user_businesses 
+     WHERE user_id = _user_id AND business_id = _business_id),
+    (SELECT 'owner' FROM public.businesses 
+     WHERE id = _business_id AND owner_id = _user_id)
+  )
+$$;
+3.3 Funcion para verificar rol especifico:
+
+
+CREATE OR REPLACE FUNCTION public.has_business_role(
+  _user_id uuid, 
+  _business_id uuid,
+  _roles text[]
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT public.user_business_role(_user_id, _business_id) = ANY(_roles)
+$$;
+Fase 4: Funciones de Negocio
+4.1 Generar NCF:
+
+
+CREATE OR REPLACE FUNCTION public.generate_ncf(
+  _business_id uuid,
+  _ncf_type ncf_type
+)
+RETURNS text
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  _sequence RECORD;
+  _new_number bigint;
+  _ncf text;
+BEGIN
+  SELECT * INTO _sequence
+  FROM public.ncf_sequences
+  WHERE business_id = _business_id
+    AND ncf_type = _ncf_type
+    AND is_active = true
+    AND current_number < range_end
+    AND (expiration_date IS NULL OR expiration_date > CURRENT_DATE)
+  FOR UPDATE;
+  
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'No hay secuencia NCF disponible para tipo %', _ncf_type;
+  END IF;
+  
+  _new_number := _sequence.current_number + 1;
+  
+  UPDATE public.ncf_sequences
+  SET current_number = _new_number
+  WHERE id = _sequence.id;
+  
+  _ncf := _sequence.prefix || LPAD(_new_number::text, 8, '0');
+  
+  RETURN _ncf;
+END;
+$$;
+4.2 Calcular totales de orden:
+
+
+CREATE OR REPLACE FUNCTION public.calculate_order_totals(_order_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  _subtotal numeric;
+  _tax numeric;
+  _discounts numeric;
+  _service_fee numeric;
+  _total numeric;
+BEGIN
+  SELECT 
+    COALESCE(SUM(subtotal), 0),
+    COALESCE(SUM(tax), 0),
+    COALESCE(SUM(discounts), 0)
+  INTO _subtotal, _tax, _discounts
+  FROM public.order_items
+  WHERE order_id = _order_id;
+  
+  -- Obtener service_fee si aplica
+  SELECT COALESCE(service_fee, 0) INTO _service_fee
+  FROM public.orders WHERE id = _order_id;
+  
+  _total := _subtotal + _tax + _service_fee - _discounts;
+  
+  UPDATE public.orders
+  SET 
+    subtotal = _subtotal,
+    tax = _tax,
+    discounts = _discounts,
+    total = _total
+  WHERE id = _order_id;
+END;
+$$;
+4.3 Calcular totales de check (subcuenta):
+
+
+CREATE OR REPLACE FUNCTION public.calculate_check_totals(_check_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  UPDATE public.order_checks
+  SET 
+    subtotal = COALESCE((
+      SELECT SUM(subtotal) FROM public.order_items WHERE check_id = _check_id
+    ), 0),
+    tax = COALESCE((
+      SELECT SUM(tax) FROM public.order_items WHERE check_id = _check_id
+    ), 0),
+    discounts = COALESCE((
+      SELECT SUM(discounts) FROM public.order_items WHERE check_id = _check_id
+    ), 0),
+    total = COALESCE((
+      SELECT SUM(subtotal + tax - discounts) FROM public.order_items WHERE check_id = _check_id
+    ), 0)
+  WHERE id = _check_id;
+END;
+$$;
+Fase 5: Triggers
+5.1 Trigger para actualizar totales de orden:
+
+
+CREATE OR REPLACE FUNCTION public.trigger_update_order_totals()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    PERFORM public.calculate_order_totals(OLD.order_id);
+    IF OLD.check_id IS NOT NULL THEN
+      PERFORM public.calculate_check_totals(OLD.check_id);
+    END IF;
+    RETURN OLD;
+  ELSE
+    PERFORM public.calculate_order_totals(NEW.order_id);
+    IF NEW.check_id IS NOT NULL THEN
+      PERFORM public.calculate_check_totals(NEW.check_id);
+    END IF;
+    RETURN NEW;
+  END IF;
+END;
+$$;
+
+CREATE TRIGGER order_items_totals_trigger
+AFTER INSERT OR UPDATE OR DELETE ON public.order_items
+FOR EACH ROW
+EXECUTE FUNCTION public.trigger_update_order_totals();
+5.2 Trigger para updated_at automatico:
+
+
+CREATE OR REPLACE FUNCTION public.trigger_set_updated_at()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$;
+
+-- Aplicar a tablas con updated_at
+CREATE TRIGGER set_updated_at ON public.businesses
+BEFORE UPDATE FOR EACH ROW EXECUTE FUNCTION public.trigger_set_updated_at();
+
+CREATE TRIGGER set_updated_at ON public.customers
+BEFORE UPDATE FOR EACH ROW EXECUTE FUNCTION public.trigger_set_updated_at();
+
+CREATE TRIGGER set_updated_at ON public.menu_items
+BEFORE UPDATE FOR EACH ROW EXECUTE FUNCTION public.trigger_set_updated_at();
+
+CREATE TRIGGER set_updated_at ON public.profiles
+BEFORE UPDATE FOR EACH ROW EXECUTE FUNCTION public.trigger_set_updated_at();
+
+CREATE TRIGGER set_updated_at ON public.business_settings
+BEFORE UPDATE FOR EACH ROW EXECUTE FUNCTION public.trigger_set_updated_at();
+
+CREATE TRIGGER set_updated_at ON public.fiscal_settings
+BEFORE UPDATE FOR EACH ROW EXECUTE FUNCTION public.trigger_set_updated_at();
+5.3 Trigger para incrementar uso de cupon:
+
+
+CREATE OR REPLACE FUNCTION public.trigger_increment_coupon_usage()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  UPDATE public.coupons
+  SET times_used = times_used + 1
+  WHERE id = NEW.coupon_id;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER increment_coupon_usage
+AFTER INSERT ON public.coupon_usage
+FOR EACH ROW
+EXECUTE FUNCTION public.trigger_increment_coupon_usage();
+Fase 6: Row Level Security Policies
+6.1 Habilitar RLS en todas las tablas:
+
+
+ALTER TABLE public.businesses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_businesses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.zones ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.dining_tables ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.table_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.order_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.order_checks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.order_item_modifiers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.payment_methods ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.categories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.menu_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.menus ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.menu_item_links ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.modifier_groups ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.modifiers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.customers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.taxes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.cash_registers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.cash_register_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.cash_transactions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.fiscal_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.fiscal_documents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ncf_sequences ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.printers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.print_areas ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.warehouses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.inventory_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.inventory_stock ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.inventory_movements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.suppliers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.purchase_orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.loyalty_programs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.customer_points ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.customer_credits ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.gift_cards ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.shifts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.attendance ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.promotions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.coupons ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.business_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.currencies ENABLE ROW LEVEL SECURITY;
+6.2 Policies para tablas con business_id directo:
+
+
+-- Template para SELECT (todas las tablas con business_id)
+CREATE POLICY "Users can view own business data" ON public.zones
+FOR SELECT TO authenticated
+USING (public.user_has_business_access(auth.uid(), business_id));
+
+CREATE POLICY "Users can view own business data" ON public.categories
+FOR SELECT TO authenticated
+USING (public.user_has_business_access(auth.uid(), business_id));
+
+CREATE POLICY "Users can view own business data" ON public.menu_items
+FOR SELECT TO authenticated
+USING (public.user_has_business_access(auth.uid(), business_id));
+
+-- ... repetir para todas las tablas con business_id
+
+-- Template para INSERT/UPDATE/DELETE (solo admin/owner)
+CREATE POLICY "Admins can manage zones" ON public.zones
+FOR ALL TO authenticated
+USING (public.has_business_role(auth.uid(), business_id, ARRAY['owner', 'admin']))
+WITH CHECK (public.has_business_role(auth.uid(), business_id, ARRAY['owner', 'admin']));
+6.3 Policies para tablas sin business_id directo:
+
+Para orders (usa table_sessions.business_id):
+
+
+CREATE POLICY "Users can view business orders" ON public.orders
+FOR SELECT TO authenticated
+USING (
+  public.user_has_business_access(
+    auth.uid(), 
+    (SELECT business_id FROM public.table_sessions WHERE id = orders.session_id)
+  )
+);
+
+CREATE POLICY "Staff can manage orders" ON public.orders
+FOR ALL TO authenticated
+USING (
+  public.has_business_role(
+    auth.uid(), 
+    (SELECT business_id FROM public.table_sessions WHERE id = orders.session_id),
+    ARRAY['owner', 'admin', 'cashier', 'waiter']
+  )
+);
+Para order_items:
+
+
+CREATE POLICY "Users can view order items" ON public.order_items
+FOR SELECT TO authenticated
+USING (
+  public.user_has_business_access(
+    auth.uid(), 
+    (SELECT ts.business_id 
+     FROM public.orders o 
+     JOIN public.table_sessions ts ON o.session_id = ts.id 
+     WHERE o.id = order_items.order_id)
+  )
+);
+Para dining_tables (usa zones.business_id):
+
+
+CREATE POLICY "Users can view tables" ON public.dining_tables
+FOR SELECT TO authenticated
+USING (
+  public.user_has_business_access(
+    auth.uid(), 
+    (SELECT business_id FROM public.zones WHERE id = dining_tables.zone_id)
+  )
+);
+Fase 7: Datos Iniciales por Defecto
+7.1 Funcion para crear datos iniciales de negocio:
+
+
+CREATE OR REPLACE FUNCTION public.create_business_defaults(_business_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  -- Metodos de pago por defecto
+  INSERT INTO public.payment_methods (business_id, name, code, position, icon) VALUES
+    (_business_id, 'Efectivo', 'cash', 1, 'banknote'),
+    (_business_id, 'Tarjeta', 'card', 2, 'credit-card'),
+    (_business_id, 'Transferencia', 'transfer', 3, 'building-2');
+  
+  -- Moneda por defecto (Peso Dominicano)
+  INSERT INTO public.currencies (business_id, code, name, symbol, is_default) VALUES
+    (_business_id, 'DOP', 'Peso Dominicano', 'RD$', true);
+  
+  -- Configuracion por defecto
+  INSERT INTO public.business_settings (business_id) VALUES (_business_id);
+  
+  -- Impuesto ITBIS por defecto
+  INSERT INTO public.taxes (business_id, name, rate) VALUES
+    (_business_id, 'ITBIS', 18);
+  
+  -- Zona por defecto
+  INSERT INTO public.zones (business_id, name, sort_index) VALUES
+    (_business_id, 'Salon Principal', 1);
+  
+  -- Almacen principal
+  INSERT INTO public.warehouses (business_id, name, is_main) VALUES
+    (_business_id, 'Almacen Principal', true);
+END;
+$$;
+7.2 Trigger para crear datos al crear negocio:
+
+
+CREATE OR REPLACE FUNCTION public.trigger_create_business_defaults()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  PERFORM public.create_business_defaults(NEW.id);
+  
+  -- Agregar owner a user_businesses
+  INSERT INTO public.user_businesses (user_id, business_id, role)
+  VALUES (NEW.owner_id, NEW.id, 'owner');
+  
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER create_business_defaults
+AFTER INSERT ON public.businesses
+FOR EACH ROW
+EXECUTE FUNCTION public.trigger_create_business_defaults();
+Resumen de Cambios
+Fase	Descripcion	Archivos/Tablas
+1	Correcciones estructurales	table_sessions, taxes, customers, print_jobs, order_items
+2	Tablas faltantes	promotions, coupons, coupon_usage
+3	Funciones de seguridad	user_has_business_access, user_business_role, has_business_role
+4	Funciones de negocio	generate_ncf, calculate_order_totals, calculate_check_totals
+5	Triggers	Totales automaticos, updated_at, cupones
+6	RLS Policies	35+ tablas con policies de acceso
+7	Datos iniciales	Metodos de pago, moneda, impuestos, zona, almacen

@@ -27,7 +27,9 @@ class ZonesRepository {
   Future<List<TableStatus>> fetchByZone(String zoneId) async {
     final rows = await sb
         .from('v_zone_table_status')
-        .select('table_id,zone_id,code,session_id,orders_count,minutes_open')
+        .select(
+          'table_id,zone_id,code,session_id,orders_count,minutes_open,items_count,total,people_count',
+        )
         .eq('zone_id', zoneId)
         .order('code');
 

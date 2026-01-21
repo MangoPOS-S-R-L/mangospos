@@ -3,8 +3,10 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
-import 'package:mangopos/data/models/printing.dart';
+import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/presentation/settings/more settings/printing/printers/viewmodel/printers_viewmodel.dart';
 
 class PrintingPrintersView extends ConsumerStatefulWidget {
@@ -101,107 +103,139 @@ class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
 
     return Stack(
       children: [
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (errorMessage != null && vm.items.isNotEmpty)
+        Container(
+          color: Colors.white,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
-                child: _InlineError(message: errorMessage),
-              ),
-
-            // Header con botón de agregar
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    'Impresoras configuradas',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                      color: MangoColors.darkGray,
-                    ),
+                padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+                child: TextButton.icon(
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.black87,
+                    padding: EdgeInsets.zero,
                   ),
-                  ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF32AD40),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 20,
-                        vertical: 12,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+                  onPressed: () => context.go(AppRoutes.printingBase),
+                  icon: const Icon(Icons.arrow_back),
+                  label: const Text('Regresar'),
+                ),
+              ),
+              if (errorMessage != null && vm.items.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
+                  child: _InlineError(message: errorMessage),
+                ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: const [
+                          Text(
+                            'Asignar impresion de comprobantes',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.black87,
+                            ),
+                          ),
+                          SizedBox(height: 6),
+                          Text(
+                            'Define que impresoras usaran las facturas y NCF. '
+                            'Esta seccion es independiente de productos y comandas.',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.black54,
+                              height: 1.3,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    onPressed: _isSearching
-                        ? null
-                        : () => _showAddPrinterDialog(context, vmCtrl),
-                    icon: const Icon(Icons.add, size: 20),
-                    label: const Text('Agregar impresora'),
-                  ),
-                ],
+                    const SizedBox(width: 12),
+                    FilledButton.icon(
+                      onPressed: _isSearching
+                          ? null
+                          : () => _showAddPrinterDialog(context, vmCtrl),
+                      icon: const Icon(Icons.add_circle, size: 20),
+                      label: const Text('Agregar impresora'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF2196F3),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 14,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: vm.items.isEmpty
+                    ? const _EmptyReceiptsState()
+                    : SingleChildScrollView(
+                        padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                        child: Wrap(
+                          spacing: 16,
+                          runSpacing: 16,
+                          children: vm.items.map((p) {
+                            final selected = vm.selectedIds.contains(p.id);
+                            final ip = p.ip ?? '';
+                            final mac = p.mac ?? '';
+                            final typeLabel = p.type.label.toUpperCase();
 
-            const SizedBox(height: 16),
-            const Divider(height: 1, color: MangoColors.cardBorder),
-
-            Expanded(
-              child: vm.items.isEmpty
-                  ? const _EmptyHint()
-                  : ListView.separated(
-                      padding: const EdgeInsets.all(20),
-                      itemCount: vm.items.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 16),
-                      itemBuilder: (context, i) {
-                        final p = vm.items[i];
-                        final selected = vm.selectedIds.contains(p.id);
-                        final ip = p.ip ?? '';
-                        final mac = p.mac ?? '';
-
-                        return _PrinterCard(
-                          printer: p,
-                          ip: ip,
-                          mac: mac,
-                          selected: selected,
-                          onLongPress: () => vmCtrl.toggleSelect(p.id),
-                          // ⛳️ Cambiado: usar testPrint (sirve en Web / Desktop / Mobile)
-                          onPrintSample: () async {
-                            final ok = await vmCtrl.testPrint(p.id);
-                            final state = ref.read(
-                              printingPrintersViewModelProvider,
+                            return SizedBox(
+                              width: 360,
+                              child: _PrinterCard(
+                                printer: p,
+                                ip: ip,
+                                mac: mac,
+                                typeLabel: typeLabel,
+                                selected: selected,
+                                onLongPress: () => vmCtrl.toggleSelect(p.id),
+                                onPrintSample: () async {
+                                  final ok = await vmCtrl.testPrint(p.id);
+                                  final state = ref.read(
+                                    printingPrintersViewModelProvider,
+                                  );
+                                  final msg = ok
+                                      ? 'Muestra enviada a la impresora'
+                                      : (state.errorMessage ??
+                                            'No se pudo imprimir la muestra');
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text(msg)),
+                                    );
+                                  }
+                                },
+                                onConfigure: () => _showPrinterInfo(
+                                  context,
+                                  p.name,
+                                  ip,
+                                  mac,
+                                  typeLabel,
+                                ),
+                                onDelete: () => _confirmDeletePrinter(
+                                  context,
+                                  onConfirm: () => vmCtrl.deletePrinter(p.id),
+                                ),
+                              ),
                             );
-                            final msg = ok
-                                ? 'Muestra enviada a la impresora'
-                                : (state.errorMessage ??
-                                      'No se pudo imprimir la muestra');
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(
-                                context,
-                              ).showSnackBar(SnackBar(content: Text(msg)));
-                            }
-                          },
-                          onConfigure: () => _showPrinterInfo(
-                            context,
-                            p.name,
-                            ip,
-                            mac,
-                            p.type.label,
-                          ),
-                          onDelete: () => _confirmDeletePrinter(
-                            context,
-                            onConfirm: () => vmCtrl.deletePrinter(p.id),
-                          ),
-                        );
-                      },
-                    ),
-            ),
-          ],
+                          }).toList(),
+                        ),
+                      ),
+              ),
+            ],
+          ),
         ),
-
         if (_isSearching)
           Container(
             color: Colors.black.withOpacity(0.7),
@@ -377,6 +411,7 @@ class _PrinterCard extends StatelessWidget {
   final dynamic printer;
   final String ip;
   final String mac;
+  final String typeLabel;
   final bool selected;
   final VoidCallback onLongPress;
   final VoidCallback onPrintSample;
@@ -387,6 +422,7 @@ class _PrinterCard extends StatelessWidget {
     required this.printer,
     required this.ip,
     required this.mac,
+    required this.typeLabel,
     required this.selected,
     required this.onLongPress,
     required this.onPrintSample,
@@ -396,20 +432,32 @@ class _PrinterCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final statusColor = printer.online
+        ? const Color(0xFF2BAA3D)
+        : Colors.redAccent;
+    final statusText = printer.online ? 'En linea' : 'Desconectada';
+
     return InkWell(
+      onTap: onLongPress,
       onLongPress: onLongPress,
       borderRadius: BorderRadius.circular(12),
       child: Container(
         decoration: BoxDecoration(
-          color: selected
-              ? MangoColors.primaryOrange.withOpacity(0.05)
-              : MangoColors.white,
+          color: Colors.white,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: selected
                 ? MangoColors.primaryOrange
-                : MangoColors.cardBorder,
+                : const Color(0xFFE0E0E0),
+            width: selected ? 2 : 1,
           ),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x0A000000),
+              blurRadius: 8,
+              offset: Offset(0, 2),
+            ),
+          ],
         ),
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -418,15 +466,17 @@ class _PrinterCard extends StatelessWidget {
             Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF3F4F6),
-                    borderRadius: BorderRadius.circular(8),
+                    color: const Color(0xFFF5F5F5),
+                    borderRadius: BorderRadius.circular(10),
                   ),
-                  child: const Icon(
-                    Icons.print,
-                    size: 24,
-                    color: Color(0xFF6B7280),
+                  child: Icon(
+                    Icons.receipt_long,
+                    size: 22,
+                    color: selected
+                        ? MangoColors.primaryOrange
+                        : MangoColors.darkGray,
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -437,100 +487,182 @@ class _PrinterCard extends StatelessWidget {
                       Text(
                         printer.name,
                         style: const TextStyle(
-                          fontSize: 16,
+                          fontSize: 17,
                           fontWeight: FontWeight.w600,
                           color: MangoColors.darkGray,
                         ),
                       ),
                       const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          Text(
-                            'IP: ${ip.isEmpty ? "—" : ip}',
-                            style: const TextStyle(
-                              fontSize: 13,
-                              color: MangoColors.muted,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Text(
-                            'MAC: ${mac.isEmpty ? "—" : mac}',
-                            style: const TextStyle(
-                              fontSize: 13,
-                              color: MangoColors.muted,
-                            ),
-                          ),
-                        ],
+                      const Text(
+                        'Impresora de comprobantes',
+                        style: TextStyle(fontSize: 13, color: Colors.black54),
                       ),
                     ],
                   ),
                 ),
-                Row(
-                  children: [
-                    Icon(
-                      Icons.wifi,
-                      size: 18,
-                      color: printer.online
-                          ? const Color(0xFF10B981)
-                          : const Color(0xFF6B7280),
-                    ),
-                    const SizedBox(width: 4),
-                    Icon(
-                      Icons.circle,
-                      size: 10,
-                      color: printer.online
-                          ? const Color(0xFF10B981)
-                          : Colors.redAccent,
-                    ),
-                  ],
-                ),
-                const SizedBox(width: 12),
-                PopupMenuButton(
-                  icon: const Icon(Icons.more_vert, color: MangoColors.muted),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
                   ),
-                  itemBuilder: (context) => [
-                    PopupMenuItem(
-                      onTap: onPrintSample,
-                      child: const Row(
-                        children: [
-                          Icon(Icons.receipt_long_outlined, size: 18),
-                          SizedBox(width: 12),
-                          Text('Imprimir muestra'),
-                        ],
+                  decoration: BoxDecoration(
+                    color: selected
+                        ? MangoColors.primaryOrange.withOpacity(0.1)
+                        : const Color(0xFFF5F5F5),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        selected ? Icons.check_circle : Icons.print_rounded,
+                        size: 16,
+                        color: selected
+                            ? MangoColors.primaryOrange
+                            : MangoColors.darkGray,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        selected ? 'Seleccionada' : 'Lista para asignar',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: selected
+                              ? FontWeight.w700
+                              : FontWeight.w600,
+                          color: selected
+                              ? MangoColors.primaryOrange
+                              : Colors.black54,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 12,
+              runSpacing: 8,
+              children: [
+                _InfoChip(
+                  icon: Icons.wifi,
+                  label: ip.isEmpty ? 'Sin IP' : 'IP: $ip',
+                ),
+                if (mac.isNotEmpty)
+                  _InfoChip(icon: Icons.bluetooth, label: 'MAC: $mac'),
+                _InfoChip(
+                  icon: Icons.settings_ethernet,
+                  label: typeLabel.toUpperCase(),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8FBFF),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFE0E0E0)),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    printer.online ? Icons.cloud_done : Icons.cloud_off,
+                    size: 18,
+                    color: statusColor,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      statusText,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: statusColor,
                       ),
                     ),
-                    PopupMenuItem(
-                      onTap: onConfigure,
-                      child: const Row(
-                        children: [
-                          Icon(Icons.settings_outlined, size: 18),
-                          SizedBox(width: 12),
-                          Text('Configurar'),
-                        ],
-                      ),
+                  ),
+                  Text(
+                    'Toca para seleccionar',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: selected
+                          ? MangoColors.primaryOrange
+                          : Colors.black45,
                     ),
-                    PopupMenuItem(
-                      onTap: onDelete,
-                      child: const Row(
-                        children: [
-                          Icon(
-                            Icons.delete_outline,
-                            size: 18,
-                            color: Colors.red,
-                          ),
-                          SizedBox(width: 12),
-                          Text('Eliminar', style: TextStyle(color: Colors.red)),
-                        ],
-                      ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: onPrintSample,
+                    icon: const Icon(Icons.receipt_long_outlined, size: 18),
+                    label: const Text('Imprimir prueba'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF2196F3),
+                      side: const BorderSide(color: Color(0xFF2196F3)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
                     ),
-                  ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: onConfigure,
+                    icon: const Icon(Icons.info_outline, size: 18),
+                    label: const Text('Ver datos'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.black87,
+                      side: const BorderSide(color: Color(0xFFE0E0E0)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                IconButton(
+                  onPressed: onDelete,
+                  icon: const Icon(Icons.delete_outline, color: Colors.red),
+                  tooltip: 'Eliminar impresora',
                 ),
               ],
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _InfoChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _InfoChip({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF5F5F5),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE0E0E0)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: MangoColors.darkGray),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: const TextStyle(fontSize: 12, color: Colors.black87),
+          ),
+        ],
       ),
     );
   }
@@ -1081,8 +1213,8 @@ class _ConnectionOption extends StatelessWidget {
   }
 }
 
-class _EmptyHint extends StatelessWidget {
-  const _EmptyHint();
+class _EmptyReceiptsState extends StatelessWidget {
+  const _EmptyReceiptsState();
   @override
   Widget build(BuildContext context) {
     return const Center(
@@ -1092,13 +1224,13 @@ class _EmptyHint extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(
-              Icons.print_disabled_outlined,
+              Icons.receipt_long_outlined,
               size: 56,
               color: MangoColors.muted,
             ),
             SizedBox(height: 10),
             Text(
-              'No hay impresoras vinculadas.\nAgrega una para comenzar.',
+              'No hay impresoras asignadas para comprobantes.\nAgrega una para imprimir tus facturas.',
               textAlign: TextAlign.center,
               style: TextStyle(color: MangoColors.muted),
             ),

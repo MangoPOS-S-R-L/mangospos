@@ -1,277 +1,352 @@
-// lib/data/repositories/printing_repository.dart
-import 'dart:async';
-import 'dart:convert';
-
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:http/http.dart' as http;
-import 'package:mangopos/data/models/printing.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-class PrintingRepository {
-  PrintingRepository(this._client, {List<String>? agentBases})
-    : _agentBases =
-          agentBases ??
-          const [
-            // Puertos típicos para el agente (Express/Electron/etc.)
-            'http://127.0.0.1:3000',
-            'http://localhost:3000',
-            'http://127.0.0.1:3001',
-            'http://localhost:3001',
-            // Emulador Android accediendo al host
-            'http://10.0.2.2:3000',
-            'http://10.0.2.2:3001',
-            // (opcional) algunos agentes usan 9977
-            'http://127.0.0.1:9977',
-            'http://localhost:9977',
-            'http://10.0.2.2:9977',
-          ];
+import '../models/printing_models.dart';
 
+/// 🖨️ Repositorio de Impresión
+class PrintingRepository {
   final SupabaseClient _client;
 
-  // ====== Agente local (Express/Electron) ======
-  final List<String> _agentBases;
+  PrintingRepository(this._client);
 
-  Future<Uri?> _resolveAgentBase() async {
-    // Más margen por preflight/CORS/antivirus en Web
-    final healthTimeout = kIsWeb
-        ? const Duration(milliseconds: 1500)
-        : const Duration(milliseconds: 1200);
+  // ============================================================
+  // 🖨️ IMPRESORAS
+  // ============================================================
 
-    for (final base in _agentBases) {
-      final uri = Uri.parse('$base/health');
-      try {
-        final r = await http.get(uri).timeout(healthTimeout);
-        if (r.statusCode == 200) return Uri.parse(base);
-      } catch (_) {
-        // intenta con la siguiente base
-      }
-    }
-    return null;
-  }
-
-  /// Indica si el agente LAN está disponible en alguna de las bases.
-  Future<bool> isAgentUp() async => (await _resolveAgentBase()) != null;
-
-  /// Llama al agente para **descubrir impresoras** y devuelve la lista **cruda** (NO guarda).
-  /// Estructura esperada por item: `{ ip, name?, type? }`.
-  Future<List<Map<String, dynamic>>> discoverWithAgentRaw({
-    String? hintCidr, // ej. '192.168.0.0/24' para acelerar
-  }) async {
-    final base = await _resolveAgentBase();
-    if (base == null) {
-      throw Exception(
-        'Agente de impresión no disponible en localhost/127.0.0.1.',
-      );
-    }
-
-    final path = '/api/printers/discover';
-    final uri = (hintCidr == null || hintCidr.isEmpty)
-        ? base.replace(path: path)
-        : base.replace(path: path, queryParameters: {'hint': hintCidr});
-
-    // Tiempo mayor en Web (preflight + escaneo)
-    final discoverTimeout = kIsWeb
-        ? const Duration(seconds: 45)
-        : const Duration(seconds: 15);
-
-    http.Response r;
+  /// Obtener impresoras activas
+  Future<List<PrinterConfig>> getActivePrinters(String businessId) async {
     try {
-      r = await http.get(uri).timeout(discoverTimeout);
-    } on TimeoutException {
-      throw Exception(
-        'El agente tardó más de ${discoverTimeout.inSeconds}s en responder /discover.',
-      );
-    }
+      final data = await _client
+          .from('printers')
+          .select()
+          .eq('business_id', businessId)
+          .order('name', ascending: true);
 
-    if (r.statusCode != 200) {
-      throw Exception('Agent /discover respondió ${r.statusCode}: ${r.body}');
+      return data.map((json) => PrinterConfig.fromMap(json)).toList();
+    } catch (e) {
+      throw Exception('Error al obtener impresoras: $e');
     }
-
-    final data = jsonDecode(r.body) as Map<String, dynamic>;
-    final items = (data['items'] as List? ?? const [])
-        .cast<Map<String, dynamic>>();
-    return items;
   }
 
-  /// Llama al agente y **asegura upsert** en Supabase (GUARDA).
-  Future<List<PrinterDevice>> discoverWithAgent(
-    String businessId, {
-    String? hintCidr,
-  }) async {
-    final raw = await discoverWithAgentRaw(hintCidr: hintCidr);
-    final out = <PrinterDevice>[];
-    for (final m in raw) {
-      final ip = (m['ip'] as String?)?.trim();
-      final name =
-          (m['name'] as String?)?.trim() ?? (ip != null ? 'Printer $ip' : null);
-      if (ip == null || name == null) continue;
-      final dev = await _upsertNetworkPrinter(
-        businessId: businessId,
-        name: name,
-        ip: ip,
-      );
-      out.add(dev);
+  /// Obtener impresora por ID
+  Future<PrinterConfig?> getPrinter(String printerId) async {
+    try {
+      final data = await _client
+          .from('printers')
+          .select()
+          .eq('id', printerId)
+          .maybeSingle();
+
+      if (data == null) return null;
+
+      return PrinterConfig.fromMap(data);
+    } catch (e) {
+      throw Exception('Error al obtener impresora: $e');
     }
-    return out;
   }
 
-  /// Envia una **impresión de prueba** al agente.
-  /// El agente debe abrir socket al `ip:port` indicado (por defecto 9100).
-  // Devuelve la base seleccionada (útil para debug UI/SnackBar)
-  Future<Uri?> agentBaseSelected() => _resolveAgentBase();
-
-  Future<void> testPrintViaAgent({required String ip, int port = 9100}) async {
-    final base = await _resolveAgentBase();
-    if (base == null) {
-      throw Exception('Agente no disponible (no respondió /health).');
-    }
-
-    // Endpoints compatibles que vamos a intentar en orden
-    final paths = <String>[
-      '/api/printers/test',
-      '/api/print/test',
-      '/print/test',
-      '/test-print',
-    ];
-
-    // Tiempo por intento (un poco mayor en Web)
-    final attemptTimeout = kIsWeb
-        ? const Duration(seconds: 15)
-        : const Duration(seconds: 8);
-
-    // Acumulamos errores para un mensaje útil
-    final errors = <String>[];
-
-    for (final p in paths) {
-      final uri = base.replace(path: p);
-      try {
-        final res = await http
-            .post(
-              uri,
-              headers: {'Content-Type': 'application/json'},
-              // Enviamos ambas claves posibles: ip y host
-              body: jsonEncode({'ip': ip, 'host': ip, 'port': port}),
-            )
-            .timeout(attemptTimeout);
-
-        if (res.statusCode == 200) {
-          // Éxito
-          return;
-        } else {
-          errors.add('${uri.path} -> ${res.statusCode} ${res.body}');
-        }
-      } on TimeoutException {
-        errors.add('${uri.path} -> timeout (${attemptTimeout.inSeconds}s)');
-      } catch (e) {
-        errors.add('${uri.path} -> $e');
-      }
-
-      // Si el POST no funcionó, probamos GET con query (algunos agentes lo esperan así)
-      try {
-        final getUri = base.replace(
-          path: p,
-          queryParameters: {'ip': ip, 'port': '$port'},
-        );
-        final res = await http.get(getUri).timeout(attemptTimeout);
-        if (res.statusCode == 200) {
-          return;
-        } else {
-          errors.add('GET ${getUri.path} -> ${res.statusCode} ${res.body}');
-        }
-      } on TimeoutException {
-        errors.add('GET $p -> timeout (${attemptTimeout.inSeconds}s)');
-      } catch (e) {
-        errors.add('GET $p -> $e');
-      }
-    }
-
-    // Si llegamos aquí, todos los intentos fallaron
-    throw Exception(
-      'Ninguna ruta del Agente respondió OK. '
-      'Base=${base.toString()}.\n'
-      'Detalles:\n- ${errors.join('\n- ')}',
-    );
-  }
-
-  // =================== SUPABASE ===================
-
-  // ------- Printers -------
-  Future<List<PrinterDevice>> getPrinters(String businessId) async {
-    final rows = await _client
-        .from('printers')
-        .select()
-        .eq('business_id', businessId)
-        .order('created_at');
-    return (rows as List<dynamic>)
-        .map((e) => PrinterDevice.fromMap(e as Map<String, dynamic>))
-        .toList();
-  }
-
-  Future<void> createPrinter({
+  /// Crear impresora
+  Future<PrinterConfig> createPrinter({
     required String businessId,
     required String name,
-    String? ip,
-    String? mac,
-    PrinterType type = PrinterType.network,
-  }) {
-    return _client.from('printers').insert({
-      'business_id': businessId,
-      'name': name,
-      'ip': ip,
-      'mac': mac,
-      'type': type.name,
-    });
+    required String type,
+    String? ipAddress,
+    int? port,
+    String? devicePath,
+    int paperWidth = 80,
+  }) async {
+    try {
+      final data = await _client
+          .from('printers')
+          .insert({
+            'business_id': businessId,
+            'name': name,
+            'type': type,
+            'ip_address': ipAddress,
+            'port': port,
+            'device_path': devicePath,
+            'paper_width': paperWidth,
+            'online': false,
+          })
+          .select()
+          .single();
+
+      return PrinterConfig.fromMap(data);
+    } catch (e) {
+      throw Exception('Error al crear impresora: $e');
+    }
   }
 
-  Future<void> savePrinter(PrinterDevice printer) {
-    return _client.from('printers').upsert(printer.toMap());
+  /// Actualizar impresora
+  Future<void> updatePrinter({
+    required String printerId,
+    String? name,
+    String? ipAddress,
+    int? port,
+    bool? isActive,
+  }) async {
+    try {
+      final updates = <String, dynamic>{};
+      if (name != null) updates['name'] = name;
+      if (ipAddress != null) updates['ip_address'] = ipAddress;
+      if (port != null) updates['port'] = port;
+      if (isActive != null) updates['online'] = isActive;
+
+      await _client.from('printers').update(updates).eq('id', printerId);
+    } catch (e) {
+      throw Exception('Error al actualizar impresora: $e');
+    }
   }
 
-  Future<void> deletePrinter(String id) {
-    return _client.from('printers').delete().eq('id', id);
+  // ============================================================
+  // 📍 ÁREAS DE IMPRESIÓN
+  // ============================================================
+
+  /// Obtener áreas de impresión
+  Future<List<PrintArea>> getPrintAreas(String businessId) async {
+    try {
+      final data = await _client
+          .from('print_areas')
+          .select()
+          .eq('business_id', businessId)
+          .order('name', ascending: true);
+
+      return data.map((json) => PrintArea.fromMap(json)).toList();
+    } catch (e) {
+      throw Exception('Error al obtener áreas: $e');
+    }
   }
 
-  Future<void> enqueueTestPrint(String printerId) {
-    return _client.rpc(
-      'enqueue_print_test',
-      params: {'p_printer_id': printerId},
+  /// Obtener impresoras asignadas a un área
+  Future<List<PrinterConfig>> getPrintersForArea(String areaId) async {
+    try {
+      final data = await _client
+          .from('print_area_printers')
+          .select('printer_id, printers(*)')
+          .eq('area_id', areaId)
+          .order('priority', ascending: true);
+
+      return data
+          .map((json) => PrinterConfig.fromMap(json['printers']))
+          .toList();
+    } catch (e) {
+      throw Exception('Error al obtener impresoras del área: $e');
+    }
+  }
+
+  /// Asignar impresora a área
+  Future<void> assignPrinterToArea({
+    required String areaId,
+    required String printerId,
+    int priority = 1,
+  }) async {
+    try {
+      await _client.from('print_area_printers').insert({
+        'area_id': areaId,
+        'printer_id': printerId,
+        'priority': priority,
+      });
+    } catch (e) {
+      throw Exception('Error al asignar impresora: $e');
+    }
+  }
+
+  /// Remover impresora de área
+  Future<void> removePrinterFromArea({
+    required String areaId,
+    required String printerId,
+  }) async {
+    try {
+      await _client
+          .from('print_area_printers')
+          .delete()
+          .eq('area_id', areaId)
+          .eq('printer_id', printerId);
+    } catch (e) {
+      throw Exception('Error al remover impresora: $e');
+    }
+  }
+
+  // ============================================================
+  // 📄 TRABAJOS DE IMPRESIÓN
+  // ============================================================
+
+  /// Obtener trabajos pendientes
+  Future<List<PrintJob>> getPendingJobs(String businessId) async {
+    try {
+      final data = await _client
+          .from('print_jobs')
+          .select()
+          .eq('business_id', businessId)
+          .eq('status', 'pending')
+          .order('created_at', ascending: true)
+          .limit(50);
+
+      return data.map((json) => PrintJob.fromMap(json)).toList();
+    } catch (e) {
+      throw Exception('Error al obtener trabajos pendientes: $e');
+    }
+  }
+
+  /// Crear trabajo de impresión
+  Future<PrintJob> createPrintJob({
+    required String businessId,
+    required String areaId,
+    required String type,
+    required Map<String, dynamic> data,
+    String? orderId,
+    String? checkId,
+  }) async {
+    try {
+      final jobData = await _client
+          .from('print_jobs')
+          .insert({
+            'business_id': businessId,
+            'area_id': areaId,
+            'order_id': orderId,
+            'check_id': checkId,
+            'type': type,
+            'status': 'pending',
+            'data': data,
+          })
+          .select()
+          .single();
+
+      return PrintJob.fromMap(jobData);
+    } catch (e) {
+      throw Exception('Error al crear trabajo de impresión: $e');
+    }
+  }
+
+  /// Actualizar estado de trabajo
+  Future<void> updateJobStatus({
+    required String jobId,
+    required String status,
+    String? printerId,
+    String? errorMessage,
+  }) async {
+    try {
+      final updates = <String, dynamic>{'status': status};
+
+      if (printerId != null) updates['printer_id'] = printerId;
+      if (errorMessage != null) updates['error_message'] = errorMessage;
+      if (status == 'printed') {
+        updates['printed_at'] = DateTime.now().toIso8601String();
+      }
+
+      await _client.from('print_jobs').update(updates).eq('id', jobId);
+    } catch (e) {
+      throw Exception('Error al actualizar estado: $e');
+    }
+  }
+
+  /// Reintentar trabajo fallido
+  Future<void> retryJob(String jobId) async {
+    try {
+      await _client
+          .from('print_jobs')
+          .update({
+            'status': 'pending',
+            'retry_count': 0,
+            'error_message': null,
+          })
+          .eq('id', jobId);
+    } catch (e) {
+      throw Exception('Error al reintentar trabajo: $e');
+    }
+  }
+
+  // ============================================================
+  // 🔔 SUSCRIPCIONES EN TIEMPO REAL
+  // ============================================================
+
+  /// Suscribirse a nuevos trabajos de impresión
+  Stream<List<PrintJob>> subscribeToPrintJobs(String businessId) {
+    return _client
+        .from('print_jobs')
+        .stream(primaryKey: ['id'])
+        .map(
+          (data) => data
+              .where(
+                (json) =>
+                    json['business_id'] == businessId &&
+                    json['status'] == 'pending',
+              )
+              .toList(),
+        )
+        .map((data) => data.map((json) => PrintJob.fromMap(json)).toList());
+  }
+
+  // ============================================================
+  // 🔄 MÉTODOS DE COMPATIBILIDAD (para código viejo)
+  // ============================================================
+
+  /// Alias de getActivePrinters (compatibilidad)
+  Future<List<PrinterConfig>> getPrinters(String businessId) async {
+    return getActivePrinters(businessId);
+  }
+
+  /// Eliminar impresora (compatibilidad)
+  Future<void> deletePrinter(String printerId) async {
+    await updatePrinter(printerId: printerId, isActive: false);
+  }
+
+  /// Crear trabajo de test (compatibilidad)
+  Future<void> enqueueTestPrint(String printerId) async {
+    final printer = await getPrinter(printerId);
+    if (printer == null) throw Exception('Impresora no encontrada');
+
+    await createPrintJob(
+      businessId: printer.businessId,
+      areaId: 'test',
+      type: 'test',
+      data: {'printer_id': printerId},
     );
   }
 
-  // ------- Areas -------
-  Future<List<PrintArea>> getPrintAreas(String businessId) async {
-    final rows = await _client
-        .from('print_areas_view')
+  /// Verificar si agent está activo (stub - no implementado)
+  Future<bool> isAgentUp() async {
+    return false; // Por ahora retornar false
+  }
+
+  /// Test via agent (stub - no implementado)
+  Future<void> testPrintViaAgent({
+    required String ip,
+    required int port,
+  }) async {
+    throw UnimplementedError('Agent no implementado aún');
+  }
+
+  /// Descubrir con agent (stub - no implementado)
+  Future<List<dynamic>> discoverWithAgent(String businessId) async {
+    return [];
+  }
+
+  /// Crear área de impresión (compatibilidad)
+  Future<PrintArea> createArea({
+    required String businessId,
+    required String name,
+    required String code,
+  }) async {
+    final data = await _client
+        .from('print_areas')
+        .insert({
+          'business_id': businessId,
+          'name': name,
+          'code': code,
+          'is_active': true,
+        })
         .select()
-        .eq('business_id', businessId)
-        .order('created_at');
-    return (rows as List<dynamic>)
-        .map((e) => PrintArea.fromMap(e as Map<String, dynamic>))
-        .toList();
+        .single();
+
+    return PrintArea.fromMap(data);
   }
 
-  Future<void> createArea({required String businessId, required String name}) {
-    return _client.from('print_areas').insert({
-      'business_id': businessId,
-      'name': name,
-    });
+  /// Eliminar área (compatibilidad)
+  Future<void> deleteArea(String areaId) async {
+    await _client.from('print_areas').delete().eq('id', areaId);
   }
 
-  Future<void> deleteArea(String id) {
-    return _client.from('print_areas').delete().eq('id', id);
-  }
-
-  // ------- Area <-> Printer assignments -------
-  Future<List<PrintAreaPrinter>> getAreaPrinters(String areaId) async {
-    final rows = await _client
-        .from('print_area_printers')
-        .select()
-        .eq('area_id', areaId);
-    return (rows as List<dynamic>)
-        .map((e) => PrintAreaPrinter.fromMap(e as Map<String, dynamic>))
-        .toList();
-  }
-
+  /// Vincular area a impresora con configuracion de tipos de impresion
   Future<void> linkAreaToPrinter({
     required String businessId,
     required String areaId,
@@ -280,61 +355,21 @@ class PrintingRepository {
     bool printsOrders = true,
     bool printsPrebills = false,
     bool printsReceipts = false,
-  }) {
-    return _client.from('print_area_printers').upsert({
-      'business_id': businessId,
-      'area_id': areaId,
-      'printer_id': printerId,
-      'enabled': enabled,
-      'prints_orders': printsOrders,
-      'prints_prebills': printsPrebills,
-      'prints_receipts': printsReceipts,
-    });
-  }
-
-  Future<void> unlinkAreaPrinter({
-    required String areaId,
-    required String printerId,
-  }) {
-    return _client.from('print_area_printers').delete().match({
-      'area_id': areaId,
-      'printer_id': printerId,
-    });
-  }
-
-  // =================== Helpers privados ===================
-
-  Future<PrinterDevice?> _findByIp(String businessId, String ip) async {
-    final row = await _client
-        .from('printers')
-        .select()
-        .eq('business_id', businessId)
-        .eq('ip', ip)
-        .maybeSingle();
-    if (row == null) return null;
-    return PrinterDevice.fromMap(row);
-  }
-
-  Future<PrinterDevice> _upsertNetworkPrinter({
-    required String businessId,
-    required String name,
-    required String ip,
+    int priority = 1,
   }) async {
-    final exists = await _findByIp(businessId, ip);
-    if (exists != null) return exists;
-
-    final inserted = await _client
-        .from('printers')
-        .insert({
-          'business_id': businessId,
-          'name': name,
-          'ip': ip,
-          'type': PrinterType.network.name,
-          'online': true,
-        })
-        .select()
-        .single();
-
-    return PrinterDevice.fromMap(inserted);
+    try {
+      await _client.from('print_area_printers').upsert({
+        'business_id': businessId,
+        'area_id': areaId,
+        'printer_id': printerId,
+        'priority': priority,
+        'enabled': enabled,
+        'prints_orders': printsOrders,
+        'prints_prebills': printsPrebills,
+        'prints_receipts': printsReceipts,
+      }, onConflict: 'area_id,printer_id');
+    } catch (e) {
+      throw Exception('Error al vincular impresora a area: $e');
+    }
   }
 }

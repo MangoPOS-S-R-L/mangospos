@@ -612,59 +612,201 @@ class _UserInfo extends StatelessWidget {
         final info = snap.data!;
         final initials = _initialsFromFullName(info.fullName);
 
-        return Row(
-          children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  info.fullName,
-                  style: text.titleMedium?.copyWith(
-                    fontSize: context.sp(16),
-                    fontWeight: FontWeight.w700,
-                    color: MangoColors.darkGray,
+        return PopupMenuButton<String>(
+          offset: const Offset(0, 60),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          elevation: 8,
+          onSelected: (value) async {
+            switch (value) {
+              case 'updates':
+                // TODO: Implementar búsqueda de actualizaciones
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Buscando actualizaciones...'),
+                    duration: Duration(seconds: 2),
                   ),
-                ),
-                SizedBox(height: context.hp(0.4)),
-                if (info.role == 'admin' || info.role == 'owner')
-                  Container(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: context.wp(2.2),
-                      vertical: context.hp(0.5),
-                    ),
-                    decoration: BoxDecoration(
-                      color: MangoColors.successGreen,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(
-                      'Administrador',
-                      style: TextStyle(
-                        color: MangoColors.white,
-                        fontSize: context.sp(12),
-                        fontWeight: FontWeight.w600,
-                      ),
+                );
+                break;
+              case 'settings':
+                context.go(AppRoutes.settings);
+                break;
+              case 'logout':
+                await _handleLogout(context);
+                break;
+            }
+          },
+          itemBuilder: (context) => [
+            PopupMenuItem<String>(
+              value: 'updates',
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.system_update_outlined,
+                    size: context.iconSizeOf(20),
+                    color: Colors.grey[700],
+                  ),
+                  SizedBox(width: context.wp(2)),
+                  Text(
+                    'Buscar actualización',
+                    style: TextStyle(
+                      fontSize: context.sp(14),
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
-              ],
+                ],
+              ),
             ),
-            SizedBox(width: context.wp(2.2)),
-            CircleAvatar(
-              radius: context.iconSizeOf(20),
-              backgroundColor: MangoColors.primaryOrange.withOpacity(0.12),
-              child: Text(
-                initials,
-                style: TextStyle(
-                  fontWeight: FontWeight.w800,
-                  fontSize: context.sp(14),
-                  color: MangoColors.primaryOrange,
-                ),
+            PopupMenuItem<String>(
+              value: 'settings',
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.settings_outlined,
+                    size: context.iconSizeOf(20),
+                    color: Colors.grey[700],
+                  ),
+                  SizedBox(width: context.wp(2)),
+                  Text(
+                    'Ajustes del sistema',
+                    style: TextStyle(
+                      fontSize: context.sp(14),
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const PopupMenuDivider(),
+            PopupMenuItem<String>(
+              value: 'logout',
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.logout,
+                    size: context.iconSizeOf(20),
+                    color: Colors.red[600],
+                  ),
+                  SizedBox(width: context.wp(2)),
+                  Text(
+                    'Cerrar sesión',
+                    style: TextStyle(
+                      fontSize: context.sp(14),
+                      fontWeight: FontWeight.w600,
+                      color: Colors.red[600],
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
+          child: Row(
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    info.fullName,
+                    style: text.titleMedium?.copyWith(
+                      fontSize: context.sp(16),
+                      fontWeight: FontWeight.w700,
+                      color: MangoColors.darkGray,
+                    ),
+                  ),
+                  SizedBox(height: context.hp(0.4)),
+                  if (info.role == 'admin' || info.role == 'owner')
+                    Container(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: context.wp(2.2),
+                        vertical: context.hp(0.5),
+                      ),
+                      decoration: BoxDecoration(
+                        color: MangoColors.successGreen,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        'Administrador',
+                        style: TextStyle(
+                          color: MangoColors.white,
+                          fontSize: context.sp(12),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              SizedBox(width: context.wp(2.2)),
+              CircleAvatar(
+                radius: context.iconSizeOf(20),
+                backgroundColor: MangoColors.primaryOrange.withOpacity(0.12),
+                child: Text(
+                  initials,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: context.sp(14),
+                    color: MangoColors.primaryOrange,
+                  ),
+                ),
+              ),
+              SizedBox(width: context.wp(1)),
+              Icon(
+                Icons.arrow_drop_down,
+                size: context.iconSizeOf(24),
+                color: Colors.grey[600],
+              ),
+            ],
+          ),
         );
       },
     );
+  }
+
+  Future<void> _handleLogout(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Cerrar sesión'),
+        content: const Text('¿Estás seguro de que deseas cerrar sesión?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text('Cancelar', style: TextStyle(color: Colors.grey[600])),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red[600],
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Cerrar sesión'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && context.mounted) {
+      try {
+        await Supabase.instance.client.auth.signOut();
+        if (context.mounted) {
+          context.go('/login');
+        }
+      } catch (e) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error al cerrar sesión: $e'),
+              backgroundColor: Colors.red[600],
+            ),
+          );
+        }
+      }
+    }
   }
 
   static String _initialsFromFullName(String fullName) {

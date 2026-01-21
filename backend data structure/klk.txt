@@ -1,0 +1,1 @@
+PS D:\MangoPos\Dev\mangopos> supabase db dump --schema public -f supabase/schema.sql

@@ -159,3 +159,124 @@ class PrintAreaPrinter {
     };
   }
 }
+
+/// 🖨️ Configuración de impresora (legacy support)
+@immutable
+class PrinterConfig {
+  final String id;
+  final String businessId;
+  final String name;
+  final String type; // 'network', 'usb', 'bluetooth'
+  final String? ipAddress;
+  final int? port;
+  final String? devicePath;
+  final bool isActive;
+  final int paperWidth; // 58mm, 80mm
+  final String encoding; // 'CP437', 'CP850', 'UTF-8'
+
+  const PrinterConfig({
+    required this.id,
+    required this.businessId,
+    required this.name,
+    required this.type,
+    this.ipAddress,
+    this.port,
+    this.devicePath,
+    required this.isActive,
+    this.paperWidth = 80,
+    this.encoding = 'CP437',
+  });
+
+  factory PrinterConfig.fromMap(Map<String, dynamic> map) {
+    return PrinterConfig(
+      id: map['id'] ?? '',
+      businessId: map['business_id'] ?? '',
+      name: map['name'] ?? '',
+      type: map['type'] ?? 'network',
+      ipAddress: map['ip_address'],
+      port: map['port'],
+      devicePath: map['device_path'],
+      isActive: map['is_active'] ?? true,
+      paperWidth: map['paper_width'] ?? 80,
+      encoding: map['encoding'] ?? 'CP437',
+    );
+  }
+
+  bool get isNetwork => type == 'network';
+  bool get isUSB => type == 'usb';
+  bool get isBluetooth => type == 'bluetooth';
+}
+
+/// 📄 Trabajo de impresión
+@immutable
+class PrintJob {
+  final String id;
+  final String businessId;
+  final String areaId;
+  final String? orderId;
+  final String? checkId;
+  final String
+  type; // 'kitchen_order', 'precheck', 'fiscal_invoice', 'cash_close'
+  final String status; // 'pending', 'printing', 'printed', 'failed'
+  final Map<String, dynamic> data;
+  final String? printerId;
+  final int retryCount;
+  final String? errorMessage;
+  final DateTime createdAt;
+  final DateTime? printedAt;
+
+  const PrintJob({
+    required this.id,
+    required this.businessId,
+    required this.areaId,
+    this.orderId,
+    this.checkId,
+    required this.type,
+    required this.status,
+    required this.data,
+    this.printerId,
+    this.retryCount = 0,
+    this.errorMessage,
+    required this.createdAt,
+    this.printedAt,
+  });
+
+  factory PrintJob.fromMap(Map<String, dynamic> map) {
+    return PrintJob(
+      id: map['id'] ?? '',
+      businessId: map['business_id'] ?? '',
+      areaId: map['area_id'] ?? '',
+      orderId: map['order_id'],
+      checkId: map['check_id'],
+      type: map['type'] ?? '',
+      status: map['status'] ?? 'pending',
+      data: Map<String, dynamic>.from(map['data'] ?? {}),
+      printerId: map['printer_id'],
+      retryCount: map['retry_count'] ?? 0,
+      errorMessage: map['error_message'],
+      createdAt: DateTime.tryParse(map['created_at'] ?? '') ?? DateTime.now(),
+      printedAt: map['printed_at'] != null
+          ? DateTime.tryParse(map['printed_at'])
+          : null,
+    );
+  }
+
+  bool get isPending => status == 'pending';
+  bool get isPrinting => status == 'printing';
+  bool get isPrinted => status == 'printed';
+  bool get isFailed => status == 'failed';
+}
+
+/// 🎫 Ticket generado para imprimir
+@immutable
+class PrintTicket {
+  final String type;
+  final List<int> escPosCommands;
+  final String? rawText;
+
+  const PrintTicket({
+    required this.type,
+    required this.escPosCommands,
+    this.rawText,
+  });
+}

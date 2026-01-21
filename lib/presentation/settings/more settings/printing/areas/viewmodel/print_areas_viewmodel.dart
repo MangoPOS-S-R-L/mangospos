@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:mangopos/core/business/business_resolver.dart';
-import 'package:mangopos/data/models/printing.dart';
+import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
 
 @immutable
@@ -85,7 +85,8 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
       state = state.copyWith(isLoading: true, errorMessage: null);
       final b = _ensureBusiness();
 
-      await _repo.createArea(businessId: b, name: trimmed);
+      final code = trimmed.toUpperCase().replaceAll(' ', '_');
+      await _repo.createArea(businessId: b, name: trimmed, code: code);
       await load(businessId: b);
       return true;
     } catch (e) {

@@ -1,6 +1,6 @@
 // lib/presentation/settings/printing/state/printers_state.dart
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mangopos/data/models/printing.dart';
+import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -13,12 +13,13 @@ final printersRepoProvider = Provider<PrintingRepository>((ref) {
 });
 
 /// Lista “read-only” de impresoras (útil para combos, etc.)
-final printersListProvider =
-    FutureProvider.family<List<PrinterDevice>, String>((ref, businessIdOrAuto) async {
-  final repo = ref.read(printersRepoProvider);
-  final bid = await _ensureBid(businessIdOrAuto);
-  return repo.getPrinters(bid);
-});
+final printersListProvider = FutureProvider.family<List<PrinterConfig>, String>(
+  (ref, businessIdOrAuto) async {
+    final repo = ref.read(printersRepoProvider);
+    final bid = await _ensureBid(businessIdOrAuto);
+    return repo.getPrinters(bid);
+  },
+);
 
 Future<String> _ensureBid(String businessIdOrAuto) async {
   // usa tu BusinessResolver.ensure(...)

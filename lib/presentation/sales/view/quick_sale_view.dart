@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/presentation/payments/widgets/payment_modal.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../viewmodel/sales_viewmodel.dart';
 
@@ -10,6 +11,9 @@ class QuickSaleView extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final s = ref.watch(currentOrderProvider);
+    final total = s.order?.total ?? 0.0;
+    final canPay =
+        s.order != null && s.items.isNotEmpty && !s.loading && total > 0;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Venta Rápida'),
@@ -35,7 +39,7 @@ class QuickSaleView extends ConsumerWidget {
                   final it = s.items[i];
                   return ListTile(
                     title: Text(it.productName),
-                    subtitle: Text('Cant: ${it.qty}'),
+                    subtitle: Text('Cant: ${it.quantity}'),
                     trailing: Text('RD\$ ${it.total.toStringAsFixed(2)}'),
                   );
                 },
@@ -43,6 +47,42 @@ class QuickSaleView extends ConsumerWidget {
             ),
         ],
       ),
+      bottomNavigationBar: s.order == null
+          ? null
+          : Padding(
+              padding: const EdgeInsets.all(16),
+              child: SizedBox(
+                height: 52,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: MangoColors.primaryOrange,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: !canPay
+                      ? null
+                      : () {
+                          showDialog(
+                            context: context,
+                            builder: (context) => PaymentModal(
+                              order: s.order!,
+                              onPaymentSuccess: () {
+                                ref
+                                    .read(currentOrderProvider.notifier)
+                                    .refreshOrder(clearIfPaid: true);
+                                ref
+                                    .read(currentOrderProvider.notifier)
+                                    .openQuick(forceRestart: true);
+                              },
+                            ),
+                          );
+                        },
+                  child: Text(
+                    'PAGAR RD\$ ${total.toStringAsFixed(2)}',
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+              ),
+            ),
       floatingActionButton: s.order == null
           ? null
           : FloatingActionButton(
@@ -55,10 +95,9 @@ class QuickSaleView extends ConsumerWidget {
                     .limit(1)
                     .maybeSingle();
                 if (first != null) {
-                  await ref.read(currentOrderProvider.notifier).addItem(
-                        menuItemId: first['id'] as String,
-                        qty: 1,
-                      );
+                  await ref
+                      .read(currentOrderProvider.notifier)
+                      .addItem(menuItemId: first['id'] as String, qty: 1);
                 }
               },
               tooltip: 'Agregar producto',

@@ -87,7 +87,39 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
   void _subscribeRealtime(ZonesRepository repo, String businessId) {
     if (_rt != null && _rtBusinessId == businessId) return;
     _rt?.unsubscribe();
-    _rt = repo.subscribe(() => load(businessId));
+
+    // Subscribe to multiple tables for comprehensive real-time updates
+    _rt = sb
+        .channel('sales_by_zone_$businessId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'table_sessions',
+          callback: (_) {
+            // Reload all zones when a session changes (opened/closed)
+            load(businessId);
+          },
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'orders',
+          callback: (_) {
+            // Reload when order status or total changes
+            load(businessId);
+          },
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'order_items',
+          callback: (_) {
+            // Reload when items are added/removed (affects totals)
+            load(businessId);
+          },
+        )
+        .subscribe();
+
     _rtBusinessId = businessId;
   }
 

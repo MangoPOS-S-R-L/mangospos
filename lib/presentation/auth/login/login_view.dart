@@ -24,7 +24,7 @@ class _LoginViewState extends ConsumerState<LoginView> {
 
   @override
   Widget build(BuildContext context) {
-    // ⬇️ AHORA el provider devuelve LoginState directamente (no AsyncValue)
+    // AHORA el provider devuelve LoginState directamente (no AsyncValue)
     final state = ref.watch(loginVmProvider); // LoginState
     final vm = ref.read(loginVmProvider.notifier);
 
@@ -84,7 +84,7 @@ class _LoginViewState extends ConsumerState<LoginView> {
                   ),
                   const SizedBox(height: 20),
 
-                  _label('Introduce tu correo electrónico'),
+                  _label('Introduce tu correo electronico'),
                   const SizedBox(height: 8),
                   TextFormField(
                     initialValue: data.email,
@@ -92,13 +92,13 @@ class _LoginViewState extends ConsumerState<LoginView> {
                     keyboardType: TextInputType.emailAddress,
                     onChanged: vm.setEmail,
                     validator: (v) => (v == null || !v.contains('@'))
-                        ? 'Correo inválido'
+                        ? 'Correo invalido'
                         : null,
                     decoration: _inputDecoration('email@tuempresa.com'),
                   ),
                   const SizedBox(height: 16),
 
-                  _label('Contraseña'),
+                  _label('Contrasena'),
                   const SizedBox(height: 8),
                   _PasswordField(
                     initial: data.password,
@@ -114,16 +114,16 @@ class _LoginViewState extends ConsumerState<LoginView> {
                         activeColor: _orange,
                         side: BorderSide(color: _dark.withOpacity(.35)),
                       ),
-                      const Text('Recuérdame', style: TextStyle(color: _dark)),
+                      const Text('Recuerdame', style: TextStyle(color: _dark)),
                       const Spacer(),
                       TextButton(
                         onPressed: () {
-                          /* TODO: recuperar contraseña */
+                          /* TODO: recuperar contrasena */
                         },
                         style: TextButton.styleFrom(
                           foregroundColor: _dark.withOpacity(.8),
                         ),
-                        child: const Text('¿Olvidaste tu contraseña?'),
+                        child: const Text('Olvidaste tu contrasena?'),
                       ),
                     ],
                   ),
@@ -146,8 +146,7 @@ class _LoginViewState extends ConsumerState<LoginView> {
                                 await vm.submit();
                                 if (!mounted) return;
                                 final hasError =
-                                    ref.read(loginVmProvider).error !=
-                                    null; // ← del estado
+                                    ref.read(loginVmProvider).error != null;
                                 if (!hasError) context.go('/dashboard');
                               }
                             },
@@ -156,7 +155,7 @@ class _LoginViewState extends ConsumerState<LoginView> {
                               valueColor: AlwaysStoppedAnimation<Color>(_white),
                             )
                           : const Text(
-                              'Iniciar sesión',
+                              'Iniciar sesion',
                               style: TextStyle(
                                 color: _white,
                                 fontWeight: FontWeight.w600,
@@ -179,7 +178,7 @@ class _LoginViewState extends ConsumerState<LoginView> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Text(
-                        '¿Eres nuevo aquí?',
+                        'Eres nuevo aqui?',
                         style: TextStyle(color: _dark.withOpacity(.8)),
                       ),
                       TextButton(
@@ -278,15 +277,18 @@ class _VideoPaneState extends State<_VideoPane> {
   VideoController? _controller;
   String? _webViewType;
   bool _isInitialized = false;
+  late final bool _useNativeVideo;
 
   @override
   void initState() {
     super.initState();
+    _useNativeVideo =
+        !kIsWeb && defaultTargetPlatform != TargetPlatform.windows;
     _initializeVideo();
   }
 
   void _initializeVideo() {
-    if (kIsWeb) {
+    if (!_useNativeVideo) {
       _initializeWebVideo();
     } else {
       _initializeNativeVideo();
@@ -295,14 +297,17 @@ class _VideoPaneState extends State<_VideoPane> {
 
   void _initializeWebVideo() {
     // For web, we'll use a simple placeholder that can be enhanced later
-    _webViewType = 'mangopos-login-video-${DateTime.now().microsecondsSinceEpoch}';
-    
+    _webViewType =
+        'mangopos-login-video-${DateTime.now().microsecondsSinceEpoch}';
+
     // Register a basic HTML video element using a workaround
     _registerWebVideo();
-    
-    setState(() {
-      _isInitialized = true;
-    });
+
+    if (mounted) {
+      setState(() {
+        _isInitialized = true;
+      });
+    }
   }
 
   void _registerWebVideo() {
@@ -316,20 +321,22 @@ class _VideoPaneState extends State<_VideoPane> {
   }
 
   void _initializeNativeVideo() {
-    if (!kIsWeb) {
-      try {
-        _player = Player();
-        _controller = VideoController(_player!);
-        _player!
-          ..open(Media('asset:///assets/videos/video_login.mp4'))
-          ..setVolume(0)
-          ..setPlaylistMode(PlaylistMode.loop);
-        
+    try {
+      _player = Player();
+      _controller = VideoController(_player!);
+      _player!
+        ..open(Media('asset:///assets/videos/video_login.mp4'))
+        ..setVolume(0)
+        ..setPlaylistMode(PlaylistMode.loop);
+
+      if (mounted) {
         setState(() {
           _isInitialized = true;
         });
-      } catch (e) {
-        print('Error initializing native video: $e');
+      }
+    } catch (e) {
+      print('Error initializing native video: $e');
+      if (mounted) {
         setState(() {
           _isInitialized = true; // Show placeholder instead
         });
@@ -339,7 +346,7 @@ class _VideoPaneState extends State<_VideoPane> {
 
   @override
   void dispose() {
-    if (!kIsWeb && _player != null) {
+    if (_useNativeVideo) {
       _player?.dispose();
       _controller = null;
     }
@@ -351,29 +358,33 @@ class _VideoPaneState extends State<_VideoPane> {
     if (!_isInitialized) {
       return Container(
         color: _dark.withOpacity(.06),
-        child: const Center(
-          child: CircularProgressIndicator(),
-        ),
+        child: const Center(child: CircularProgressIndicator()),
       );
     }
 
     Widget videoWidget;
 
-    if (kIsWeb) {
-      // For web builds, show a placeholder or use webview_flutter_web
-      // You could also implement the actual HtmlElementView here if needed
+    if (!_useNativeVideo) {
+      // For web/Windows builds, show a placeholder.
+      final placeholderText = kIsWeb
+          ? 'Video no disponible en Web'
+          : 'Video no disponible en Windows';
       videoWidget = Container(
         color: _dark.withOpacity(.06),
-        child: const Center(
+        child: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.play_circle_outline, size: 64, color: Colors.grey),
-              SizedBox(height: 16),
+              const Icon(
+                Icons.play_circle_outline,
+                size: 64,
+                color: Colors.grey,
+              ),
+              const SizedBox(height: 16),
               Text(
-                'Video Player\n(Web Implementation)',
+                placeholderText,
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey),
+                style: const TextStyle(color: Colors.grey),
               ),
             ],
           ),
@@ -426,9 +437,9 @@ class _PasswordFieldState extends State<_PasswordField> {
       obscureText: _obscure,
       onChanged: widget.onChanged,
       validator: (v) =>
-          (v == null || v.length < 6) ? 'Mínimo 6 caracteres' : null,
+          (v == null || v.length < 6) ? 'Minimo 6 caracteres' : null,
       decoration: InputDecoration(
-        hintText: '••••••••',
+        hintText: '********',
         hintStyle: TextStyle(color: _dark.withOpacity(.45)),
         filled: true,
         fillColor: _white,

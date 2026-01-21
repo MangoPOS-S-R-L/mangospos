@@ -1,0 +1,2679 @@
+================================================================================
+================================================================================
+                         SISTEMA DE VENTAS - MANGOPOS
+              Documentación Completa de Funciones, Flujos y Reglas
+================================================================================
+================================================================================
+
+Última actualización: 2026-01-11
+Versión: 2.0 (Detallada)
+
+================================================================================
+                               ÍNDICE GENERAL
+================================================================================
+
+PARTE I - VISIÓN GENERAL
+  1.1 Descripción del Sistema
+  1.2 Modos de Venta Disponibles
+  1.3 Arquitectura de Componentes
+  1.4 Navegación Principal
+
+PARTE II - VENTA POR SALÓN (FLUJO COMPLETO)
+  2.1 Pantalla de Selección de Mesas
+  2.2 Tabs de Zonas
+  2.3 Tarjetas de Mesa (TableCard)
+  2.4 Estados de Mesa
+  2.5 Transición a Pantalla de Orden
+
+PARTE III - PANTALLA DE ORDEN (OrderScreen)
+  3.1 Layout y Estructura
+  3.2 Header de la Orden
+  3.3 Área del Catálogo (ProductCatalog)
+  3.4 Área del Carrito (Cart)
+  3.5 Interacción entre Componentes
+
+PARTE IV - CATÁLOGO DE PRODUCTOS
+  4.1 Estructura del Catálogo
+  4.2 Sistema de Búsqueda
+  4.3 Navegación por Categorías
+  4.4 Tabs del Catálogo
+  4.5 Grid de Productos
+  4.6 Selección de Producto
+
+PARTE V - PERSONALIZACIÓN DE PRODUCTOS
+  5.1 Cuándo se Abre el Modal
+  5.2 Estructura del Modal
+  5.3 Selector de Cantidad
+  5.4 Grupos de Modificadores
+  5.5 Sistema de Notas
+  5.6 Cálculo de Precios
+  5.7 Validaciones
+  5.8 Botones de Acción
+
+PARTE VI - GESTIÓN DEL CARRITO
+  6.1 Estructura del Carrito
+  6.2 Header del Carrito
+  6.3 Lista de Items
+  6.4 Controles por Item
+  6.5 Footer con Totales
+  6.6 Botones de Acción
+  6.7 Estados del Carrito
+
+PARTE VII - ENVÍO A COCINA
+  7.1 Requisitos Previos
+  7.2 Flujo del Envío
+  7.3 Datos de la Comanda
+  7.4 Estados Post-Envío
+  7.5 Restricciones
+
+PARTE VIII - DIVISIÓN DE CUENTA (SPLIT BILL)
+  8.1 Acceso al Modal
+  8.2 Modos de División
+  8.3 División Manual - Flujo Detallado
+  8.4 División Equitativa - Flujo Detallado
+  8.5 Gestión de Subcuentas
+  8.6 Validaciones
+  8.7 Confirmación y Resultado
+
+PARTE IX - SISTEMA DE PAGOS
+  9.1 Acceso al Modal de Pago
+  9.2 Estructura del Modal
+  9.3 Configuración de Métodos de Pago
+  9.4 Métodos de Pago
+  9.5 Flujo de Pago en Efectivo
+  9.6 Flujo de Pago con Tarjeta
+  9.7 Flujo de Pago por Transferencia
+  9.8 Validaciones de Pago
+  9.9 Confirmación y Cierre
+
+PARTE X - VENTA RÁPIDA (EXPRESS)
+  10.1 Diferencias con Venta por Salón
+  10.2 Flujo Completo
+  10.3 Restricciones
+  10.4 Casos de Uso
+
+PARTE XI - TIPOS DE DATOS
+  11.1 Estructuras Principales
+  11.2 Enums y Constantes
+  11.3 Interfaces de Componentes
+
+PARTE XII - HOOKS Y ESTADO
+  12.1 useCart - Gestión del Carrito
+  12.2 Estados Globales
+  12.3 Transiciones de Estado
+
+PARTE XIII - REGLAS DE NEGOCIO
+  13.1 Reglas del Carrito
+  13.2 Reglas de Modificadores
+  13.3 Reglas de Pago
+  13.4 Reglas de Mesa
+  13.5 Reglas Fiscales
+
+PARTE XIV - INTEGRACIONES BACKEND
+  14.1 Operaciones de Base de Datos
+  14.2 Impresión
+  14.3 Tiempo Real
+
+================================================================================
+================================================================================
+                    PARTE I - VISIÓN GENERAL
+================================================================================
+================================================================================
+
+
+================================================================================
+1.1 DESCRIPCIÓN DEL SISTEMA
+================================================================================
+
+MangoPOS es un sistema de punto de venta diseñado para restaurantes que 
+permite gestionar ventas tanto en mesa (dine-in) como ventas rápidas 
+(takeout/delivery). El sistema está optimizado para pantallas táctiles y 
+operación rápida.
+
+CARACTERÍSTICAS PRINCIPALES:
+- Gestión visual de mesas por zonas
+- Catálogo de productos con personalización
+- Carrito de compras con cálculo automático de impuestos
+- División de cuentas (manual o equitativa)
+- Múltiples métodos de pago
+- Envío de comandas a cocina
+- Soporte para impresión térmica
+
+
+================================================================================
+1.2 MODOS DE VENTA DISPONIBLES
+================================================================================
+
+El sistema soporta 5 modos de venta:
+
+┌─────────────────┬──────────────────────────────────────────────────────────┐
+│ MODO            │ DESCRIPCIÓN                                              │
+├─────────────────┼──────────────────────────────────────────────────────────┤
+│ Por Zona        │ Venta tradicional en mesa. Requiere seleccionar mesa.    │
+│                 │ Permite envío a cocina, división de cuenta.              │
+│                 │ URL: /ventas                                             │
+├─────────────────┼──────────────────────────────────────────────────────────┤
+│ Venta Manual    │ Similar a Venta Rápida pero con más opciones.            │
+│                 │ URL: /ventas?mode=manual                                 │
+├─────────────────┼──────────────────────────────────────────────────────────┤
+│ Venta Rápida    │ Flujo express sin mesa. Pago inmediato.                  │
+│                 │ Ideal para takeout.                                      │
+│                 │ URL: /ventas?mode=rapida                                 │
+├─────────────────┼──────────────────────────────────────────────────────────┤
+│ Delivery        │ Para pedidos a domicilio. Requiere datos de cliente.     │
+│                 │ URL: /ventas?mode=delivery                               │
+├─────────────────┼──────────────────────────────────────────────────────────┤
+│ Self Service    │ Para kioscos de autoservicio.                            │
+│                 │ URL: /ventas?mode=selfservice                            │
+└─────────────────┴──────────────────────────────────────────────────────────┘
+
+
+================================================================================
+1.3 ARQUITECTURA DE COMPONENTES
+================================================================================
+
+ESTRUCTURA DE ARCHIVOS:
+
+src/
+├── pages/
+│   └── Ventas.tsx                    # Página principal de ventas
+│
+├── components/
+│   └── ventas/
+│       ├── VentasSidebar.tsx         # Navegación lateral de modos
+│       ├── TablesGrid.tsx            # Grid de mesas por zona
+│       ├── TableCard.tsx             # Tarjeta individual de mesa
+│       ├── OrderScreen.tsx           # Pantalla de toma de orden
+│       ├── ProductCatalog.tsx        # Catálogo de productos
+│       ├── Cart.tsx                  # Carrito de compras
+│       ├── ProductCustomizationModal.tsx  # Modal de personalización
+│       ├── PaymentModal.tsx          # Modal de pago
+│       └── SplitBillModal.tsx        # Modal de división de cuenta
+│
+├── hooks/
+│   └── use-cart.ts                   # Hook de gestión de carrito
+│
+├── types/
+│   └── pos.ts                        # Tipos TypeScript del POS
+│
+└── data/
+    └── mock-products.ts              # Datos de prueba
+
+
+JERARQUÍA DE COMPONENTES:
+
+Ventas.tsx
+├── MainLayout
+│   └── (content)
+│       ├── VentasSidebar
+│       │   └── [Links de modos de venta]
+│       │
+│       └── TablesGrid / OrderScreen (condicional)
+│           │
+│           ├── [Si no hay mesa seleccionada]
+│           │   └── TablesGrid
+│           │       ├── Tabs de zonas
+│           │       └── Grid de TableCard
+│           │
+│           └── [Si hay mesa seleccionada]
+│               └── OrderScreen
+│                   ├── Cart (sidebar)
+│                   ├── ProductCatalog (main)
+│                   ├── ProductCustomizationModal
+│                   ├── PaymentModal
+│                   └── SplitBillModal
+
+
+================================================================================
+1.4 NAVEGACIÓN PRINCIPAL
+================================================================================
+
+SIDEBAR DE VENTAS (VentasSidebar.tsx):
+
+┌────────────────────────────────┐
+│ MODO DE VENTA                  │ ← Header (texto gris, uppercase)
+├────────────────────────────────┤
+│ [🔲] Por Zona        ← activo  │ ← Link con icono LayoutGrid
+│ [📄] Venta Manual              │ ← Link con icono FileText
+│ [⚡] Venta Rápida               │ ← Link con icono Zap
+│ [🚚] Delivery                  │ ← Link con icono Truck
+│ [📱] Self Service              │ ← Link con icono Smartphone
+└────────────────────────────────┘
+
+COMPORTAMIENTO DE LINKS:
+- El link activo tiene fondo primary y texto primary-foreground
+- Links inactivos tienen texto muted-foreground
+- Hover: fondo accent, texto foreground
+- Click navega a la URL correspondiente
+
+DETECCIÓN DE LINK ACTIVO:
+- "Por Zona" activo cuando: URL = /ventas sin parámetro mode
+- Otros modos: cuando searchParams.get("mode") === id del modo
+
+
+================================================================================
+================================================================================
+                    PARTE II - VENTA POR SALÓN (FLUJO COMPLETO)
+================================================================================
+================================================================================
+
+
+================================================================================
+2.1 PANTALLA DE SELECCIÓN DE MESAS (TablesGrid.tsx)
+================================================================================
+
+DESCRIPCIÓN:
+Pantalla principal que muestra todas las mesas organizadas por zona.
+Permite visualizar el estado de cada mesa y seleccionar una para operar.
+
+LAYOUT:
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ [Tab: Salón Principal] [Tab: Terraza] [Tab: VIP]                            │
+│ ● 4 disponibles   ○ 2 ocupadas                                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐                        │
+│  │   A1    │  │   A2    │  │   A3    │  │   A4    │                        │
+│  │Disponible│  │ Ocupado │  │Disponible│  │ Ocupado │                        │
+│  │         │  │RD$2,500 │  │         │  │RD$1,800 │                        │
+│  │  Toca   │  │👥2 ⏱45m │  │  Toca   │  │👥4 ⏱20m │                        │
+│  │  para   │  │         │  │  para   │  │         │                        │
+│  │ asignar │  │         │  │ asignar │  │         │                        │
+│  └─────────┘  └─────────┘  └─────────┘  └─────────┘                        │
+│                                                                             │
+│  ┌─────────┐  ┌─────────┐                                                  │
+│  │   A5    │  │   A6    │                                                  │
+│  │Disponible│  │Disponible│                                                  │
+│  │         │  │         │                                                  │
+│  │  Toca   │  │  Toca   │                                                  │
+│  │  para   │  │  para   │                                                  │
+│  │ asignar │  │ asignar │                                                  │
+│  └─────────┘  └─────────┘                                                  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+2.2 TABS DE ZONAS
+================================================================================
+
+ZONAS DISPONIBLES:
+- Salón Principal (zone: "salon")
+- Terraza (zone: "terraza")
+- VIP (zone: "vip")
+
+COMPORTAMIENTO DE TABS:
+1. Click en tab → Cambia activeZone al valor correspondiente
+2. Grid se actualiza mostrando solo mesas de esa zona
+3. Contadores se recalculan para la zona seleccionada
+
+CONTADORES:
+- "● X disponibles" → Cuenta de mesas con status = "disponible"
+- "○ X ocupadas" → Cuenta de mesas con status = "ocupado" o "pagando"
+
+ESTILO DE TABS:
+- Tab activo: fondo sólido, texto oscuro
+- Tab inactivo: fondo transparente, texto gris
+- Transición suave al cambiar
+
+
+================================================================================
+2.3 TARJETAS DE MESA (TableCard.tsx)
+================================================================================
+
+ESTRUCTURA DE TARJETA - MESA DISPONIBLE:
+┌─────────────────────────────┐
+│ A1                          │ ← Código de mesa (text-lg font-bold)
+│ Disponible                  │ ← Estado (text-xs text-success)
+│─────────────────────────────│
+│ Toca para asignar           │ ← Texto informativo (text-sm text-muted)
+└─────────────────────────────┘
+
+ESTRUCTURA DE TARJETA - MESA OCUPADA:
+┌─────────────────────────────┐
+│ A1              RD$ 2,500   │ ← Código + Total actual
+│ Ocupado                     │ ← Estado (text-xs text-warning)
+│─────────────────────────────│
+│ 👥 2    ⏱ 45m              │ ← Comensales + Tiempo transcurrido
+└─────────────────────────────┘
+
+PROPS DE TableCard:
+- code: string → Código visual de la mesa (ej: "A1", "T1", "VIP1")
+- status: "disponible" | "ocupado" | "pagando"
+- guests?: number → Cantidad de comensales (solo si ocupada)
+- time?: string → Tiempo desde que se abrió (solo si ocupada)
+- total?: number → Total acumulado de la orden (solo si ocupada)
+- onClick?: () => void → Handler cuando se hace click
+
+ESTILOS CONDICIONALES:
+- Mesa disponible: Borde izquierdo verde (border-l-success)
+- Mesa ocupada: Borde izquierdo amarillo/naranja (border-l-warning)
+- Hover: Elevación sutil, cursor pointer
+
+
+================================================================================
+2.4 ESTADOS DE MESA
+================================================================================
+
+┌─────────────┬────────────┬─────────────────────────────────────────────────┐
+│ ESTADO      │ COLOR      │ SIGNIFICADO                                     │
+├─────────────┼────────────┼─────────────────────────────────────────────────┤
+│ disponible  │ Verde      │ Mesa libre. Se puede abrir nueva sesión.        │
+│             │            │ Click → Abre OrderScreen vacío.                 │
+├─────────────┼────────────┼─────────────────────────────────────────────────┤
+│ ocupado     │ Amarillo   │ Mesa con orden activa en progreso.              │
+│             │            │ Click → Abre OrderScreen con items existentes.  │
+├─────────────┼────────────┼─────────────────────────────────────────────────┤
+│ pagando     │ Azul       │ Mesa en proceso de cierre/pago.                 │
+│             │            │ Click → Abre modal de pago directamente.        │
+└─────────────┴────────────┴─────────────────────────────────────────────────┘
+
+
+================================================================================
+2.5 TRANSICIÓN A PANTALLA DE ORDEN
+================================================================================
+
+FLUJO AL SELECCIONAR MESA:
+
+1. Usuario hace click en TableCard
+2. Se ejecuta handleTableClick(table)
+3. Se guarda la mesa en estado selectedTable
+4. Renderizado condicional cambia:
+   - SI selectedTable !== null → Renderiza OrderScreen
+   - SI selectedTable === null → Renderiza TablesGrid
+
+DATOS PASADOS A OrderScreen:
+- table: Objeto completo de la mesa seleccionada
+- isQuickSale: false (es venta por mesa)
+- onBack: Función para volver a TablesGrid (setSelectedTable(null))
+- onOrderComplete: Función para completar orden y liberar mesa
+
+
+================================================================================
+================================================================================
+                    PARTE III - PANTALLA DE ORDEN (OrderScreen)
+================================================================================
+================================================================================
+
+
+================================================================================
+3.1 LAYOUT Y ESTRUCTURA
+================================================================================
+
+LAYOUT PRINCIPAL:
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                HEADER                                       │
+│ [← Volver]    Mesa A1 • En preparación         [👤 Asignar cliente]        │
+├──────────────────────────────────┬──────────────────────────────────────────┤
+│                                  │                                          │
+│           CARRITO                │              CATÁLOGO                    │
+│         (Cart.tsx)               │         (ProductCatalog.tsx)             │
+│                                  │                                          │
+│     Ancho fijo: 380px            │          Ancho: flexible                 │
+│                                  │                                          │
+│  ┌────────────────────────────┐  │  ┌────────────────────────────────────┐  │
+│  │ Mesa A1           2 items  │  │  │ 🔍 Buscar productos...             │  │
+│  ├────────────────────────────┤  │  ├────────────────────────────────────┤  │
+│  │                            │  │  │ [Categorías] [Menú] [Favoritos]    │  │
+│  │ Producto 1                 │  │  ├────────────────────────────────────┤  │
+│  │   + Modificador            │  │  │                                    │  │
+│  │   [−] 1 [+]     RD$ 350    │  │  │  ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐  │  │
+│  │                            │  │  │  │ 🍔  │ │ 🍕  │ │ 🍝  │ │ 🥗  │  │  │
+│  │ Producto 2                 │  │  │  │Plato│ │Pizza│ │Pasta│ │Ensalada │  │
+│  │   [−] 2 [+]     RD$ 500    │  │  │  │ 250 │ │ 350 │ │ 280 │ │ 180 │  │  │
+│  │                            │  │  │  └─────┘ └─────┘ └─────┘ └─────┘  │  │
+│  ├────────────────────────────┤  │  │                                    │  │
+│  │ Subtotal        RD$ 850    │  │  │  ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐  │  │
+│  │ ITBIS (18%)     RD$ 153    │  │  │  │ 🍗  │ │ 🐟  │ │ 🥤  │ │ 🍰  │  │  │
+│  │ TOTAL         RD$ 1,003    │  │  │  │Pollo│ │Pescado│ │Bebida│ │Postre│  │
+│  ├────────────────────────────┤  │  │  │ 320 │ │ 450 │ │ 80  │ │ 150 │  │  │
+│  │ [📋 Enviar]  [÷ Dividir]   │  │  │  └─────┘ └─────┘ └─────┘ └─────┘  │  │
+│  │ [        💳 Pagar        ] │  │  │                                    │  │
+│  └────────────────────────────┘  │  └────────────────────────────────────┘  │
+│                                  │                                          │
+└──────────────────────────────────┴──────────────────────────────────────────┘
+
+DIMENSIONES:
+- Carrito: width fijo de 380px
+- Catálogo: flex-1 (ocupa el resto del espacio)
+- Gap entre columnas: 24px (gap-6)
+
+
+================================================================================
+3.2 HEADER DE LA ORDEN
+================================================================================
+
+ESTRUCTURA DEL HEADER:
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ [← icono]   Mesa A1 • En preparación                    [Asignar cliente]  │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+ELEMENTOS:
+
+1. BOTÓN VOLVER:
+   - Icono: ArrowLeft de lucide-react
+   - Posición: Izquierda
+   - Estilo: Button variant="ghost" size="icon"
+   - Acción: Ejecuta onBack() → Vuelve a TablesGrid
+   - NO DEBE: Preguntar confirmación si hay items (comportamiento actual)
+   - DEBE: En el futuro, preguntar confirmación si hay items no enviados
+
+2. TÍTULO:
+   - Formato: "Mesa {código}" o "Venta Rápida"
+   - Separador: " • "
+   - Estado: Texto del estado actual de la orden
+   - Estilo: text-lg font-semibold
+
+3. BOTÓN ASIGNAR CLIENTE:
+   - Icono: User de lucide-react
+   - Texto: "Asignar cliente"
+   - Posición: Derecha
+   - Estilo: Button variant="outline"
+   - Acción: Abre modal de selección/creación de cliente (pendiente)
+   - SOLO VISIBLE: En venta por mesa (no en venta rápida)
+
+
+================================================================================
+3.3 ÁREA DEL CATÁLOGO (ProductCatalog)
+================================================================================
+
+Ver PARTE IV para documentación completa del catálogo.
+
+INTERACCIÓN CON OrderScreen:
+- ProductCatalog recibe: onSelectProduct callback
+- Cuando usuario selecciona producto:
+  - Si producto tiene hasModifiers = true → Abre modal de personalización
+  - Si producto NO tiene modificadores → Agrega directamente al carrito
+
+
+================================================================================
+3.4 ÁREA DEL CARRITO (Cart)
+================================================================================
+
+Ver PARTE VI para documentación completa del carrito.
+
+INTERACCIÓN CON OrderScreen:
+- Cart recibe: items, totales, funciones de actualización
+- Cart comunica hacia arriba: solicitudes de pago, división, envío
+
+
+================================================================================
+3.5 INTERACCIÓN ENTRE COMPONENTES
+================================================================================
+
+FLUJO DE DATOS:
+
+     OrderScreen (estado central)
+            │
+            ├──────────────────────────────────────────┐
+            │                                          │
+            ▼                                          ▼
+      Cart.tsx                                  ProductCatalog.tsx
+         │                                          │
+         │ solicita:                                │ notifica:
+         │ - onSendToKitchen                        │ - onSelectProduct
+         │ - onSplitBill                            │
+         │ - onPayment                              │
+         │ - onUpdateQuantity                       │
+         │ - onRemoveItem                           │
+         │                                          │
+         └──────────────────────────────────────────┘
+                            │
+                            ▼
+                     useCart hook
+                   (estado del carrito)
+
+
+COMUNICACIÓN:
+
+1. Usuario selecciona producto en Catálogo
+   → ProductCatalog llama onSelectProduct(product)
+   → OrderScreen decide si abrir modal o agregar directo
+   → Si modal: abre ProductCustomizationModal
+   → Al confirmar: llama addItem del useCart
+
+2. Usuario modifica cantidad en Carrito
+   → Cart llama onUpdateQuantity(itemId, newQty)
+   → OrderScreen llama updateItemQuantity del useCart
+   → Carrito se re-renderiza con nueva cantidad
+
+3. Usuario presiona "Pagar"
+   → Cart llama onPayment()
+   → OrderScreen abre PaymentModal
+   → Al confirmar pago: cierra orden y mesa
+
+
+================================================================================
+================================================================================
+                    PARTE IV - CATÁLOGO DE PRODUCTOS
+================================================================================
+================================================================================
+
+
+================================================================================
+4.1 ESTRUCTURA DEL CATÁLOGO (ProductCatalog.tsx)
+================================================================================
+
+LAYOUT COMPLETO:
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 🔍 Buscar productos...                                              [X]    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ [Categorías]     [Menú]     [Favoritos]                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   [Vista de categorías / productos según tab y filtros activos]             │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+4.2 SISTEMA DE BÚSQUEDA
+================================================================================
+
+INPUT DE BÚSQUEDA:
+- Placeholder: "Buscar productos..."
+- Icono: Search (lucide-react) a la izquierda
+- Botón X para limpiar (visible cuando hay texto)
+- Debounce: 300ms antes de filtrar (evitar renders excesivos)
+
+COMPORTAMIENTO:
+1. Usuario escribe en input
+2. Se filtra la lista de productos en tiempo real
+3. Filtro aplica a: nombre del producto (case insensitive)
+4. Si hay categoría seleccionada: filtra dentro de esa categoría
+5. Si no hay categoría: filtra todos los productos
+
+EJEMPLO:
+- Input: "poll"
+- Resultado: Muestra "Pollo Frito", "Pollo a la Plancha", etc.
+
+
+================================================================================
+4.3 NAVEGACIÓN POR CATEGORÍAS
+================================================================================
+
+CATEGORÍAS DISPONIBLES (desde mock-products.ts):
+- Entradas
+- Platos Fuertes
+- Pastas
+- Ensaladas
+- Bebidas
+- Postres
+- Agregados
+
+FLUJO DE NAVEGACIÓN:
+
+1. VISTA INICIAL (ninguna categoría seleccionada):
+   - Muestra grid de categorías
+   - Cada categoría es una tarjeta clickeable
+   - Click en categoría → selectedCategory = id
+
+2. VISTA DE CATEGORÍA (categoría seleccionada):
+   - Header muestra: [← Volver] Nombre de Categoría
+   - Grid muestra productos de esa categoría
+   - Click en "Volver" → selectedCategory = null
+
+TARJETA DE CATEGORÍA:
+┌─────────────────────────────┐
+│        [Icono/Emoji]        │
+│                             │
+│     Nombre Categoría        │
+│       X productos           │
+└─────────────────────────────┘
+
+
+================================================================================
+4.4 TABS DEL CATÁLOGO
+================================================================================
+
+TAB "CATEGORÍAS":
+- Valor: "categorias"
+- Comportamiento:
+  - Si selectedCategory = null → Muestra grid de categorías
+  - Si selectedCategory != null → Muestra productos de esa categoría
+
+TAB "MENÚ":
+- Valor: "menu"
+- Comportamiento:
+  - Siempre muestra todos los productos
+  - Ignora selectedCategory
+  - Útil para búsqueda global
+
+TAB "FAVORITOS":
+- Valor: "favoritos"
+- Comportamiento:
+  - Muestra productos marcados como favoritos
+  - (Requiere implementación de sistema de favoritos)
+  - Si no hay favoritos: mensaje "No tienes productos favoritos"
+
+
+================================================================================
+4.5 GRID DE PRODUCTOS
+================================================================================
+
+LAYOUT DEL GRID:
+- Columnas: responsive (2 en móvil, 3 en tablet, 4 en desktop)
+- Gap: 16px (gap-4)
+- Productos ordenados por: position, luego por nombre
+
+TARJETA DE PRODUCTO:
+┌─────────────────────────────┐
+│  ┌───────────────────────┐  │
+│  │                       │  │
+│  │     [Imagen del       │  │
+│  │      Producto]        │  │
+│  │                       │  │
+│  └───────────────────────┘  │
+│                             │
+│  Nombre del Producto        │
+│  RD$ 350                    │
+└─────────────────────────────┘
+
+ESTADOS DE TARJETA:
+- Normal: Fondo card, borde sutil
+- Hover: Elevación (shadow), borde más visible
+- Click: Breve feedback visual
+- Producto sin stock: Opacidad reducida, badge "Agotado"
+
+
+================================================================================
+4.6 SELECCIÓN DE PRODUCTO
+================================================================================
+
+CUANDO USUARIO HACE CLICK EN PRODUCTO:
+
+DECISIÓN 1: ¿Tiene modificadores?
+┌──────────────────────────────────────┐
+│ producto.hasModifiers === true?      │
+├─────────────┬────────────────────────┤
+│     SÍ      │          NO            │
+│     ▼       │          ▼             │
+│ Abre modal  │  Agregar directo       │
+│ de persona- │  al carrito con:       │
+│ lización    │  - quantity: 1         │
+│             │  - modifiers: []       │
+│             │  - notes: ""           │
+└─────────────┴────────────────────────┘
+
+AGREGAR DIRECTO (sin modificadores):
+1. Llamar addItem(product, 1, [], "")
+2. Mostrar toast: "Producto agregado"
+3. No abre ningún modal
+
+ABRIR MODAL (con modificadores):
+1. setSelectedProduct(product)
+2. setIsCustomizationModalOpen(true)
+3. Modal se renderiza con el producto
+
+
+================================================================================
+================================================================================
+                    PARTE V - PERSONALIZACIÓN DE PRODUCTOS
+================================================================================
+================================================================================
+
+
+================================================================================
+5.1 CUÁNDO SE ABRE EL MODAL
+================================================================================
+
+EL MODAL SE ABRE CUANDO:
+- Usuario hace click en producto con hasModifiers = true
+- Sistema detecta que producto tiene modifierGroups no vacío
+
+EL MODAL NO SE ABRE CUANDO:
+- Producto no tiene modificadores (hasModifiers = false)
+- Producto tiene modifierGroups vacío o undefined
+
+NOTA IMPORTANTE:
+- Incluso si hasModifiers = true pero modifierGroups está vacío,
+  se podría abrir el modal (pero estaría vacío de opciones)
+- Se recomienda validar que modifierGroups.length > 0
+
+
+================================================================================
+5.2 ESTRUCTURA DEL MODAL (ProductCustomizationModal.tsx)
+================================================================================
+
+LAYOUT COMPLETO:
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     Nombre del Producto                             [X]    │
+│                        RD$ 350 base                                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  CANTIDAD                                                                   │
+│  ┌─────────────────────────────────────────────┐                           │
+│  │      [−]           3           [+]          │                           │
+│  └─────────────────────────────────────────────┘                           │
+│                                                                             │
+│  ─────────────────────────────────────────────────                         │
+│                                                                             │
+│  TÉRMINO DE COCCIÓN *                              ← Grupo requerido       │
+│  ○ Poco cocido (+RD$ 0)                                                    │
+│  ● Término medio (+RD$ 0)                          ← Seleccionado          │
+│  ○ Bien cocido (+RD$ 0)                                                    │
+│                                                                             │
+│  ─────────────────────────────────────────────────                         │
+│                                                                             │
+│  EXTRAS (máx. 3)                                   ← Grupo opcional        │
+│  ☐ Queso extra (+RD$ 50)                                                   │
+│  ☑ Tocineta (+RD$ 75)                              ← Seleccionado          │
+│  ☐ Huevo frito (+RD$ 40)                                                   │
+│  ☑ Aguacate (+RD$ 60)                              ← Seleccionado          │
+│                                                                             │
+│  ─────────────────────────────────────────────────                         │
+│                                                                             │
+│  NOTAS RÁPIDAS                                                             │
+│  [Sin sal] [Sin cebolla] [Extra picante] [Para llevar]                     │
+│                                                                             │
+│  Notas adicionales:                                                        │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ Alergico a mariscos                                                 │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│                     Total: RD$ 1,455                                        │
+│                                                                             │
+│  [Cancelar]                              [Agregar al pedido]               │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+5.3 SELECTOR DE CANTIDAD
+================================================================================
+
+COMPONENTE:
+┌───────────────────────────────────────┐
+│        [−]       3       [+]          │
+└───────────────────────────────────────┘
+
+BOTÓN MENOS (−):
+- Icono: Minus
+- Acción: quantity = Math.max(1, quantity - 1)
+- Estado disabled: cuando quantity === 1
+- Estilo disabled: opacity reducida, cursor not-allowed
+
+DISPLAY DE CANTIDAD:
+- Muestra número actual
+- Estilo: text-xl font-bold
+- Ancho mínimo para evitar saltos
+
+BOTÓN MÁS (+):
+- Icono: Plus
+- Acción: quantity = quantity + 1
+- Sin límite superior (o definir maxQuantity si aplica)
+
+REGLAS:
+- Cantidad mínima: 1 (no puede ser 0 ni negativo)
+- Cantidad máxima: Sin límite (o 99 como límite práctico)
+- Cambio de cantidad recalcula totalPrice inmediatamente
+
+
+================================================================================
+5.4 GRUPOS DE MODIFICADORES
+================================================================================
+
+TIPOS DE GRUPOS:
+
+A) GRUPO DE SELECCIÓN ÚNICA (Radio):
+   - Cuando: maxSelection === 1
+   - Renderiza: Radio buttons
+   - Comportamiento: Solo uno puede estar seleccionado
+   - Click en opción: Reemplaza selección anterior
+
+B) GRUPO DE SELECCIÓN MÚLTIPLE (Checkbox):
+   - Cuando: maxSelection > 1
+   - Renderiza: Checkboxes
+   - Comportamiento: Múltiples pueden estar seleccionados
+   - Click en opción:
+     - Si ya seleccionada → La deselecciona
+     - Si no seleccionada Y count < maxSelection → La selecciona
+     - Si no seleccionada Y count >= maxSelection → No hace nada (o muestra error)
+
+INDICADORES VISUALES:
+
+Grupo requerido:
+- Título con asterisco (*): "Término de cocción *"
+- Si no hay selección: borde rojo, mensaje de error
+
+Grupo opcional:
+- Título sin asterisco
+- Muestra "(máx. X)" si hay límite
+
+ESTRUCTURA DE DATOS DE GRUPO:
+{
+  id: string,
+  name: string,
+  required: boolean,
+  minSelection: number,  // Mínimo requerido (0 para opcional)
+  maxSelection: number,  // 1 = radio, >1 = checkbox
+  modifiers: Modifier[]
+}
+
+ESTRUCTURA DE MODIFICADOR:
+{
+  id: string,
+  name: string,
+  price: number  // 0 si no tiene costo adicional
+}
+
+
+================================================================================
+5.5 SISTEMA DE NOTAS
+================================================================================
+
+NOTAS RÁPIDAS (Botones predefinidos):
+- "Sin sal"
+- "Sin cebolla"
+- "Extra picante"
+- "Para llevar"
+- (Agregar más según necesidad del negocio)
+
+COMPORTAMIENTO DE NOTAS RÁPIDAS:
+1. Click en botón → Agrega texto al campo de notas
+2. Si ya hay texto en notas: agrega con ", " como separador
+3. No duplica si la nota ya existe
+4. Botón cambia de estilo al estar "activo"
+
+CAMPO DE NOTAS LIBRES:
+- Componente: Textarea
+- Placeholder: "Instrucciones especiales..."
+- Máximo caracteres: 200 (o sin límite)
+- Redimensionable: Solo vertical
+
+EJEMPLO DE NOTAS COMBINADAS:
+"Sin sal, Extra picante, Sin gluten por favor"
+
+
+================================================================================
+5.6 CÁLCULO DE PRECIOS
+================================================================================
+
+FÓRMULAS:
+
+modifiersTotal = SUM(selectedModifiers.map(m => m.price))
+unitPrice = product.price + modifiersTotal
+totalPrice = unitPrice * quantity
+
+EJEMPLO:
+- Producto base: RD$ 350
+- Modificador "Tocineta": RD$ 75
+- Modificador "Aguacate": RD$ 60
+- Cantidad: 3
+
+modifiersTotal = 75 + 60 = 135
+unitPrice = 350 + 135 = 485
+totalPrice = 485 * 3 = 1,455
+
+DISPLAY EN MODAL:
+- Header muestra precio base: "RD$ 350 base"
+- Footer muestra total calculado: "Total: RD$ 1,455"
+- Cada modificador muestra su precio: "(+RD$ 75)"
+
+
+================================================================================
+5.7 VALIDACIONES
+================================================================================
+
+ANTES DE PERMITIR "AGREGAR AL PEDIDO":
+
+1. VALIDAR CANTIDAD:
+   - quantity >= 1 ✓
+
+2. VALIDAR GRUPOS REQUERIDOS:
+   Para cada grupo donde required === true:
+   - Verificar que selectedModifiers incluye al menos una opción del grupo
+   - Si falta: marcar grupo con error, deshabilitar botón
+
+3. VALIDAR MIN SELECTION:
+   Para cada grupo:
+   - Contar cuántos modificadores del grupo están seleccionados
+   - Si count < minSelection: error
+
+4. VALIDAR MAX SELECTION:
+   Para cada grupo:
+   - Contar cuántos modificadores del grupo están seleccionados
+   - Si count > maxSelection: error (no debería pasar si UI lo previene)
+
+FUNCIÓN isValid:
+```typescript
+const isValid = useMemo(() => {
+  if (!product?.modifierGroups) return true;
+  
+  return product.modifierGroups.every(group => {
+    if (!group.required) return true;
+    
+    const selectedCount = selectedModifiers.filter(
+      m => m.groupId === group.id
+    ).length;
+    
+    return selectedCount >= (group.minSelection || 1);
+  });
+}, [product, selectedModifiers]);
+```
+
+
+================================================================================
+5.8 BOTONES DE ACCIÓN
+================================================================================
+
+BOTÓN "CANCELAR":
+- Posición: Izquierda del footer
+- Estilo: Button variant="outline"
+- Acción:
+  1. Resetear estado del modal (cantidad, modificadores, notas)
+  2. Cerrar modal (onClose())
+- NO PREGUNTA confirmación
+
+BOTÓN "AGREGAR AL PEDIDO":
+- Posición: Derecha del footer
+- Estilo: Button variant="default" (primary)
+- Estado disabled: cuando isValid === false
+- Acción cuando enabled:
+  1. Llamar onConfirm(quantity, selectedModifiers, notes)
+  2. Modal se cierra automáticamente
+  3. OrderScreen ejecuta addItem con los datos
+  4. Toast: "Producto agregado al pedido"
+
+COMPORTAMIENTO POST-AGREGAR:
+- Modal se cierra
+- Carrito se actualiza con nuevo item
+- Si se vuelve a abrir modal para mismo producto: estado reseteado
+
+
+================================================================================
+================================================================================
+                    PARTE VI - GESTIÓN DEL CARRITO
+================================================================================
+================================================================================
+
+
+================================================================================
+6.1 ESTRUCTURA DEL CARRITO (Cart.tsx)
+================================================================================
+
+LAYOUT COMPLETO:
+┌─────────────────────────────────────┐
+│ HEADER                              │
+│ Mesa A1               🗑️ Vaciar    │
+│ 3 productos                         │
+├─────────────────────────────────────┤
+│ LISTA DE ITEMS (scrollable)         │
+│                                     │
+│ ┌─────────────────────────────────┐ │
+│ │ Hamburguesa Clásica        [×]  │ │
+│ │ + Queso extra, Tocineta         │ │
+│ │ "Sin cebolla"                   │ │
+│ │ [−] 2 [+]              RD$ 950  │ │
+│ └─────────────────────────────────┘ │
+│                                     │
+│ ┌─────────────────────────────────┐ │
+│ │ Papas Fritas               [×]  │ │
+│ │ [−] 1 [+]              RD$ 150  │ │
+│ └─────────────────────────────────┘ │
+│                                     │
+│ ┌─────────────────────────────────┐ │
+│ │ Coca Cola               [×]     │ │
+│ │ [−] 2 [+]              RD$ 160  │ │
+│ └─────────────────────────────────┘ │
+│                                     │
+├─────────────────────────────────────┤
+│ FOOTER - TOTALES                    │
+│                                     │
+│ Subtotal              RD$ 1,260     │
+│ ITBIS (18%)             RD$ 227     │
+│ ─────────────────────────────────   │
+│ TOTAL                 RD$ 1,487     │
+│                                     │
+├─────────────────────────────────────┤
+│ FOOTER - ACCIONES                   │
+│                                     │
+│ [📋 Enviar a Cocina]  [÷ Dividir]  │
+│                                     │
+│ [         💳 Pagar              ]  │
+│                                     │
+└─────────────────────────────────────┘
+
+
+================================================================================
+6.2 HEADER DEL CARRITO
+================================================================================
+
+ELEMENTOS:
+
+1. IDENTIFICADOR:
+   - Venta por mesa: "Mesa {código}" (ej: "Mesa A1")
+   - Venta rápida: "Venta Rápida"
+   - Estilo: text-lg font-semibold
+
+2. CONTADOR DE ITEMS:
+   - Formato: "{n} productos" o "{n} producto" (singular)
+   - Estilo: text-sm text-muted-foreground
+
+3. BOTÓN VACIAR:
+   - Icono: Trash2
+   - Texto: "Vaciar" (o solo icono en móvil)
+   - Estilo: Button variant="ghost" size="sm"
+   - Color: destructive
+   - Visible: Solo si hay items en carrito
+   - Acción: Muestra confirmación, luego clearCart()
+
+CONFIRMACIÓN AL VACIAR:
+- Tipo: Dialog o Alert
+- Mensaje: "¿Estás seguro de vaciar el carrito?"
+- Submensaje: "Esta acción eliminará todos los productos"
+- Botones: [Cancelar] [Vaciar]
+
+
+================================================================================
+6.3 LISTA DE ITEMS
+================================================================================
+
+CONTENEDOR:
+- Área scrollable
+- Height: flex-1 (ocupa espacio disponible)
+- Overflow: auto (scroll cuando necesario)
+- Padding: 16px
+
+CUANDO ESTÁ VACÍO:
+┌─────────────────────────────────────┐
+│                                     │
+│         🛒                          │
+│                                     │
+│    Carrito vacío                    │
+│                                     │
+│    Selecciona productos del         │
+│    catálogo para comenzar           │
+│                                     │
+└─────────────────────────────────────┘
+
+
+================================================================================
+6.4 CONTROLES POR ITEM
+================================================================================
+
+ESTRUCTURA DE ITEM:
+┌─────────────────────────────────────────────────────────────┐
+│ Nombre del Producto                                    [×]  │
+│ + Modificador 1, Modificador 2                              │
+│ "Notas del cliente"                                         │
+│ [−] 2 [+]                                       RD$ 950     │
+└─────────────────────────────────────────────────────────────┘
+
+1. NOMBRE DEL PRODUCTO:
+   - Estilo: font-medium
+   - Truncate si muy largo
+
+2. BOTÓN ELIMINAR [×]:
+   - Posición: Esquina superior derecha
+   - Icono: X (lucide-react)
+   - Tamaño: Pequeño (20x20px)
+   - Acción: removeItem(itemId)
+   - NO pide confirmación (la acción es reversible agregando de nuevo)
+
+3. MODIFICADORES:
+   - Prefijo: "+"
+   - Lista separada por comas
+   - Estilo: text-sm text-muted-foreground
+   - Oculto si no hay modificadores
+
+4. NOTAS:
+   - Formato: Entre comillas itálicas
+   - Estilo: text-sm italic text-muted-foreground
+   - Oculto si no hay notas
+
+5. CONTROLES DE CANTIDAD:
+   ┌─────────────────────────────────┐
+   │    [−]      2      [+]         │
+   └─────────────────────────────────┘
+   
+   - Botón [−]:
+     * Si quantity > 1: Decrementa
+     * Si quantity === 1: Elimina item (mismo que [×])
+   
+   - Display cantidad:
+     * Ancho mínimo fijo
+     * Centrado
+   
+   - Botón [+]:
+     * Incrementa cantidad
+     * Sin límite superior
+
+6. PRECIO TOTAL DEL ITEM:
+   - Muestra: item.totalPrice (unitPrice × quantity)
+   - Formato: "RD$ X,XXX"
+   - Posición: Derecha, alineado con controles de cantidad
+
+
+================================================================================
+6.5 FOOTER CON TOTALES
+================================================================================
+
+SECCIÓN DE TOTALES:
+┌─────────────────────────────────────┐
+│ Subtotal              RD$ 1,260     │ ← Suma de todos los items
+│ ITBIS (18%)             RD$ 227     │ ← subtotal × 0.18
+│ ─────────────────────────────────   │ ← Separador
+│ TOTAL                 RD$ 1,487     │ ← subtotal + tax
+└─────────────────────────────────────┘
+
+CÁLCULOS:
+- subtotal = SUM(items.map(i => i.totalPrice))
+- tax = Math.round(subtotal × 0.18)
+- total = subtotal + tax
+
+FORMATO DE MONEDA:
+- Prefijo: "RD$ "
+- Separador de miles: ","
+- Sin decimales (redondeado)
+- Función: number.toLocaleString("es-DO")
+
+
+================================================================================
+6.6 BOTONES DE ACCIÓN
+================================================================================
+
+LAYOUT DE BOTONES:
+┌─────────────────────────────────────┐
+│ [📋 Enviar]        [÷ Dividir]     │ ← Fila 1: Acciones secundarias
+│ [         💳 Pagar              ]  │ ← Fila 2: Acción principal
+└─────────────────────────────────────┘
+
+1. BOTÓN "ENVIAR A COCINA":
+   - Icono: Send o ChefHat
+   - Texto: "Enviar a Cocina" o solo "Enviar"
+   - Estilo: Button variant="outline"
+   - Visible: SOLO en venta por mesa (NO en venta rápida)
+   - Disabled: 
+     * Si carrito vacío
+     * Si ya fue enviado (orderSent === true)
+   - Si ya enviado: Cambia texto a "✓ Enviado" con estilo diferente
+   - Acción: Ver PARTE VII
+
+2. BOTÓN "DIVIDIR CUENTA":
+   - Icono: Split o Users
+   - Texto: "Dividir" o "Dividir Cuenta"
+   - Estilo: Button variant="outline"
+   - Visible: SOLO en venta por mesa
+   - Disabled: Si carrito vacío
+   - Acción: Abre SplitBillModal
+
+3. BOTÓN "PAGAR":
+   - Icono: CreditCard o Wallet
+   - Texto: "Pagar"
+   - Estilo: Button variant="default" (primary), full width
+   - Disabled: Si carrito vacío
+   - Acción: Abre PaymentModal
+
+
+================================================================================
+6.7 ESTADOS DEL CARRITO
+================================================================================
+
+ESTADO: VACÍO
+- Lista muestra mensaje "Carrito vacío"
+- Totales muestran RD$ 0
+- Todos los botones de acción disabled
+- Botón "Vaciar" oculto
+
+ESTADO: CON ITEMS (NO ENVIADO)
+- Lista muestra items
+- Totales calculados
+- Botón "Enviar a Cocina" enabled
+- Botón "Dividir" enabled
+- Botón "Pagar" enabled
+
+ESTADO: CON ITEMS (ENVIADO)
+- Lista muestra items
+- Totales calculados
+- Botón "Enviar a Cocina" muestra "✓ Enviado" y está disabled
+- Botón "Dividir" enabled
+- Botón "Pagar" enabled
+
+ESTADO: DESPUÉS DE DIVISIÓN
+- Items pueden estar asignados a subcuentas
+- Mostrar indicador de subcuenta por item (opcional)
+
+
+================================================================================
+================================================================================
+                    PARTE VII - ENVÍO A COCINA
+================================================================================
+================================================================================
+
+
+================================================================================
+7.1 REQUISITOS PREVIOS
+================================================================================
+
+PARA PODER ENVIAR A COCINA:
+
+✅ Debe haber al menos 1 item en el carrito
+✅ Debe ser venta por mesa (NO venta rápida)
+✅ No debe haberse enviado previamente (orderSent === false)
+
+SI NO SE CUMPLE:
+- Botón "Enviar a Cocina" está disabled
+- No se ejecuta ninguna acción
+
+
+================================================================================
+7.2 FLUJO DEL ENVÍO
+================================================================================
+
+SECUENCIA DE ACCIONES:
+
+1. Usuario presiona botón "Enviar a Cocina"
+   │
+   ├─→ VALIDACIÓN (frontend)
+   │   - ¿Hay items? → Si no, abort
+   │   - ¿Ya enviado? → Si sí, abort
+   │
+   ├─→ FEEDBACK INMEDIATO
+   │   - Cambiar orderSent = true
+   │   - Botón cambia a "✓ Enviado"
+   │   - Mostrar toast: "Pedido enviado a cocina"
+   │
+   ├─→ BACKEND (async, no bloquea UI)
+   │   │
+   │   ├─→ Crear/Actualizar table_session (si es nuevo)
+   │   ├─→ Crear orden en tabla orders
+   │   ├─→ Crear order_items para cada item
+   │   ├─→ Crear order_item_modifiers para modificadores
+   │   ├─→ Actualizar order.status = 'sent'
+   │   ├─→ Actualizar dining_table.state = 'occupied'
+   │   └─→ Crear print_job para impresora de cocina
+   │
+   └─→ COCINA
+       - Recibe comanda impresa
+       - (Opcional) Ve en pantalla KDS
+
+DIAGRAMA DE FLUJO:
+
+    ┌─────────────┐
+    │   Usuario   │
+    │ presiona    │
+    │  "Enviar"   │
+    └──────┬──────┘
+           │
+           ▼
+    ┌─────────────┐     NO
+    │ ¿Hay items? ├──────────→ [No hacer nada]
+    └──────┬──────┘
+           │ SÍ
+           ▼
+    ┌─────────────┐     SÍ
+    │ ¿Ya enviado?├──────────→ [No hacer nada]
+    └──────┬──────┘
+           │ NO
+           ▼
+    ┌─────────────┐
+    │ orderSent   │
+    │   = true    │
+    └──────┬──────┘
+           │
+           ▼
+    ┌─────────────┐
+    │  Toast:     │
+    │ "Enviado"   │
+    └──────┬──────┘
+           │
+           ▼
+    ┌─────────────┐
+    │  API call   │
+    │  (async)    │
+    └─────────────┘
+
+
+================================================================================
+7.3 DATOS DE LA COMANDA
+================================================================================
+
+ESTRUCTURA DE COMANDA ENVIADA:
+
+{
+  // Identificación
+  tableCode: "A1",
+  orderNumber: "ORD-20260111-001",
+  timestamp: "2026-01-11T14:30:00Z",
+  
+  // Usuario
+  waiterName: "Juan Pérez",
+  waiterId: "uuid",
+  
+  // Items
+  items: [
+    {
+      productName: "Hamburguesa Clásica",
+      quantity: 2,
+      modifiers: ["Queso extra", "Sin cebolla"],
+      notes: "Término medio",
+      isTakeout: false
+    },
+    {
+      productName: "Papas Fritas",
+      quantity: 1,
+      modifiers: [],
+      notes: "",
+      isTakeout: false
+    }
+  ],
+  
+  // Metadata
+  isReprint: false,
+  printArea: "cocina"
+}
+
+FORMATO DE IMPRESIÓN:
+
+┌────────────────────────────────────┐
+│           COMANDA COCINA           │
+│────────────────────────────────────│
+│ Mesa: A1         Hora: 14:30       │
+│ Mesero: Juan Pérez                 │
+│ Orden: ORD-20260111-001            │
+│────────────────────────────────────│
+│                                    │
+│ 2x Hamburguesa Clásica             │
+│    + Queso extra                   │
+│    + Sin cebolla                   │
+│    * Término medio                 │
+│                                    │
+│ 1x Papas Fritas                    │
+│                                    │
+│────────────────────────────────────│
+│         ** FIN COMANDA **          │
+└────────────────────────────────────┘
+
+
+================================================================================
+7.4 ESTADOS POST-ENVÍO
+================================================================================
+
+CAMBIOS EN FRONTEND:
+- orderSent = true
+- Botón "Enviar a Cocina" → "✓ Enviado" (disabled)
+- Badge de estado en header: "En preparación"
+
+CAMBIOS EN BACKEND:
+- orders.status_ext = 'sent'
+- order_items.status = 'queued'
+- dining_tables.state = 'occupied'
+
+CAMBIOS EN COCINA:
+- Comanda visible en KDS (Kitchen Display System)
+- Comanda impresa en impresora de cocina
+
+
+================================================================================
+7.5 RESTRICCIONES
+================================================================================
+
+NO SE PUEDE ENVIAR SI:
+- Carrito está vacío
+- Ya se envió previamente (evita duplicados)
+- Es venta rápida (no aplica cocina)
+
+DESPUÉS DE ENVIAR:
+- SE PUEDE: Seguir agregando productos
+- SE PUEDE: Modificar cantidades de items existentes
+- SE PUEDE: Eliminar items
+- SE PUEDE: Pagar
+- SE PUEDE: Dividir cuenta
+- NO SE PUEDE: Volver a enviar (botón disabled)
+  * Para enviar nuevos items, necesitaría otro mecanismo
+  * (Pendiente: implementar "Enviar adicionales")
+
+
+================================================================================
+================================================================================
+                    PARTE VIII - DIVISIÓN DE CUENTA (SPLIT BILL)
+================================================================================
+================================================================================
+
+
+================================================================================
+8.1 ACCESO AL MODAL
+================================================================================
+
+BOTÓN DE ACCESO:
+- Ubicación: Carrito, botones de acción
+- Texto: "Dividir" o "Dividir Cuenta"
+- Icono: Split / Users
+- Visible: Solo en venta por mesa
+
+REQUISITOS:
+- Al menos 1 item en el carrito
+- No está disponible en venta rápida
+
+
+================================================================================
+8.2 MODOS DE DIVISIÓN
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         DIVISIÓN DE CUENTA                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│     [División Manual]              [División Equitativa]                    │
+│                                                                             │
+│     Asignar items                  Dividir el total                        │
+│     a cada persona                 entre X personas                         │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+MODO A: DIVISIÓN MANUAL
+- El usuario asigna cada item a una subcuenta específica
+- Cada subcuenta puede tener diferentes items y montos
+- Útil cuando cada persona paga exactamente lo que consumió
+
+MODO B: DIVISIÓN EQUITATIVA
+- El total se divide entre un número de personas
+- Cada subcuenta tiene el mismo monto
+- Útil para dividir la cuenta "a la mitad" o entre varios
+
+
+================================================================================
+8.3 DIVISIÓN MANUAL - FLUJO DETALLADO
+================================================================================
+
+LAYOUT DEL MODAL:
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ División de Cuenta                                                     [X]  │
+├───────────────────────────────────┬─────────────────────────────────────────┤
+│                                   │                                         │
+│   PRODUCTOS DISPONIBLES           │   SUBCUENTAS                            │
+│                                   │                                         │
+│   ☐ Hamburguesa (2)    RD$ 950   │   ┌───────────────────────────────────┐ │
+│   ☐ Papas Fritas       RD$ 150   │   │ Juan                          [×] │ │
+│   ☑ Coca Cola (2)      RD$ 160   │   │ ──────────────────────────────── │ │
+│                        ────────   │   │ (vacío)                         │ │
+│                        RD$ 1,260  │   │                                  │ │
+│                                   │   │ Subtotal: RD$ 0                  │ │
+│   [Asignar a: ▼ Juan]            │   │ ITBIS:    RD$ 0                  │ │
+│                                   │   │ Total:    RD$ 0                  │ │
+│                                   │   └───────────────────────────────────┘ │
+│                                   │                                         │
+│                                   │   ┌───────────────────────────────────┐ │
+│                                   │   │ María                         [×] │ │
+│                                   │   │ ──────────────────────────────── │ │
+│                                   │   │ (vacío)                         │ │
+│                                   │   │                                  │ │
+│                                   │   │ Subtotal: RD$ 0                  │ │
+│                                   │   │ ITBIS:    RD$ 0                  │ │
+│                                   │   │ Total:    RD$ 0                  │ │
+│                                   │   └───────────────────────────────────┘ │
+│                                   │                                         │
+│                                   │   [+ Nueva Subcuenta]                   │
+│                                   │                                         │
+├───────────────────────────────────┴─────────────────────────────────────────┤
+│                                                                             │
+│     [Cancelar]                                        [Confirmar División]  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+PASOS:
+
+1. CREAR SUBCUENTA:
+   - Click en "+ Nueva Subcuenta"
+   - Ingresar nombre (ej: "Juan")
+   - Subcuenta aparece en lista de la derecha
+
+2. SELECCIONAR ITEMS:
+   - En "Productos Disponibles", marcar checkbox de items
+   - Items seleccionados se resaltan
+
+3. ASIGNAR A SUBCUENTA:
+   - Seleccionar subcuenta destino del dropdown
+   - Click "Asignar"
+   - Items se mueven a la subcuenta
+   - Desaparecen de "Productos Disponibles"
+
+4. DESASIGNAR ITEM (si error):
+   - En la subcuenta, click en [×] junto al item
+   - Item vuelve a "Productos Disponibles"
+
+5. CONFIRMAR DIVISIÓN:
+   - Click "Confirmar División"
+   - Se crean los order_checks en backend
+   - Modal se cierra
+
+
+================================================================================
+8.4 DIVISIÓN EQUITATIVA - FLUJO DETALLADO
+================================================================================
+
+LAYOUT DEL MODAL:
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ División Equitativa                                                    [X]  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│     Total de la cuenta: RD$ 1,487                                           │
+│                                                                             │
+│     Dividir entre:                                                          │
+│     ┌─────────────────────────────────────────────┐                        │
+│     │        [−]         3         [+]            │                        │
+│     └─────────────────────────────────────────────┘                        │
+│     personas                                                                │
+│                                                                             │
+│     ─────────────────────────────────────────────────                       │
+│                                                                             │
+│     Cada persona paga:                                                      │
+│                                                                             │
+│     RD$ 495.67  ← (1,487 ÷ 3)                                              │
+│                                                                             │
+│     ─────────────────────────────────────────────────                       │
+│                                                                             │
+│     Se crearán 3 subcuentas:                                                │
+│     • Cuenta 1: RD$ 496                                                     │
+│     • Cuenta 2: RD$ 496                                                     │
+│     • Cuenta 3: RD$ 495   ← Absorbe diferencia de redondeo                  │
+│                                                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│     [Cancelar]                                        [Confirmar División]  │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+PASOS:
+
+1. SELECCIONAR CANTIDAD DE PERSONAS:
+   - Usar botones [−] [+] o input directo
+   - Mínimo: 2 personas
+   - Máximo: 10 personas (o cantidad de items)
+
+2. VER CÁLCULO AUTOMÁTICO:
+   - Sistema calcula: total ÷ numPersonas
+   - Muestra monto por persona
+   - Muestra preview de subcuentas
+
+3. CONFIRMAR:
+   - Click "Confirmar División"
+   - Se crean N subcuentas con montos iguales
+   - Modal se cierra
+
+
+================================================================================
+8.5 GESTIÓN DE SUBCUENTAS
+================================================================================
+
+CREAR SUBCUENTA:
+- Click "+ Nueva Subcuenta"
+- Input para nombre (o autogenerar "Cuenta 1", "Cuenta 2", etc.)
+- Subcuenta inicia vacía
+
+ELIMINAR SUBCUENTA:
+- Click [×] en header de subcuenta
+- Items asignados vuelven a "Disponibles"
+- Confirmar si tiene items asignados
+
+RENOMBRAR SUBCUENTA:
+- Click en nombre para editar
+- Enter o blur para confirmar
+
+ESTRUCTURA SubAccount:
+{
+  id: string,
+  name: string,
+  items: CartItem[],
+  subtotal: number,
+  tax: number,
+  total: number,
+  paid: boolean
+}
+
+
+================================================================================
+8.6 VALIDACIONES
+================================================================================
+
+AL CREAR SUBCUENTA:
+- Nombre no puede estar vacío
+- Nombre no puede duplicarse
+
+AL ASIGNAR ITEMS:
+- Debe haber items seleccionados
+- Debe haber subcuenta destino seleccionada
+
+AL CONFIRMAR DIVISIÓN:
+- MODO MANUAL: Todos los items deben estar asignados
+  * Si quedan items en "Disponibles" → Mostrar advertencia
+- MODO EQUITATIVO: N >= 2
+
+
+================================================================================
+8.7 CONFIRMACIÓN Y RESULTADO
+================================================================================
+
+AL CONFIRMAR DIVISIÓN:
+
+1. Crear order_checks para cada subcuenta:
+   ```sql
+   INSERT INTO order_checks (order_id, label, position, subtotal, tax, total)
+   VALUES (?, ?, ?, ?, ?, ?)
+   ```
+
+2. Actualizar order_items con check_id:
+   ```sql
+   UPDATE order_items SET check_id = ? WHERE id = ?
+   ```
+
+3. Frontend recibe confirmación
+
+4. Modo de pago cambia:
+   - Ahora hay múltiples cuentas que pagar
+   - UI de carrito muestra subcuentas
+   - Botón "Pagar" abre modal con opciones por subcuenta
+
+
+================================================================================
+================================================================================
+                    PARTE IX - SISTEMA DE PAGOS
+================================================================================
+================================================================================
+
+
+================================================================================
+9.1 ACCESO AL MODAL DE PAGO
+================================================================================
+
+BOTÓN DE ACCESO:
+- Ubicación: Carrito, parte inferior
+- Texto: "Pagar"
+- Icono: CreditCard o Wallet
+- Estilo: Button primary, full width
+- Disabled: Si carrito vacío
+
+AL HACER CLICK:
+- Se abre PaymentModal
+- Modal recibe: total, tableCode (opcional), onConfirmPayment callback
+
+
+================================================================================
+9.2 ESTRUCTURA DEL MODAL (PaymentModal.tsx)
+================================================================================
+
+LAYOUT COMPLETO:
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Procesar Pago - Mesa A1                                                [X]  │
+├─────────────────────────────────────┬───────────────────────────────────────┤
+│                                     │                                       │
+│   MÉTODO DE PAGO                    │   RESUMEN                             │
+│                                     │                                       │
+│   [💵 Efectivo] [💳 Tarjeta]       │   Total a pagar:                      │
+│   [🏦 Transferencia]                │   RD$ 1,487                           │
+│                                     │                                       │
+│   ─────────────────────────────     │   ─────────────────────────────       │
+│                                     │                                       │
+│   MONTOS RÁPIDOS (solo efectivo)   │   Monto recibido:                     │
+│                                     │   RD$ 2,000                           │
+│   [Exacto] [+100] [+500] [+1000]   │                                       │
+│                                     │   ─────────────────────────────       │
+│   ─────────────────────────────     │                                       │
+│                                     │   Cambio a devolver:                  │
+│   MONTO RECIBIDO                    │   RD$ 513                             │
+│                                     │                                       │
+│   ┌───────────────────────────┐    │                                       │
+│   │       RD$ 2,000           │    │                                       │
+│   └───────────────────────────┘    │                                       │
+│                                     │                                       │
+│   ┌─────────────────────────┐      │                                       │
+│   │  7  │  8  │  9  │  ⌫   │      │   ┌─────────────────────────────────┐ │
+│   ├─────┼─────┼─────┼───────┤      │   │                                 │ │
+│   │  4  │  5  │  6  │   C   │      │   │      [Confirmar Pago]          │ │
+│   ├─────┼─────┼─────┼───────┤      │   │                                 │ │
+│   │  1  │  2  │  3  │       │      │   └─────────────────────────────────┘ │
+│   ├─────┼─────┼─────┤   00  │      │                                       │
+│   │     0     │  .  │       │      │   [Cancelar]                          │
+│   └───────────┴─────┴───────┘      │                                       │
+│                                     │                                       │
+└─────────────────────────────────────┴───────────────────────────────────────┘
+
+
+================================================================================
+9.3 CONFIGURACIÓN DE MÉTODOS DE PAGO
+================================================================================
+
+UBICACIÓN EN MENÚS:
+- Más Ajustes > Pagos del Sistema > Métodos de Pago
+- Permite activar/desactivar métodos (Efectivo, Tarjeta, Transferencia, QR)
+- Ordenar prioridad y nombres visibles en el POS
+
+REGLAS:
+- Debe existir al menos un método activo para permitir pagos
+- Cambios aplican a nuevos cobros inmediatamente
+
+
+================================================================================
+9.4 MÉTODOS DE PAGO
+================================================================================
+
+┌────────────────┬──────────────────────────────────────────────────────────────┐
+│ MÉTODO         │ COMPORTAMIENTO                                               │
+├────────────────┼──────────────────────────────────────────────────────────────┤
+│ 💵 Efectivo   │ • Muestra numpad y botones rápidos                           │
+│                │ • Requiere ingresar monto recibido                           │
+│                │ • Calcula cambio automáticamente                             │
+│                │ • No puede confirmar si monto < total                        │
+├────────────────┼──────────────────────────────────────────────────────────────┤
+│ 💳 Tarjeta    │ • Oculta numpad y botones rápidos                            │
+│                │ • Monto = total (cobro exacto)                               │
+│                │ • Campo opcional de referencia/autorización                  │
+│                │ • Puede confirmar inmediatamente                             │
+├────────────────┼──────────────────────────────────────────────────────────────┤
+│ 🏦 Transferencia│ • Oculta numpad y botones rápidos                           │
+│                │ • Monto = total (cobro exacto)                               │
+│                │ • Campo opcional de referencia                               │
+│                │ • Puede confirmar inmediatamente                             │
+└────────────────┴──────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+9.5 FLUJO DE PAGO EN EFECTIVO
+================================================================================
+
+PASO 1: Seleccionar método "Efectivo"
+- Tab "Efectivo" se activa
+- Numpad se hace visible
+- Input de monto se habilita
+
+PASO 2: Ingresar monto recibido
+
+   OPCIÓN A - Botones rápidos:
+   - [Exacto]: amountReceived = total
+   - [+100]: amountReceived += 100
+   - [+500]: amountReceived += 500
+   - [+1000]: amountReceived += 1000
+
+   OPCIÓN B - Numpad:
+   - Dígitos 0-9: Concatenan al monto
+   - [⌫] (Backspace): Elimina último dígito
+   - [C] (Clear): Resetea a 0
+   - [00]: Agrega dos ceros
+   - [.]: Agrega punto decimal
+
+PASO 3: Verificar cambio
+- change = amountReceived - total
+- Si change >= 0: Mostrar cambio en verde
+- Si change < 0: Mostrar "Monto insuficiente" en rojo
+
+PASO 4: Confirmar
+- Botón "Confirmar Pago" enabled solo si change >= 0
+- Click → Procesa pago
+
+CÁLCULO DE CAMBIO:
+```typescript
+const change = amountReceived - total;
+// change >= 0: válido
+// change < 0: inválido
+```
+
+
+================================================================================
+9.6 FLUJO DE PAGO CON TARJETA
+================================================================================
+
+PASO 1: Seleccionar método "Tarjeta"
+- Tab "Tarjeta" se activa
+- Numpad se oculta
+- Se muestra campo de referencia (opcional)
+
+PASO 2: (Opcional) Ingresar referencia
+- Input de texto para número de autorización
+- No es requerido
+
+PASO 3: Confirmar
+- Botón "Confirmar Pago" siempre enabled
+- Click → Procesa pago
+
+
+================================================================================
+9.7 FLUJO DE PAGO POR TRANSFERENCIA
+================================================================================
+
+PASO 1: Seleccionar método "Transferencia"
+- Tab "Transferencia" se activa
+- Numpad se oculta
+- Se muestra campo de referencia (opcional)
+
+PASO 2: (Opcional) Ingresar referencia
+- Input de texto para número de transacción
+- No es requerido
+
+PASO 3: Confirmar
+- Botón "Confirmar Pago" siempre enabled
+- Click → Procesa pago
+
+
+================================================================================
+9.8 VALIDACIONES DE PAGO
+================================================================================
+
+VALIDACIÓN GENERAL:
+- ¿Hay items en el carrito? → Si no, no debería haber llegado aquí
+
+VALIDACIÓN POR MÉTODO:
+
+EFECTIVO:
+- amountReceived >= total → OK
+- amountReceived < total → Botón disabled, mostrar error
+
+TARJETA:
+- Siempre OK (monto es el total exacto)
+
+TRANSFERENCIA:
+- Siempre OK (monto es el total exacto)
+
+
+================================================================================
+9.9 CONFIRMACIÓN Y CIERRE
+================================================================================
+
+AL CONFIRMAR PAGO:
+
+1. FRONTEND:
+   - Cierra modal de pago
+   - Muestra toast: "Pago procesado correctamente"
+   - Si hay cambio: "Cambio: RD$ X"
+   - Llama onOrderComplete()
+
+2. BACKEND:
+   - Crear registro en payments
+   - Actualizar order.status_ext = 'paid'
+   - Actualizar order.closed_at = now()
+   - Cerrar table_session.closed_at = now()
+   - Actualizar dining_table.state = 'available'
+   - Registrar en cash_transactions (si efectivo)
+   - Generar fiscal_document (NCF) si aplica
+   - Crear print_job para recibo
+
+3. POST-PAGO:
+   - Mesa vuelve a estado "disponible"
+   - OrderScreen se cierra
+   - Vuelve a TablesGrid
+
+DATOS DEL PAGO:
+{
+  business_id: uuid,
+  order_id: uuid,
+  check_id: uuid | null,
+  payment_method_id: uuid,
+  amount: number,
+  reference: string | null,
+  change_amount: number,
+  status: 'completed',
+  processed_by: uuid,
+  session_id: uuid (cash register session)
+}
+
+
+================================================================================
+================================================================================
+                    PARTE X - VENTA RÁPIDA (EXPRESS)
+================================================================================
+================================================================================
+
+
+================================================================================
+10.1 DIFERENCIAS CON VENTA POR SALÓN
+================================================================================
+
+┌─────────────────────────┬────────────────────────┬───────────────────────────┐
+│ CARACTERÍSTICA          │ VENTA POR SALÓN        │ VENTA RÁPIDA              │
+├─────────────────────────┼────────────────────────┼───────────────────────────┤
+│ Selección de mesa       │ ✅ Requerida           │ ❌ No aplica              │
+├─────────────────────────┼────────────────────────┼───────────────────────────┤
+│ Header muestra          │ "Mesa {código}"        │ "Venta Rápida"            │
+├─────────────────────────┼────────────────────────┼───────────────────────────┤
+│ Botón Enviar a Cocina   │ ✅ Visible             │ ❌ Oculto                 │
+├─────────────────────────┼────────────────────────┼───────────────────────────┤
+│ Botón Dividir Cuenta    │ ✅ Visible             │ ❌ Oculto                 │
+├─────────────────────────┼────────────────────────┼───────────────────────────┤
+│ Botón Asignar Cliente   │ ✅ Visible             │ ❌ Oculto (o visible)     │
+├─────────────────────────┼────────────────────────┼───────────────────────────┤
+│ table_session           │ ✅ Se crea             │ ❌ No se crea             │
+├─────────────────────────┼────────────────────────┼───────────────────────────┤
+│ table_id en orden       │ ✅ Tiene referencia    │ ❌ null                   │
+├─────────────────────────┼────────────────────────┼───────────────────────────┤
+│ origin                  │ 'dine_in'              │ 'takeout' o 'quick'       │
+└─────────────────────────┴────────────────────────┴───────────────────────────┘
+
+
+================================================================================
+10.2 FLUJO COMPLETO
+================================================================================
+
+ACCESO:
+- Click en "Venta Rápida" en VentasSidebar
+- URL: /ventas?mode=rapida
+
+FLUJO:
+
+1. Se renderiza OrderScreen con:
+   - table = undefined
+   - isQuickSale = true
+
+2. Usuario agrega productos al carrito
+   - Mismo flujo que venta por salón
+   - Personalización disponible
+
+3. Usuario presiona "Pagar"
+   - Se abre PaymentModal
+   - Header muestra "Venta Rápida" en lugar de mesa
+
+4. Usuario confirma pago
+   - Orden se crea con origin = 'quick'
+   - No hay table_session
+   - Orden se cierra inmediatamente
+
+5. Post-pago
+   - Toast de confirmación
+   - Carrito se vacía
+   - Listo para nueva venta
+
+
+================================================================================
+10.3 RESTRICCIONES
+================================================================================
+
+NO DISPONIBLE EN VENTA RÁPIDA:
+- ❌ Enviar a Cocina (no hay mesa)
+- ❌ Dividir Cuenta (flujo simplificado)
+- ❌ Seleccionar mesa
+
+SIEMPRE DISPONIBLE:
+- ✅ Agregar productos
+- ✅ Personalizar productos
+- ✅ Modificar cantidades
+- ✅ Eliminar productos
+- ✅ Pagar
+
+
+================================================================================
+10.4 CASOS DE USO
+================================================================================
+
+IDEAL PARA:
+- Órdenes para llevar (takeout)
+- Ventas rápidas en barra
+- Pedidos sin servicio de mesa
+- Ventas en mostrador
+
+NO IDEAL PARA:
+- Clientes que se sentarán
+- Órdenes que requieren preparación monitoreada
+- Cuentas que se dividirán
+
+
+================================================================================
+================================================================================
+                    PARTE XI - TIPOS DE DATOS
+================================================================================
+================================================================================
+
+
+================================================================================
+11.1 ESTRUCTURAS PRINCIPALES
+================================================================================
+
+// src/types/pos.ts
+
+PRODUCT
+-------
+interface Product {
+  id: string;                      // UUID único
+  name: string;                    // Nombre visible
+  price: number;                   // Precio base en centavos o unidades
+  image?: string;                  // URL de imagen
+  categoryId: string;              // FK a categoría
+  hasModifiers: boolean;           // Si tiene opciones de personalización
+  modifierGroups?: ModifierGroup[]; // Grupos de modificadores
+}
+
+MODIFIER_GROUP
+--------------
+interface ModifierGroup {
+  id: string;                      // UUID único
+  name: string;                    // Ej: "Término de cocción"
+  required: boolean;               // Si es obligatorio seleccionar
+  minSelection: number;            // Mínimo de opciones (0 si opcional)
+  maxSelection: number;            // Máximo de opciones (1 = radio)
+  modifiers: Modifier[];           // Lista de opciones
+}
+
+MODIFIER
+--------
+interface Modifier {
+  id: string;                      // UUID único
+  name: string;                    // Ej: "Término medio"
+  price: number;                   // Precio adicional (0 si no aplica)
+}
+
+SELECTED_MODIFIER
+-----------------
+interface SelectedModifier {
+  groupId: string;                 // ID del grupo al que pertenece
+  groupName: string;               // Nombre del grupo (para display)
+  modifierId: string;              // ID del modificador seleccionado
+  modifierName: string;            // Nombre del modificador
+  price: number;                   // Precio adicional
+}
+
+CART_ITEM
+---------
+interface CartItem {
+  id: string;                      // ID único del item en carrito
+  productId: string;               // FK al producto
+  product: Product;                // Objeto producto completo
+  quantity: number;                // Cantidad
+  selectedModifiers: SelectedModifier[]; // Modificadores elegidos
+  notes: string;                   // Notas del cliente
+  unitPrice: number;               // Precio unitario (base + mods)
+  totalPrice: number;              // unitPrice × quantity
+}
+
+TABLE
+-----
+interface Table {
+  id: string;                      // UUID único
+  code: string;                    // Código visual (ej: "A1")
+  status: "disponible" | "ocupado" | "pagando";
+  guests?: number;                 // Comensales (si ocupada)
+  time?: string;                   // Tiempo transcurrido
+  total?: number;                  // Total acumulado
+  zone: string;                    // Zona: "salon", "terraza", "vip"
+  orderId?: string;                // ID de orden activa (si aplica)
+}
+
+SUB_ACCOUNT
+-----------
+interface SubAccount {
+  id: string;                      // UUID único
+  name: string;                    // Nombre de la subcuenta
+  items: CartItem[];               // Items asignados
+  subtotal: number;                // Suma de items
+  tax: number;                     // ITBIS
+  total: number;                   // subtotal + tax
+  paid: boolean;                   // Si ya fue pagada
+}
+
+
+================================================================================
+11.2 ENUMS Y CONSTANTES
+================================================================================
+
+// Constantes fiscales
+const TAX_RATE = 0.18;             // ITBIS 18%
+
+// Métodos de pago
+type PaymentMethod = "efectivo" | "tarjeta" | "transferencia";
+
+// Estados de mesa
+type TableStatus = "disponible" | "ocupado" | "pagando";
+
+// Estados de orden
+type OrderStatus = "open" | "sent" | "served" | "paid" | "canceled";
+
+// Estados de item
+type ItemStatus = "draft" | "queued" | "preparing" | "ready" | "served";
+
+// Origen de orden
+type OrderOrigin = "dine_in" | "takeout" | "delivery" | "quick" | "selfservice";
+
+// Zonas
+type Zone = "salon" | "terraza" | "vip";
+
+
+================================================================================
+11.3 INTERFACES DE COMPONENTES
+================================================================================
+
+// Props de componentes principales
+
+interface OrderScreenProps {
+  table?: Table;                   // Mesa seleccionada (undefined en venta rápida)
+  isQuickSale?: boolean;           // Si es venta rápida
+  onBack: () => void;              // Callback para volver
+  onOrderComplete: (tableId?: string) => void; // Callback al completar
+}
+
+interface CartProps {
+  items: CartItem[];
+  subtotal: number;
+  tax: number;
+  total: number;
+  tableCode?: string;
+  orderSent: boolean;
+  onUpdateQuantity: (itemId: string, quantity: number) => void;
+  onRemoveItem: (itemId: string) => void;
+  onClearCart: () => void;
+  onSendToKitchen: () => void;
+  onSplitBill: () => void;
+  onPayment: () => void;
+}
+
+interface ProductCatalogProps {
+  onSelectProduct: (product: Product) => void;
+}
+
+interface TableCardProps {
+  code: string;
+  status: TableStatus;
+  guests?: number;
+  time?: string;
+  total?: number;
+  onClick?: () => void;
+}
+
+interface ProductCustomizationModalProps {
+  product: Product | null;
+  open: boolean;
+  onClose: () => void;
+  onConfirm: (
+    quantity: number,
+    modifiers: SelectedModifier[],
+    notes: string
+  ) => void;
+}
+
+interface PaymentModalProps {
+  open: boolean;
+  onClose: () => void;
+  total: number;
+  tableCode?: string;
+  onConfirmPayment: (
+    method: PaymentMethod,
+    amountReceived: number
+  ) => void;
+}
+
+interface SplitBillModalProps {
+  open: boolean;
+  onClose: () => void;
+  items: CartItem[];
+  subtotal: number;
+  tax: number;
+  total: number;
+  onConfirmSplit: (subAccounts: SubAccount[]) => void;
+}
+
+
+================================================================================
+================================================================================
+                    PARTE XII - HOOKS Y ESTADO
+================================================================================
+================================================================================
+
+
+================================================================================
+12.1 useCart - GESTIÓN DEL CARRITO
+================================================================================
+
+UBICACIÓN: src/hooks/use-cart.ts
+
+ESTADO INTERNO:
+```typescript
+const [items, setItems] = useState<CartItem[]>([]);
+```
+
+FUNCIONES EXPUESTAS:
+
+addItem(product, quantity, modifiers, notes)
+--------------------------------------------
+Agrega un nuevo item al carrito.
+
+Parámetros:
+- product: Product - El producto a agregar
+- quantity: number - Cantidad
+- modifiers: SelectedModifier[] - Modificadores seleccionados
+- notes: string - Notas del cliente
+
+Lógica:
+1. Calcular modifiersTotal = SUM(modifiers.price)
+2. Calcular unitPrice = product.price + modifiersTotal
+3. Calcular totalPrice = unitPrice × quantity
+4. Generar ID único para el item
+5. Crear objeto CartItem
+6. Agregar al array de items
+
+NO AGRUPA items iguales - cada agregado es un item nuevo.
+
+updateItemQuantity(itemId, quantity)
+------------------------------------
+Actualiza la cantidad de un item existente.
+
+Lógica:
+- Si quantity <= 0: Eliminar item (llama removeItem internamente)
+- Si quantity > 0: Actualizar quantity y recalcular totalPrice
+
+removeItem(itemId)
+------------------
+Elimina un item del carrito.
+
+Lógica:
+- Filtrar items para excluir el del ID dado
+
+clearCart()
+-----------
+Vacía completamente el carrito.
+
+Lógica:
+- setItems([])
+
+VALORES CALCULADOS (useMemo):
+
+subtotal
+--------
+Suma de todos los totalPrice de items.
+```typescript
+const subtotal = useMemo(() => {
+  return items.reduce((sum, item) => sum + item.totalPrice, 0);
+}, [items]);
+```
+
+tax
+---
+ITBIS calculado sobre el subtotal.
+```typescript
+const tax = useMemo(() => {
+  return Math.round(subtotal * TAX_RATE);
+}, [subtotal]);
+```
+
+total
+-----
+Subtotal más impuesto.
+```typescript
+const total = useMemo(() => {
+  return subtotal + tax;
+}, [subtotal, tax]);
+```
+
+itemCount
+---------
+Suma de todas las cantidades.
+```typescript
+const itemCount = useMemo(() => {
+  return items.reduce((sum, item) => sum + item.quantity, 0);
+}, [items]);
+```
+
+RETURN:
+```typescript
+return {
+  items,
+  addItem,
+  updateItemQuantity,
+  removeItem,
+  clearCart,
+  subtotal,
+  tax,
+  total,
+  itemCount,
+  setItems, // Expuesto para casos especiales (ej: cargar orden existente)
+};
+```
+
+
+================================================================================
+12.2 ESTADOS GLOBALES
+================================================================================
+
+ESTADO EN TablesGrid:
+- activeZone: string - Zona seleccionada ("salon", "terraza", "vip")
+- tables: Table[] - Lista de todas las mesas
+- selectedTable: Table | null - Mesa seleccionada para operar
+
+ESTADO EN OrderScreen:
+- selectedProduct: Product | null - Producto para personalizar
+- isCustomizationModalOpen: boolean
+- isPaymentModalOpen: boolean
+- isSplitBillModalOpen: boolean
+- orderSent: boolean - Si ya se envió a cocina
+- subAccounts: SubAccount[] - Subcuentas de división
+
+ESTADO EN ProductCatalog:
+- selectedCategory: string | null - Categoría seleccionada
+- searchQuery: string - Texto de búsqueda
+- activeTab: "categorias" | "menu" | "favoritos"
+
+ESTADO EN PaymentModal:
+- selectedMethod: PaymentMethod - Método seleccionado
+- amountReceived: number - Monto ingresado (efectivo)
+
+ESTADO EN SplitBillModal:
+- subAccounts: SubAccount[] - Lista de subcuentas
+- selectedItems: string[] - IDs de items seleccionados
+- splitCount: number - Número de personas (división equitativa)
+
+
+================================================================================
+12.3 TRANSICIONES DE ESTADO
+================================================================================
+
+ESTADOS DE MESA:
+
+    disponible ──────────────────────┐
+         │                           │
+         │ [seleccionar mesa]        │
+         │                           │
+         ▼                           │
+    ocupado ─────────────────────────┼──────────────────┐
+         │                           │                  │
+         │ [iniciar pago]            │                  │ [cancelar orden]
+         │                           │                  │
+         ▼                           │                  │
+    pagando ─────────────────────────┘                  │
+         │                                              │
+         │ [completar pago]                             │
+         │                                              │
+         ▼                                              │
+    disponible ◀────────────────────────────────────────┘
+
+
+ESTADOS DE ORDEN:
+
+    open ────────────────────────────┐
+      │                              │
+      │ [enviar a cocina]            │ [pago directo - venta rápida]
+      │                              │
+      ▼                              │
+    sent ────────────────────────────┤
+      │                              │
+      │ [completar pago]             │
+      │                              │
+      ▼                              ▼
+    paid ◀───────────────────────────┘
+      
+    * → canceled (desde cualquier estado)
+
+
+ESTADOS DE ITEM:
+
+    draft → queued → preparing → ready → served
+      │
+      └─→ canceled
+
+
+================================================================================
+================================================================================
+                    PARTE XIII - REGLAS DE NEGOCIO
+================================================================================
+================================================================================
+
+
+================================================================================
+13.1 REGLAS DEL CARRITO
+================================================================================
+
+REGLA: CANTIDAD MÍNIMA
+- Todo item debe tener quantity >= 1
+- Si quantity llega a 0, el item se elimina automáticamente
+
+REGLA: NO AGRUPACIÓN
+- Items idénticos NO se agrupan
+- Cada agregado crea un nuevo CartItem con ID único
+- Razón: Permite notas/modificadores diferentes para "el mismo" producto
+
+REGLA: RECÁLCULO AUTOMÁTICO
+- Al cambiar quantity → Recalcular totalPrice
+- Al modificar items → Recalcular subtotal, tax, total
+
+REGLA: PERSISTENCIA
+- El carrito vive en memoria durante la sesión
+- Al recargar página → Se pierde (a menos que se implemente persistencia)
+- Para mesas ocupadas → Cargar orden existente del backend
+
+
+================================================================================
+13.2 REGLAS DE MODIFICADORES
+================================================================================
+
+REGLA: GRUPOS REQUERIDOS
+- Si modifierGroup.required === true
+- Usuario DEBE seleccionar al menos minSelection opciones
+- No puede agregar al carrito sin cumplir esto
+
+REGLA: SELECCIÓN ÚNICA (RADIO)
+- Si maxSelection === 1
+- Solo una opción puede estar seleccionada
+- Nueva selección reemplaza la anterior
+
+REGLA: SELECCIÓN MÚLTIPLE (CHECKBOX)
+- Si maxSelection > 1
+- Puede seleccionar hasta maxSelection opciones
+- Al llegar al máximo, no permite seleccionar más
+
+REGLA: PRECIO ADICIONAL
+- Precio del modificador se suma al precio base
+- modifier.price puede ser 0 (opción sin costo extra)
+- Precio negativo: descuento (poco común)
+
+
+================================================================================
+13.3 REGLAS DE PAGO
+================================================================================
+
+REGLA: MONTO MÍNIMO EFECTIVO
+- Para pago en efectivo: amountReceived >= total
+- Si amountReceived < total → No permite confirmar
+
+REGLA: COBRO EXACTO
+- Para tarjeta y transferencia: amountReceived = total
+- No hay cálculo de cambio
+
+REGLA: REFERENCIA OPCIONAL
+- Para tarjeta/transferencia: referencia es opcional
+- Se guarda si se proporciona
+
+REGLA: CAMBIO
+- change = amountReceived - total
+- Solo aplica para efectivo
+- Se muestra al usuario
+- Se registra en payment.change_amount
+
+REGLA: CIERRE DE MESA
+- Al confirmar pago → Mesa cambia a "disponible"
+- table_session.closed_at = now()
+- dining_table.state = 'available'
+
+
+================================================================================
+13.4 REGLAS DE MESA
+================================================================================
+
+REGLA: UNA SESIÓN ACTIVA
+- Una mesa solo puede tener una table_session abierta
+- Al abrir nueva sesión → Verificar que no haya activa
+
+REGLA: ESTADOS VÁLIDOS
+- disponible: Puede iniciar nueva orden
+- ocupado: Tiene orden activa
+- pagando: En proceso de cierre
+
+REGLA: TRANSICIONES PERMITIDAS
+- disponible → ocupado (al agregar items)
+- ocupado → pagando (al iniciar pago)
+- pagando → disponible (al completar pago)
+- ocupado → disponible (al cancelar orden)
+- NO: disponible → pagando (no tiene sentido)
+
+REGLA: VISUALIZACIÓN
+- Mostrar comensales solo si hay dato
+- Mostrar tiempo solo si ocupada
+- Mostrar total solo si hay items
+
+
+================================================================================
+13.5 REGLAS FISCALES
+================================================================================
+
+REGLA: ITBIS
+- Tasa fija: 18%
+- Se aplica sobre el subtotal
+- Redondeo: Math.round() al peso más cercano
+
+REGLA: NCF (PENDIENTE IMPLEMENTACIÓN)
+- Generar al momento del pago
+- Tipo según cliente (B01, B02, B15, etc.)
+- Validar secuencia disponible
+
+REGLA: DOCUMENTO FISCAL
+- Crear registro en fiscal_documents
+- Asociar a orden y pago
+- Incluir desglose de impuestos
+
+
+================================================================================
+================================================================================
+                    PARTE XIV - INTEGRACIONES BACKEND
+================================================================================
+================================================================================
+
+
+================================================================================
+14.1 OPERACIONES DE BASE DE DATOS
+================================================================================
+
+AL ABRIR MESA (crear sesión):
+```sql
+INSERT INTO table_sessions (
+  table_id, opened_by, customer_name, people_count, origin
+) VALUES (?, auth.uid(), ?, ?, 'dine_in')
+RETURNING id;
+
+UPDATE dining_tables SET state = 'occupied' WHERE id = ?;
+```
+
+AL AGREGAR PRIMER ITEM (crear orden):
+```sql
+INSERT INTO orders (session_id, status_ext)
+VALUES (?, 'open')
+RETURNING id;
+```
+
+AL AGREGAR ITEM A ORDEN:
+```sql
+INSERT INTO order_items (
+  order_id, product_id, product_name, qty, unit_price, subtotal, notes, status
+) VALUES (?, ?, ?, ?, ?, ?, ?, 'draft')
+RETURNING id;
+
+-- Para cada modificador
+INSERT INTO order_item_modifiers (item_id, name, qty, price)
+VALUES (?, ?, 1, ?);
+```
+
+AL ENVIAR A COCINA:
+```sql
+UPDATE orders SET status_ext = 'sent' WHERE id = ?;
+UPDATE order_items SET status = 'queued' WHERE order_id = ?;
+```
+
+AL DIVIDIR CUENTA:
+```sql
+-- Crear check por subcuenta
+INSERT INTO order_checks (order_id, label, position, subtotal, tax, total)
+VALUES (?, ?, ?, ?, ?, ?)
+RETURNING id;
+
+-- Asignar items al check
+UPDATE order_items SET check_id = ? WHERE id = ANY(?);
+```
+
+AL PROCESAR PAGO:
+```sql
+-- Crear pago
+INSERT INTO payments (
+  business_id, order_id, check_id, payment_method_id, 
+  amount, reference, change_amount, status, processed_by, session_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', auth.uid(), ?)
+RETURNING id;
+
+-- Cerrar orden
+UPDATE orders SET status_ext = 'paid', closed_at = now() WHERE id = ?;
+
+-- Cerrar sesión
+UPDATE table_sessions SET closed_at = now() WHERE id = ?;
+
+-- Liberar mesa
+UPDATE dining_tables SET state = 'available' WHERE id = ?;
+
+-- Registrar en caja (si efectivo)
+INSERT INTO cash_transactions (session_id, amount, type, related_order_id)
+VALUES (?, ?, 'sale', ?);
+```
+
+
+================================================================================
+14.2 IMPRESIÓN
+================================================================================
+
+CREAR JOB DE IMPRESIÓN:
+```sql
+INSERT INTO print_jobs (business_id, ip, port, data_hex, status)
+VALUES (?, ?, 9100, ?, 'pending');
+```
+
+ESTRUCTURA data_hex:
+- Comandos ESC/POS codificados en hexadecimal
+- Incluye formato de comanda o recibo
+- Se envía a impresora térmica
+
+TIPOS DE IMPRESIÓN:
+- Comanda de cocina: Al enviar a cocina
+- Pre-cuenta: Al solicitar cuenta (antes de pagar)
+- Recibo/Factura: Al completar pago
+
+
+================================================================================
+14.3 TIEMPO REAL
+================================================================================
+
+SUSCRIPCIONES RECOMENDADAS:
+
+Mesa actualizada:
+```typescript
+supabase
+  .channel('dining_tables')
+  .on('postgres_changes', {
+    event: 'UPDATE',
+    schema: 'public',
+    table: 'dining_tables',
+    filter: `business_id=eq.${businessId}`
+  }, handleTableUpdate)
+  .subscribe();
+```
+
+Orden actualizada:
+```typescript
+supabase
+  .channel('orders')
+  .on('postgres_changes', {
+    event: '*',
+    schema: 'public',
+    table: 'orders',
+    filter: `session_id=eq.${sessionId}`
+  }, handleOrderUpdate)
+  .subscribe();
+```
+
+
+================================================================================
+================================================================================
+                          FIN DEL DOCUMENTO
+================================================================================
+================================================================================
+
+HISTORIAL DE VERSIONES:
+
+v2.0 (2026-01-11)
+- Documentación completamente reescrita
+- Detalle exhaustivo de cada pantalla y botón
+- Diagramas ASCII de layouts
+- Flujos paso a paso
+- Reglas de negocio explícitas
+- Integraciones de backend
+
+v1.0 (2026-01-11)
+- Versión inicial

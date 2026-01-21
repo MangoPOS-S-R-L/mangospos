@@ -13,7 +13,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import 'package:mangopos/core/business/business_resolver.dart';
-import 'package:mangopos/data/models/printing.dart';
+import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
 
 @immutable
@@ -120,7 +120,8 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       );
       _lastLoadedBusinessId = _businessId;
 
-      final items = await _repo.getPrinters(_businessId!);
+      final configs = await _repo.getPrinters(_businessId!);
+      final items = configs.map(_toPrinterDevice).toList();
       state = state.copyWith(items: items, isLoading: false);
     } catch (e, st) {
       _log('load() ERROR: $e\n$st');
@@ -157,9 +158,8 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       await _repo.createPrinter(
         businessId: b,
         name: trimmed,
-        ip: (ip ?? '').trim().isEmpty ? null : (ip ?? '').trim(),
-        mac: (mac ?? '').trim().isEmpty ? null : (mac ?? '').trim(),
-        type: t,
+        ipAddress: (ip ?? '').trim().isEmpty ? null : (ip ?? '').trim(),
+        type: t.name,
       );
 
       await load(businessId: b, force: true);
@@ -285,8 +285,6 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
     }
   }
 
-  
-
   // ----------------- Selección -----------------
   void toggleSelect(String id) {
     final next = Set<String>.from(state.selectedIds);
@@ -401,7 +399,7 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
 
       final out = <DiscoveredPrinter>[];
       // 👇 IMPORTANTE: iterar como dynamic para que la promoción funcione
-      for (final dynamic x in raw as List) {
+      for (final dynamic x in raw) {
         String? ip;
         String? mac;
         String name = 'Printer';
@@ -744,9 +742,8 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
           await _repo.createPrinter(
             businessId: b,
             name: prettyName,
-            ip: ip,
-            mac: null,
-            type: PrinterType.network,
+            ipAddress: ip,
+            type: PrinterType.network.name,
           );
           inserted++;
         }
@@ -793,8 +790,9 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
 
       try {
         final since = _jobStartAt ?? started;
-        final items = await _repo.getPrinters(businessId);
-        final hasNew = items.any((p) => (p.createdAt.isAfter(since) ?? false));
+        final configs = await _repo.getPrinters(businessId);
+        final items = configs.map(_toPrinterDevice).toList();
+        final hasNew = items.any((p) => p.createdAt.isAfter(since));
         if (hasNew) state = state.copyWith(items: items);
 
         if (_activeJobId != null) {
@@ -831,7 +829,8 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
   Future<void> _refreshWithoutChangingDiscoveryState() async {
     try {
       final b = await _ensureOrResolveBusiness();
-      final items = await _repo.getPrinters(b);
+      final configs = await _repo.getPrinters(b);
+      final items = configs.map(_toPrinterDevice).toList();
       state = state.copyWith(items: items);
     } catch (e) {
       _log('_refreshWithoutChangingDiscoveryState() ERROR: $e');
@@ -932,7 +931,6 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       return false;
     }
   }
-  
 
   Future<bool> _ensureBtPermissions() async {
     try {
@@ -998,5 +996,20 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
 
   void _log(String msg) {
     if (kDebugMode) debugPrint('[PrintersVM] $msg');
+  }
+
+  /// Helper method to convert PrinterConfig to PrinterDevice
+  PrinterDevice _toPrinterDevice(PrinterConfig config) {
+    return PrinterDevice(
+      id: config.id,
+      businessId: config.businessId,
+      name: config.name,
+      ip: config.ipAddress,
+      mac: null, // PrinterConfig doesn't have mac field
+      type: PrinterTypeX.fromName(config.type),
+      online: config.isActive,
+      lastSeen: null, // PrinterConfig doesn't have lastSeen field
+      createdAt: DateTime.now(), // PrinterConfig doesn't have createdAt field
+    );
   }
 }

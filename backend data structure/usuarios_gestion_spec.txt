@@ -1,0 +1,85 @@
+========================================================
+GESTION DE USUARIOS - UI Y CAMPOS
+========================================================
+
+PANTALLA PRINCIPAL
+------------------
+- Título: "Gestión de Usuarios" + subtítulo "Administra los usuarios del sistema y sus permisos".
+- Botones primarios en header derecho:
+  - "Gestionar Roles" (outlined) -> navega a pantalla de roles/permisos.
+  - "Nuevo Usuario" (filled primary).
+- KPIs (cards):
+  - Total Usuarios
+  - Activos
+  - Inactivos
+  - Cambio de Clave pendiente
+- Barra de búsqueda: texto "Buscar por nombre, email o teléfono..."
+- Filtros:
+  - Estado: Todos / Activo / Inactivo / Cambio de Clave
+  - Rol: Todos los roles / {roles disponibles}
+- Tabla/lista:
+  - Usuario (avatar iniciales, nombre, email)
+  - Rol (pill)
+  - Departamento
+  - Salario (monto + frecuencia)
+  - Estado (pill Activo/ Inactivo / Cambio de clave)
+  - Acciones: menú (editar, desactivar/activar, reset clave, ver roles)
+
+MODAL NUEVO/EDITAR USUARIO
+--------------------------
+- Full screen dialog con tabs:
+  1) Personal:
+     - Nombre *, Apellido *
+     - Email *, Cédula
+     - Teléfono *, Género
+     - Dirección
+     - Contraseña *, PIN (4-6 dígitos)
+  2) Trabajo:
+     - Departamento *, Posición *
+     - Tipo de contrato (Tiempo completo / Medio tiempo / Temporal)
+     - Fecha de ingreso
+     - Horario de trabajo (texto libre)
+  3) Salario:
+     - Salario base (DOP) *
+     - Frecuencia de pago (Semanal / Quincenal / Mensual)
+     - Deducciones: AFP (catálogo), ARS (catálogo)
+     - Beneficios (checkbox): Transporte, Alimentación, otros opcional
+     - Cuenta bancaria: Banco, Número de cuenta
+  4) Roles:
+     - Lista de roles disponibles (usa catálogo de roles), selección múltiple.
+  5) Emergencia:
+     - Nombre del contacto, Relación, Teléfono
+- Footer: Cancelar (ghost) / Crear/Guardar Usuario (primary).
+
+MODELO DE DATOS (SUPABASE/POSTGRES)
+-----------------------------------
+- employees
+  id uuid PK
+  business_id uuid NOT NULL
+  user_id uuid references auth.users
+  first_name text, last_name text, email text, phone text
+  national_id text, gender text, address text
+  status text check ('active','inactive','password_reset')
+  hire_date date, contract_type text, department text, position text
+  work_schedule text
+  salary_base numeric(15,2), pay_frequency text
+  bank_name text, bank_account text
+  emergency_name text, emergency_relation text, emergency_phone text
+  pin text (hashed), created_at timestamptz default now(), updated_at timestamptz
+
+- employee_roles: employee_id, role_id (roles de roles_permissions.sql)
+- employee_benefits: employee_id, benefit text
+- employee_deductions: employee_id, afp text, ars text
+
+RLS SUGERIDA
+------------
+- fn_user_in_business(business_id) para scoping.
+- POLICIES FOR ALL using fn_user_in_business(business_id) en employees y tablas hijas.
+- Opcional: solo admins con permiso settings.usuarios.* pueden insertar/actualizar (validar en API layer).
+
+API/REPO (APP)
+--------------
+- Listar usuarios: employees + roles agregados + estado.
+- Crear/editar: mapear formulario a employees + tablas hijas + employee_roles.
+- Filtro estado/rol y búsqueda por nombre/email/teléfono.
+- Navegación Gestionar Roles: va a pantalla de roles/permisos existente.

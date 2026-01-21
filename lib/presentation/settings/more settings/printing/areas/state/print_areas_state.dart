@@ -2,7 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:mangopos/core/business/business_resolver.dart';
-import 'package:mangopos/data/models/printing.dart';
+import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
 
 final printAreasRepoProvider = Provider<PrintingRepository>((ref) {
@@ -10,8 +10,10 @@ final printAreasRepoProvider = Provider<PrintingRepository>((ref) {
   return PrintingRepository(client);
 });
 
-final printAreasListProvider =
-    FutureProvider.family<List<PrintArea>, String>((ref, businessIdOrAuto) async {
+final printAreasListProvider = FutureProvider.family<List<PrintArea>, String>((
+  ref,
+  businessIdOrAuto,
+) async {
   final repo = ref.read(printAreasRepoProvider);
   final bid = await _ensureBid(businessIdOrAuto);
   return repo.getPrintAreas(bid);

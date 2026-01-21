@@ -5,23 +5,36 @@ import 'package:mangopos/presentation/settings/more%20settings/menus/categories/
 import 'package:mangopos/presentation/settings/more%20settings/menus/menu%20items/view/menu_items_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/menus/view/menus_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/view/printers_view.dart.dart';
+import 'package:mangopos/presentation/settings/more%20settings/printing/main/printing_home_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/areas/view/print_areas_view.dart';
+import 'package:mangopos/presentation/settings/more%20settings/printing/products/view/printing_products_view.dart';
+import 'package:mangopos/presentation/settings/more%20settings/printing/receipts/view/printing_receipts_view.dart';
+import 'package:mangopos/presentation/settings/more%20settings/printing/orders/view/printing_orders_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/view/taxes_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/zones_tables/view/zones_tables_view.dart';
+import 'package:mangopos/presentation/settings/more%20settings/system%20settings/users/view/roles_permissions_view.dart';
+import 'package:mangopos/presentation/settings/more%20settings/system%20settings/users/view/users_view.dart';
 import '../../presentation/auth/login/login_view.dart';
 import '../../presentation/auth/register/register_step1_view.dart';
 import '../../presentation/auth/register/register_step2_view.dart';
 import '../../presentation/dashboard/dashboard_view.dart';
 import '../../presentation/shell/main_shell.dart';
+import '../../presentation/cashier/view/open_close_cash_view.dart';
+import '../../presentation/kitchen/view/kitchen_view.dart';
+import '../../presentation/customers/view/customers_view.dart';
+import '../../presentation/customers/view/customer_detail_view.dart';
+import '../../presentation/products/view/products_view.dart';
 import 'routes.dart';
 
 // Sales module
 import '../../presentation/sales/view/sales_shell_view.dart';
 import '../../presentation/sales/view/sales_by_zone_view.dart';
-import '../../presentation/sales/view/sale_manual_view.dart';
+import '../../presentation/sales/view/manual_sale_view.dart';
 import '../../presentation/sales/view/sale_quick_view.dart';
 import '../../presentation/sales/view/delivery_express_view.dart';
 import '../../presentation/sales/view/self_service_view.dart';
+import '../../presentation/sales/view/table_order_screen.dart';
+import '../../presentation/reports/view/reports_view.dart';
 
 // More Settings module
 import 'package:mangopos/presentation/settings/view/settings_view.dart';
@@ -76,7 +89,7 @@ class AppRouter {
               ),
               GoRoute(
                 path: AppRoutes.salesManual,
-                builder: (_, __) => const SaleManualView(),
+                builder: (_, __) => const ManualSaleView(),
               ),
               GoRoute(
                 path: AppRoutes.salesQuick,
@@ -93,14 +106,29 @@ class AppRouter {
             ],
           ),
 
+          // ---------- Ruta de mesa (fuera del shell para pantalla completa) ----------
+          GoRoute(
+            path: '${AppRoutes.sales}/table/:tableId',
+            builder: (_, state) {
+              final tableId = state.pathParameters['tableId']!;
+              final tableCode = state.uri.queryParameters['code'] ?? 'Mesa';
+              final zoneId = state.uri.queryParameters['zone'] ?? '';
+              return TableOrderScreen(
+                tableId: tableId,
+                tableCode: tableCode,
+                zoneId: zoneId,
+              );
+            },
+          ),
+
           // ---------- Otros módulos (placeholder por ahora) ----------
           GoRoute(
             path: AppRoutes.cashier,
-            builder: (_, __) => const _Placeholder('Cashier'),
+            builder: (_, __) => const OpenCloseCashView(),
           ),
           GoRoute(
             path: AppRoutes.kitchen,
-            builder: (_, __) => const _Placeholder('Kitchen'),
+            builder: (_, __) => const KitchenView(),
           ),
           GoRoute(
             path: AppRoutes.reservations,
@@ -108,21 +136,47 @@ class AppRouter {
           ),
           GoRoute(
             path: AppRoutes.customers,
-            builder: (_, __) => const _Placeholder('Customers'),
+            builder: (_, __) => const CustomersView(),
+            routes: [
+              GoRoute(
+                path: ':id',
+                builder: (_, state) {
+                  final id = state.pathParameters['id']!;
+                  final name = state.uri.queryParameters['name'] ?? 'Cliente';
+                  final orders =
+                      int.tryParse(
+                        state.uri.queryParameters['orders'] ?? '0',
+                      ) ??
+                      0;
+                  return CustomerDetailView(
+                    customerName: name,
+                    ordersCount: orders,
+                  );
+                },
+              ),
+            ],
           ),
           GoRoute(
             path: AppRoutes.products,
-            builder: (_, __) => const _Placeholder('Products'),
+            builder: (_, __) => const ProductsView(),
           ),
           GoRoute(
             path: AppRoutes.reports,
-            builder: (_, __) => const _Placeholder('Reports'),
+            builder: (_, __) => const ReportsView(),
           ),
 
           // ✅ Ajustes (vista principal)
           GoRoute(
             path: AppRoutes.settings,
             builder: (_, __) => const SettingsView(),
+          ),
+          GoRoute(
+            path: AppRoutes.settingsUsers,
+            builder: (_, __) => const SettingsUsersView(businessId: 'auto'),
+          ),
+          GoRoute(
+            path: AppRoutes.settingsRoles,
+            builder: (_, __) => const SettingsRolesView(businessId: 'auto'),
           ),
           GoRoute(
             path: AppRoutes.settingsZonesTables,
@@ -182,6 +236,11 @@ class AppRouter {
           ShellRoute(
             builder: (_, __, child) => PrintingShellView(child: child),
             routes: [
+              // /settings/printing
+              GoRoute(
+                path: AppRoutes.printingBase,
+                builder: (_, __) => const PrintingHomeView(businessId: 'auto'),
+              ),
               // /settings/printing/printers
               GoRoute(
                 path: AppRoutes.printingPrinters,
@@ -192,6 +251,24 @@ class AppRouter {
               GoRoute(
                 path: AppRoutes.printingAreas,
                 builder: (_, __) => const PrintingAreasView(businessId: 'auto'),
+              ),
+              // /settings/printing/products
+              GoRoute(
+                path: AppRoutes.printingProducts,
+                builder: (_, __) =>
+                    const PrintingProductsView(businessId: 'auto'),
+              ),
+              // /settings/printing/receipts
+              GoRoute(
+                path: AppRoutes.printingReceipts,
+                builder: (_, __) =>
+                    const PrintingReceiptsView(businessId: 'auto'),
+              ),
+              // /settings/printing/orders
+              GoRoute(
+                path: AppRoutes.printingOrders,
+                builder: (_, __) =>
+                    const PrintingOrdersView(businessId: 'auto'),
               ),
             ],
           ),
@@ -223,6 +300,7 @@ class PrintingShellView extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Gestión de impresión')),
+      backgroundColor: Colors.white,
       body: child,
     );
   }

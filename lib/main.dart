@@ -3,17 +3,17 @@ import 'dart:async';
 import 'dart:io' show Platform, Process;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // <-- NECESARIO para bloquear orientación
+import 'package:flutter/services.dart'; // <-- NECESARIO para bloquear orientacion
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:media_kit/media_kit.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'env/env.dart';
 import 'app/router/app_router.dart';
+import 'core/network/supabase_config.dart';
 
 /// === CONFIG DEL AGENTE ===
-/// Cambia estas rutas/puerto según tu instalación.
+/// Cambia estas rutas/puerto segun tu instalacion.
 const String agentHost = '127.0.0.1';
 const int agentPort = 3000;
 
@@ -47,18 +47,18 @@ Future<bool> _pingAgentOnce({
 
 /// Intenta arrancar el agente (solo desktop). En Web no se puede.
 Future<void> _ensurePrinterAgentStarted() async {
-  // 1) Si ya está arriba, listo.
+  // 1) Si ya esta arriba, listo.
   if (await _pingAgentOnce()) {
     // ignore: avoid_print
-    print('[Agent] Ya está activo en http://$agentHost:$agentPort');
+    print('[Agent] Ya esta activo en http://$agentHost:$agentPort');
     return;
   }
 
   if (kIsWeb) {
-    // En Web no podemos lanzar procesos. Solo “precalienta” con varios /health.
+    // En Web no podemos lanzar procesos. Solo "precalienta" con varios /health.
     // ignore: avoid_print
     print(
-      '[Agent] Web: no se puede iniciar proceso; intentando precalentar /health…',
+      '[Agent] Web: no se puede iniciar proceso; intentando precalentar /health...',
     );
     for (int i = 0; i < 4; i++) {
       await Future.delayed(const Duration(milliseconds: 350));
@@ -70,7 +70,7 @@ Future<void> _ensurePrinterAgentStarted() async {
     }
     // ignore: avoid_print
     print(
-      '[Agent] Web: no respondió /health; asegúrate de correr el agente como servicio.',
+      '[Agent] Web: no respondio /health; asegurate de correr el agente como servicio.',
     );
     return;
   }
@@ -120,7 +120,7 @@ Future<void> _ensurePrinterAgentStarted() async {
     await Future.delayed(const Duration(milliseconds: 700));
     if (await _pingAgentOnce(timeout: const Duration(milliseconds: 1000))) {
       // ignore: avoid_print
-      print('[Agent] Arrancado correctamente ✅ http://$agentHost:$agentPort');
+      print('[Agent] Arrancado correctamente. http://$agentHost:$agentPort');
       return;
     }
   }
@@ -143,13 +143,18 @@ Future<void> _lockLandscapeIfMobile() async {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await Supabase.initialize(url: Env.supabaseUrl, anonKey: Env.supabaseAnonKey);
+  // Inicializar Supabase con configuración personalizada (timeouts, reintentos, etc.)
+  await SupabaseConfig.initialize(
+    url: Env.supabaseUrl,
+    anonKey: Env.supabaseAnonKey,
+  );
+
   MediaKit.ensureInitialized();
 
-  // 🔒 Bloquear orientación a horizontal (Android/iOS)
+  // Bloquear orientacion a horizontal (Android/iOS)
   await _lockLandscapeIfMobile();
 
-  // 🔸 Arranca o “precalienta” el agente ANTES de montar el árbol de widgets
+  // Arranca o "precalienta" el agente ANTES de montar el arbol de widgets
   await _ensurePrinterAgentStarted();
 
   runApp(const ProviderScope(child: MyApp()));

@@ -1,0 +1,176 @@
+========================================================
+MANGOPOS - USUARIOS Y ROLES (CONFIGURABLES)
+Basado en el flujo completo descrito en SISTEMA_VENTAS.txt
+========================================================
+
+OBJETIVO
+--------
+Permitir que, desde Configuracion, el administrador cree usuarios y roles
+personalizados y asigne permisos alineados a las pantallas y acciones
+reales del POS (venta por salon, venta rapida, pagos, KDS, caja, reportes,
+configuracion, inventario/compras cuando aplique).
+
+MODELO DE DATOS (SUGERIDO)
+--------------------------
+- users: id, nombre, email, activo, hash, debe_cambiar_clave, created_at.
+- roles: id, nombre, descripcion, nivel (opcional: admin/supervisor/operador).
+- permissions: id, code (modulo.accion), nombre, descripcion, modulo.
+- role_permissions: role_id, permission_id, allow (bool).
+- user_roles: user_id, role_id (permite multi-rol).
+- user_overrides (opcional): user_id, permission_id, allow (para excepciones).
+- audit_logs: user_id, accion, motivo, ref_id, ref_tipo, timestamp.
+
+CONVENCION DE PERMISOS
+----------------------
+Cada permiso es una accion puntual `modulo.recurso.accion`. Se agrupan en
+la UI de Configuracion en columnas equivalentes a:
+- Acceso: puede entrar a la pantalla o modulo.
+- Ver: lectura/listado/detalle.
+- Graba/Modifica: crear/actualizar (y mover/reasignar si aplica).
+- Anula: cancelar/anular/revertir (requiere motivo).
+- Reimprime: reimprimir documentos/comandas/facturas.
+
+CATALOGO DE PERMISOS (ALINEADO CON FUNCIONES ACTUALES)
+------------------------------------------------------
+Configuracion
+- settings.usuarios.acceso
+- settings.usuarios.ver
+- settings.usuarios.crear
+- settings.usuarios.editar
+- settings.usuarios.desactivar
+- settings.roles.acceso
+- settings.roles.crear
+- settings.roles.editar
+- settings.roles.clonar
+- settings.roles.eliminar
+- settings.impresoras.gestionar      (incluye cocina/bar/caja)
+- settings.zonas_mesas.gestionar     (zonas, mesas, aforo)
+- settings.impuestos_fiscal.gestionar (ITBIS, NCF, numeraciones, impresora fiscal)
+- settings.metodos_pago.gestionar
+- settings.descuentos_propinas.gestionar
+- settings.kds.gestionar             (targets de impresion/KDS)
+
+Ventas por salon / manual
+- ventas.mesas.acceso
+- ventas.mesas.ver_estado
+- ventas.mesas.abrir
+- ventas.mesas.mover_unir             (mover mesa, unir mesas)
+- ventas.mesas.marcar_pagando
+- ventas.mesas.liberar                (cuando orden cerrada)
+- ventas.orden.agregar_item           (incluye modificadores y notas)
+- ventas.orden.editar_item
+- ventas.orden.eliminar_item
+- ventas.orden.enviar_cocina
+- ventas.orden.reabrir                (reabrir orden enviada; requiere motivo)
+- ventas.orden.anular                 (cancelar orden completa; requiere motivo)
+- ventas.orden.descuento_aplicar
+- ventas.orden.ver_total
+- ventas.cuenta.split_manual
+- ventas.cuenta.split_equiv
+
+Venta rapida / express / self-service
+- ventas_rapida.acceso
+- ventas_rapida.crear_orden
+- ventas_rapida.enviar_cocina
+- ventas_rapida.cobrar_inmediato
+
+Pagos y caja
+- pagos.acceso                        (abrir modal de pago)
+- pagos.cobrar_efectivo
+- pagos.cobrar_tarjeta
+- pagos.cobrar_transferencia
+- pagos.asignar_referencia
+- pagos.reimprimir_recibo
+- pagos.anular_pago                   (void/refund; motivo obligatorio)
+- caja.apertura
+- caja.cierre
+- caja.arqueo_ver                     (totales turno)
+- caja.movimientos_ver                (ventas turno, cash in/out)
+
+KDS / Cocina
+- kds.acceso
+- kds.ver_comandas
+- kds.cambiar_estado                  (queued -> preparando -> listo -> servido)
+- kds.reimprimir_comanda
+
+Reportes
+- reportes.ventas
+- reportes.productos
+- reportes.mesas
+- reportes.caja
+- reportes.fiscales
+- reportes.auditoria                  (anulaciones, reimpresiones, reaperturas)
+
+Clientes y delivery
+- clientes.ver
+- clientes.crear_editar
+- clientes.asignar_a_mesa
+- delivery.crear_orden
+- delivery.asignar_repartidor
+- delivery.marcar_entregado
+
+Inventario/Compras (si el modulo esta activo)
+- inventario.acceso
+- inventario.productos.crear_editar
+- inventario.ajustes.crear
+- inventario.kardex.ver
+- compras.proveedores.crear_editar
+- compras.ordenes.crear
+- compras.ordenes.recibir
+- compras.ordenes.anular
+
+PERFILES BASE (EDITABLES POR EL ADMIN)
+--------------------------------------
+- Administrador: todos los permisos.
+- Supervisor: todo ventas/pagos/caja/kds/reportes; puede reabrir/anular; puede
+  reimprimir; sin configuracion fiscal (opcional) ni eliminar roles.
+- Cajero: ventas.orden.agregar_item, enviar_cocina, pagos.*, caja.*,
+  reimprimir_recibo; sin crear productos ni configurar.
+- Mesero: acceso a mesas, abrir/mover, agregar/editar/eliminar item, notas,
+  enviar_cocina, split; no cobra, no caja, no reportes, no configuracion.
+- Cocina/KDS: kds.* y reimprimir comanda; sin precios ni pagos ni config.
+- Delivery/Runner (opcional): delivery.*, ver orden asignada, marcar entregado;
+  sin acceso a caja/reportes/configuracion.
+
+REGLAS OPERATIVAS
+-----------------
+- Acceso a pantalla requiere el permiso *.acceso; los botones internos verifican
+  acciones especificas (ej. `ventas.orden.anular` para boton Anular).
+- Reaperturas, anulaciones y reimpresiones siempre registran motivo en audit_logs.
+- Descuentos y cambio de precios solo con `ventas.orden.descuento_aplicar` o un
+  permiso adicional `ventas.orden.cambiar_precio` si se habilita.
+- Split bill requiere permiso de split; pago de subcuentas sigue reglas de pagos.*
+- KDS no muestra precios; la API debe omitir campos de precio para usuarios con
+  rol solo cocina.
+- Caja: apertura/cierre/arqueo amarrado a session_id; se bloquea si no hay
+  `caja.apertura` vigente para el usuario.
+
+FLUJO EN CONFIGURACION (UI)
+---------------------------
+1) Crear rol: nombre + descripcion.
+2) Seleccionar modulo -> toggles Acceso, Ver, Graba/Modifica, Anula, Reimprime
+   se traducen a los permisos listados arriba (mapping uno-a-varios).
+   Ejemplo:
+   - Acceso Ventas por salon -> `ventas.mesas.acceso`, `ventas.orden.ver_total`.
+   - Ver -> `ventas.mesas.ver_estado`.
+   - Graba/Modifica -> `ventas.orden.agregar_item`, `ventas.orden.editar_item`,
+     `ventas.mesas.abrir`, `ventas.mesas.mover_unir`.
+   - Anula -> `ventas.orden.anular`, `ventas.orden.reabrir` (con motivo).
+   - Reimprime -> `pagos.reimprimir_recibo`, `kds.reimprimir_comanda`.
+3) Guardar rol y asignarlo a usuarios. Opcional: overrides puntuales por usuario.
+4) Mostrar matriz resumida tipo la de la captura para validar.
+
+SUGERENCIAS DE BACKEND
+----------------------
+- Centralizar verificacion en middleware: recibe user_id -> roles -> permisos
+  resolviendo overrides; cache en memoria corta.
+- Endpoint de introspeccion `/me/permissions` para que el frontend oculte botones.
+- Incluir `reason` y `ref` en todas las anulaciones/reaperturas/reimpresiones.
+- Para operaciones criticas (anular venta, reabrir, reimprimir fiscal) pedir
+  PIN/clave del supervisor y registrar en audit_logs.
+
+EXTENSION FUTURA
+----------------
+- Soporte a sucursales: role_permissions con business_id.
+- Permisos temporales (ventana de tiempo) para acciones criticas.
+- Hooks web para alertar anulaciones o reimpresiones a gerencia.

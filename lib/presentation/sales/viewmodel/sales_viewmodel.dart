@@ -1,55 +1,69 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mangopos/data/models/order.dart';
-import 'package:mangopos/data/models/order_item.dart';
+
 import 'package:mangopos/data/repositories/sales_repository.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../state/sales_state.dart';
+import '../../../data/models/sales_models.dart';
 
 final salesRepositoryProvider = Provider<SalesRepository>(
   (ref) => SalesRepository(Supabase.instance.client),
 );
 
-final currentOrderProvider = NotifierProvider<SalesViewModel, CurrentOrderState>(
-  SalesViewModel.new,
-);
+final currentOrderProvider =
+    NotifierProvider<SalesViewModel, CurrentOrderState>(SalesViewModel.new);
 
 class SalesViewModel extends Notifier<CurrentOrderState> {
   @override
   CurrentOrderState build() => const CurrentOrderState();
 
   Future<void> openTable(String tableId) async {
-    state = state.copyWith(loading: true, error: null);
+    // Reset state completely to avoid showing data from previous table
+    state = const CurrentOrderState(loading: true);
     try {
       final client = Supabase.instance.client;
       final userId = client.auth.currentUser?.id;
-      final result = await ref.read(salesRepositoryProvider).openTable(
-        tableId: tableId,
-        userId: userId, // si es null, el RPC tiene fallback
-        peopleCount: 1,
-      );
+      final result = await ref
+          .read(salesRepositoryProvider)
+          .openTable(
+            tableId: tableId,
+            userId: userId, // si es null, el RPC tiene fallback
+            peopleCount: 1,
+          );
       final orderId = result['order_id'] as String;
-
-      // Cargamos detalle
-      await _loadOrderDetail(orderId);
+      await _loadOrderDetail(orderId, origin: 'table');
     } catch (e) {
       state = state.copyWith(loading: false, error: e.toString());
     }
   }
 
-  Future<void> openManual() async => _openManualOrQuick('manual');
-  Future<void> openQuick() async => _openManualOrQuick('quick');
+  Future<void> openManual({bool forceRestart = false}) async =>
+      _openManualOrQuick('manual', forceReset: forceRestart);
+  Future<void> openQuick({bool forceRestart = false}) async =>
+      _openManualOrQuick('quick', forceReset: forceRestart);
 
-  Future<void> _openManualOrQuick(String origin) async {
-    state = state.copyWith(loading: true, error: null);
+  Future<void> ensureManualOrder() async {
+    if (state.origin == 'manual' && state.order != null) return;
+    await openManual(forceRestart: true);
+  }
+
+  Future<void> _openManualOrQuick(
+    String origin, {
+    bool forceReset = false,
+  }) async {
+    state = forceReset
+        ? const CurrentOrderState(loading: true)
+        : state.copyWith(loading: true, error: null);
     try {
-      final client = Supabase.instance.client;
-      final userId = client.auth.currentUser?.id;
       final res = await ref
-          .read(
-            salesRepositoryProvider,
-          )
-          .openManualOrQuick(origin: origin, userId: userId ?? '', peopleCount: 1);
-      await _loadOrderDetail(res['order_id'] as String);
+          .read(salesRepositoryProvider)
+          .openManualOrQuick(
+            origin: origin,
+            customerName: null,
+            peopleCount: 1,
+          );
+      await _loadOrderDetail(res['order_id'] as String, origin: origin);
     } catch (e) {
       state = state.copyWith(loading: false, error: e.toString());
     }
@@ -63,32 +77,78 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     String? notes,
   }) async {
     final orderId = state.order?.id;
-    if (orderId == null) return;
-    await ref.read(salesRepositoryProvider).addItemFromMenu(
-      orderId: orderId,
-      menuItemId: menuItemId,
-      qty: qty,
-      checkPosition: checkPos,
-      isTakeout: takeout,
-      notes: notes,
-    );
-    await _loadOrderDetail(orderId);
+    if (orderId == null) {
+      state = state.copyWith(error: 'Orden no disponible. Reintenta.');
+      return;
+    }
+    state = state.copyWith(error: null);
+    try {
+      await ref
+          .read(salesRepositoryProvider)
+          .addItemFromMenu(
+            orderId: orderId,
+            menuItemId: menuItemId,
+            quantity: qty,
+            checkPosition: checkPos,
+            isTakeout: takeout,
+            notes: notes,
+          );
+      unawaited(_loadOrderDetail(orderId));
+    } catch (e) {
+      state = state.copyWith(
+        error: 'Error al agregar producto: $e',
+      );
+    }
   }
 
   Future<void> toggleTakeout(bool value) async {
     final orderId = state.order?.id;
     if (orderId == null) return;
-    await ref.read(
-      salesRepositoryProvider,
-    ).markOrderTakeout(orderId: orderId, takeout: value);
+    await ref
+        .read(salesRepositoryProvider)
+        .markOrderTakeout(orderId: orderId, takeout: value);
     state = state.copyWith(takeout: value);
     await _loadOrderDetail(orderId);
   }
 
+  Future<void> deleteItem(String itemId) async {
+    final orderId = state.order?.id;
+    if (orderId == null) return;
+    await ref.read(salesRepositoryProvider).deleteItem(itemId: itemId);
+    await _loadOrderDetail(orderId);
+  }
+
+  Future<void> updateItemQuantity(String itemId, double quantity) async {
+    final orderId = state.order?.id;
+    if (orderId == null) return;
+    await ref
+        .read(salesRepositoryProvider)
+        .updateItemQuantity(itemId: itemId, quantity: quantity);
+    await _loadOrderDetail(orderId);
+  }
+
+  Future<void> updateItemNotes(String itemId, String notes) async {
+    final orderId = state.order?.id;
+    if (orderId == null) return;
+    await ref
+        .read(salesRepositoryProvider)
+        .updateItemNotes(itemId: itemId, notes: notes);
+    await _loadOrderDetail(orderId);
+  }
+
+  Future<void> toggleItemTakeout(String itemId, bool isTakeout) async {
+    final orderId = state.order?.id;
+    if (orderId == null) return;
+    await ref
+        .read(salesRepositoryProvider)
+        .toggleItemTakeout(itemId: itemId, isTakeout: isTakeout);
+    await _loadOrderDetail(orderId);
+  }
+
   Future<void> moveItemToCheck(String itemId, int pos) async {
-    await ref.read(
-      salesRepositoryProvider,
-    ).moveItemToCheck(itemId: itemId, checkPosition: pos);
+    await ref
+        .read(salesRepositoryProvider)
+        .moveItemToCheck(itemId: itemId, checkPosition: pos);
     final orderId = state.order?.id;
     if (orderId != null) await _loadOrderDetail(orderId);
   }
@@ -96,54 +156,83 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   Future<void> closeOrderPaid() async {
     final orderId = state.order?.id;
     if (orderId == null) return;
-    await ref.read(
-      salesRepositoryProvider,
-    ).closeOrder(orderId: orderId, status: 'paid');
-    // limpia el estado
+    await ref
+        .read(salesRepositoryProvider)
+        .closeOrder(orderId: orderId, status: 'paid');
     state = const CurrentOrderState();
   }
 
-  Future<void> _loadOrderDetail(String orderId) async {
-    final repo = ref.read(salesRepositoryProvider);
-    final rows = await repo.getOrderDetail(orderId);
-    // Map a Order + Items
-    if (rows.isEmpty) {
-      state = state.copyWith(loading: false);
+  Future<void> cancelCurrentOrder() async {
+    final orderId = state.order?.id;
+    if (orderId == null) {
+      state = const CurrentOrderState();
       return;
     }
-    // La fila tiene totales de orden repetidos – tomamos la primera
-    final o = Order.fromMap({
-      'id': orderId,
-      'session_id': null,
-      'status_ext': rows.first['status_ext'],
-      'subtotal': rows.first['order_subtotal'],
-      'discounts': rows.first['order_discounts'],
-      'tax': rows.first['order_tax'],
-      'total': rows.first['order_total'],
-      'created_at': DateTime.now().toIso8601String(),
-    });
-    final items = rows
-        .where((m) => m['item_id'] != null)
-        .map(
-          (m) => OrderItem.fromMap({
-            'id': m['item_id'],
-            'order_id': orderId,
-            'check_id': m['check_id'],
-            'product_id': m['product_id'],
-            'product_name': m['product_name'],
-            'qty': m['qty'],
-            'unit_price': m['unit_price'],
-            'is_takeout': m['is_takeout'],
-            'status': m['status'],
-            'notes': m['notes'],
-            'subtotal': m['subtotal'],
-            'discounts': m['discounts'],
-            'tax': m['tax'],
-            'total': m['total'],
-          }),
-        )
-        .toList();
+    await ref
+        .read(salesRepositoryProvider)
+        .closeOrder(orderId: orderId, status: 'void');
+    state = const CurrentOrderState();
+  }
 
-    state = state.copyWith(loading: false, order: o, items: items);
+  // Method to confirm order (send to kitchen)
+  Future<void> confirmOrder() async {
+    final orderId = state.order?.id;
+    if (orderId == null) return;
+    state = state.copyWith(loading: true);
+    try {
+      await ref.read(salesRepositoryProvider).confirmOrderToKitchen(orderId);
+      await _loadOrderDetail(orderId);
+    } catch (e) {
+      state = state.copyWith(loading: false, error: e.toString());
+    }
+  }
+
+  Future<void> refreshOrder({bool clearIfPaid = false}) async {
+    final orderId = state.order?.id;
+    if (orderId == null) return;
+    await _loadOrderDetail(orderId);
+    if (clearIfPaid && (state.order?.isPaid ?? false)) {
+      state = const CurrentOrderState();
+    }
+  }
+
+  Future<void> _loadOrderDetail(String orderId, {String? origin}) async {
+    final repo = ref.read(salesRepositoryProvider);
+    Order? order;
+    List<OrderItem> items = const [];
+    String? loadError;
+    final orderFuture = repo.getOrder(orderId);
+    final itemsFuture = repo.getOrderItems(
+      orderId,
+      includeModifiers: false,
+    );
+
+    try {
+      order = await orderFuture;
+    } catch (e) {
+      loadError = e.toString();
+    }
+
+    try {
+      items = await itemsFuture;
+    } catch (e) {
+      loadError ??= e.toString();
+    }
+
+    if (order == null && items.isEmpty) {
+      state = state.copyWith(
+        loading: false,
+        error: loadError ?? 'Orden no encontrada',
+      );
+      return;
+    }
+
+    state = state.copyWith(
+      loading: false,
+      order: order ?? state.order,
+      items: items,
+      origin: origin ?? state.origin,
+      error: items.isEmpty ? (loadError ?? state.error) : null,
+    );
   }
 }

@@ -1,0 +1,9 @@
+Database updates (manual/quick sales)
+------------------------------------
+Last updated: 2025-11-18
+
+1. `fn_open_manual_or_quick` (see `lib/databasecode/databasecode.txt`)
+   - Added logic to detect an existing open `table_sessions` row for the virtual table used by manual/quick sales.
+   - Any open orders attached to that session are closed with `fn_close_order_and_table(..., 'void')`.
+   - The old session is timestamped (`closed_at = now()`) before a brand-new session/order is created.
+   - Run the SQL block in `databasecode.txt` to deploy the change (it replaces the function in Supabase).

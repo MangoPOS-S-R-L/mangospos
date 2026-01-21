@@ -13,6 +13,8 @@ class AppRoutes {
   static const products = '/products';
   static const reports = '/reports';
   static const settings = '/settings';
+  static const settingsUsers = '$settings/users';
+  static const settingsRoles = '$settings/roles';
 
   // ---- Subrutas de ventas ----
   static const salesByZone = '$sales/by-zone';
@@ -20,6 +22,7 @@ class AppRoutes {
   static const salesQuick = '$sales/quick';
   static const salesDelivery = '$sales/delivery';
   static const salesSelfService = '$sales/self-service';
+  static const salesTable = '$sales/table';
 
   // 👇 subruta de Ajustes
 
@@ -37,8 +40,10 @@ class AppRoutes {
   static const settingsTaxes = '$settings/taxes';
   static const printingBase = '$settings/printing';
 
-   // ---- Gestión de impresión (sin businessId en URL) ----
+  // ---- Gestión de impresión (sin businessId en URL) ----
   static const printingPrinters = '$settings/printing/printers';
-  static const printingAreas    = '$settings/printing/areas';
-
+  static const printingAreas = '$settings/printing/areas';
+  static const printingProducts = '$settings/printing/products';
+  static const printingReceipts = '$settings/printing/receipts';
+  static const printingOrders = '$settings/printing/orders';
 }

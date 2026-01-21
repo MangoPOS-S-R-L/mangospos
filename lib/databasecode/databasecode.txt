@@ -1,0 +1,5062 @@
+-- WARNING: This schema is for context only and is not meant to be run.
+-- Table order and constraints may not be valid for execution.
+
+CREATE TABLE public.businesses (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  owner_id uuid NOT NULL,
+  business_name text NOT NULL,
+  branch_name text,
+  country text,
+  address text,
+  status text NOT NULL DEFAULT 'active'::text CHECK (status = ANY (ARRAY['active'::text, 'inactive'::text])),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT businesses_pkey PRIMARY KEY (id),
+  CONSTRAINT businesses_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.memberships (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  business_id uuid NOT NULL,
+  plan_type text NOT NULL DEFAULT 'trial'::text CHECK (plan_type = ANY (ARRAY['trial'::text, 'free'::text, 'basic'::text, 'pro'::text])),
+  status text NOT NULL DEFAULT 'active'::text CHECK (status = ANY (ARRAY['active'::text, 'canceled'::text, 'expired'::text])),
+  start_date timestamp with time zone NOT NULL DEFAULT now(),
+  end_date timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT memberships_pkey PRIMARY KEY (id),
+  CONSTRAINT memberships_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
+  CONSTRAINT memberships_business_id_fkey FOREIGN KEY (business_id) REFERENCES public.businesses(id)
+);
+CREATE TABLE public.profiles (
+  id uuid NOT NULL,
+  email text NOT NULL UNIQUE,
+  full_name text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT profiles_pkey PRIMARY KEY (id),
+  CONSTRAINT profiles_id_fkey FOREIGN KEY (id) REFERENCES auth.users(id)
+);
+-- Asegura la extensión para gen_random_uuid()
+create extension if not exists pgcrypto;
+
+create table if not exists public.user_businesses (
+  id           uuid primary key default gen_random_uuid(),
+  user_id      uuid not null references auth.users(id) on delete cascade,
+  business_id  uuid not null references public.businesses(id) on delete cascade,
+
+  role         text not null default 'owner'
+               check (role in ('owner','admin','cashier','chef','waiter')),
+
+  -- AQUÍ EL CAMBIO: tipo text[] y default como arreglo
+  permissions  text[] not null default ARRAY['all']::text[],
+
+  created_at   timestamptz not null default now(),
+
+  -- opcional pero recomendado para evitar duplicados
+  unique (user_id, business_id)
+);
+
+-- Índices útiles (opcionales)
+create index if not exists idx_user_businesses_user on public.user_businesses(user_id);
+create index if not exists idx_user_businesses_business on public.user_businesses(business_id);
+
+-- 1) Columna (paso seguro por si ya existe)
+alter table public.businesses
+  add column if not exists domain text;
+
+-- 2) Trigger para normalizar (lowercase, sin http(s) ni paths/espacios)
+create or replace function public.fn_normalize_domain()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.domain is not null then
+    -- quita http(s)://
+    new.domain := regexp_replace(new.domain, '^https?://', '', 'i');
+    -- quita todo lo que venga después de una /
+    new.domain := regexp_replace(new.domain, '/.*$', '');
+    -- quita espacios
+    new.domain := regexp_replace(new.domain, '\s+', '', 'g');
+    -- a minúsculas
+    new.domain := lower(new.domain);
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_businesses_domain_normalize on public.businesses;
+create trigger trg_businesses_domain_normalize
+before insert or update of domain
+on public.businesses
+for each row
+execute function public.fn_normalize_domain();
+
+-- 3) Check de formato: FQDN que termine en .mangopos.do
+alter table public.businesses
+  drop constraint if exists businesses_domain_format;
+
+alter table public.businesses
+  add constraint businesses_domain_format
+  check (
+    domain ~ '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.mangopos\.do$'
+  );
+
+-- 4) Unicidad case-insensitive (único por lower(domain))
+-- Nota: índice único por expresión en lugar de unique constraint de columna.
+create unique index if not exists uq_businesses_domain_lower
+  on public.businesses ((lower(domain)));
+
+-- 5) Finalmente, vuelve obligatoria la columna (hazlo cuando ya tengas datos válidos)
+alter table public.businesses
+  alter column domain set not null;
+
+-- 9/21/2025
+
+create type table_shape as enum ('square','circle');
+create type table_state as enum ('available','occupied','reserved','blocked');
+
+-- ZONAS (por negocio y opcionalmente por sucursal)
+create table if not exists public.zones (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  branch_id uuid null, -- si tienes tabla branches, agrega FK aquí
+  name text not null,
+  sort_index int not null default 0,
+  is_active boolean not null default true,
+  created_at timestamptz default now()
+);
+
+-- MESAS
+create table if not exists public.dining_tables (
+  id uuid primary key default gen_random_uuid(),
+  zone_id uuid not null references public.zones(id) on delete cascade,
+  code text not null,              -- ej: T01, P05, M02 (único por zona)
+  label text,
+  shape table_shape not null default 'square',
+  capacity int not null default 4,
+  pos_x numeric not null default 0,  -- para layout (grid o %)
+  pos_y numeric not null default 0,
+  width numeric not null default 1,
+  height numeric not null default 1,
+  rotation numeric not null default 0,
+  state table_state not null default 'available',
+  is_active boolean not null default true,
+  created_at timestamptz default now(),
+  unique(zone_id, code)
+);
+
+-- Sesión abierta en una mesa (cuenta por mesa)
+create table if not exists public.table_sessions (
+  id uuid primary key default gen_random_uuid(),
+  table_id uuid not null references public.dining_tables(id) on delete cascade,
+  opened_by uuid not null references auth.users(id) on delete restrict,
+  opened_at timestamptz not null default now(),
+  closed_at timestamptz,
+  customer_name text,
+  note text
+);
+
+-- Pedidos por sesión (resumen)
+create table if not exists public.orders (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid not null references public.table_sessions(id) on delete cascade,
+  status text not null check (status in ('open','sent','served','canceled','paid')) default 'open',
+  total_amount numeric(12,2) default 0,
+  created_at timestamptz default now()
+);
+
+create or replace view public.v_zone_table_status as
+select
+  t.id              as table_id,
+  z.id              as zone_id,
+  z.name            as zone_name,
+  z.business_id,
+  t.code,
+  t.label,
+  t.shape,
+  t.capacity,
+  t.state,
+  s.id              as session_id,
+  s.opened_by,
+  s.opened_at,
+  case when s.opened_at is not null and s.closed_at is null
+       then extract(epoch from (now() - s.opened_at))::int / 60
+       else null end as minutes_open,
+  coalesce((select count(*) from public.orders o where o.session_id = s.id),0) as orders_count
+from public.dining_tables t
+join public.zones z on z.id = t.zone_id
+left join lateral (
+  select * from public.table_sessions s2
+  where s2.table_id = t.id and s2.closed_at is null
+  order by s2.opened_at desc
+  limit 1
+) s on true;
+
+-- habilitar RLS
+alter table public.zones          enable row level security;
+alter table public.dining_tables  enable row level security;
+alter table public.table_sessions enable row level security;
+alter table public.orders         enable row level security;
+-- (businesses / profiles ya los tienes con RLS)
+
+-- helper: negocios del usuario
+create or replace function public.current_user_business_ids()
+returns setof uuid language sql stable as $$
+  select business_id from public.user_businesses where user_id = auth.uid()
+$$;
+
+-- ZONES
+create policy "zones_select" on public.zones
+for select using (business_id in (select public.current_user_business_ids()));
+
+create policy "zones_modify" on public.zones
+for all using (business_id in (select public.current_user_business_ids()))
+with check (business_id in (select public.current_user_business_ids()));
+
+-- TABLES
+create policy "tables_select" on public.dining_tables
+for select using (
+  zone_id in (select id from public.zones where business_id in (select public.current_user_business_ids()))
+);
+
+create policy "tables_modify" on public.dining_tables
+for all using (
+  zone_id in (select id from public.zones where business_id in (select public.current_user_business_ids()))
+)
+with check (
+  zone_id in (select id from public.zones where business_id in (select public.current_user_business_ids()))
+);
+
+-- SESSIONS
+create policy "sessions_all" on public.table_sessions
+for all using (
+  table_id in (
+    select t.id from public.dining_tables t
+    join public.zones z on z.id = t.zone_id
+    where z.business_id in (select public.current_user_business_ids())
+  )
+)
+with check (
+  table_id in (
+    select t.id from public.dining_tables t
+    join public.zones z on z.id = t.zone_id
+    where z.business_id in (select public.current_user_business_ids())
+  )
+);
+
+-- ORDERS
+create policy "orders_all" on public.orders
+for all using (
+  session_id in (
+    select s.id from public.table_sessions s
+    join public.dining_tables t on t.id = s.table_id
+    join public.zones z on z.id = t.zone_id
+    where z.business_id in (select public.current_user_business_ids())
+  )
+)
+with check (
+  session_id in (
+    select s.id from public.table_sessions s
+    join public.dining_tables t on t.id = s.table_id
+    join public.zones z on z.id = t.zone_id
+    where z.business_id in (select public.current_user_business_ids())
+  )
+);
+
+create index if not exists idx_zones_business on public.zones(business_id, sort_index);
+create index if not exists idx_tables_zone on public.dining_tables(zone_id, code);
+create index if not exists idx_sessions_table_open on public.table_sessions(table_id, opened_at) where closed_at is null;
+create index if not exists idx_orders_session on public.orders(session_id, created_at);
+
+create table order_items (
+  id uuid primary key default gen_random_uuid(),
+  order_id uuid references orders(id) on delete cascade,
+  product_id uuid, -- si usas catálogo
+  quantity int not null,
+  unit_price numeric(10,2) not null,
+  total numeric(10,2) generated always as (quantity * unit_price) stored
+);
+
+-----------------------------------
+
+-- Crea la función si no existe (usa memberships y user_businesses)
+create or replace function public.current_user_business_ids()
+returns setof uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select m.business_id
+  from public.memberships m
+  where m.user_id = auth.uid()
+  union
+  select ub.business_id
+  from public.user_businesses ub
+  where ub.user_id = auth.uid();
+$$;
+
+-- Permisos para que los usuarios autenticados puedan ejecutarla
+grant execute on function public.current_user_business_ids() to authenticated;
+
+----------------------------------
+
+alter table public.zones enable row level security;
+
+-- SELECT (ya la tienes, te la dejo por si quieres uniformar la sintaxis)
+create policy if not exists zones_select
+on public.zones for select to authenticated
+using (business_id in (select current_user_business_ids()));
+
+-- INSERT
+create policy if not exists zones_insert
+on public.zones for insert to authenticated
+with check (business_id in (select current_user_business_ids()));
+
+-- UPDATE (opcional pero recomendado)
+create policy if not exists zones_update
+on public.zones for update to authenticated
+using      (business_id in (select current_user_business_ids()))
+with check (business_id in (select current_user_business_ids()));
+
+-- DELETE (opcional)
+create policy if not exists zones_delete
+on public.zones for delete to authenticated
+using (business_id in (select current_user_business_ids()));
+
+
+-----------------------------------------
+
+create or replace function public.current_user_business_ids()
+returns setof uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select m.business_id
+  from public.memberships m
+  where m.user_id = auth.uid()
+  union
+  select ub.business_id
+  from public.user_businesses ub
+  where ub.user_id = auth.uid();
+$$;
+
+grant execute on function public.current_user_business_ids() to authenticated;
+
+
+------------------------------------------------
+
+-- Habilita RLS
+alter table public.zones enable row level security;
+
+-- SELECT
+drop policy if exists zones_select on public.zones;
+create policy zones_select
+on public.zones
+for select
+to authenticated
+using (
+  business_id in (select public.current_user_business_ids())
+);
+
+-- INSERT
+drop policy if exists zones_insert on public.zones;
+create policy zones_insert
+on public.zones
+for insert
+to authenticated
+with check (
+  business_id in (select public.current_user_business_ids())
+);
+
+-- UPDATE (opcional, recomendado)
+drop policy if exists zones_update on public.zones;
+create policy zones_update
+on public.zones
+for update
+to authenticated
+using (
+  business_id in (select public.current_user_business_ids())
+)
+with check (
+  business_id in (select public.current_user_business_ids())
+);
+
+-- DELETE (opcional)
+drop policy if exists zones_delete on public.zones;
+create policy zones_delete
+on public.zones
+for delete
+to authenticated
+using (
+  business_id in (select public.current_user_business_ids())
+);
+
+
+-------------------------------------------------
+
+alter table public.dining_tables enable row level security;
+
+-- SELECT
+drop policy if exists dining_tables_select on public.dining_tables;
+create policy dining_tables_select
+on public.dining_tables
+for select
+to authenticated
+using (
+  exists (
+    select 1
+    from public.zones z
+    where z.id = dining_tables.zone_id
+      and z.business_id in (select public.current_user_business_ids())
+  )
+);
+
+-- INSERT
+drop policy if exists dining_tables_insert on public.dining_tables;
+create policy dining_tables_insert
+on public.dining_tables
+for insert
+to authenticated
+with check (
+  exists (
+    select 1
+    from public.zones z
+    where z.id = dining_tables.zone_id
+      and z.business_id in (select public.current_user_business_ids())
+  )
+);
+
+-- UPDATE (opcional)
+drop policy if exists dining_tables_update on public.dining_tables;
+create policy dining_tables_update
+on public.dining_tables
+for update
+to authenticated
+using (
+  exists (
+    select 1
+    from public.zones z
+    where z.id = dining_tables.zone_id
+      and z.business_id in (select public.current_user_business_ids())
+  )
+)
+with check (
+  exists (
+    select 1
+    from public.zones z
+    where z.id = dining_tables.zone_id
+      and z.business_id in (select public.current_user_business_ids())
+  )
+);
+
+-- DELETE (opcional)
+drop policy if exists dining_tables_delete on public.dining_tables;
+create policy dining_tables_delete
+on public.dining_tables
+for delete
+to authenticated
+using (
+  exists (
+    select 1
+    from public.zones z
+    where z.id = dining_tables.zone_id
+      and z.business_id in (select public.current_user_business_ids())
+  )
+);
+
+
+
+----------------------
+
+create or replace function public.current_user_business_ids()
+returns setof uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select m.business_id
+  from public.memberships m
+  where m.user_id = auth.uid()
+  union
+  select ub.business_id
+  from public.user_businesses ub
+  where ub.user_id = auth.uid();
+$$;
+
+grant execute on function public.current_user_business_ids() to authenticated;
+
+
+
+
+
+
+
+-- Activa RLS
+alter table public.profiles enable row level security;
+
+-- Limpia policies previas (opcional pero recomendado)
+drop policy if exists profiles_select_own on public.profiles;
+drop policy if exists profiles_insert_own on public.profiles;
+drop policy if exists profiles_update_own on public.profiles;
+
+-- SOLO usuarios autenticados pueden ver su propio perfil
+create policy profiles_select_own
+on public.profiles
+for select
+to authenticated
+using (id = auth.uid());
+
+-- SOLO usuarios autenticados pueden insertar su propio perfil
+create policy profiles_insert_own
+on public.profiles
+for insert
+to authenticated
+with check (id = auth.uid());
+
+-- SOLO usuarios autenticados pueden actualizar su propio perfil
+create policy profiles_update_own
+on public.profiles
+for update
+to authenticated
+using (id = auth.uid())
+with check (id = auth.uid());
+
+-- Permisos básicos (por si faltan)
+grant usage on schema public to anon, authenticated;
+grant select, insert, update on public.profiles to authenticated;
+
+
+
+-------------------------------------------------------------------------------
+
+
+alter table public.businesses enable row level security;
+
+-- limpia
+drop policy if exists businesses_owner_select on public.businesses;
+drop policy if exists businesses_owner_insert on public.businesses;
+drop policy if exists businesses_owner_update on public.businesses;
+
+-- SELECT: dueño o miembro (vía RPC)
+create policy businesses_owner_select
+on public.businesses
+for select
+to authenticated
+using (
+  owner_id = auth.uid()
+  or id in (select * from public.current_user_business_ids())
+);
+
+-- INSERT: solo si el owner es el usuario
+create policy businesses_owner_insert
+on public.businesses
+for insert
+to authenticated
+with check (owner_id = auth.uid());
+
+-- UPDATE: solo si es el owner
+create policy businesses_owner_update
+on public.businesses
+for update
+to authenticated
+using (owner_id = auth.uid())
+with check (owner_id = auth.uid());
+
+--------------------------------------------------------------
+
+alter table public.memberships enable row level security;
+
+-- limpia
+drop policy if exists memberships_select_own on public.memberships;
+drop policy if exists memberships_insert_own on public.memberships;
+
+-- SELECT: ver solo tus memberships
+create policy memberships_select_own
+on public.memberships
+for select
+to authenticated
+using (user_id = auth.uid());
+
+-- INSERT: crear memberships solo para ti
+create policy memberships_insert_own
+on public.memberships
+for insert
+to authenticated
+with check (user_id = auth.uid());
+
+
+----------------------------------------------------------------
+
+alter table public.user_businesses enable row level security;
+
+-- limpia
+drop policy if exists user_businesses_select_own on public.user_businesses;
+drop policy if exists user_businesses_insert_self on public.user_businesses;
+
+-- SELECT: ver solo tus relaciones
+create policy user_businesses_select_own
+on public.user_businesses
+for select
+to authenticated
+using (user_id = auth.uid());
+
+-- INSERT: crear relaciones solo para ti
+create policy user_businesses_insert_self
+on public.user_businesses
+for insert
+to authenticated
+with check (user_id = auth.uid());
+
+
+--------------------------------------------- 9 - 26 - 2025 ----------------------
+
+-- MENUS
+create table if not exists public.menus (
+  id uuid primary key,
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  name text not null,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+-- MENU ITEMS
+create table if not exists public.menu_items (
+  id uuid primary key,
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  category_id uuid references public.categories(id),
+  name text not null,
+  price numeric(12,2) not null default 0,
+  sku text,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+-- CATEGORIES
+create table if not exists public.categories (
+  id uuid primary key,
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  name text not null,
+  position int not null default 0,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+-- MODIFIER GROUPS
+create table if not exists public.modifier_groups (
+  id uuid primary key,
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  name text not null,
+  min_select int not null default 0,
+  max_select int not null default 0,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+-- MODIFIERS
+create table if not exists public.modifiers (
+  id uuid primary key,
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  group_id uuid references public.modifier_groups(id) on delete cascade,
+  name text not null,
+  price_delta numeric(12,2) not null default 0,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+-- RELACIONES (opcional)
+create table if not exists public.menu_item_groups (
+  menu_item_id uuid references public.menu_items(id) on delete cascade,
+  group_id uuid references public.modifier_groups(id) on delete cascade,
+  primary key (menu_item_id, group_id)
+);
+
+-- RLS
+alter table public.menus enable row level security;
+alter table public.menu_items enable row level security;
+alter table public.categories enable row level security;
+alter table public.modifier_groups enable row level security;
+alter table public.modifiers enable row level security;
+alter table public.menu_item_groups enable row level security;
+
+-- Asumiendo memberships(business_id, user_id, role)
+create policy "tenant_read" on public.menus
+for select using (exists (select 1 from memberships m where m.business_id = business_id and m.user_id = auth.uid()));
+create policy "tenant_write" on public.menus
+for all using (exists (select 1 from memberships m where m.business_id = business_id and m.user_id = auth.uid() and m.role in ('owner','admin')));
+
+-- Repite las dos políticas para cada tabla (menu_items, categories, modifier_groups, modifiers, menu_item_groups)
+
+
+-- ============= FIX RLS PARA MODULO MENÚ =============
+
+-- MENUS
+drop policy if exists tenant_read on public.menus;
+drop policy if exists tenant_write on public.menus;
+
+create policy tenant_read
+on public.menus
+for select
+to authenticated
+using (business_id in (select public.current_user_business_ids()));
+
+create policy tenant_write
+on public.menus
+for all
+to authenticated
+using (
+  exists (
+    select 1 from public.user_businesses ub
+    where ub.business_id = public.menus.business_id
+      and ub.user_id = auth.uid()
+      and ub.role in ('owner','admin')
+  )
+)
+with check (
+  exists (
+    select 1 from public.user_businesses ub
+    where ub.business_id = public.menus.business_id
+      and ub.user_id = auth.uid()
+      and ub.role in ('owner','admin')
+  )
+);
+
+-- CATEGORIES
+drop policy if exists categories_read on public.categories;
+drop policy if exists categories_write on public.categories;
+
+create policy categories_read
+on public.categories
+for select
+to authenticated
+using (business_id in (select public.current_user_business_ids()));
+
+create policy categories_write
+on public.categories
+for all
+to authenticated
+using (
+  exists (
+    select 1 from public.user_businesses ub
+    where ub.business_id = public.categories.business_id
+      and ub.user_id = auth.uid()
+      and ub.role in ('owner','admin')
+  )
+)
+with check (
+  exists (
+    select 1 from public.user_businesses ub
+    where ub.business_id = public.categories.business_id
+      and ub.user_id = auth.uid()
+      and ub.role in ('owner','admin')
+  )
+);
+
+-- MENU ITEMS
+drop policy if exists menu_items_read on public.menu_items;
+drop policy if exists menu_items_write on public.menu_items;
+
+create policy menu_items_read
+on public.menu_items
+for select
+to authenticated
+using (business_id in (select public.current_user_business_ids()));
+
+create policy menu_items_write
+on public.menu_items
+for all
+to authenticated
+using (
+  exists (
+    select 1 from public.user_businesses ub
+    where ub.business_id = public.menu_items.business_id
+      and ub.user_id = auth.uid()
+      and ub.role in ('owner','admin')
+  )
+)
+with check (
+  exists (
+    select 1 from public.user_businesses ub
+    where ub.business_id = public.menu_items.business_id
+      and ub.user_id = auth.uid()
+      and ub.role in ('owner','admin')
+  )
+);
+
+-- MODIFIER GROUPS
+drop policy if exists modifier_groups_read on public.modifier_groups;
+drop policy if exists modifier_groups_write on public.modifier_groups;
+
+create policy modifier_groups_read
+on public.modifier_groups
+for select
+to authenticated
+using (business_id in (select public.current_user_business_ids()));
+
+create policy modifier_groups_write
+on public.modifier_groups
+for all
+to authenticated
+using (
+  exists (
+    select 1 from public.user_businesses ub
+    where ub.business_id = public.modifier_groups.business_id
+      and ub.user_id = auth.uid()
+      and ub.role in ('owner','admin')
+  )
+)
+with check (
+  exists (
+    select 1 from public.user_businesses ub
+    where ub.business_id = public.modifier_groups.business_id
+      and ub.user_id = auth.uid()
+      and ub.role in ('owner','admin')
+  )
+);
+
+-- MODIFIERS
+drop policy if exists modifiers_read on public.modifiers;
+drop policy if exists modifiers_write on public.modifiers;
+
+create policy modifiers_read
+on public.modifiers
+for select
+to authenticated
+using (business_id in (select public.current_user_business_ids()));
+
+create policy modifiers_write
+on public.modifiers
+for all
+to authenticated
+using (
+  exists (
+    select 1 from public.user_businesses ub
+    where ub.business_id = public.modifiers.business_id
+      and ub.user_id = auth.uid()
+      and ub.role in ('owner','admin')
+  )
+)
+with check (
+  exists (
+    select 1 from public.user_businesses ub
+    where ub.business_id = public.modifiers.business_id
+      and ub.user_id = auth.uid()
+      and ub.role in ('owner','admin')
+  )
+);
+
+-- MENU_ITEM_GROUPS (tabla puente)
+drop policy if exists menu_item_groups_read on public.menu_item_groups;
+drop policy if exists menu_item_groups_write on public.menu_item_groups;
+
+create policy menu_item_groups_read
+on public.menu_item_groups
+for select
+to authenticated
+using (
+  exists (
+    select 1
+    from public.menu_items mi
+    where mi.id = public.menu_item_groups.menu_item_id
+      and mi.business_id in (select public.current_user_business_ids())
+  )
+);
+
+create policy menu_item_groups_write
+on public.menu_item_groups
+for all
+to authenticated
+using (
+  exists (
+    select 1
+    from public.menu_items mi
+    where mi.id = public.menu_item_groups.menu_item_id
+      and exists (
+        select 1
+        from public.user_businesses ub
+        where ub.business_id = mi.business_id
+          and ub.user_id = auth.uid()
+          and ub.role in ('owner','admin')
+      )
+  )
+)
+with check (
+  exists (
+    select 1
+    from public.menu_items mi
+    where mi.id = public.menu_item_groups.menu_item_id
+      and exists (
+        select 1
+        from public.user_businesses ub
+        where ub.business_id = mi.business_id
+          and ub.user_id = auth.uid()
+          and ub.role in ('owner','admin')
+      )
+  )
+);
+
+-------------------------------------------------------------------
+-------------------------------------------------------------------
+
+-- =============== MENÚS ===============
+create table if not exists public.menus (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  name text not null,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+-- (ya tienes menu_items; asegúrate de default id y FK existentes)
+alter table public.menu_items
+  alter column id set default gen_random_uuid();
+
+-- vínculo N:N entre menús e items (posición opcional para ordenar)
+create table if not exists public.menu_item_links (
+  menu_id uuid not null references public.menus(id) on delete cascade,
+  item_id uuid not null references public.menu_items(id) on delete cascade,
+  position int not null default 0,
+  created_at timestamptz not null default now(),
+  primary key (menu_id, item_id)
+);
+
+-- índice útil para orden por menú
+create index if not exists idx_menu_item_links_menu on public.menu_item_links(menu_id, position);
+
+-- ===== Vista con conteo de items por menú (útil para UI) =====
+create or replace view public.v_menus_with_counts as
+select
+  m.*,
+  (
+    select count(*)::int
+    from public.menu_item_links mil
+    join public.menu_items mi on mi.id = mil.item_id
+    where mil.menu_id = m.id
+  ) as items_count
+from public.menus m;
+
+-- ================= RLS =================
+alter table public.menus enable row level security;
+alter table public.menu_item_links enable row level security;
+-- (menu_items ya lo tienes con RLS; si no, habilítalo)
+
+-- Limpia policies previas si es necesario
+drop policy if exists menus_read on public.menus;
+drop policy if exists menus_write on public.menus;
+
+create policy menus_read
+on public.menus
+for select
+to authenticated
+using (business_id in (select public.current_user_business_ids()));
+
+create policy menus_write
+on public.menus
+for all
+to authenticated
+using (
+  exists (
+    select 1 from public.user_businesses ub
+    where ub.business_id = public.menus.business_id
+      and ub.user_id = auth.uid()
+      and ub.role in ('owner','admin')
+  )
+)
+with check (
+  exists (
+    select 1 from public.user_businesses ub
+    where ub.business_id = public.menus.business_id
+      and ub.user_id = auth.uid()
+      and ub.role in ('owner','admin')
+  )
+);
+
+-- Vínculos N:N: lectura si el menú pertenece a tus negocios
+drop policy if exists menu_item_links_read on public.menu_item_links;
+drop policy if exists menu_item_links_write on public.menu_item_links;
+
+create policy menu_item_links_read
+on public.menu_item_links
+for select
+to authenticated
+using (
+  exists (
+    select 1 from public.menus m
+    where m.id = public.menu_item_links.menu_id
+      and m.business_id in (select public.current_user_business_ids())
+  )
+);
+
+create policy menu_item_links_write
+on public.menu_item_links
+for all
+to authenticated
+using (
+  exists (
+    select 1 from public.menus m
+    where m.id = public.menu_item_links.menu_id
+      and exists (
+        select 1 from public.user_businesses ub
+        where ub.business_id = m.business_id
+          and ub.user_id = auth.uid()
+          and ub.role in ('owner','admin')
+      )
+  )
+)
+with check (
+  exists (
+    select 1 from public.menus m
+    where m.id = public.menu_item_links.menu_id
+      and exists (
+        select 1 from public.user_businesses ub
+        where ub.business_id = m.business_id
+          and ub.user_id = auth.uid()
+          and ub.role in ('owner','admin')
+      )
+  )
+);
+
+
+-------------------------------------9/29/2025----------------------------------------
+
+-- ============ TABLAS BASE (si ya existen, omite) ============
+
+-- ITEMS DEL MENÚ / ARTÍCULOS
+create table if not exists public.menu_items (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  category_id uuid references public.categories(id) on delete set null,
+  name text not null,
+  description text,
+  price numeric(12,2) not null default 0,
+  sku text,
+  prep_minutes int not null default 0,
+  image_url text,
+  has_variants boolean not null default false,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+-- relación N:N (ya la propusimos antes; la dejamos aquí por si faltaba)
+create table if not exists public.menu_item_links (
+  menu_id uuid not null references public.menus(id) on delete cascade,
+  item_id uuid not null references public.menu_items(id) on delete cascade,
+  position int not null default 0,
+  created_at timestamptz not null default now(),
+  primary key (menu_id, item_id)
+);
+
+create index if not exists idx_menu_item_links_menu on public.menu_item_links(menu_id, position);
+
+-- ============ VISTA PARA LISTADO ============
+-- Trae nombre de categoría y el PRIMER menú al que está vinculado.
+create or replace view public.v_menu_items_list as
+select
+  i.*,
+  c.name  as category_name,
+  (
+    select m.name
+    from public.menu_item_links mil
+    join public.menus m on m.id = mil.menu_id
+    where mil.item_id = i.id
+    order by mil.position, mil.created_at
+    limit 1
+  ) as menu_name
+from public.menu_items i
+left join public.categories c on c.id = i.category_id;
+
+grant select on public.v_menu_items_list to authenticated;
+
+-- ============ RLS ============
+alter table public.menu_items enable row level security;
+alter table public.menu_item_links enable row level security;
+
+drop policy if exists menu_items_read  on public.menu_items;
+drop policy if exists menu_items_write on public.menu_items;
+
+create policy menu_items_read
+on public.menu_items
+for select
+to authenticated
+using (business_id in (select public.current_user_business_ids()));
+
+create policy menu_items_write
+on public.menu_items
+for all
+to authenticated
+using (
+  exists (
+    select 1 from public.user_businesses ub
+    where ub.business_id = public.menu_items.business_id
+      and ub.user_id = auth.uid()
+      and ub.role in ('owner','admin')
+  )
+)
+with check (
+  exists (
+    select 1 from public.user_businesses ub
+    where ub.business_id = public.menu_items.business_id
+      and ub.user_id = auth.uid()
+      and ub.role in ('owner','admin')
+  )
+);
+
+drop policy if exists menu_item_links_read  on public.menu_item_links;
+drop policy if exists menu_item_links_write on public.menu_item_links;
+
+create policy menu_item_links_read
+on public.menu_item_links
+for select
+to authenticated
+using (
+  exists (
+    select 1 from public.menus m
+    where m.id = public.menu_item_links.menu_id
+      and m.business_id in (select public.current_user_business_ids())
+  )
+);
+
+create policy menu_item_links_write
+on public.menu_item_links
+for all
+to authenticated
+using (
+  exists (
+    select 1 from public.menus m
+    where m.id = public.menu_item_links.menu_id
+      and exists (
+        select 1 from public.user_businesses ub
+        where ub.business_id = m.business_id
+          and ub.user_id = auth.uid()
+          and ub.role in ('owner','admin')
+      )
+  )
+)
+with check (
+  exists (
+    select 1 from public.menus m
+    where m.id = public.menu_item_links.menu_id
+      and exists (
+        select 1 from public.user_businesses ub
+        where ub.business_id = m.business_id
+          and ub.user_id = auth.uid()
+          and ub.role in ('owner','admin')
+      )
+  )
+);
+
+
+-- asegúrate de que todas las columnas usadas por el insert existan
+alter table public.menu_items
+  add column if not exists description   text,
+  add column if not exists sku           text,
+  add column if not exists prep_minutes  int not null default 0,
+  add column if not exists image_url     text,
+  add column if not exists has_variants  boolean not null default false;
+
+-- fuerza recarga del esquema de PostgREST (cache)
+notify pgrst, 'reload schema';
+
+
+-----------------------------------------
+
+-- Tabla de vínculos menú <-> item (muchos a muchos con orden)
+create table if not exists public.menu_item_links (
+  menu_id uuid not null references public.menus(id) on delete cascade,
+  item_id uuid not null references public.menu_items(id) on delete cascade,
+  position int not null default 0,
+  created_at timestamptz not null default now(),
+  primary key (menu_id, item_id)
+);
+
+create index if not exists idx_links_menu on public.menu_item_links(menu_id, position);
+create index if not exists idx_links_item on public.menu_item_links(item_id);
+
+-- Vista para listar items con datos útiles (ajústala si quieres más columnas)
+drop view if exists public.v_menu_items_list;
+
+create view public.v_menu_items_list
+with (security_invoker = on)  -- respeta RLS de las tablas base
+as
+select
+  i.id,
+  i.business_id,
+  i.name,
+  i.description,
+  i.category_id,
+  c.name as category_name,
+  i.price,
+  i.sku,
+  i.prep_minutes,
+  i.has_variants,
+  i.is_active,
+  i.image_url,
+  i.created_at,
+  -- menú "principal" si existe (el primero por position)
+  l.menu_id,
+  m.name as menu_name,
+  l.position
+from public.menu_items i
+left join lateral (
+  select l1.menu_id, l1.position
+  from public.menu_item_links l1
+  where l1.item_id = i.id
+  order by l1.position asc
+  limit 1
+) l on true
+left join public.menus m on m.id = l.menu_id
+left join public.categories c on c.id = i.category_id;
+
+-- RLS (si no lo tenías aplicados a estas tablas)
+alter table public.menu_item_links enable row level security;
+
+-- policy: select/insert/update/delete para usuarios del negocio
+drop policy if exists links_select on public.menu_item_links;
+create policy links_select on public.menu_item_links
+for select to authenticated
+using (
+  exists (select 1
+          from public.menus mm
+          where mm.id = menu_item_links.menu_id
+            and mm.business_id in (select public.current_user_business_ids()))
+);
+
+drop policy if exists links_write on public.menu_item_links;
+create policy links_write on public.menu_item_links
+for all to authenticated
+using (
+  exists (select 1
+          from public.menus mm
+          where mm.id = menu_item_links.menu_id
+            and mm.business_id in (select public.current_user_business_ids()))
+)
+with check (
+  exists (select 1
+          from public.menus mm
+          where mm.id = menu_item_links.menu_id
+            and mm.business_id in (select public.current_user_business_ids()))
+);
+
+
+----------------------------------------------------------
+
+-- 1. Enum opcional (para chips de dieta). Sáltalo si no lo usarás ahora.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'dietary_type') THEN
+    CREATE TYPE dietary_type AS ENUM ('unspecified', 'vegetarian', 'non_vegetarian');
+  END IF;
+END$$;
+
+-- 2. Agregar columnas (si no existen)
+ALTER TABLE public.menu_items
+  ADD COLUMN IF NOT EXISTS has_prep boolean,
+  ADD COLUMN IF NOT EXISTS prep_minutes int4,
+  ADD COLUMN IF NOT EXISTS image_path text,
+  ADD COLUMN IF NOT EXISTS contains_egg boolean,
+  ADD COLUMN IF NOT EXISTS is_beverage boolean,
+  ADD COLUMN IF NOT EXISTS dietary dietary_type;
+
+-- 3. Defaults seguros
+ALTER TABLE public.menu_items
+  ALTER COLUMN has_prep SET DEFAULT false,
+  ALTER COLUMN prep_minutes SET DEFAULT 0,
+  ALTER COLUMN contains_egg SET DEFAULT false,
+  ALTER COLUMN is_beverage SET DEFAULT false,
+  ALTER COLUMN dietary SET DEFAULT 'unspecified';
+
+-- 4. Normalizar nulos existentes
+UPDATE public.menu_items SET has_prep = COALESCE(has_prep, false) WHERE has_prep IS NULL;
+UPDATE public.menu_items SET prep_minutes = COALESCE(prep_minutes, 0) WHERE prep_minutes IS NULL;
+UPDATE public.menu_items SET contains_egg = COALESCE(contains_egg, false) WHERE contains_egg IS NULL;
+UPDATE public.menu_items SET is_beverage = COALESCE(is_beverage, false) WHERE is_beverage IS NULL;
+UPDATE public.menu_items SET dietary = COALESCE(dietary, 'unspecified') WHERE dietary IS NULL;
+
+-- 5. (Opcional) NOT NULL en lo que quieras estrictamente obligatorio
+ALTER TABLE public.menu_items
+  ALTER COLUMN has_prep SET NOT NULL,
+  ALTER COLUMN prep_minutes SET NOT NULL,
+  ALTER COLUMN contains_egg SET NOT NULL,
+  ALTER COLUMN is_beverage SET NOT NULL,
+  ALTER COLUMN dietary SET NOT NULL;
+
+
+-- Elimina la constraint si existía mal
+ALTER TABLE public.menu_items
+  DROP CONSTRAINT IF EXISTS menu_items_prep_minutes_ck;
+
+-- Regla: si has_prep=false => prep_minutes=0; si has_prep=true => prep_minutes>=0
+ALTER TABLE public.menu_items
+  ADD CONSTRAINT menu_items_prep_minutes_ck
+  CHECK (
+    (has_prep = false AND prep_minutes = 0)
+    OR
+    (has_prep = true  AND prep_minutes >= 0)
+  ) NOT VALID;
+
+-- Valida cuando ya no haya filas que violen la regla
+ALTER TABLE public.menu_items
+  VALIDATE CONSTRAINT menu_items_prep_minutes_ck;
+
+
+SELECT id, has_prep, prep_minutes
+FROM public.menu_items
+WHERE NOT (
+  (has_prep = false AND prep_minutes = 0) OR
+  (has_prep = true  AND prep_minutes >= 0)
+);
+
+
+-- Asegura booleans y defaults
+UPDATE public.menu_items
+SET has_prep = COALESCE(has_prep, false);
+
+-- Si NO lleva preparación ⇒ minutos = 0
+UPDATE public.menu_items
+SET prep_minutes = 0
+WHERE has_prep = false AND prep_minutes IS DISTINCT FROM 0;
+
+-- Si SÍ lleva preparación ⇒ minutos >= 0
+UPDATE public.menu_items
+SET prep_minutes = GREATEST(0, COALESCE(prep_minutes, 0))
+WHERE has_prep = true;
+
+ALTER TABLE public.menu_items
+  VALIDATE CONSTRAINT menu_items_prep_minutes_ck;
+
+create or replace function public.enforce_prep_minutes()
+returns trigger
+language plpgsql
+as $$
+begin
+  if NEW.has_prep = false then
+    NEW.prep_minutes := 0;
+  else
+    NEW.prep_minutes := greatest(0, coalesce(NEW.prep_minutes,0));
+  end if;
+  return NEW;
+end;
+$$;
+
+drop trigger if exists trg_menu_items_prep on public.menu_items;
+create trigger trg_menu_items_prep
+before insert or update on public.menu_items
+for each row execute function public.enforce_prep_minutes();
+
+-----------------------------------------------------
+
+-- 1) Crear bucket si no existe
+INSERT INTO storage.buckets (id, name, "public")
+SELECT 'menu-items', 'menu-items', true
+WHERE NOT EXISTS (
+  SELECT 1 FROM storage.buckets WHERE id = 'menu-items'
+);
+
+-- 2) Policies (usa DO blocks para "if not exists")
+
+-- Lectura pública
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'storage'
+      AND tablename = 'objects'
+      AND policyname = 'Public read menu-items'
+  ) THEN
+    CREATE POLICY "Public read menu-items"
+      ON storage.objects
+      FOR SELECT
+      TO public
+      USING (bucket_id = 'menu-items');
+  END IF;
+END$$;
+
+-- Insert solo autenticados
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'storage'
+      AND tablename = 'objects'
+      AND policyname = 'Auth write menu-items'
+  ) THEN
+    CREATE POLICY "Auth write menu-items"
+      ON storage.objects
+      FOR INSERT
+      TO authenticated
+      WITH CHECK (bucket_id = 'menu-items');
+  END IF;
+END$$;
+
+-- Update autenticados (opcional)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'storage'
+      AND tablename = 'objects'
+      AND policyname = 'Auth update menu-items'
+  ) THEN
+    CREATE POLICY "Auth update menu-items"
+      ON storage.objects
+      FOR UPDATE
+      TO authenticated
+      USING (bucket_id = 'menu-items')
+      WITH CHECK (bucket_id = 'menu-items');
+  END IF;
+END$$;
+
+-- Delete autenticados (opcional)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'storage'
+      AND tablename = 'objects'
+      AND policyname = 'Auth delete menu-items'
+  ) THEN
+    CREATE POLICY "Auth delete menu-items"
+      ON storage.objects
+      FOR DELETE
+      TO authenticated
+      USING (bucket_id = 'menu-items');
+  END IF;
+END$$;
+
+
+
+
+create or replace view public.v_menu_items_list as
+select
+  mi.*,                          -- 👈 trae TODOS los campos (incluye image_path / image_url / has_prep)
+  c.name as category_name,
+  l.menu_id,
+  m.name as menu_name
+from public.menu_items mi
+left join public.categories c on c.id = mi.category_id
+left join public.menu_item_links l on l.item_id = mi.id
+left join public.menus m on m.id = l.menu_id;
+
+
+-------------------------------------
+
+-- Tabla de impuestos
+create table if not exists public.taxes (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null,
+  name text not null,
+  rate numeric not null check (rate >= 0 and rate <= 100),
+  is_active boolean not null default true,
+  created_at timestamptz default now()
+);
+
+-- Relación item <-> impuesto (N:N)
+create table if not exists public.menu_item_taxes (
+  item_id uuid not null references public.menu_items(id) on delete cascade,
+  tax_id  uuid not null references public.taxes(id) on delete cascade,
+  primary key (item_id, tax_id)
+);
+
+-- Políticas básicas (ajústalas a tu modelo)
+alter table public.taxes enable row level security;
+alter table public.menu_item_taxes enable row level security;
+
+create policy "read taxes" on public.taxes
+for select using (true);
+
+create policy "write taxes (auth)" on public.taxes
+for all to authenticated using (true) with check (true);
+
+create policy "read item taxes" on public.menu_item_taxes
+for select using (true);
+
+create policy "write item taxes (auth)" on public.menu_item_taxes
+for all to authenticated using (true) with check (true);
+
+
+-----------------------------------------------------------------
+
+
+-- 1) Enum para "vendido por"
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'sold_by_type') THEN
+    CREATE TYPE sold_by_type AS ENUM ('unit','piece','weight','volume','package');
+  END IF;
+END$$;
+
+-- 2) Columnas nuevas (si no existen)
+ALTER TABLE public.menu_items
+  ADD COLUMN IF NOT EXISTS sold_by sold_by_type NOT NULL DEFAULT 'unit',
+  ADD COLUMN IF NOT EXISTS cost numeric NULL,
+  ADD COLUMN IF NOT EXISTS barcode text NULL,
+  ADD COLUMN IF NOT EXISTS updated_at timestamptz NULL;
+
+-- 3) Trigger para updated_at
+CREATE OR REPLACE FUNCTION public.set_updated_at()
+RETURNS trigger AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_menu_items_set_updated_at'
+  ) THEN
+    CREATE TRIGGER trg_menu_items_set_updated_at
+    BEFORE UPDATE ON public.menu_items
+    FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+  END IF;
+END$$;
+
+-- 4) Constraint de preparación (ya tienes has_prep y prep_minutes)
+--   mantiene coherencia (si has_prep=false => prep_minutes=0)
+ALTER TABLE public.menu_items
+  DROP CONSTRAINT IF EXISTS menu_items_prep_minutes_ck;
+
+ALTER TABLE public.menu_items
+  ADD CONSTRAINT menu_items_prep_minutes_ck
+  CHECK (
+    (has_prep = false AND prep_minutes = 0)
+    OR
+    (has_prep = true  AND prep_minutes >= 0)
+  ) NOT VALID;
+
+-- 5) (opcional) Actualiza tu vista de listado si la usas:
+-- v_menu_items_list debe exponer sold_by, cost, barcode (y mantener image_url/image_path)
+-- Ejemplo mínimo:
+-- CREATE OR REPLACE VIEW public.v_menu_items_list AS
+-- SELECT i.*, c.name AS category_name, l.menu_id, m.name AS menu_name
+-- FROM menu_items i
+-- LEFT JOIN categories c ON c.id = i.category_id
+-- LEFT JOIN menu_item_links l ON l.item_id = i.id
+-- LEFT JOIN menus m ON m.id = l.menu_id;
+
+--------------------------------------------------------Printing area and Printing connection 10/1/2015-----------------------
+
+-- 1) Crear enum si no existe
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'member_role') then
+    create type member_role as enum ('owner','admin','manager','staff','viewer');
+  end if;
+end$$;
+
+-- 2) Agregar columna role si no existe
+alter table public.memberships
+  add column if not exists role member_role not null default 'staff';
+
+-- 3) Opcional: marcar dueños como 'owner' basándote en businesses.owner_id
+-- Ajusta si tu tabla businesses usa otro campo para el dueño
+do $$
+begin
+  if exists (select 1 from information_schema.columns 
+             where table_schema='public' and table_name='businesses' and column_name='owner_id') then
+    update public.memberships m
+      set role = 'owner'
+    from public.businesses b
+    where m.business_id = b.id and m.user_id = b.owner_id;
+  end if;
+end$$;
+
+-- 4) Re-crear helpers con el nuevo enum
+create or replace function public.is_member_of_business(p_business uuid)
+returns boolean language sql stable as $$
+  select exists(
+    select 1 from public.memberships m
+    where m.business_id = p_business and m.user_id = auth.uid()
+  );
+$$;
+
+create or replace function public.is_admin_of_business(p_business uuid)
+returns boolean language sql stable as $$
+  select exists(
+    select 1 from public.memberships m
+    where m.business_id = p_business
+      and m.user_id = auth.uid()
+      and m.role in ('owner','admin','manager')
+  );
+$$;
+
+
+-------------------------------------------------------------
+
+-- Tipos
+create type printer_type as enum ('network','bluetooth','usb');
+
+-- Tabla de impresoras
+create table if not exists public.printers (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  name text not null,
+  ip_address text,
+  port int,
+  device_path text,
+  ip inet,
+  mac text,
+  type printer_type not null default 'network',
+  is_active boolean not null default true,
+  paper_width int not null default 80,
+  encoding text not null default 'CP437',
+  online boolean not null default false,
+  last_seen timestamptz,
+  created_at timestamptz not null default now()
+);
+alter table public.printers enable row level security;
+
+-- Tabla de áreas (cocina, barra, horno, etc.)
+create table if not exists public.print_areas (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  name text not null,
+  code text not null,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  unique (business_id, code)
+);
+alter table public.print_areas enable row level security;
+
+-- Relación área - impresora (muchos a muchos)
+create table if not exists public.print_area_printers (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  area_id uuid not null references public.print_areas(id) on delete cascade,
+  printer_id uuid not null references public.printers(id) on delete cascade,
+  priority int not null default 1,
+  enabled boolean not null default true,
+  prints_orders boolean not null default true,      -- tickets de cocina
+  prints_prebills boolean not null default false,   -- pre-cuentas
+  prints_receipts boolean not null default false,   -- comprobantes
+  unique (area_id, printer_id)
+);
+alter table public.print_area_printers enable row level security;
+
+-- Vista con conteo (para UI)
+create or replace view public.print_areas_view as
+select a.*,
+  0::int as products_count -- ajusta si tienes tabla productos/areas
+from public.print_areas a;
+
+-- Función opcional para probar impresión (cola)
+create or replace function public.enqueue_print_test(p_printer_id uuid)
+returns void language plpgsql as $$
+begin
+  -- Aquí solo marcamos last_seen y online = true para la demo
+  update public.printers set online = true, last_seen = now() where id = p_printer_id;
+end$$;
+
+-- RLS: helpers
+create or replace function public.is_member_of_business(p_business uuid)
+returns boolean language sql stable as $$
+  select exists(
+    select 1 from public.memberships m
+    where m.business_id = p_business and m.user_id = auth.uid()
+  );
+$$;
+
+create or replace function public.is_admin_of_business(p_business uuid)
+returns boolean language sql stable as $$
+  select exists(
+    select 1 from public.memberships m
+    where m.business_id = p_business and m.user_id = auth.uid()
+      and m.role in ('owner','admin')
+  );
+$$;
+
+-- Policies: printers
+create policy "read printers members" on public.printers
+for select using (public.is_member_of_business(business_id));
+
+create policy "insert printers admins" on public.printers
+for insert with check (public.is_admin_of_business(business_id));
+
+create policy "update printers admins" on public.printers
+for update using (public.is_admin_of_business(business_id));
+
+create policy "delete printers admins" on public.printers
+for delete using (public.is_admin_of_business(business_id));
+
+-- Policies: print_areas
+create policy "read areas members" on public.print_areas
+for select using (public.is_member_of_business(business_id));
+
+create policy "insert areas admins" on public.print_areas
+for insert with check (public.is_admin_of_business(business_id));
+
+create policy "update areas admins" on public.print_areas
+for update using (public.is_admin_of_business(business_id));
+
+create policy "delete areas admins" on public.print_areas
+for delete using (public.is_admin_of_business(business_id));
+
+-- Policies: link table
+create policy "read area_printers members" on public.print_area_printers
+for select using (public.is_member_of_business(business_id));
+
+create policy "upsert area_printers admins" on public.print_area_printers
+for all using (public.is_admin_of_business(business_id))
+with check (public.is_admin_of_business(business_id));
+
+
+-----------------------------10/2/2025----------------------------------
+
+-- Tabla de jobs
+create table if not exists public.discovery_jobs (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null,
+  status text not null default 'pending', -- pending|running|done|failed
+  platform text,                          -- 'web', 'desktop', etc
+  requested_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  started_at timestamptz,
+  finished_at timestamptz,
+  error text
+);
+
+-- Indexes
+create index on public.discovery_jobs (business_id, status);
+create index on public.discovery_jobs (created_at);
+
+-- RLS
+alter table public.discovery_jobs enable row level security;
+
+-- Políticas: cada usuario ve/crea jobs sólo de su business
+create policy "discovery_jobs_select" on public.discovery_jobs
+  for select using (
+    exists(
+      select 1 from public.memberships m
+      where m.user_id = auth.uid()
+        and m.business_id = discovery_jobs.business_id
+    )
+  );
+
+create policy "discovery_jobs_insert" on public.discovery_jobs
+  for insert with check (
+    exists(
+      select 1 from public.memberships m
+      where m.user_id = auth.uid()
+        and m.business_id = discovery_jobs.business_id
+    )
+  );
+
+create policy "discovery_jobs_update" on public.discovery_jobs
+  for update using (
+    -- Los updates los hará el agente con service key; si quieres permitir al usuario, ajusta aquí
+    auth.role() = 'service_role'
+  );
+
+-------------------------configuracion de impresoras---------------------------------
+---------------------1) printers (único por negocio+IP y RLS por negocio)------------
+-- Asegura unicidad por negocio+ip
+alter table public.printers
+  add constraint printers_business_ip_unique unique (business_id, ip);
+
+-- RLS (si no está activado)
+alter table public.printers enable row level security;
+
+-- Asumo que tienes memberships (user_id, business_id).
+-- El cliente móvil/web SOLO puede ver su negocio:
+create policy "printers_select_own_business"
+  on public.printers
+  for select
+  using (
+    exists (
+      select 1
+      from public.memberships m
+      where m.user_id = auth.uid()
+        and m.business_id = printers.business_id
+    )
+  );
+
+-- Inserciones desde el front opcionalmente:
+create policy "printers_insert_own_business"
+  on public.printers
+  for insert
+  with check (
+    exists (
+      select 1 from public.memberships m
+      where m.user_id = auth.uid()
+        and m.business_id = printers.business_id
+    )
+  );
+
+-- Update/Delete si lo permites desde el front:
+create policy "printers_update_own_business"
+  on public.printers
+  for update using (
+    exists (
+      select 1 from public.memberships m
+      where m.user_id = auth.uid()
+        and m.business_id = printers.business_id
+    )
+  );
+create policy "printers_delete_own_business"
+  on public.printers
+  for delete using (
+    exists (
+      select 1 from public.memberships m
+      where m.user_id = auth.uid()
+        and m.business_id = printers.business_id
+    )
+  );
+
+
+--
+--2) discovery_jobs (job por negocio y sucursal)------
+
+-- ============ discovery_jobs: columna site_code si falta ============
+do $$
+begin
+  if not exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name   = 'discovery_jobs'
+      and column_name  = 'site_code'
+  ) then
+    alter table public.discovery_jobs
+      add column site_code text;
+  end if;
+end$$;
+
+-- ============ discovery_jobs: columnas base si la tabla no existía ============
+-- (Por si entras a un proyecto limpio; en el tuyo ya existen varias)
+create table if not exists public.discovery_jobs (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null,
+  -- site_code ya se asegura arriba
+  status text not null default 'pending', -- pending|claimed|running|done|failed
+  requested_by uuid references auth.users(id) on delete set null,
+  claimed_by uuid,
+  created_at timestamptz not null default now(),
+  started_at timestamptz,
+  finished_at timestamptz,
+  error text
+);
+
+-- ============ discovery_jobs: índices ============
+create index if not exists idx_discovery_jobs_business_status_created
+  on public.discovery_jobs (business_id, status, created_at);
+
+create index if not exists idx_discovery_jobs_site_status_created
+  on public.discovery_jobs (site_code, status, created_at);
+
+-- ============ discovery_jobs: RLS ============
+alter table public.discovery_jobs enable row level security;
+
+drop policy if exists "jobs_select_own_business" on public.discovery_jobs;
+create policy "jobs_select_own_business"
+  on public.discovery_jobs
+  for select
+  using (
+    exists (
+      select 1 from public.memberships m
+      where m.user_id = auth.uid()
+        and m.business_id = discovery_jobs.business_id
+    )
+  );
+
+drop policy if exists "jobs_insert_own_business" on public.discovery_jobs;
+create policy "jobs_insert_own_business"
+  on public.discovery_jobs
+  for insert
+  with check (
+    exists (
+      select 1 from public.memberships m
+      where m.user_id = auth.uid()
+        and m.business_id = discovery_jobs.business_id
+    )
+  );
+
+-- ===================================================================
+-- (Bonus recomendado para robustez multi-tenant)
+-- printers: constraint único por negocio+ip, idempotente
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'printers_business_ip_unique'
+  ) then
+    alter table public.printers
+      add constraint printers_business_ip_unique unique (business_id, ip);
+  end if;
+end$$;
+
+-- ===================================================================
+-- (Bonus) RPCs con SECURITY DEFINER y nombres de parámetros claros
+-- Asegura extensión pgcrypto para crypt/gen_salt
+create extension if not exists pgcrypto;
+
+-- Por seguridad, fija el search_path dentro de cada función
+-- para evitar que SECURITY DEFINER use search_path manipulable.
+-- Ajusta si usas otro esquema.
+drop function if exists public.agent_claim_next_job(text);
+create or replace function public.agent_claim_next_job(p_agent_key text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_agent record;
+  v_job   record;
+begin
+  select *
+  into v_agent
+  from public.agent_nodes a
+  where a.is_active = true
+    and crypt(p_agent_key, a.api_key_hash) = a.api_key_hash
+  limit 1;
+
+  if not found then
+    raise exception 'AGENT_AUTH_FAILED';
+  end if;
+
+  update public.agent_nodes
+     set last_seen = now()
+   where id = v_agent.id;
+
+  select *
+  into v_job
+  from public.discovery_jobs j
+  where j.status = 'pending'
+    and j.business_id = v_agent.business_id
+    and (j.site_code is null or j.site_code = v_agent.site_code)
+  order by j.created_at asc
+  limit 1
+  for update skip locked;
+
+  if not found then
+    return null;
+  end if;
+
+  update public.discovery_jobs
+     set status = 'claimed',
+         claimed_by = v_agent.id,
+         started_at = now()
+   where id = v_job.id;
+
+  return jsonb_build_object(
+    'id', v_job.id,
+    'business_id', v_job.business_id,
+    'site_code', v_job.site_code,
+    'status', 'claimed'
+  );
+end;
+$$;
+
+drop function if exists public.agent_report_result(text, uuid, text, text);
+create or replace function public.agent_report_result(
+  p_agent_key text,
+  p_job_id uuid,
+  p_status text,  -- 'done' | 'failed'
+  p_err text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_agent record;
+  v_job   record;
+begin
+  select *
+  into v_agent
+  from public.agent_nodes a
+  where a.is_active = true
+    and crypt(p_agent_key, a.api_key_hash) = a.api_key_hash
+  limit 1;
+  if not found then
+    raise exception 'AGENT_AUTH_FAILED';
+  end if;
+
+  select *
+  into v_job
+  from public.discovery_jobs j
+  where j.id = p_job_id
+    and j.claimed_by = v_agent.id;
+  if not found then
+    raise exception 'JOB_NOT_CLAIMED_BY_THIS_AGENT';
+  end if;
+
+  update public.discovery_jobs
+     set status = p_status,
+         finished_at = now(),
+         error = p_err
+   where id = p_job_id;
+end;
+$$;
+
+drop function if exists public.agent_upsert_printer(text, uuid, text, text);
+create or replace function public.agent_upsert_printer(
+  p_agent_key text,
+  p_job_id uuid,
+  p_ip text,
+  p_name text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_agent record;
+  v_job   record;
+begin
+  select *
+  into v_agent
+  from public.agent_nodes a
+  where a.is_active = true
+    and crypt(p_agent_key, a.api_key_hash) = a.api_key_hash
+  limit 1;
+  if not found then
+    raise exception 'AGENT_AUTH_FAILED';
+  end if;
+
+  select *
+  into v_job
+  from public.discovery_jobs j
+  where j.id = p_job_id
+    and j.claimed_by = v_agent.id;
+  if not found then
+    raise exception 'JOB_NOT_CLAIMED_BY_THIS_AGENT';
+  end if;
+
+  insert into public.printers (business_id, name, ip, type, mac, online, created_at)
+  values (v_job.business_id, p_name, p_ip, 'network', null, false, now())
+  on conflict (business_id, ip) do update
+    set name = excluded.name;
+end;
+$$;
+
+--------------------------
+------3) agent_nodes (agentes por sucursal + clave propia)
+
+create table if not exists public.agent_nodes (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null,
+  site_code text not null,                 -- sucursal
+  name text,
+  api_key_hash text not null,              -- hash de la clave del agente
+  is_active boolean not null default true,
+  last_seen timestamptz
+);
+
+create unique index on public.agent_nodes (business_id, site_code);
+alter table public.agent_nodes enable row level security;
+
+-- No exponemos agent_nodes a clientes; solo admins internos si quieres.
+-- Para simplificar, no damos políticas de select a usuarios normales.
+
+
+------------------------------------
+-------------------4 extensiones---------------
+
+create extension if not exists pgcrypto;
+
+
+-----RPC
+-------RPC 1: agent_claim_next_job(agent_key text)
+
+
+create or replace function public.agent_claim_next_job(agent_key text)
+returns jsonb
+language plpgsql
+security definer
+as $$
+declare
+  v_agent record;
+  v_job record;
+begin
+  -- Buscar el agente por su api_key (hash)
+  select *
+  into v_agent
+  from public.agent_nodes a
+  where a.is_active = true
+    and crypt(agent_key, a.api_key_hash) = a.api_key_hash
+  limit 1;
+
+  if not found then
+    raise exception 'AGENT_AUTH_FAILED';
+  end if;
+
+  update public.agent_nodes
+     set last_seen = now()
+   where id = v_agent.id;
+
+  -- Tomar un job pendiente para SU negocio y SU sucursal
+  select *
+  into v_job
+  from public.discovery_jobs j
+  where j.status = 'pending'
+    and j.business_id = v_agent.business_id
+    and (j.site_code is null or j.site_code = v_agent.site_code)
+  order by j.created_at asc
+  limit 1
+  for update skip locked;
+
+  if not found then
+    return null;
+  end if;
+
+  update public.discovery_jobs
+     set status = 'claimed',
+         claimed_by = v_agent.id,
+         started_at = now()
+   where id = v_job.id;
+
+  return to_jsonb((
+    select row_to_json(x)
+    from (
+      select v_job.id, v_job.business_id, v_job.site_code, v_job.status
+    ) x
+  ));
+end;
+$$;
+
+
+-- Da permiso de ejecución a roles web
+grant execute on function public.agent_claim_next_job(text)    to anon, authenticated;
+grant execute on function public.agent_report_result(text, uuid, text, text) to anon, authenticated;
+grant execute on function public.agent_upsert_printer(text, uuid, text, text) to anon, authenticated;
+
+
+----6) Realtime (Supabase): asegurar publicación y WAL
+-- Asegura replica identity para updates con BEFORE/AFTER
+alter table public.printers       replica identity full;
+alter table public.discovery_jobs replica identity full;
+
+-- Agregar a la publicación realtime (idempotente, ignora duplicados)
+alter publication supabase_realtime add table public.printers;
+alter publication supabase_realtime add table public.discovery_jobs;
+
+----------7) Smoke tests (desde el SQL Editor)
+
+create extension if not exists pgcrypto;
+
+insert into public.agent_nodes (business_id, site_code, name, api_key_hash, is_active)
+values (
+  'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',  -- BUSINESS_ID SD
+  'SDE-PIANTINI',
+  'Agente SD Piantini',
+  crypt('sd_piantini_3n2wA9HqKx', gen_salt('bf')),
+  true
+)
+on conflict (business_id, site_code) do update
+  set api_key_hash = excluded.api_key_hash,
+      is_active    = true;
+
+
+-----------------------------------------------------------------------------------
+---7.2. Crear un job (como lo hará tu app)
+
+insert into public.discovery_jobs (business_id, site_code, status, requested_by)
+values ('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', 'SDE-PIANTINI', 'pending', null)
+returning *;
+
+-----7.3. Simular al agente reclamando un job
+
+-- Activa la extensión pgcrypto (idempotente)
+create extension if not exists pgcrypto;
+
+
+select crypt('test', gen_salt('bf')) as hash_ok;
+
+
+----Pruebas---------
+-- Rotar/crear agente por sucursal (idempotente)
+insert into public.agent_nodes (business_id, site_code, name, api_key_hash, is_active)
+values (
+  'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+  'SDE-PIANTINI',
+  'Agente SD Piantini',
+  crypt('sd_piantini_3n2wA9HqKx', gen_salt('bf')),
+  true
+)
+on conflict (business_id, site_code) do update
+set api_key_hash = excluded.api_key_hash,
+    name         = excluded.name,
+    is_active    = true;
+
+
+-----------
+
+select id, business_id, site_code, name, is_active, last_seen
+from public.agent_nodes
+where business_id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+  and site_code   = 'SDE-PIANTINI';
+
+
+------------------
+
+insert into public.discovery_jobs (business_id, site_code, status)
+values ('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', 'SDE-PIANTINI', 'pending')
+returning id;
+
+
+--------
+select public.agent_claim_next_job('sd_piantini_3n2wA9HqKx');
+
+---------------
+
+drop function if exists public.agent_claim_next_job(text);
+
+
+----------------------
+
+---instalacion---
+
+create or replace function public.agent_claim_next_job(p_agent_key text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pgcrypto
+as $$
+declare
+  v_agent record;
+  v_job   record;
+begin
+  select *
+  into v_agent
+  from public.agent_nodes a
+  where a.is_active = true
+    and crypt(p_agent_key, a.api_key_hash) = a.api_key_hash
+  limit 1;
+
+  if not found then
+    raise exception 'AGENT_AUTH_FAILED';
+  end if;
+
+  update public.agent_nodes
+     set last_seen = now()
+   where id = v_agent.id;
+
+  select *
+  into v_job
+  from public.discovery_jobs j
+  where j.status = 'pending'
+    and j.business_id = v_agent.business_id
+    and (j.site_code is null or j.site_code = v_agent.site_code)
+  order by j.created_at asc
+  limit 1
+  for update skip locked;
+
+  if not found then
+    return null;
+  end if;
+
+  update public.discovery_jobs
+     set status = 'claimed',
+         claimed_by = v_agent.id,
+         started_at = now()
+   where id = v_job.id;
+
+  return jsonb_build_object(
+    'id', v_job.id,
+    'business_id', v_job.business_id,
+    'site_code', v_job.site_code,
+    'status', 'claimed'
+  );
+end;
+$$;
+
+
+---prueba----------
+
+select public.agent_claim_next_job('sd_piantini_3n2wA9HqKx');
+
+
+where pgcrypto.crypt(p_agent_key, a.api_key_hash) = a.api_key_hash
+
+
+------------------------------------------------
+
+-- Asegura la extensión
+create extension if not exists pgcrypto;
+
+-- =========================================
+-- 1) RPCs (DROP + CREATE) con search_path y pgcrypto.crypt
+-- =========================================
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'printers'
+  ) then
+    execute 'alter publication supabase_realtime add table public.printers';
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'discovery_jobs'
+  ) then
+    execute 'alter publication supabase_realtime add table public.discovery_jobs';
+  end if;
+end$$;
+
+-----------------------------------------------------------
+
+select pubname, schemaname, tablename
+from pg_publication_tables
+where pubname = 'supabase_realtime'
+  and schemaname = 'public'
+  and tablename in ('printers','discovery_jobs');
+
+--------------------------------
+
+select n.nspname as schema, c.relname as table, c.relreplident
+from pg_class c
+join pg_namespace n on n.oid = c.relnamespace
+where n.nspname='public' and c.relname in ('printers','discovery_jobs');
+-- Si no es 'f', ejecuta:
+-- alter table public.printers replica identity full;
+-- alter table public.discovery_jobs replica identity full;
+
+
+-----------------------------------
+
+-- 1) Crear un job pendiente
+insert into public.discovery_jobs (business_id, site_code, status)
+values ('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', 'SDE-PIANTINI', 'pending')
+returning id;
+
+-- 2) Claim (con la clave del agente)
+select public.agent_claim_next_job('sd_piantini_3n2wA9HqKx');
+
+-- 3) Upsert de una impresora dummy
+select public.agent_upsert_printer(
+  'sd_piantini_3n2wA9HqKx',
+  '<job_id>',
+  '192.168.1.50',
+  'Printer 192.168.1.50:9100'
+);
+
+-- 4) Cerrar el job
+select public.agent_report_result(
+  'sd_piantini_3n2wA9HqKx',
+  '<job_id>',
+  'done',
+  null
+);
+
+
+--correcciones:
+
+drop function if exists public.agent_claim_next_job(text);
+create or replace function public.agent_claim_next_job(p_agent_key text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_agent record;
+  v_job   record;
+begin
+  select *
+  into v_agent
+  from public.agent_nodes a
+  where a.is_active = true
+    and crypt(p_agent_key, a.api_key_hash) = a.api_key_hash
+  limit 1;
+
+  if not found then
+    raise exception 'AGENT_AUTH_FAILED';
+  end if;
+
+  update public.agent_nodes set last_seen = now() where id = v_agent.id;
+
+  select * into v_job
+  from public.discovery_jobs j
+  where j.status = 'pending'
+    and j.business_id = v_agent.business_id
+    and (j.site_code is null or j.site_code = v_agent.site_code)
+  order by j.created_at asc
+  limit 1
+  for update skip locked;
+
+  if not found then
+    return null;
+  end if;
+
+  update public.discovery_jobs
+     set status = 'claimed', claimed_by = v_agent.id, started_at = now()
+   where id = v_job.id;
+
+  return jsonb_build_object(
+    'id', v_job.id, 'business_id', v_job.business_id,
+    'site_code', v_job.site_code, 'status', 'claimed'
+  );
+end;
+$$;
+
+drop function if exists public.agent_report_result(text, uuid, text, text);
+create or replace function public.agent_report_result(
+  p_agent_key text, p_job_id uuid, p_status text, p_err text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_agent record; v_job record;
+begin
+  select * into v_agent
+  from public.agent_nodes a
+  where a.is_active = true
+    and crypt(p_agent_key, a.api_key_hash) = a.api_key_hash
+  limit 1;
+  if not found then raise exception 'AGENT_AUTH_FAILED'; end if;
+
+  select * into v_job
+  from public.discovery_jobs j
+  where j.id = p_job_id and j.claimed_by = v_agent.id;
+  if not found then raise exception 'JOB_NOT_CLAIMED_BY_THIS_AGENT'; end if;
+
+  update public.discovery_jobs
+     set status = p_status, finished_at = now(), error = p_err
+   where id = p_job_id;
+end;
+$$;
+
+drop function if exists public.agent_upsert_printer(text, uuid, text, text);
+create or replace function public.agent_upsert_printer(
+  p_agent_key text, p_job_id uuid, p_ip text, p_name text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_agent record; v_job record;
+begin
+  select * into v_agent
+  from public.agent_nodes a
+  where a.is_active = true
+    and crypt(p_agent_key, a.api_key_hash) = a.api_key_hash
+  limit 1;
+  if not found then raise exception 'AGENT_AUTH_FAILED'; end if;
+
+  select * into v_job
+  from public.discovery_jobs j
+  where j.id = p_job_id and j.claimed_by = v_agent.id;
+  if not found then raise exception 'JOB_NOT_CLAIMED_BY_THIS_AGENT'; end if;
+
+  insert into public.printers (business_id, name, ip, type, mac, online, created_at)
+  values (v_job.business_id, p_name, p_ip, 'network', null, false, now())
+  on conflict (business_id, ip) do update
+    set name = excluded.name;
+end;
+$$;
+
+---------------claimed by
+
+-- Agregar las columnas faltantes a discovery_jobs
+ALTER TABLE public.discovery_jobs 
+  ADD COLUMN IF NOT EXISTS claimed_by uuid REFERENCES public.agent_nodes(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS started_at timestamptz,
+  ADD COLUMN IF NOT EXISTS finished_at timestamptz,
+  ADD COLUMN IF NOT EXISTS error text;
+
+-- Crear índices para mejorar el rendimiento
+CREATE INDEX IF NOT EXISTS idx_discovery_jobs_status 
+  ON public.discovery_jobs(status);
+
+CREATE INDEX IF NOT EXISTS idx_discovery_jobs_business_site 
+  ON public.discovery_jobs(business_id, site_code);
+
+CREATE INDEX IF NOT EXISTS idx_discovery_jobs_claimed_by 
+  ON public.discovery_jobs(claimed_by);
+
+-- Verificar la estructura de la tabla
+SELECT column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_schema = 'public' 
+  AND table_name = 'discovery_jobs'
+ORDER BY ordinal_position;
+
+
+----------------------
+
+-- Crea un job pendiente
+insert into public.discovery_jobs (business_id, site_code, status)
+values ('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', 'SDE-PIANTINI', 'pending')
+returning id;
+
+-- Reclama con la clave del agente
+select public.agent_claim_next_job('sd_piantini_3n2wA9HqKx');
+
+
+select public.agent_upsert_printer(
+  'sd_piantini_3n2wA9HqKx',                         -- AGENT_KEY de esa sucursal
+  '9baf8f42-4ecd-4135-befb-fd092a5a3194'::uuid,     -- job_id reclamado
+  '192.168.1.50',
+  'Printer 192.168.1.50:9100'
+);
+
+
+----------checklist-----------
+
+-- Ejecuta una sola vez:
+alter publication supabase_realtime add table public.printers;
+alter publication supabase_realtime add table public.discovery_jobs;
+
+
+SELECT pubname, schemaname, tablename
+FROM pg_publication_tables
+WHERE pubname = 'supabase_realtime'
+ORDER BY schemaname, tablename;
+
+
+-- SOLO si la tabla NO tiene PK
+ALTER TABLE public.printers REPLICA IDENTITY FULL;
+ALTER TABLE public.discovery_jobs REPLICA IDENTITY FULL;
+
+--politicas minimas:
+
+-- Miembros del negocio pueden ver impresoras
+CREATE POLICY printers_select_by_member
+ON public.printers
+FOR SELECT TO authenticated
+USING (
+  EXISTS (
+    SELECT 1 FROM public.memberships m
+    WHERE m.user_id = auth.uid()
+      AND m.business_id = printers.business_id
+  )
+);
+
+-- Miembros pueden crear discovery_jobs
+CREATE POLICY jobs_insert_by_member
+ON public.discovery_jobs
+FOR INSERT TO authenticated
+WITH CHECK (
+  EXISTS (
+    SELECT 1 FROM public.memberships m
+    WHERE m.user_id = auth.uid()
+      AND m.business_id = discovery_jobs.business_id
+  )
+);
+
+
+--------------10-6-2025------------------
+
+-- Tabla mínima
+create table if not exists print_jobs (
+  id uuid primary key default gen_random_uuid(),
+  business_id text not null,
+  data_hex text,              -- ó data_base64
+  ip text not null,
+  port int not null default 9100,
+  status text not null default 'pending', -- pending|processing|done|failed
+  error text,
+  created_at timestamptz default now(),
+  printed_at timestamptz
+);
+
+alter table print_jobs enable row level security;
+
+-- Política simple por negocio (ajústala a tu modelo de roles)
+create policy "insert_by_business"
+  on print_jobs for insert
+  to authenticated
+  with check (auth.jwt() ->> 'business_id' = business_id);
+
+create policy "select_own_business"
+  on print_jobs for select
+  to authenticated
+  using (auth.jwt() ->> 'business_id' = business_id);
+
+-- (El agente puede usar una key de servicio o un JWT con rol 'agent' limitado a su business_id)
+
+
+---------10/14/2025--------------------------------1) Tipos y utilidades
+
+
+--------2) 
+
+-- =========================
+-- 1) Enums y utilidades
+-- =========================
+create extension if not exists "pgcrypto";
+
+do $$ begin
+  create type public.order_origin as enum ('dine_in','manual','quick','delivery','self_service');
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create type public.order_status as enum ('open','sent_to_kitchen','partially_paid','paid','void');
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create type public.item_status as enum ('pending','preparing','ready','served','void');
+exception when duplicate_object then null; end $$;
+
+-- helper que ya usas; lo redefino idempotente (respeta tu multi-tenant)
+create or replace function public.current_user_business_ids()
+returns setof uuid
+language sql stable security definer set search_path=public as $$
+  select m.business_id from public.memberships m where m.user_id = auth.uid()
+  union
+  select ub.business_id from public.user_businesses ub where ub.user_id = auth.uid();
+$$;
+grant execute on function public.current_user_business_ids() to authenticated;
+
+-- =========================
+-- 2) Extiende "table_sessions" y "orders"
+-- =========================
+-- asignación automática de mozo y conteo de personas a nivel de sesión
+alter table public.table_sessions
+  add column if not exists origin public.order_origin not null default 'dine_in',
+  add column if not exists waiter_user_id uuid,                         -- auth.users.id
+  add column if not exists people_count int not null default 1;
+
+-- Garantiza UNA sesión abierta por mesa
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'uniq_open_session_per_table'
+  ) then
+    create unique index uniq_open_session_per_table
+      on public.table_sessions(table_id)
+      where closed_at is null;
+  end if;
+end$$;
+
+-- Amplía "orders" para totales y estados POS (sin romper tu campo total_amount)
+alter table public.orders
+  add column if not exists status_ext public.order_status not null default 'open',
+  add column if not exists subtotal    numeric(12,2) not null default 0,
+  add column if not exists discounts   numeric(12,2) not null default 0,
+  add column if not exists service_fee numeric(12,2) not null default 0,
+  add column if not exists tax         numeric(12,2) not null default 0,
+  add column if not exists total       numeric(12,2) not null default 0;
+
+-- Totales legacy de compatibilidad
+update public.orders
+set total_amount = coalesce(total_amount, 0)
+where total_amount is null;
+
+-- Índices útiles
+create index if not exists idx_orders_session_status on public.orders(session_id, status_ext);
+
+-- =========================
+-- 3) Sub-cuentas (Checks)
+-- =========================
+create table if not exists public.order_checks (
+  id uuid primary key default gen_random_uuid(),
+  order_id uuid not null references public.orders(id) on delete cascade,
+  label text not null default 'C1',           -- C1..C5
+  position int not null default 1,            -- 1..5
+  is_closed boolean not null default false,
+  subtotal  numeric(12,2) not null default 0,
+  discounts numeric(12,2) not null default 0,
+  tax       numeric(12,2) not null default 0,
+  total     numeric(12,2) not null default 0,
+  unique (order_id, position)
+);
+create index if not exists idx_order_checks_order on public.order_checks(order_id);
+
+-- Máximo 5 checks por orden
+create or replace function public.fn_check_max_checks()
+returns trigger language plpgsql as $$
+begin
+  if (select count(*) from public.order_checks where order_id=new.order_id) >= 5 then
+    raise exception 'Max 5 checks per order';
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists trg_check_max_checks on public.order_checks;
+create trigger trg_check_max_checks before insert on public.order_checks
+for each row execute function public.fn_check_max_checks();
+
+-- =========================
+-- 4) Ítems y Modificadores
+-- =========================
+-- 1) Asegura que existan item_status y order_checks (FK de check_id)
+do $$ begin
+  create type public.item_status as enum ('pending','preparing','ready','served','void');
+exception when duplicate_object then null; end $$;
+
+create table if not exists public.order_checks (
+  id uuid primary key default gen_random_uuid(),
+  order_id uuid not null references public.orders(id) on delete cascade,
+  label text not null default 'C1',
+  position int not null default 1,
+  is_closed boolean not null default false,
+  subtotal numeric(12,2) not null default 0,
+  discounts numeric(12,2) not null default 0,
+  tax       numeric(12,2) not null default 0,
+  total     numeric(12,2) not null default 0,
+  unique(order_id, position)
+);
+
+-- 2) Si YA tienes order_items, agrégale las columnas faltantes; si NO existe, créala completa
+do $$
+begin
+  if not exists (
+    select 1 from information_schema.tables
+    where table_schema='public' and table_name='order_items'
+  ) then
+    create table public.order_items (
+      id uuid primary key default gen_random_uuid(),
+      order_id uuid not null references public.orders(id) on delete cascade,
+      check_id uuid references public.order_checks(id) on delete set null,
+      product_id uuid,
+      product_name text not null,
+      sku text,
+      qty numeric(10,3) not null default 1,
+      unit_price numeric(12,2) not null,
+      is_takeout boolean not null default false,
+      status public.item_status not null default 'pending',
+      notes text,
+      subtotal  numeric(12,2) not null default 0,
+      discounts numeric(12,2) not null default 0,
+      tax       numeric(12,2) not null default 0,
+      total     numeric(12,2) not null default 0,
+      created_at timestamptz not null default now()
+    );
+  else
+    alter table public.order_items
+      add column if not exists check_id   uuid references public.order_checks(id) on delete set null,
+      add column if not exists product_id uuid,
+      add column if not exists product_name text,
+      add column if not exists sku text,
+      add column if not exists qty numeric(10,3) default 1,
+      add column if not exists unit_price numeric(12,2),
+      add column if not exists is_takeout boolean not null default false,
+      add column if not exists status public.item_status default 'pending',
+      add column if not exists notes text,
+      add column if not exists subtotal  numeric(12,2) default 0,
+      add column if not exists discounts numeric(12,2) default 0,
+      add column if not exists tax       numeric(12,2) default 0,
+      add column if not exists total     numeric(12,2) default 0,
+      add column if not exists created_at timestamptz default now();
+  end if;
+end$$;
+
+-- 3) Índices (solo si la columna existe)
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='order_items' and column_name='order_id'
+  ) then
+    create index if not exists idx_items_order on public.order_items(order_id);
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='order_items' and column_name='check_id'
+  ) then
+    create index if not exists idx_items_check on public.order_items(check_id);
+  end if;
+end$$;
+
+-- 4) Modificadores (safe)
+create table if not exists public.order_item_modifiers (
+  id uuid primary key default gen_random_uuid(),
+  item_id uuid not null references public.order_items(id) on delete cascade,
+  name text not null,
+  qty numeric(10,3) not null default 1,
+  price numeric(12,2) not null default 0
+);
+create index if not exists idx_item_mods_item on public.order_item_modifiers(item_id);
+
+
+-- =========================
+-- 5) Triggers de totales
+-- =========================
+create or replace function public.fn_compute_item_totals()
+returns trigger language plpgsql as $$
+declare mods_total numeric(12,2) := 0;
+begin
+  select coalesce(sum(price*qty),0)
+    into mods_total
+  from public.order_item_modifiers
+  where item_id = coalesce(new.id, old.id);
+
+  new.subtotal := round((new.unit_price*new.qty) + mods_total, 2);
+  new.total    := new.subtotal - coalesce(new.discounts,0) + coalesce(new.tax,0);
+  return new;
+end $$;
+
+drop trigger if exists trg_item_totals_ins on public.order_items;
+create trigger trg_item_totals_ins
+before insert on public.order_items
+for each row execute function public.fn_compute_item_totals();
+
+drop trigger if exists trg_item_totals_upd on public.order_items;
+create trigger trg_item_totals_upd
+before update on public.order_items
+for each row execute function public.fn_compute_item_totals();
+
+create or replace function public.fn_recalc_order_totals(p_order_id uuid)
+returns void language sql as $$
+  with sums as (
+    select
+      order_id,
+      coalesce(sum(subtotal),0) as subtotal,
+      coalesce(sum(discounts),0) as discounts,
+      coalesce(sum(tax),0) as tax,
+      coalesce(sum(total),0) as total
+    from public.order_items
+    where order_id = p_order_id
+    group by order_id
+  )
+  update public.orders o
+     set subtotal = s.subtotal,
+         discounts = s.discounts,
+         tax = s.tax,
+         total = s.total,
+         total_amount = s.total        -- mantiene compatibilidad con tu campo legacy
+  from sums s
+  where o.id = s.order_id;
+$$;
+
+create or replace function public.fn_after_item_change()
+returns trigger language plpgsql as $$
+begin
+  perform public.fn_recalc_order_totals(coalesce(new.order_id, old.order_id));
+  return null;
+end $$;
+
+drop trigger if exists trg_recalc_after_item_ins on public.order_items;
+create trigger trg_recalc_after_item_ins
+after insert on public.order_items
+for each row execute function public.fn_after_item_change();
+
+drop trigger if exists trg_recalc_after_item_upd on public.order_items;
+create trigger trg_recalc_after_item_upd
+after update on public.order_items
+for each row execute function public.fn_after_item_change();
+
+drop trigger if exists trg_recalc_after_item_del on public.order_items;
+create trigger trg_recalc_after_item_del
+after delete on public.order_items
+for each row execute function public.fn_after_item_change();
+
+-- =========================
+-- 6) RPCs clave para la UI
+-- =========================
+
+-- 6.1 Abrir mesa: si no hay sesión abierta, la crea y asigna mozo = quien hizo click.
+--     Crea una orden base con su check C1.
+create or replace function public.fn_open_table(
+  p_table_id uuid,
+  p_user_id uuid,               -- auth.users.id del mesero que clickea
+  p_people_count int default 1
+) returns jsonb
+language plpgsql
+security definer
+set search_path=public as $$
+declare
+  v_session_id uuid;
+  v_order_id uuid;
+begin
+  -- Si ya hay sesión abierta, regrésala
+  select id into v_session_id
+  from public.table_sessions
+  where table_id = p_table_id and closed_at is null
+  order by opened_at desc
+  limit 1;
+
+  if v_session_id is null then
+    insert into public.table_sessions(table_id, opened_by, origin, waiter_user_id, people_count)
+    values (p_table_id, p_user_id, 'dine_in', p_user_id, greatest(1,p_people_count))
+    returning id into v_session_id;
+  end if;
+
+  -- Orden base (si no existe una OPEN)
+  select id into v_order_id
+  from public.orders
+  where session_id = v_session_id and status_ext='open'
+  order by created_at asc limit 1;
+
+  if v_order_id is null then
+    insert into public.orders(session_id, status_ext, subtotal, discounts, tax, total, total_amount)
+    values (v_session_id, 'open', 0,0,0,0,0)
+    returning id into v_order_id;
+
+    -- C1 por defecto
+    insert into public.order_checks(order_id, label, position) values (v_order_id, 'C1', 1);
+  end if;
+
+  return jsonb_build_object('session_id', v_session_id, 'order_id', v_order_id);
+end $$;
+
+grant execute on function public.fn_open_table(uuid, uuid, int) to authenticated;
+
+-- 6.2 Marcar TODOS los ítems de una orden como "para llevar" (toggle)
+create or replace function public.fn_mark_order_takeout(p_order_id uuid, p_takeout boolean)
+returns void language sql security definer set search_path=public as $$
+  update public.order_items set is_takeout = p_takeout where order_id = p_order_id;
+$$;
+grant execute on function public.fn_mark_order_takeout(uuid, boolean) to authenticated;
+
+-- =========================
+-- 7) RLS para nuevas tablas
+-- =========================
+alter table public.order_checks          enable row level security;
+alter table public.order_items           enable row level security;
+alter table public.order_item_modifiers  enable row level security;
+
+-- checks: mismo tenant que la orden
+drop policy if exists checks_rw on public.order_checks;
+create policy checks_rw on public.order_checks
+for all to authenticated
+using (
+  exists (
+    select 1 from public.orders o
+    join public.table_sessions s on s.id = o.session_id
+    join public.dining_tables t on t.id = s.table_id
+    join public.zones z on z.id = t.zone_id
+    where o.id = order_checks.order_id
+      and z.business_id in (select public.current_user_business_ids())
+  )
+)
+with check (
+  exists (
+    select 1 from public.orders o
+    join public.table_sessions s on s.id = o.session_id
+    join public.dining_tables t on t.id = s.table_id
+    join public.zones z on z.id = t.zone_id
+    where o.id = order_checks.order_id
+      and z.business_id in (select public.current_user_business_ids())
+  )
+);
+
+-- items
+drop policy if exists items_rw on public.order_items;
+create policy items_rw on public.order_items
+for all to authenticated
+using (
+  exists (
+    select 1 from public.orders o
+    join public.table_sessions s on s.id = o.session_id
+    join public.dining_tables t on t.id = s.table_id
+    join public.zones z on z.id = t.zone_id
+    where o.id = order_items.order_id
+      and z.business_id in (select public.current_user_business_ids())
+  )
+)
+with check (
+  exists (
+    select 1 from public.orders o
+    join public.table_sessions s on s.id = o.session_id
+    join public.dining_tables t on t.id = s.table_id
+    join public.zones z on z.id = t.zone_id
+    where o.id = order_items.order_id
+      and z.business_id in (select public.current_user_business_ids())
+  )
+);
+
+-- item modifiers
+drop policy if exists item_mods_rw on public.order_item_modifiers;
+create policy item_mods_rw on public.order_item_modifiers
+for all to authenticated
+using (
+  exists (
+    select 1 from public.order_items oi
+    join public.orders o on o.id = oi.order_id
+    join public.table_sessions s on s.id = o.session_id
+    join public.dining_tables t on t.id = s.table_id
+    join public.zones z on z.id = t.zone_id
+    where oi.id = order_item_modifiers.item_id
+      and z.business_id in (select public.current_user_business_ids())
+  )
+)
+with check (
+  exists (
+    select 1 from public.order_items oi
+    join public.orders o on o.id = oi.order_id
+    join public.table_sessions s on s.id = o.session_id
+    join public.dining_tables t on t.id = s.table_id
+    join public.zones z on z.id = t.zone_id
+    where oi.id = order_item_modifiers.item_id
+      and z.business_id in (select public.current_user_business_ids())
+  )
+);
+
+-- =========================
+-- 8) Venta Manual y Rápida
+-- =========================
+-- Para venta manual/rápida no hay mesa; reusamos table_sessions con mesa NULL
+-- Creamos una "mesa virtual" opcional si prefieres trackear por zona; aquí
+-- sólo dejamos helpers:
+
+create or replace function public.fn_open_manual_or_quick(
+  p_origin public.order_origin,   -- 'manual' o 'quick'
+  p_user_id uuid,
+  p_people_count int default 1
+) returns jsonb
+language plpgsql security definer set search_path=public as $$
+declare
+  v_session_id uuid;
+  v_order_id uuid;
+begin
+  insert into public.table_sessions(table_id, opened_by, origin, waiter_user_id, people_count)
+  values (null, p_user_id, p_origin, p_user_id, greatest(1,p_people_count))
+  returning id into v_session_id;
+
+  insert into public.orders(session_id, status_ext, subtotal, discounts, tax, total, total_amount)
+  values (v_session_id, 'open', 0,0,0,0,0)
+  returning id into v_order_id;
+
+  insert into public.order_checks(order_id, label, position) values (v_order_id, 'C1', 1);
+
+  return jsonb_build_object('session_id', v_session_id, 'order_id', v_order_id);
+end $$;
+
+grant execute on function public.fn_open_manual_or_quick(public.order_origin, uuid, int) to authenticated;
+
+-- =========================
+-- 9) Vistas útiles para la UI
+-- =========================
+-- Estado de mesas por zona (respeta tu view previa; nueva incluye mozo/tiempo)
+create or replace view public.v_zone_table_status2
+with (security_invoker = on) as
+select
+  t.id as table_id,
+  z.id as zone_id,
+  z.name as zone_name,
+  t.code,
+  t.label,
+  t.state,
+  s.id as session_id,
+  s.waiter_user_id,
+  s.opened_at,
+  case when s.closed_at is null then extract(epoch from (now()-s.opened_at))::int/60 end as minutes_open,
+  (select count(*) from public.orders o where o.session_id = s.id and o.status_ext='open') as open_orders
+from public.dining_tables t
+join public.zones z on z.id = t.zone_id
+left join lateral (
+  select *
+  from public.table_sessions s2
+  where s2.table_id = t.id and s2.closed_at is null
+  order by s2.opened_at desc
+  limit 1
+) s on true;
+
+grant select on public.v_zone_table_status2 to authenticated;
+
+-- =========================
+-- 10) Notificación para PostgREST
+-- =========================
+notify pgrst, 'reload schema';
+
+
+------Correccion-------------
+
+-- Elige un usuario del negocio dueño de la mesa (prioriza owner/admin/manager)
+create or replace function public.fn_pick_member_for_table(p_table_id uuid)
+returns uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with biz as (
+    select z.business_id
+    from public.dining_tables dt
+    join public.zones z on z.id = dt.zone_id
+    where dt.id = p_table_id
+    limit 1
+  ),
+  pick_from_memberships as (
+    select m.user_id
+    from public.memberships m, biz
+    where m.business_id = biz.business_id
+      and coalesce(m.status, 'active') = 'active'
+    order by
+      case when coalesce(m.role::text,'staff') in ('owner','admin','manager') then 0 else 1 end,
+      m.start_date nulls last
+    limit 1
+  ),
+  pick_from_user_businesses as (
+    select ub.user_id
+    from public.user_businesses ub, biz
+    where ub.business_id = biz.business_id
+    order by
+      case when coalesce(ub.role,'staff') in ('owner','admin','manager') then 0 else 1 end,
+      ub.created_at nulls last
+    limit 1
+  )
+  select coalesce(
+    (select user_id from pick_from_memberships),
+    (select user_id from pick_from_user_businesses)
+  );
+$$;
+
+grant execute on function public.fn_pick_member_for_table(uuid) to authenticated;
+
+
+---------------------------------
+
+
+
+---------------------------Prueba-----------------------------------
+
+
+-- Toma una mesa cualquiera y un usuario miembro cualquiera
+with u as (
+  select m.user_id
+  from public.memberships m
+  order by m.created_at
+  limit 1
+),
+t as (
+  select dt.id as table_id
+  from public.dining_tables dt
+  order by dt.created_at
+  limit 1
+)
+select public.fn_open_table((select table_id from t), (select user_id from u), 2);
+
+
+----------------------------------
+
+
+-------------1) RPC: agregar ítem por menu_item_id--------------------
+
+-- helper: obtiene (id) del check por posición; crea C1 si no existe
+create or replace function public.fn_get_or_create_check(
+  p_order_id uuid,
+  p_position int default 1
+) returns uuid
+language plpgsql
+security definer
+set search_path=public
+as $$
+declare v_check_id uuid;
+begin
+  select id into v_check_id
+  from public.order_checks
+  where order_id = p_order_id and position = p_position;
+
+  if v_check_id is null then
+    insert into public.order_checks(order_id, label, position)
+    values (p_order_id, 'C'||p_position::text, p_position)
+    returning id into v_check_id;
+  end if;
+
+  return v_check_id;
+end $$;
+
+grant execute on function public.fn_get_or_create_check(uuid,int) to authenticated;
+
+-- Agregar ítem usando catalogo (menu_items)
+create or replace function public.fn_add_item_from_menu(
+  p_order_id uuid,
+  p_menu_item_id uuid,
+  p_qty numeric(10,3) default 1,
+  p_check_position int default 1,
+  p_is_takeout boolean default false,
+  p_notes text default null
+) returns uuid
+language plpgsql
+security definer
+set search_path=public
+as $$
+declare
+  v_name text;
+  v_price numeric(12,2);
+  v_check uuid;
+  v_item_id uuid;
+  v_qty numeric(10,3);
+begin
+  v_qty := greatest(coalesce(p_qty,1), 1);
+
+  select name, price
+    into v_name, v_price
+  from public.menu_items
+  where id = p_menu_item_id
+  limit 1;
+
+  if v_name is null then
+    raise exception 'MENU_ITEM_NOT_FOUND';
+  end if;
+
+  v_check := public.fn_get_or_create_check(p_order_id, p_check_position);
+
+  -- 👇 Insertando quantity además de qty
+  insert into public.order_items(
+    order_id, check_id, product_id, product_name,
+    qty, quantity, unit_price, is_takeout, notes
+  ) values (
+    p_order_id, v_check, p_menu_item_id, v_name,
+    v_qty, v_qty, v_price, coalesce(p_is_takeout,false), p_notes
+  )
+  returning id into v_item_id;
+
+  perform public.fn_recalc_order_totals(p_order_id);
+  return v_item_id;
+end $$;
+
+grant execute on function public.fn_add_item_from_menu(uuid,uuid,numeric,int,boolean,text) to authenticated;
+
+
+
+-----2) RPC: marcar toda la orden “para llevar” (toggle)-----------
+
+create or replace function public.fn_mark_order_takeout(p_order_id uuid, p_takeout boolean)
+returns void language sql security definer set search_path=public as $$
+  update public.order_items set is_takeout = p_takeout where order_id = p_order_id;
+$$;
+grant execute on function public.fn_mark_order_takeout(uuid, boolean) to authenticated;
+
+
+------3) Cerrar orden y mesa---------------
+
+create or replace function public.fn_close_order_and_table(
+  p_order_id uuid,
+  p_status public.order_status -- 'paid' o 'void'
+) returns void
+language plpgsql
+security definer
+set search_path=public
+as $$
+declare
+  v_session uuid;
+  v_open_count int;
+begin
+  -- Actualiza estado de la orden y cacha totales
+  update public.orders
+  set status_ext = p_status,
+      closed_at  = now()
+  where id = p_order_id;
+
+  select session_id into v_session from public.orders where id = p_order_id;
+
+  -- ¿quedan órdenes abiertas en la sesión?
+  select count(*) into v_open_count
+  from public.orders
+  where session_id = v_session and status_ext = 'open';
+
+  if coalesce(v_open_count,0) = 0 then
+    update public.table_sessions
+    set closed_at = now()
+    where id = v_session and closed_at is null;
+  end if;
+end $$;
+
+grant execute on function public.fn_close_order_and_table(uuid, public.order_status) to authenticated;
+
+
+
+------------------------------------
+
+
+-- Asegura columnas y defaults
+alter table public.order_items
+  add column if not exists qty numeric(10,3),
+  add column if not exists quantity numeric(10,3);
+
+alter table public.order_items
+  alter column qty set default 1,
+  alter column quantity set default 1;
+
+-- Trigger de sincronización antes de INSERT/UPDATE
+create or replace function public.fn_oi_sync_qty_quantity()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.qty is null and new.quantity is null then
+    new.qty := 1;
+  end if;
+
+  new.quantity := coalesce(new.quantity, new.qty, 1);
+  new.qty      := coalesce(new.qty,      new.quantity, 1);
+
+  if new.qty <= 0 then
+    new.qty := 1; new.quantity := 1;
+  end if;
+
+  return new;
+end $$;
+
+drop trigger if exists trg_oi_sync_qty_quantity on public.order_items;
+create trigger trg_oi_sync_qty_quantity
+before insert or update on public.order_items
+for each row execute function public.fn_oi_sync_qty_quantity();
+
+
+
+---------------------------probar------------------
+
+-- Usa una orden abierta
+with o as (
+  select (public.fn_open_table((select id from public.dining_tables limit 1), null, 2))->>'order_id' oid
+)
+select public.fn_add_item_from_menu(
+  (select oid::uuid from o),
+  (select id from public.menu_items where is_active limit 1),
+  2, 1, false, 'sin cebolla'
+);
+
+
+----------------------------------------------------------------------Ultimo de cuentas: 
+
+create or replace view public.v_order_detail
+with (security_invoker = on) as
+select
+  o.id              as order_id,
+  oc.id             as check_id,
+  oc.position       as check_pos,
+  oc.label          as check_label,
+  oi.id             as item_id,
+  oi.product_id,
+  oi.product_name,
+  oi.qty,
+  oi.unit_price,
+  oi.is_takeout,
+  oi.status,
+  oi.notes,
+  oi.subtotal,
+  oi.discounts,
+  oi.tax,
+  oi.total,
+  o.subtotal  as order_subtotal,
+  o.discounts as order_discounts,
+  o.tax       as order_tax,
+  o.total     as order_total,
+  o.status_ext
+from public.orders o
+left join public.order_checks oc on oc.order_id = o.id
+left join public.order_items  oi on oi.order_id = o.id and oi.check_id = oc.id;
+
+grant select on public.v_order_detail to authenticated;
+
+
+--------------------------------- 2) Mover ítem entre subcuentas (C1..C5)
+
+create or replace function public.fn_move_item_to_check(
+  p_item_id uuid,
+  p_check_position int
+) returns void
+language plpgsql
+security definer
+set search_path=public
+as $$
+declare
+  v_order uuid;
+  v_check uuid;
+begin
+  select order_id into v_order
+  from public.order_items
+  where id = p_item_id;
+
+  if v_order is null then
+    raise exception 'ITEM_NOT_FOUND';
+  end if;
+
+  v_check := public.fn_get_or_create_check(v_order, p_check_position);
+
+  update public.order_items
+  set check_id = v_check
+  where id = p_item_id;
+
+  perform public.fn_recalc_order_totals(v_order);
+end $$;
+
+grant execute on function public.fn_move_item_to_check(uuid,int) to authenticated;
+
+
+
+------------para llevar ----------------
+
+create or replace function public.fn_toggle_item_takeout(p_item_id uuid, p_takeout boolean)
+returns void
+language sql
+security definer
+set search_path=public
+as $$
+  update public.order_items
+  set is_takeout = p_takeout
+  where id = p_item_id;
+$$;
+
+grant execute on function public.fn_toggle_item_takeout(uuid, boolean) to authenticated;
+
+
+--------------------------------------
+
+-- A) Ver el detalle de la orden actual
+select * from public.v_order_detail
+where order_id = '1890b83c-beb3-4700-800d-2146270ccded'::uuid
+order by check_pos, item_id;
+
+-- B) Mover un ítem a C2
+select public.fn_move_item_to_check('acda6424-e2d5-4dcf-b409-d7f1c551b461'::uuid, 2);
+
+-- C) Marcar ese ítem como "para llevar"
+select public.fn_toggle_item_takeout('acda6424-e2d5-4dcf-b409-d7f1c551b461'::uuid, true);
+
+
+-----Modulo Punto de Ventas------------------------
+
+---------10/14/2025--------------------------------1) Tipos y utilidades
+
+
+--------2) 
+
+-- =========================
+-- 1) Enums y utilidades
+-- =========================
+create extension if not exists "pgcrypto";
+
+do $$ begin
+  create type public.order_origin as enum ('dine_in','manual','quick','delivery','self_service');
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create type public.order_status as enum ('open','sent_to_kitchen','partially_paid','paid','void');
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create type public.item_status as enum ('pending','preparing','ready','served','void');
+exception when duplicate_object then null; end $$;
+
+-- helper que ya usas; lo redefino idempotente (respeta tu multi-tenant)
+create or replace function public.current_user_business_ids()
+returns setof uuid
+language sql stable security definer set search_path=public as $$
+  select m.business_id from public.memberships m where m.user_id = auth.uid()
+  union
+  select ub.business_id from public.user_businesses ub where ub.user_id = auth.uid();
+$$;
+grant execute on function public.current_user_business_ids() to authenticated;
+
+-- =========================
+-- 2) Extiende "table_sessions" y "orders"
+-- =========================
+-- asignación automática de mozo y conteo de personas a nivel de sesión
+alter table public.table_sessions
+  add column if not exists origin public.order_origin not null default 'dine_in',
+  add column if not exists waiter_user_id uuid,                         -- auth.users.id
+  add column if not exists people_count int not null default 1;
+
+-- Garantiza UNA sesión abierta por mesa
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'uniq_open_session_per_table'
+  ) then
+    create unique index uniq_open_session_per_table
+      on public.table_sessions(table_id)
+      where closed_at is null;
+  end if;
+end$$;
+
+-- Amplía "orders" para totales y estados POS (sin romper tu campo total_amount)
+alter table public.orders
+  add column if not exists status_ext public.order_status not null default 'open',
+  add column if not exists subtotal    numeric(12,2) not null default 0,
+  add column if not exists discounts   numeric(12,2) not null default 0,
+  add column if not exists service_fee numeric(12,2) not null default 0,
+  add column if not exists tax         numeric(12,2) not null default 0,
+  add column if not exists total       numeric(12,2) not null default 0;
+
+-- Totales legacy de compatibilidad
+update public.orders
+set total_amount = coalesce(total_amount, 0)
+where total_amount is null;
+
+-- Índices útiles
+create index if not exists idx_orders_session_status on public.orders(session_id, status_ext);
+
+-- =========================
+-- 3) Sub-cuentas (Checks)
+-- =========================
+create table if not exists public.order_checks (
+  id uuid primary key default gen_random_uuid(),
+  order_id uuid not null references public.orders(id) on delete cascade,
+  label text not null default 'C1',           -- C1..C5
+  position int not null default 1,            -- 1..5
+  is_closed boolean not null default false,
+  subtotal  numeric(12,2) not null default 0,
+  discounts numeric(12,2) not null default 0,
+  tax       numeric(12,2) not null default 0,
+  total     numeric(12,2) not null default 0,
+  unique (order_id, position)
+);
+create index if not exists idx_order_checks_order on public.order_checks(order_id);
+
+-- Máximo 5 checks por orden
+create or replace function public.fn_check_max_checks()
+returns trigger language plpgsql as $$
+begin
+  if (select count(*) from public.order_checks where order_id=new.order_id) >= 5 then
+    raise exception 'Max 5 checks per order';
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists trg_check_max_checks on public.order_checks;
+create trigger trg_check_max_checks before insert on public.order_checks
+for each row execute function public.fn_check_max_checks();
+
+-- =========================
+-- 4) Ítems y Modificadores
+-- =========================
+-- 1) Asegura que existan item_status y order_checks (FK de check_id)
+do $$ begin
+  create type public.item_status as enum ('pending','preparing','ready','served','void');
+exception when duplicate_object then null; end $$;
+
+create table if not exists public.order_checks (
+  id uuid primary key default gen_random_uuid(),
+  order_id uuid not null references public.orders(id) on delete cascade,
+  label text not null default 'C1',
+  position int not null default 1,
+  is_closed boolean not null default false,
+  subtotal numeric(12,2) not null default 0,
+  discounts numeric(12,2) not null default 0,
+  tax       numeric(12,2) not null default 0,
+  total     numeric(12,2) not null default 0,
+  unique(order_id, position)
+);
+
+-- 2) Si YA tienes order_items, agrégale las columnas faltantes; si NO existe, créala completa
+do $$
+begin
+  if not exists (
+    select 1 from information_schema.tables
+    where table_schema='public' and table_name='order_items'
+  ) then
+    create table public.order_items (
+      id uuid primary key default gen_random_uuid(),
+      order_id uuid not null references public.orders(id) on delete cascade,
+      check_id uuid references public.order_checks(id) on delete set null,
+      product_id uuid,
+      product_name text not null,
+      sku text,
+      qty numeric(10,3) not null default 1,
+      unit_price numeric(12,2) not null,
+      is_takeout boolean not null default false,
+      status public.item_status not null default 'pending',
+      notes text,
+      subtotal  numeric(12,2) not null default 0,
+      discounts numeric(12,2) not null default 0,
+      tax       numeric(12,2) not null default 0,
+      total     numeric(12,2) not null default 0,
+      created_at timestamptz not null default now()
+    );
+  else
+    alter table public.order_items
+      add column if not exists check_id   uuid references public.order_checks(id) on delete set null,
+      add column if not exists product_id uuid,
+      add column if not exists product_name text,
+      add column if not exists sku text,
+      add column if not exists qty numeric(10,3) default 1,
+      add column if not exists unit_price numeric(12,2),
+      add column if not exists is_takeout boolean not null default false,
+      add column if not exists status public.item_status default 'pending',
+      add column if not exists notes text,
+      add column if not exists subtotal  numeric(12,2) default 0,
+      add column if not exists discounts numeric(12,2) default 0,
+      add column if not exists tax       numeric(12,2) default 0,
+      add column if not exists total     numeric(12,2) default 0,
+      add column if not exists created_at timestamptz default now();
+  end if;
+end$$;
+
+-- 3) Índices (solo si la columna existe)
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='order_items' and column_name='order_id'
+  ) then
+    create index if not exists idx_items_order on public.order_items(order_id);
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='order_items' and column_name='check_id'
+  ) then
+    create index if not exists idx_items_check on public.order_items(check_id);
+  end if;
+end$$;
+
+-- 4) Modificadores (safe)
+create table if not exists public.order_item_modifiers (
+  id uuid primary key default gen_random_uuid(),
+  item_id uuid not null references public.order_items(id) on delete cascade,
+  name text not null,
+  qty numeric(10,3) not null default 1,
+  price numeric(12,2) not null default 0
+);
+create index if not exists idx_item_mods_item on public.order_item_modifiers(item_id);
+
+
+-- =========================
+-- 5) Triggers de totales
+-- =========================
+create or replace function public.fn_compute_item_totals()
+returns trigger language plpgsql as $$
+declare mods_total numeric(12,2) := 0;
+begin
+  select coalesce(sum(price*qty),0)
+    into mods_total
+  from public.order_item_modifiers
+  where item_id = coalesce(new.id, old.id);
+
+  new.subtotal := round((new.unit_price*new.qty) + mods_total, 2);
+  new.total    := new.subtotal - coalesce(new.discounts,0) + coalesce(new.tax,0);
+  return new;
+end $$;
+
+drop trigger if exists trg_item_totals_ins on public.order_items;
+create trigger trg_item_totals_ins
+before insert on public.order_items
+for each row execute function public.fn_compute_item_totals();
+
+drop trigger if exists trg_item_totals_upd on public.order_items;
+create trigger trg_item_totals_upd
+before update on public.order_items
+for each row execute function public.fn_compute_item_totals();
+
+create or replace function public.fn_recalc_order_totals(p_order_id uuid)
+returns void language sql as $$
+  with sums as (
+    select
+      order_id,
+      coalesce(sum(subtotal),0) as subtotal,
+      coalesce(sum(discounts),0) as discounts,
+      coalesce(sum(tax),0) as tax,
+      coalesce(sum(total),0) as total
+    from public.order_items
+    where order_id = p_order_id
+    group by order_id
+  )
+  update public.orders o
+     set subtotal = s.subtotal,
+         discounts = s.discounts,
+         tax = s.tax,
+         total = s.total,
+         total_amount = s.total        -- mantiene compatibilidad con tu campo legacy
+  from sums s
+  where o.id = s.order_id;
+$$;
+
+create or replace function public.fn_after_item_change()
+returns trigger language plpgsql as $$
+begin
+  perform public.fn_recalc_order_totals(coalesce(new.order_id, old.order_id));
+  return null;
+end $$;
+
+drop trigger if exists trg_recalc_after_item_ins on public.order_items;
+create trigger trg_recalc_after_item_ins
+after insert on public.order_items
+for each row execute function public.fn_after_item_change();
+
+drop trigger if exists trg_recalc_after_item_upd on public.order_items;
+create trigger trg_recalc_after_item_upd
+after update on public.order_items
+for each row execute function public.fn_after_item_change();
+
+drop trigger if exists trg_recalc_after_item_del on public.order_items;
+create trigger trg_recalc_after_item_del
+after delete on public.order_items
+for each row execute function public.fn_after_item_change();
+
+-- =========================
+-- 6) RPCs clave para la UI
+-- =========================
+
+-- 6.1 Abrir mesa: si no hay sesión abierta, la crea y asigna mozo = quien hizo click.
+--     Crea una orden base con su check C1.
+create or replace function public.fn_open_table(
+  p_table_id uuid,
+  p_user_id uuid,               -- auth.users.id del mesero que clickea
+  p_people_count int default 1
+) returns jsonb
+language plpgsql
+security definer
+set search_path=public as $$
+declare
+  v_session_id uuid;
+  v_order_id uuid;
+begin
+  -- Si ya hay sesión abierta, regrésala
+  select id into v_session_id
+  from public.table_sessions
+  where table_id = p_table_id and closed_at is null
+  order by opened_at desc
+  limit 1;
+
+  if v_session_id is null then
+    insert into public.table_sessions(table_id, opened_by, origin, waiter_user_id, people_count)
+    values (p_table_id, p_user_id, 'dine_in', p_user_id, greatest(1,p_people_count))
+    returning id into v_session_id;
+  end if;
+
+  -- Orden base (si no existe una OPEN)
+  select id into v_order_id
+  from public.orders
+  where session_id = v_session_id and status_ext='open'
+  order by created_at asc limit 1;
+
+  if v_order_id is null then
+    insert into public.orders(session_id, status_ext, subtotal, discounts, tax, total, total_amount)
+    values (v_session_id, 'open', 0,0,0,0,0)
+    returning id into v_order_id;
+
+    -- C1 por defecto
+    insert into public.order_checks(order_id, label, position) values (v_order_id, 'C1', 1);
+  end if;
+
+  return jsonb_build_object('session_id', v_session_id, 'order_id', v_order_id);
+end $$;
+
+grant execute on function public.fn_open_table(uuid, uuid, int) to authenticated;
+
+-- 6.2 Marcar TODOS los ítems de una orden como "para llevar" (toggle)
+create or replace function public.fn_mark_order_takeout(p_order_id uuid, p_takeout boolean)
+returns void language sql security definer set search_path=public as $$
+  update public.order_items set is_takeout = p_takeout where order_id = p_order_id;
+$$;
+grant execute on function public.fn_mark_order_takeout(uuid, boolean) to authenticated;
+
+-- =========================
+-- 7) RLS para nuevas tablas
+-- =========================
+alter table public.order_checks          enable row level security;
+alter table public.order_items           enable row level security;
+alter table public.order_item_modifiers  enable row level security;
+
+-- checks: mismo tenant que la orden
+drop policy if exists checks_rw on public.order_checks;
+create policy checks_rw on public.order_checks
+for all to authenticated
+using (
+  exists (
+    select 1 from public.orders o
+    join public.table_sessions s on s.id = o.session_id
+    join public.dining_tables t on t.id = s.table_id
+    join public.zones z on z.id = t.zone_id
+    where o.id = order_checks.order_id
+      and z.business_id in (select public.current_user_business_ids())
+  )
+)
+with check (
+  exists (
+    select 1 from public.orders o
+    join public.table_sessions s on s.id = o.session_id
+    join public.dining_tables t on t.id = s.table_id
+    join public.zones z on z.id = t.zone_id
+    where o.id = order_checks.order_id
+      and z.business_id in (select public.current_user_business_ids())
+  )
+);
+
+-- items
+drop policy if exists items_rw on public.order_items;
+create policy items_rw on public.order_items
+for all to authenticated
+using (
+  exists (
+    select 1 from public.orders o
+    join public.table_sessions s on s.id = o.session_id
+    join public.dining_tables t on t.id = s.table_id
+    join public.zones z on z.id = t.zone_id
+    where o.id = order_items.order_id
+      and z.business_id in (select public.current_user_business_ids())
+  )
+)
+with check (
+  exists (
+    select 1 from public.orders o
+    join public.table_sessions s on s.id = o.session_id
+    join public.dining_tables t on t.id = s.table_id
+    join public.zones z on z.id = t.zone_id
+    where o.id = order_items.order_id
+      and z.business_id in (select public.current_user_business_ids())
+  )
+);
+
+-- item modifiers
+drop policy if exists item_mods_rw on public.order_item_modifiers;
+create policy item_mods_rw on public.order_item_modifiers
+for all to authenticated
+using (
+  exists (
+    select 1 from public.order_items oi
+    join public.orders o on o.id = oi.order_id
+    join public.table_sessions s on s.id = o.session_id
+    join public.dining_tables t on t.id = s.table_id
+    join public.zones z on z.id = t.zone_id
+    where oi.id = order_item_modifiers.item_id
+      and z.business_id in (select public.current_user_business_ids())
+  )
+)
+with check (
+  exists (
+    select 1 from public.order_items oi
+    join public.orders o on o.id = oi.order_id
+    join public.table_sessions s on s.id = o.session_id
+    join public.dining_tables t on t.id = s.table_id
+    join public.zones z on z.id = t.zone_id
+    where oi.id = order_item_modifiers.item_id
+      and z.business_id in (select public.current_user_business_ids())
+  )
+);
+
+-- =========================
+-- 8) Venta Manual y Rápida
+-- =========================
+-- Para venta manual/rápida no hay mesa; reusamos table_sessions con mesa NULL
+-- Creamos una "mesa virtual" opcional si prefieres trackear por zona; aquí
+-- sólo dejamos helpers:
+
+create or replace function public.fn_open_manual_or_quick(
+  p_origin public.order_origin,   -- 'manual' o 'quick'
+  p_user_id uuid,
+  p_people_count int default 1
+) returns jsonb
+language plpgsql security definer set search_path=public as $$
+declare
+  v_session_id uuid;
+  v_order_id uuid;
+begin
+  insert into public.table_sessions(table_id, opened_by, origin, waiter_user_id, people_count)
+  values (null, p_user_id, p_origin, p_user_id, greatest(1,p_people_count))
+  returning id into v_session_id;
+
+  insert into public.orders(session_id, status_ext, subtotal, discounts, tax, total, total_amount)
+  values (v_session_id, 'open', 0,0,0,0,0)
+  returning id into v_order_id;
+
+  insert into public.order_checks(order_id, label, position) values (v_order_id, 'C1', 1);
+
+  return jsonb_build_object('session_id', v_session_id, 'order_id', v_order_id);
+end $$;
+
+grant execute on function public.fn_open_manual_or_quick(public.order_origin, uuid, int) to authenticated;
+
+-- =========================
+-- 9) Vistas útiles para la UI
+-- =========================
+-- Estado de mesas por zona (respeta tu view previa; nueva incluye mozo/tiempo)
+create or replace view public.v_zone_table_status2
+with (security_invoker = on) as
+select
+  t.id as table_id,
+  z.id as zone_id,
+  z.name as zone_name,
+  t.code,
+  t.label,
+  t.state,
+  s.id as session_id,
+  s.waiter_user_id,
+  s.opened_at,
+  case when s.closed_at is null then extract(epoch from (now()-s.opened_at))::int/60 end as minutes_open,
+  (select count(*) from public.orders o where o.session_id = s.id and o.status_ext='open') as open_orders
+from public.dining_tables t
+join public.zones z on z.id = t.zone_id
+left join lateral (
+  select *
+  from public.table_sessions s2
+  where s2.table_id = t.id and s2.closed_at is null
+  order by s2.opened_at desc
+  limit 1
+) s on true;
+
+grant select on public.v_zone_table_status2 to authenticated;
+
+-- =========================
+-- 10) Notificación para PostgREST
+-- =========================
+notify pgrst, 'reload schema';
+
+
+------Correccion-------------
+
+-- Elige un usuario del negocio dueño de la mesa (prioriza owner/admin/manager)
+create or replace function public.fn_pick_member_for_table(p_table_id uuid)
+returns uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with biz as (
+    select z.business_id
+    from public.dining_tables dt
+    join public.zones z on z.id = dt.zone_id
+    where dt.id = p_table_id
+    limit 1
+  ),
+  pick_from_memberships as (
+    select m.user_id
+    from public.memberships m, biz
+    where m.business_id = biz.business_id
+      and coalesce(m.status, 'active') = 'active'
+    order by
+      case when coalesce(m.role::text,'staff') in ('owner','admin','manager') then 0 else 1 end,
+      m.start_date nulls last
+    limit 1
+  ),
+  pick_from_user_businesses as (
+    select ub.user_id
+    from public.user_businesses ub, biz
+    where ub.business_id = biz.business_id
+    order by
+      case when coalesce(ub.role,'staff') in ('owner','admin','manager') then 0 else 1 end,
+      ub.created_at nulls last
+    limit 1
+  )
+  select coalesce(
+    (select user_id from pick_from_memberships),
+    (select user_id from pick_from_user_businesses)
+  );
+$$;
+
+grant execute on function public.fn_pick_member_for_table(uuid) to authenticated;
+
+
+---------------------------------
+
+
+
+---------------------------Prueba-----------------------------------
+
+
+-- Toma una mesa cualquiera y un usuario miembro cualquiera
+with u as (
+  select m.user_id
+  from public.memberships m
+  order by m.created_at
+  limit 1
+),
+t as (
+  select dt.id as table_id
+  from public.dining_tables dt
+  order by dt.created_at
+  limit 1
+)
+select public.fn_open_table((select table_id from t), (select user_id from u), 2);
+
+
+----------------------------------
+
+
+-------------1) RPC: agregar ítem por menu_item_id--------------------
+
+-- helper: obtiene (id) del check por posición; crea C1 si no existe
+create or replace function public.fn_get_or_create_check(
+  p_order_id uuid,
+  p_position int default 1
+) returns uuid
+language plpgsql
+security definer
+set search_path=public
+as $$
+declare v_check_id uuid;
+begin
+  select id into v_check_id
+  from public.order_checks
+  where order_id = p_order_id and position = p_position;
+
+  if v_check_id is null then
+    insert into public.order_checks(order_id, label, position)
+    values (p_order_id, 'C'||p_position::text, p_position)
+    returning id into v_check_id;
+  end if;
+
+  return v_check_id;
+end $$;
+
+grant execute on function public.fn_get_or_create_check(uuid,int) to authenticated;
+
+-- Agregar ítem usando catalogo (menu_items)
+create or replace function public.fn_add_item_from_menu(
+  p_order_id uuid,
+  p_menu_item_id uuid,
+  p_qty numeric(10,3) default 1,
+  p_check_position int default 1,
+  p_is_takeout boolean default false,
+  p_notes text default null
+) returns uuid
+language plpgsql
+security definer
+set search_path=public
+as $$
+declare
+  v_name text;
+  v_price numeric(12,2);
+  v_check uuid;
+  v_item_id uuid;
+  v_qty numeric(10,3);
+begin
+  v_qty := greatest(coalesce(p_qty,1), 1);
+
+  select name, price
+    into v_name, v_price
+  from public.menu_items
+  where id = p_menu_item_id
+  limit 1;
+
+  if v_name is null then
+    raise exception 'MENU_ITEM_NOT_FOUND';
+  end if;
+
+  v_check := public.fn_get_or_create_check(p_order_id, p_check_position);
+
+  -- 👇 Insertando quantity además de qty
+  insert into public.order_items(
+    order_id, check_id, product_id, product_name,
+    qty, quantity, unit_price, is_takeout, notes
+  ) values (
+    p_order_id, v_check, p_menu_item_id, v_name,
+    v_qty, v_qty, v_price, coalesce(p_is_takeout,false), p_notes
+  )
+  returning id into v_item_id;
+
+  perform public.fn_recalc_order_totals(p_order_id);
+  return v_item_id;
+end $$;
+
+grant execute on function public.fn_add_item_from_menu(uuid,uuid,numeric,int,boolean,text) to authenticated;
+
+ALTER TABLE menu_items ADD COLUMN position int4 DEFAULT 0;
+
+
+-----2) RPC: marcar toda la orden “para llevar” (toggle)-----------
+
+create or replace function public.fn_mark_order_takeout(p_order_id uuid, p_takeout boolean)
+returns void language sql security definer set search_path=public as $$
+  update public.order_items set is_takeout = p_takeout where order_id = p_order_id;
+$$;
+grant execute on function public.fn_mark_order_takeout(uuid, boolean) to authenticated;
+
+
+------3) Cerrar orden y mesa---------------
+
+create or replace function public.fn_close_order_and_table(
+  p_order_id uuid,
+  p_status public.order_status -- 'paid' o 'void'
+) returns void
+language plpgsql
+security definer
+set search_path=public
+as $$
+declare
+  v_session uuid;
+  v_open_count int;
+begin
+  -- Actualiza estado de la orden y cacha totales
+  update public.orders
+  set status_ext = p_status,
+      closed_at  = now()
+  where id = p_order_id;
+
+  select session_id into v_session from public.orders where id = p_order_id;
+
+  -- ¿quedan órdenes abiertas en la sesión?
+  select count(*) into v_open_count
+  from public.orders
+  where session_id = v_session and status_ext = 'open';
+
+  if coalesce(v_open_count,0) = 0 then
+    update public.table_sessions
+    set closed_at = now()
+    where id = v_session and closed_at is null;
+  end if;
+end $$;
+
+grant execute on function public.fn_close_order_and_table(uuid, public.order_status) to authenticated;
+
+
+
+------------------------------------
+
+
+-- Asegura columnas y defaults
+alter table public.order_items
+  add column if not exists qty numeric(10,3),
+  add column if not exists quantity numeric(10,3);
+
+alter table public.order_items
+  alter column qty set default 1,
+  alter column quantity set default 1;
+
+-- Trigger de sincronización antes de INSERT/UPDATE
+create or replace function public.fn_oi_sync_qty_quantity()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.qty is null and new.quantity is null then
+    new.qty := 1;
+  end if;
+
+  new.quantity := coalesce(new.quantity, new.qty, 1);
+  new.qty      := coalesce(new.qty,      new.quantity, 1);
+
+  if new.qty <= 0 then
+    new.qty := 1; new.quantity := 1;
+  end if;
+
+  return new;
+end $$;
+
+drop trigger if exists trg_oi_sync_qty_quantity on public.order_items;
+create trigger trg_oi_sync_qty_quantity
+before insert or update on public.order_items
+for each row execute function public.fn_oi_sync_qty_quantity();
+
+
+
+---------------------------probar------------------
+
+-- Usa una orden abierta
+with o as (
+  select (public.fn_open_table((select id from public.dining_tables limit 1), null, 2))->>'order_id' oid
+)
+select public.fn_add_item_from_menu(
+  (select oid::uuid from o),
+  (select id from public.menu_items where is_active limit 1),
+  2, 1, false, 'sin cebolla'
+);
+
+
+----------------------------------------------------------------------Ultimo de cuentas: 
+
+create or replace view public.v_order_detail
+with (security_invoker = on) as
+select
+  o.id              as order_id,
+  oc.id             as check_id,
+  oc.position       as check_pos,
+  oc.label          as check_label,
+  oi.id             as item_id,
+  oi.product_id,
+  oi.product_name,
+  oi.qty,
+  oi.unit_price,
+  oi.is_takeout,
+  oi.status,
+  oi.notes,
+  oi.subtotal,
+  oi.discounts,
+  oi.tax,
+  oi.total,
+  o.subtotal  as order_subtotal,
+  o.discounts as order_discounts,
+  o.tax       as order_tax,
+  o.total     as order_total,
+  o.status_ext
+from public.orders o
+left join public.order_checks oc on oc.order_id = o.id
+left join public.order_items  oi on oi.order_id = o.id and oi.check_id = oc.id;
+
+grant select on public.v_order_detail to authenticated;
+
+
+--------------------------------- 2) Mover ítem entre subcuentas (C1..C5)
+
+create or replace function public.fn_move_item_to_check(
+  p_item_id uuid,
+  p_check_position int
+) returns void
+language plpgsql
+security definer
+set search_path=public
+as $$
+declare
+  v_order uuid;
+  v_check uuid;
+begin
+  select order_id into v_order
+  from public.order_items
+  where id = p_item_id;
+
+  if v_order is null then
+    raise exception 'ITEM_NOT_FOUND';
+  end if;
+
+  v_check := public.fn_get_or_create_check(v_order, p_check_position);
+
+  update public.order_items
+  set check_id = v_check
+  where id = p_item_id;
+
+  perform public.fn_recalc_order_totals(v_order);
+end $$;
+
+grant execute on function public.fn_move_item_to_check(uuid,int) to authenticated;
+
+
+
+------------para llevar ----------------
+
+create or replace function public.fn_toggle_item_takeout(p_item_id uuid, p_takeout boolean)
+returns void
+language sql
+security definer
+set search_path=public
+as $$
+  update public.order_items
+  set is_takeout = p_takeout
+  where id = p_item_id;
+$$;
+
+grant execute on function public.fn_toggle_item_takeout(uuid, boolean) to authenticated;
+
+
+--------------------------------------
+
+-- A) Ver el detalle de la orden actual
+select * from public.v_order_detail
+where order_id = '1890b83c-beb3-4700-800d-2146270ccded'::uuid
+order by check_pos, item_id;
+
+-- B) Mover un ítem a C2
+select public.fn_move_item_to_check('acda6424-e2d5-4dcf-b409-d7f1c551b461'::uuid, 2);
+
+-- C) Marcar ese ítem como "para llevar"
+select public.fn_toggle_item_takeout('acda6424-e2d5-4dcf-b409-d7f1c551b461'::uuid, true);
+
+
+---------------10-25-2025------------------------ para la tabla orders
+
+-- Add closed_at column to orders table
+ALTER TABLE orders 
+ADD COLUMN closed_at timestamptz;
+
+-- Optional: Add an index for better query performance
+CREATE INDEX idx_orders_closed_at ON orders(closed_at);
+
+-- Optional: Add a comment
+COMMENT ON COLUMN orders.closed_at IS 'Timestamp when the order was closed (paid or voided)';
+
+
+
+-- WARNING: This schema is for context only and is not meant to be run.
+-- Table order and constraints may not be valid for execution.
+
+CREATE TABLE public.businesses (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  owner_id uuid NOT NULL,
+  business_name text NOT NULL,
+  branch_name text,
+  country text,
+  address text,
+  status text NOT NULL DEFAULT 'active'::text CHECK (status = ANY (ARRAY['active'::text, 'inactive'::text])),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT businesses_pkey PRIMARY KEY (id),
+  CONSTRAINT businesses_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.memberships (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  business_id uuid NOT NULL,
+  plan_type text NOT NULL DEFAULT 'trial'::text CHECK (plan_type = ANY (ARRAY['trial'::text, 'free'::text, 'basic'::text, 'pro'::text])),
+  status text NOT NULL DEFAULT 'active'::text CHECK (status = ANY (ARRAY['active'::text, 'canceled'::text, 'expired'::text])),
+  start_date timestamp with time zone NOT NULL DEFAULT now(),
+  end_date timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT memberships_pkey PRIMARY KEY (id),
+  CONSTRAINT memberships_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
+  CONSTRAINT memberships_business_id_fkey FOREIGN KEY (business_id) REFERENCES public.businesses(id)
+);
+CREATE TABLE public.profiles (
+  id uuid NOT NULL,
+  email text NOT NULL UNIQUE,
+  full_name text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT profiles_pkey PRIMARY KEY (id),
+  CONSTRAINT profiles_id_fkey FOREIGN KEY (id) REFERENCES auth.users(id)
+);
+-- Asegura la extensión para gen_random_uuid()
+create extension if not exists pgcrypto;
+
+create table if not exists public.user_businesses (
+  id           uuid primary key default gen_random_uuid(),
+  user_id      uuid not null references auth.users(id) on delete cascade,
+  business_id  uuid not null references public.businesses(id) on delete cascade,
+
+  role         text not null default 'owner'
+               check (role in ('owner','admin','cashier','chef','waiter')),
+
+  -- AQUÍ EL CAMBIO: tipo text[] y default como arreglo
+  permissions  text[] not null default ARRAY['all']::text[],
+
+  created_at   timestamptz not null default now(),
+
+  -- opcional pero recomendado para evitar duplicados
+  unique (user_id, business_id)
+);
+
+-- Índices útiles (opcionales)
+create index if not exists idx_user_businesses_user on public.user_businesses(user_id);
+create index if not exists idx_user_businesses_business on public.user_businesses(business_id);
+
+-- 1) Columna (paso seguro por si ya existe)
+alter table public.businesses
+  add column if not exists domain text;
+
+-- 2) Trigger para normalizar (lowercase, sin http(s) ni paths/espacios)
+create or replace function public.fn_normalize_domain()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.domain is not null then
+    -- quita http(s)://
+    new.domain := regexp_replace(new.domain, '^https?://', '', 'i');
+    -- quita todo lo que venga después de una /
+    new.domain := regexp_replace(new.domain, '/.*$', '');
+    -- quita espacios
+    new.domain := regexp_replace(new.domain, '\s+', '', 'g');
+    -- a minúsculas
+    new.domain := lower(new.domain);
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_businesses_domain_normalize on public.businesses;
+create trigger trg_businesses_domain_normalize
+before insert or update of domain
+on public.businesses
+for each row
+execute function public.fn_normalize_domain();
+
+-- 3) Check de formato: FQDN que termine en .mangopos.do
+alter table public.businesses
+  drop constraint if exists businesses_domain_format;
+
+alter table public.businesses
+  add constraint businesses_domain_format
+  check (
+    domain ~ '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.mangopos\.do$'
+  );
+
+-- 4) Unicidad case-insensitive (único por lower(domain))
+-- Nota: índice único por expresión en lugar de unique constraint de columna.
+create unique index if not exists uq_businesses_domain_lower
+  on public.businesses ((lower(domain)));
+
+-- 5) Finalmente, vuelve obligatoria la columna (hazlo cuando ya tengas datos válidos)
+alter table public.businesses
+  alter column domain set not null;
+
+-- 9/21/2025
+
+create type table_shape as enum ('square','circle');
+create type table_state as enum ('available','occupied','reserved','blocked');
+
+-- ZONAS (por negocio y opcionalmente por sucursal)
+create table if not exists public.zones (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  branch_id uuid null, -- si tienes tabla branches, agrega FK aquí
+  name text not null,
+  sort_index int not null default 0,
+  is_active boolean not null default true,
+  created_at timestamptz default now()
+);
+
+-- MESAS
+create table if not exists public.dining_tables (
+  id uuid primary key default gen_random_uuid(),
+  zone_id uuid not null references public.zones(id) on delete cascade,
+  code text not null,              -- ej: T01, P05, M02 (único por zona)
+  label text,
+  shape table_shape not null default 'square',
+  capacity int not null default 4,
+  pos_x numeric not null default 0,  -- para layout (grid o %)
+  pos_y numeric not null default 0,
+  width numeric not null default 1,
+  height numeric not null default 1,
+  rotation numeric not null default 0,
+  state table_state not null default 'available',
+  is_active boolean not null default true,
+  created_at timestamptz default now(),
+  unique(zone_id, code)
+);
+
+-- Sesión abierta en una mesa (cuenta por mesa)
+create table if not exists public.table_sessions (
+  id uuid primary key default gen_random_uuid(),
+  table_id uuid not null references public.dining_tables(id) on delete cascade,
+  opened_by uuid not null references auth.users(id) on delete restrict,
+  opened_at timestamptz not null default now(),
+  closed_at timestamptz,
+  customer_name text,
+  note text
+);
+
+-- Pedidos por sesión (resumen)
+create table if not exists public.orders (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid not null references public.table_sessions(id) on delete cascade,
+  status text not null check (status in ('open','sent','served','canceled','paid')) default 'open',
+  total_amount numeric(12,2) default 0,
+  created_at timestamptz default now()
+);
+
+create or replace view public.v_zone_table_status as
+select
+  t.id              as table_id,
+  z.id              as zone_id,
+  z.name            as zone_name,
+  z.business_id,
+  t.code,
+  t.label,
+  t.shape,
+  t.capacity,
+  t.state,
+  s.id              as session_id,
+  s.opened_by,
+  s.opened_at,
+  case when s.opened_at is not null and s.closed_at is null
+       then extract(epoch from (now() - s.opened_at))::int / 60
+       else null end as minutes_open,
+  coalesce((select count(*) from public.orders o where o.session_id = s.id),0) as orders_count
+from public.dining_tables t
+join public.zones z on z.id = t.zone_id
+left join lateral (
+  select * from public.table_sessions s2
+  where s2.table_id = t.id and s2.closed_at is null
+  order by s2.opened_at desc
+  limit 1
+) s on true;
+
+-- habilitar RLS
+alter table public.zones          enable row level security;
+alter table public.dining_tables  enable row level security;
+alter table public.table_sessions enable row level security;
+alter table public.orders         enable row level security;
+-- (businesses / profiles ya los tienes con RLS)
+
+-- helper: negocios del usuario
+create or replace function public.current_user_business_ids()
+returns setof uuid language sql stable as $$
+  select business_id from public.user_businesses where user_id = auth.uid()
+$$;
+
+-- ZONES
+create policy "zones_select" on public.zones
+for select using (business_id in (select public.current_user_business_ids()));
+
+create policy "zones_modify" on public.zones
+for all using (business_id in (select public.current_user_business_ids()))
+with check (business_id in (select public.current_user_business_ids()));
+
+-- TABLES
+create policy "tables_select" on public.dining_tables
+for select using (
+  zone_id in (select id from public.zones where business_id in (select public.current_user_business_ids()))
+);
+
+create policy "tables_modify" on public.dining_tables
+for all using (
+  zone_id in (select id from public.zones where business_id in (select public.current_user_business_ids()))
+)
+with check (
+  zone_id in (select id from public.zones where business_id in (select public.current_user_business_ids()))
+);
+
+-- SESSIONS
+create policy "sessions_all" on public.table_sessions
+for all using (
+  table_id in (
+    select t.id from public.dining_tables t
+    join public.zones z on z.id = t.zone_id
+    where z.business_id in (select public.current_user_business_ids())
+  )
+)
+with check (
+  table_id in (
+    select t.id from public.dining_tables t
+    join public.zones z on z.id = t.zone_id
+    where z.business_id in (select public.current_user_business_ids())
+  )
+);
+
+-- ORDERS
+create policy "orders_all" on public.orders
+for all using (
+  session_id in (
+    select s.id from public.table_sessions s
+    join public.dining_tables t on t.id = s.table_id
+    join public.zones z on z.id = t.zone_id
+    where z.business_id in (select public.current_user_business_ids())
+  )
+)
+with check (
+  session_id in (
+    select s.id from public.table_sessions s
+    join public.dining_tables t on t.id = s.table_id
+    join public.zones z on z.id = t.zone_id
+    where z.business_id in (select public.current_user_business_ids())
+  )
+);
+
+create index if not exists idx_zones_business on public.zones(business_id, sort_index);
+create index if not exists idx_tables_zone on public.dining_tables(zone_id, code);
+create index if not exists idx_sessions_table_open on public.table_sessions(table_id, opened_at) where closed_at is null;
+create index if not exists idx_orders_session on public.orders(session_id, created_at);
+
+create table order_items (
+  id uuid primary key default gen_random_uuid(),
+  order_id uuid references orders(id) on delete cascade,
+  product_id uuid, -- si usas catálogo
+  quantity int not null,
+  unit_price numeric(10,2) not null,
+  total numeric(10,2) generated always as (quantity * unit_price) stored
+);
+
+-----------------------------------
+
+-- Crea la función si no existe (usa memberships y user_businesses)
+create or replace function public.current_user_business_ids()
+returns setof uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select m.business_id
+  from public.memberships m
+  where m.user_id = auth.uid()
+  union
+  select ub.business_id
+  from public.user_businesses ub
+  where ub.user_id = auth.uid();
+$$;
+
+-- Permisos para que los usuarios autenticados puedan ejecutarla
+grant execute on function public.current_user_business_ids() to authenticated;
+
+----------------------------------
+
+alter table public.zones enable row level security;
+
+-- SELECT (ya la tienes, te la dejo por si quieres uniformar la sintaxis)
+create policy if not exists zones_select
+on public.zones for select to authenticated
+using (business_id in (select current_user_business_ids()));
+
+-- INSERT
+create policy if not exists zones_insert
+on public.zones for insert to authenticated
+with check (business_id in (select current_user_business_ids()));
+
+-- UPDATE (opcional pero recomendado)
+create policy if not exists zones_update
+on public.zones for update to authenticated
+using      (business_id in (select current_user_business_ids()))
+with check (business_id in (select current_user_business_ids()));
+
+-- DELETE (opcional)
+create policy if not exists zones_delete
+on public.zones for delete to authenticated
+using (business_id in (select current_user_business_ids()));
+
+
+-----------------------------------------
+
+create or replace function public.current_user_business_ids()
+returns setof uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select m.business_id
+  from public.memberships m
+  where m.user_id = auth.uid()
+  union
+  select ub.business_id
+  from public.user_businesses ub
+  where ub.user_id = auth.uid();
+$$;
+
+grant execute on function public.current_user_business_ids() to authenticated;
+
+
+------------------------------------------------
+
+-- Habilita RLS
+alter table public.zones enable row level security;
+
+-- SELECT
+drop policy if exists zones_select on public.zones;
+create policy zones_select
+on public.zones
+for select
+to authenticated
+using (
+  business_id in (select public.current_user_business_ids())
+);
+
+-- INSERT
+drop policy if exists zones_insert on public.zones;
+create policy zones_insert
+on public.zones
+for insert
+to authenticated
+with check (
+  business_id in (select public.current_user_business_ids())
+);
+
+-- UPDATE (opcional, recomendado)
+drop policy if exists zones_update on public.zones;
+create policy zones_update
+on public.zones
+for update
+to authenticated
+using (
+  business_id in (select public.current_user_business_ids())
+)
+with check (
+  business_id in (select public.current_user_business_ids())
+);
+
+-- DELETE (opcional)
+drop policy if exists zones_delete on public.zones;
+create policy zones_delete
+on public.zones
+for delete
+to authenticated
+using (
+  business_id in (select public.current_user_business_ids())
+);
+
+
+-------------------------------------------------
+
+alter table public.dining_tables enable row level security;
+
+-- SELECT
+drop policy if exists dining_tables_select on public.dining_tables;
+create policy dining_tables_select
+on public.dining_tables
+for select
+to authenticated
+using (
+  exists (
+    select 1
+    from public.zones z
+    where z.id = dining_tables.zone_id
+      and z.business_id in (select public.current_user_business_ids())
+  )
+);
+
+-- INSERT
+drop policy if exists dining_tables_insert on public.dining_tables;
+create policy dining_tables_insert
+on public.dining_tables
+for insert
+to authenticated
+with check (
+  exists (
+    select 1
+    from public.zones z
+    where z.id = dining_tables.zone_id
+      and z.business_id in (select public.current_user_business_ids())
+  )
+);
+
+-- UPDATE (opcional)
+drop policy if exists dining_tables_update on public.dining_tables;
+create policy dining_tables_update
+on public.dining_tables
+for update
+to authenticated
+using (
+  exists (
+    select 1
+    from public.zones z
+    where z.id = dining_tables.zone_id
+      and z.business_id in (select public.current_user_business_ids())
+  )
+)
+with check (
+  exists (
+    select 1
+    from public.zones z
+    where z.id = dining_tables.zone_id
+      and z.business_id in (select public.current_user_business_ids())
+  )
+);
+
+-- DELETE (opcional)
+drop policy if exists dining_tables_delete on public.dining_tables;
+create policy dining_tables_delete
+on public.dining_tables
+for delete
+to authenticated
+using (
+  exists (
+    select 1
+    from public.zones z
+    where z.id = dining_tables.zone_id
+      and z.business_id in (select public.current_user_business_ids())
+  )
+);
+
+
+
+----------------------
+
+create or replace function public.current_user_business_ids()
+returns setof uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select m.business_id
+  from public.memberships m
+  where m.user_id = auth.uid()
+  union
+  select ub.business_id
+  from public.user_businesses ub
+  where ub.user_id = auth.uid();
+$$;
+
+grant execute on function public.current_user_business_ids() to authenticated;
+
+
+
+
+
+
+
+-- Activa RLS
+alter table public.profiles enable row level security;
+
+-- Limpia policies previas (opcional pero recomendado)
+drop policy if exists profiles_select_own on public.profiles;
+drop policy if exists profiles_insert_own on public.profiles;
+drop policy if exists profiles_update_own on public.profiles;
+
+-- SOLO usuarios autenticados pueden ver su propio perfil
+create policy profiles_select_own
+on public.profiles
+for select
+to authenticated
+using (id = auth.uid());
+
+-- SOLO usuarios autenticados pueden insertar su propio perfil
+create policy profiles_insert_own
+on public.profiles
+for insert
+to authenticated
+with check (id = auth.uid());
+
+-- SOLO usuarios autenticados pueden actualizar su propio perfil
+create policy profiles_update_own
+on public.profiles
+for update
+to authenticated
+using (id = auth.uid())
+with check (id = auth.uid());
+
+-- Permisos básicos (por si faltan)
+grant usage on schema public to anon, authenticated;
+grant select, insert, update on public.profiles to authenticated;
+
+
+
+-------------------------------------------------------------------------------
+
+
+alter table public.businesses enable row level security;
+
+-- limpia
+drop policy if exists businesses_owner_select on public.businesses;
+drop policy if exists businesses_owner_insert on public.businesses;
+drop policy if exists businesses_owner_update on public.businesses;
+
+-- SELECT: dueño o miembro (vía RPC)
+create policy businesses_owner_select
+on public.businesses
+for select
+to authenticated
+using (
+  owner_id = auth.uid()
+  or id in (select * from public.current_user_business_ids())
+);
+
+-- INSERT: solo si el owner es el usuario
+create policy businesses_owner_insert
+on public.businesses
+for insert
+to authenticated
+with check (owner_id = auth.uid());
+
+-- UPDATE: solo si es el owner
+create policy businesses_owner_update
+on public.businesses
+for update
+to authenticated
+using (owner_id = auth.uid())
+with check (owner_id = auth.uid());
+
+--------------------------------------------------------------
+
+alter table public.memberships enable row level security;
+
+-- limpia
+drop policy if exists memberships_select_own on public.memberships;
+drop policy if exists memberships_insert_own on public.memberships;
+
+-- SELECT: ver solo tus memberships
+create policy memberships_select_own
+on public.memberships
+for select
+to authenticated
+using (user_id = auth.uid());
+
+-- INSERT: crear memberships solo para ti
+create policy memberships_insert_own
+on public.memberships
+for insert
+to authenticated
+with check (user_id = auth.uid());
+
+
+----------------------------------------------------------------
+
+alter table public.user_businesses enable row level security;
+
+-- limpia
+drop policy if exists user_businesses_select_own on public.user_businesses;
+drop policy if exists user_businesses_insert_self on public.user_businesses;
+
+-- SELECT: ver solo tus relaciones
+create policy user_businesses_select_own
+on public.user_businesses
+for select
+to authenticated
+using (user_id = auth.uid());
+
+-- INSERT: crear relaciones solo para ti
+create policy user_businesses_insert_self
+on public.user_businesses
+for insert
+to authenticated
+with check (user_id = auth.uid());
+
+
+
+
+-------------------------------------------------------
+
+-- ============================================================================
+-- Database helper snippets for manual / quick sales
+-- ============================================================================
+-- This file keeps the SQL we actually need in Supabase. Run the blocks below
+-- (in order) to ensure manual and quick sales always have a backing table_id.
+-- ============================================================================
+
+-------------------------------------------------------------------------------
+-- 1) Helper: ensure virtual zone/table per origin and return its table_id
+-------------------------------------------------------------------------------
+create or replace function public.fn_get_or_create_virtual_table(
+  p_business_id uuid,
+  p_origin public.order_origin
+) returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_zone_name text :=
+    case when p_origin = 'quick' then 'Ventas rapidas' else 'Ventas manuales' end;
+  v_zone_sort int := case when p_origin = 'quick' then 901 else 900 end;
+  v_table_code text := case when p_origin = 'quick' then 'quick' else 'manual' end;
+  v_table_label text :=
+    case when p_origin = 'quick' then 'Venta rapida auto' else 'Venta manual auto' end;
+  v_zone_id uuid;
+  v_table_id uuid;
+begin
+  select id
+    into v_zone_id
+  from public.zones
+  where business_id = p_business_id
+    and name = v_zone_name
+  limit 1;
+
+  if v_zone_id is null then
+    begin
+      insert into public.zones (business_id, name, sort_index, is_active)
+      values (p_business_id, v_zone_name, v_zone_sort, true)
+      returning id into v_zone_id;
+    exception when unique_violation then
+      select id
+        into v_zone_id
+      from public.zones
+      where business_id = p_business_id
+        and name = v_zone_name
+      limit 1;
+    end;
+  end if;
+
+  select id
+    into v_table_id
+  from public.dining_tables
+  where zone_id = v_zone_id
+    and code = v_table_code
+  limit 1;
+
+  if v_table_id is null then
+    begin
+      insert into public.dining_tables (
+        zone_id, code, label, shape, state, capacity,
+        pos_x, pos_y, width, height, rotation, is_active
+      )
+      values (
+        v_zone_id,
+        v_table_code,
+        v_table_label,
+        'square',
+        'available',
+        2,
+        0, 0, 1, 1, 0, true
+      )
+      returning id into v_table_id;
+    exception when unique_violation then
+      select id
+        into v_table_id
+      from public.dining_tables
+      where zone_id = v_zone_id
+        and code = v_table_code
+      limit 1;
+    end;
+  end if;
+
+  return v_table_id;
+end;
+$$;
+
+grant execute on function public.fn_get_or_create_virtual_table(uuid, public.order_origin)
+  to authenticated;
+
+
+-------------------------------------------------------------------------------
+-- 2) RPC: open manual / quick sale using the virtual table_id created above
+-------------------------------------------------------------------------------
+create or replace function public.fn_open_manual_or_quick(
+  p_origin public.order_origin,
+  p_user_id uuid,
+  p_people_count int default 1
+) returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user_id uuid := coalesce(p_user_id, auth.uid());
+  v_business_id uuid;
+  v_table_id uuid;
+  v_session_id uuid;
+  v_order_id uuid;
+  v_existing_session uuid;
+  v_open_order_id uuid;
+begin
+  if v_user_id is null then
+    raise exception 'fn_open_manual_or_quick: user id is required';
+  end if;
+
+  select business_id
+    into v_business_id
+  from public.user_businesses
+  where user_id = v_user_id
+  order by created_at
+  limit 1;
+
+  if v_business_id is null then
+    select bid
+      into v_business_id
+    from public.current_user_business_ids() as bid
+    limit 1;
+  end if;
+
+  if v_business_id is null then
+    raise exception 'fn_open_manual_or_quick: no business found for user %', v_user_id;
+  end if;
+
+  v_table_id := public.fn_get_or_create_virtual_table(v_business_id, p_origin);
+
+  -- Cierra cualquier sesión abierta previa en esta mesa virtual
+  select id
+    into v_existing_session
+  from public.table_sessions
+  where table_id = v_table_id
+    and closed_at is null
+  limit 1;
+
+  if v_existing_session is not null then
+    for v_open_order_id in
+      select id
+      from public.orders
+      where session_id = v_existing_session
+        and status_ext = 'open'
+    loop
+      perform public.fn_close_order_and_table(v_open_order_id, 'void');
+    end loop;
+
+    update public.table_sessions
+    set closed_at = now()
+    where id = v_existing_session;
+  end if;
+
+  insert into public.table_sessions (table_id, opened_by, origin, waiter_user_id, people_count)
+  values (v_table_id, v_user_id, p_origin, v_user_id, greatest(1, p_people_count))
+  returning id into v_session_id;
+
+  insert into public.orders (session_id, status_ext, subtotal, discounts, tax, total, total_amount)
+  values (v_session_id, 'open', 0, 0, 0, 0, 0)
+  returning id into v_order_id;
+
+  insert into public.order_checks (order_id, label, position)
+  values (v_order_id, 'C1', 1);
+
+  return jsonb_build_object('session_id', v_session_id, 'order_id', v_order_id);
+end;
+$$;
+
+grant execute on function public.fn_open_manual_or_quick(public.order_origin, uuid, int)
+  to authenticated;
+
+
+-------------------------------------------------------------------------------
+-- 3) Manual test helper (optional, run in SQL editor)
+-------------------------------------------------------------------------------
+-- select public.fn_open_manual_or_quick('manual', auth.uid(), 1);
+-- select public.fn_open_manual_or_quick('quick', auth.uid(), 1);
+
+
+
+-----------------------------------Actualizaciones del dia 13-------------------------------------------
+
+

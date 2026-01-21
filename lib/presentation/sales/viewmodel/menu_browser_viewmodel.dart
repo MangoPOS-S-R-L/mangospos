@@ -1,6 +1,5 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_riverpod/legacy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 @immutable
@@ -46,6 +45,7 @@ class MenuBrowserState {
   final String? selectedCategoryId;
   final List<MenuProduct> products;
   final String search;
+  final MenuProduct? selectedProduct;
 
   const MenuBrowserState({
     this.loading = false,
@@ -54,6 +54,7 @@ class MenuBrowserState {
     this.selectedCategoryId,
     this.products = const [],
     this.search = '',
+    this.selectedProduct,
   });
 
   MenuBrowserState copyWith({
@@ -63,6 +64,7 @@ class MenuBrowserState {
     String? selectedCategoryId,
     List<MenuProduct>? products,
     String? search,
+    MenuProduct? selectedProduct,
   }) {
     return MenuBrowserState(
       loading: loading ?? this.loading,
@@ -71,6 +73,7 @@ class MenuBrowserState {
       selectedCategoryId: selectedCategoryId ?? this.selectedCategoryId,
       products: products ?? this.products,
       search: search ?? this.search,
+      selectedProduct: selectedProduct ?? this.selectedProduct,
     );
   }
 }
@@ -110,6 +113,7 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
         loading: false,
         categories: categories,
         selectedCategoryId: selected,
+        selectedProduct: null,
       );
 
       if (selected != null) {
@@ -131,6 +135,7 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
         loading: true,
         error: null,
         selectedCategoryId: categoryId,
+        selectedProduct: null,
       );
 
       final rows = await _client
@@ -144,7 +149,11 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
           .map((e) => MenuProduct.fromMap(e as Map<String, dynamic>))
           .toList();
 
-      state = state.copyWith(loading: false, products: products);
+      state = state.copyWith(
+        loading: false,
+        products: products,
+        selectedProduct: null,
+      );
     } catch (e) {
       state = state.copyWith(
         loading: false,
@@ -155,7 +164,7 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
 
   Future<void> searchProducts(String text) async {
     final q = text.trim();
-    state = state.copyWith(search: q);
+    state = state.copyWith(search: q, selectedProduct: null);
 
     if (q.isEmpty) {
       // Si se borra la búsqueda, recarga por categoría seleccionada
@@ -179,12 +188,25 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
           .map((e) => MenuProduct.fromMap(e as Map<String, dynamic>))
           .toList();
 
-      state = state.copyWith(loading: false, products: products);
+      state = state.copyWith(
+        loading: false,
+        products: products,
+        selectedProduct: null,
+      );
     } catch (e) {
       state = state.copyWith(
         loading: false,
         error: 'No se pudieron buscar productos: $e',
       );
     }
+  }
+
+  // UI helpers: selección de producto para agregar
+  void startAddProduct(MenuProduct p) {
+    state = state.copyWith(selectedProduct: p);
+  }
+
+  void cancelAddProduct() {
+    state = state.copyWith(selectedProduct: null);
   }
 }

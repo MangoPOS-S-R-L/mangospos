@@ -1,119 +1,129 @@
 // lib/presentation/sales/view/sales_shell_view.dart
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
-import 'package:mangopos/app/theme/mango_colors.dart';
-import 'package:mangopos/utils/responsive_utils.dart';
-import 'package:mangopos/widgets/responsive/responsive_icon.dart';
+import 'package:mangopos/presentation/sales/state/sales_state.dart';
+import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
+import 'package:mangopos/presentation/sales/view/theme/sales_theme.dart';
 
 enum SalesTab { byZone, manual, quick, delivery, selfService }
 
-class SalesShellView extends StatelessWidget {
+class SalesShellView extends ConsumerWidget {
   final Widget child;
   const SalesShellView({super.key, required this.child});
 
   @override
-  Widget build(BuildContext context) {
-    final route = GoRouterState.of(context).uri.toString();
+  Widget build(BuildContext context, WidgetRef ref) {
+    String route;
+    try {
+      route = GoRouterState.of(context).uri.toString();
+    } catch (_) {
+      route = '';
+    }
     final selected = _selectedFromRoute(route);
-    final rawMenuWidth = context.isDesktop
-        ? context.wp(12)
-        : context.isTablet
-            ? context.wp(16)
-            : context.wp(28);
-    final menuWidth = rawMenuWidth.clamp(90.0, 200.0) as double;
-    final sidePadding = context.wp(context.isDesktop ? 1.5 : 2.8);
-    final headerHeight = context.hp(context.isMobile ? 6 : 5);
+    final orderState = ref.watch(currentOrderProvider);
+    final guardNavigation = _shouldGuardNavigation(route, orderState);
 
     return Scaffold(
-      backgroundColor: Colors.white,
-      body: SafeArea(
-        child: Row(
-          children: [
-          // ======= SUBMENÚ COMPACTO =======
-          Material(
-            color: Colors.white,
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                minWidth: menuWidth,
-                maxWidth: menuWidth,
+      backgroundColor: SalesTheme.background,
+      body: Row(
+        children: [
+          // 📂 SIDEBAR IZQUIERDO (FIJO – 224px)
+          Container(
+            width: 224,
+            decoration: const BoxDecoration(
+              color: SalesTheme.cardBackground,
+              border: Border(
+                right: BorderSide(color: SalesTheme.border, width: 1),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  // Encabezado con altura fija de 72
-                  Container(
-                    height: headerHeight,
-                    alignment: Alignment.center,
-                    child: Text(
-                      'VENTAS',
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: Colors.grey.shade600,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: .3,
-                        fontSize: context.sp(12),
-                      ),
-                    ),
-                  ),
-                  _SideDivider(padding: sidePadding),
+            ),
+            child: Column(
+              children: [
+                // Espacio superior o Header
+                const SizedBox(height: 24),
 
-                  // Opciones
-                  Expanded(
-                    child: ListView(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: sidePadding,
-                        vertical: context.hp(1.2),
+                Expanded(
+                  child: ListView(
+                    padding: const EdgeInsets.all(12),
+                    children: [
+                      _SalesNavItem(
+                        icon: Icons.grid_view_rounded,
+                        label: 'Por zona',
+                        selected: selected == SalesTab.byZone,
+                        onTap: () => _handleNavTap(
+                          context,
+                          ref,
+                          route,
+                          AppRoutes.salesByZone,
+                          guardNavigation,
+                        ),
                       ),
-                      children: [
-                        _SalesNavItemVertical(
-                          icon: Icons.grid_view_rounded,
-                          label: 'Por Zona',
-                          selected: selected == SalesTab.byZone,
-                          onTap: () => context.go(AppRoutes.salesByZone),
+                      const SizedBox(height: 4),
+                      _SalesNavItem(
+                        icon: Icons.description_outlined, // FileText
+                        label: 'Venta manual',
+                        selected: selected == SalesTab.manual,
+                        onTap: () => _handleNavTap(
+                          context,
+                          ref,
+                          route,
+                          AppRoutes.salesManual,
+                          guardNavigation,
                         ),
-                        _SalesNavItemVertical(
-                          icon: Icons.handshake_outlined,
-                          label: 'Manual',
-                          selected: selected == SalesTab.manual,
-                          onTap: () => context.go(AppRoutes.salesManual),
+                      ),
+                      const SizedBox(height: 4),
+                      _SalesNavItem(
+                        icon: Icons.bolt_rounded, // Zap
+                        label: 'Venta rápida',
+                        selected: selected == SalesTab.quick,
+                        onTap: () => _handleNavTap(
+                          context,
+                          ref,
+                          route,
+                          AppRoutes.salesQuick,
+                          guardNavigation,
                         ),
-                        _SalesNavItemVertical(
-                          icon: Icons.speed_outlined,
-                          label: 'Rápida',
-                          selected: selected == SalesTab.quick,
-                          onTap: () => context.go(AppRoutes.salesQuick),
+                      ),
+                      const SizedBox(height: 4),
+                      _SalesNavItem(
+                        icon: Icons.local_shipping_outlined, // Truck
+                        label: 'Delivery',
+                        selected: selected == SalesTab.delivery,
+                        onTap: () => _handleNavTap(
+                          context,
+                          ref,
+                          route,
+                          AppRoutes.salesDelivery,
+                          guardNavigation,
                         ),
-                        _SalesNavItemVertical(
-                          icon: Icons.delivery_dining_outlined,
-                          label: 'Delivery',
-                          selected: selected == SalesTab.delivery,
-                          onTap: () => context.go(AppRoutes.salesDelivery),
+                      ),
+                      const SizedBox(height: 4),
+                      _SalesNavItem(
+                        icon: Icons.smartphone_rounded, // Smartphone
+                        label: 'Self service',
+                        selected: selected == SalesTab.selfService,
+                        onTap: () => _handleNavTap(
+                          context,
+                          ref,
+                          route,
+                          AppRoutes.salesSelfService,
+                          guardNavigation,
                         ),
-                        _SalesNavItemVertical(
-                          icon: Icons.table_bar_outlined,
-                          label: 'Self',
-                          selected: selected == SalesTab.selfService,
-                          onTap: () => context.go(AppRoutes.salesSelfService),
-                          disabled: true,
-                        ),
-                      ],
-                    ),
+                        disabled: true,
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
 
-          // Divider vertical
-          _VerticalSeparator(padding: context.hp(1)),
-
-          // ======= CONTENIDO =======
+          // ======= CONTENIDO PRINCIPAL =======
           Expanded(
-            child: Container(color: Colors.white, child: child),
+            child: Container(color: SalesTheme.background, child: child),
           ),
-          ],
-        ),
+        ],
       ),
     );
   }
@@ -125,45 +135,74 @@ class SalesShellView extends StatelessWidget {
     if (route.contains(AppRoutes.salesSelfService)) return SalesTab.selfService;
     return SalesTab.byZone;
   }
-}
 
-class _SideDivider extends StatelessWidget {
-  final double padding;
-  const _SideDivider({required this.padding});
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.symmetric(horizontal: padding),
-      child: Divider(height: 1, thickness: 1, color: Colors.grey.shade200),
-    );
+  Future<void> _handleNavTap(
+    BuildContext context,
+    WidgetRef ref,
+    String currentRoute,
+    String targetRoute,
+    bool guardNavigation,
+  ) async {
+    if (currentRoute == targetRoute) return;
+    if (guardNavigation) {
+      final confirmed = await _showExitSaleDialog(context);
+      if (confirmed != true) return;
+      await ref.read(currentOrderProvider.notifier).cancelCurrentOrder();
+    }
+    if (!context.mounted) return;
+    context.go(targetRoute);
   }
-}
 
-class _VerticalSeparator extends StatelessWidget {
-  final double padding;
-  const _VerticalSeparator({required this.padding});
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.symmetric(vertical: padding),
-      child: Container(
-        width: 1,
-        height: double.infinity,
-        color: Colors.grey.shade200,
+  bool _shouldGuardNavigation(String route, CurrentOrderState orderState) {
+    if (orderState.items.isEmpty) return false;
+    final isManual = route.contains(AppRoutes.salesManual);
+    final isQuick = route.contains(AppRoutes.salesQuick);
+    return isManual || isQuick;
+  }
+
+  Future<bool?> _showExitSaleDialog(BuildContext context) {
+    return showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: SalesTheme.cardBackground,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: Text(
+          'Cancelar venta',
+          style: SalesTheme.textTheme.headlineMedium,
+        ),
+        content: Text(
+          '¿Estás seguro de que deseas salir? Se perderá el progreso actual.',
+          style: SalesTheme.textTheme.bodyLarge,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(
+              'Cancelar',
+              style: TextStyle(color: SalesTheme.mutedForeground),
+            ),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: SalesTheme.destructive,
+            ),
+            child: const Text('Salir'),
+          ),
+        ],
       ),
     );
   }
 }
 
-/// Ítem de navegación compacto
-class _SalesNavItemVertical extends StatelessWidget {
+class _SalesNavItem extends StatelessWidget {
   final IconData icon;
   final String label;
   final bool selected;
   final VoidCallback onTap;
   final bool disabled;
 
-  const _SalesNavItemVertical({
+  const _SalesNavItem({
     required this.icon,
     required this.label,
     required this.selected,
@@ -173,48 +212,36 @@ class _SalesNavItemVertical extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const orange = MangoColors.primaryOrange;
-    const baseFg = MangoColors.darkGray;
-
-    final bg = selected ? const Color(0xFFFFF3E5) : Colors.transparent;
-    final fg = selected ? orange : baseFg;
-    final border = selected ? Border.all(color: orange, width: 2) : null;
-    final opacity = disabled ? .38 : 1.0;
+    final bg = selected ? SalesTheme.primary : Colors.transparent;
+    final fg = selected ? SalesTheme.primaryForeground : SalesTheme.foreground;
+    // Opacidad para items deshabilitados
+    final double opacity = disabled ? 0.5 : 1.0;
 
     return Opacity(
       opacity: opacity,
-      child: Padding(
-        padding: EdgeInsets.symmetric(vertical: context.hp(0.8)),
+      child: Material(
+        color: Colors.transparent,
         child: InkWell(
           onTap: disabled ? null : onTap,
-          borderRadius: BorderRadius.circular(12),
-          splashColor: orange.withOpacity(.1),
-          hoverColor: Colors.transparent,
-          highlightColor: Colors.transparent,
-          child: Ink(
-            padding: EdgeInsets.symmetric(
-              vertical: context.hp(0.9),
-              horizontal: context.wp(1.2),
-            ),
+          borderRadius: BorderRadius.circular(8),
+          hoverColor: SalesTheme.primary.withOpacity(0.05),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
               color: bg,
-              borderRadius: BorderRadius.circular(12),
-              border: border,
+              borderRadius: BorderRadius.circular(8),
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
+            child: Row(
               children: [
-                ResponsiveIcon(icon: icon, color: fg, size: 26),
-                SizedBox(height: context.hp(0.6)),
+                Icon(icon, color: fg, size: 20),
+                const SizedBox(width: 12),
                 Text(
                   label,
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
+                  style: SalesTheme.textTheme.bodyMedium?.copyWith(
                     color: fg,
-                    fontSize: context.sp(12),
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w500, // Medium
+                    fontSize: 14,
                   ),
                 ),
               ],
