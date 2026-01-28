@@ -39,30 +39,12 @@ class _MainShellState extends State<MainShell> {
 
   @override
   Widget build(BuildContext context) {
-    final isWide = context.screenSize.width >= 1100;
-    final rawTopBarHeight = context.hp(
-      context.isDesktop
-          ? 7
-          : context.isTablet
-          ? 9
-          : 12,
-    );
-    final topBarHeight = rawTopBarHeight < 80
-        ? 80.0
-        : rawTopBarHeight > 96
-        ? 96.0
-        : rawTopBarHeight;
-    final horizontalPadding = context.wp(
-      context.isDesktop
-          ? 1.8
-          : context.isTablet
-          ? 2.8
-          : 4.5,
-    );
-    final navGap = context.wp(context.isDesktop ? 1.2 : 3);
+    const topBarHeight = 64.0;
+    const horizontalPadding = 16.0;
+    const navGap = 16.0;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF2F2F2),
+      backgroundColor: const Color(0xFFFBFAF9),
       body: SafeArea(
         child: Column(
           children: [
@@ -70,13 +52,16 @@ class _MainShellState extends State<MainShell> {
             Container(
               height: topBarHeight,
               width: double.infinity,
-              padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
+              padding: const EdgeInsets.symmetric(
+                horizontal: horizontalPadding,
+              ),
               decoration: const BoxDecoration(
-                color: MangoColors.white,
+                color: Colors.white,
+                border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
                 boxShadow: [
                   BoxShadow(
-                    color: Color(0x1A000000),
-                    blurRadius: 6,
+                    color: Color(0x0F000000), // Shadow soft
+                    blurRadius: 4,
                     offset: Offset(0, 2),
                   ),
                 ],
@@ -85,127 +70,78 @@ class _MainShellState extends State<MainShell> {
                 children: [
                   // Logo
                   const _Logo(),
-                  SizedBox(width: navGap),
+                  const SizedBox(width: 32),
 
-                  // Menú principal
+                  // Menú principal (Centro)
                   Expanded(
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      physics: const BouncingScrollPhysics(),
-                      child: Row(
-                        children: [
-                          _TopNavItem(
-                            label: 'Home',
-                            route: AppRoutes.dashboard,
-                            asset: 'assets/icons/dashboard.svg',
-                            iconSize: 24,
-                          ),
-                          SizedBox(width: navGap),
-                          _TopNavItem(
-                            label: 'Ventas',
-                            route: AppRoutes.sales,
-                            asset: 'assets/icons/ventas_principal.svg',
-                            iconSize: 24,
-                          ),
-                          SizedBox(width: navGap),
-                          _TopNavItem(
-                            label: 'Caja',
-                            route: AppRoutes.cashier,
-                            asset: 'assets/icons/caja_principal.svg',
-                            iconSize: 24,
-                          ),
-                          SizedBox(width: navGap),
-                          _TopNavItem(
-                            label: 'Cocina',
-                            route: AppRoutes.kitchen,
-                            asset: 'assets/icons/cocina_principal.svg',
-                            iconSize: 24,
-                          ),
-                          SizedBox(width: navGap),
-                          _TopNavItem(
-                            label: 'Clientes',
-                            route: AppRoutes.customers,
-                            asset: 'assets/icons/clientes_principal.svg',
-                            iconSize: 24,
-                          ),
-                          SizedBox(width: navGap),
-                          _TopNavItem(
-                            label: 'Productos',
-                            route: AppRoutes.products,
-                            asset: 'assets/icons/productos_principal.svg',
-                            iconSize: 24,
-                          ),
-                          SizedBox(width: navGap),
-                          _TopNavItem(
-                            label: 'Reportes',
-                            route: AppRoutes.reports,
-                            asset: 'assets/icons/reportes_principal.svg',
-                            iconSize: 24,
-                          ),
-                        ],
+                    child: Center(
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        physics: const BouncingScrollPhysics(),
+                        child: Row(
+                          children: [
+                            const _TopNavItem(
+                              label: 'Home',
+                              route: AppRoutes.dashboard,
+                              asset: 'assets/icons/dashboard.svg',
+                            ),
+                            const SizedBox(width: navGap),
+                            const _TopNavItem(
+                              label: 'Ventas',
+                              route: AppRoutes.sales,
+                              asset: 'assets/icons/ventas_principal.svg',
+                            ),
+                            const SizedBox(width: navGap),
+                            const _TopNavItem(
+                              label: 'Caja',
+                              route: AppRoutes.cashier,
+                              asset: 'assets/icons/caja_principal.svg',
+                            ),
+                            const SizedBox(width: navGap),
+                            const _TopNavItem(
+                              label: 'Cocina',
+                              route: AppRoutes.kitchen,
+                              asset: 'assets/icons/cocina_principal.svg',
+                            ),
+                            const SizedBox(width: navGap),
+
+                            const _TopNavItem(
+                              label: 'Productos',
+                              route: AppRoutes.products,
+                              asset: 'assets/icons/productos_principal.svg',
+                            ),
+                            const SizedBox(width: navGap),
+                            const _TopNavItem(
+                              label: 'Reportes',
+                              route: AppRoutes.reports,
+                              asset: 'assets/icons/reportes_principal.svg',
+                            ),
+                            const SizedBox(width: navGap),
+                            const _TopNavItem(
+                              label: 'Más Ajustes',
+                              route: AppRoutes.settings,
+                              asset: 'assets/icons/masajustes.svg',
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
 
-                  SizedBox(width: navGap),
-
-                  // Sección derecha
+                  // Sección derecha (Acciones)
                   Row(
                     children: [
-                      // Mas Ajustes
-                      const _SettingsButton(),
+                      // Notificaciones
+                      const _NotificationButton(),
 
-                      // Divisor
-                      if (isWide) ...[
-                        SizedBox(
-                          height: context.iconSizeOf(32),
-                          child: VerticalDivider(
-                            thickness: 1,
-                            width: context.iconSizeOf(28),
-                            color: Colors.grey[300],
-                          ),
-                        ),
+                      const SizedBox(width: 16),
 
-                        // Chip de FECHA
-                        _Chip(
-                          child: Row(
-                            children: [
-                              ResponsiveIcon(
-                                icon: Icons.event_available_outlined,
-                                size: 16,
-                                color: MangoColors.primaryOrange,
-                              ),
-                              SizedBox(width: context.wp(1.5)),
-                              Text(
-                                _fmtDate(_now),
-                                style: TextStyle(
-                                  fontSize: context.sp(12),
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
+                      // Divider
+                      Container(height: 32, width: 1, color: Colors.grey[300]),
 
-                        SizedBox(width: context.wp(2)),
+                      const SizedBox(width: 16),
 
-                        // ✅ Indicador de Conexión (reemplaza la hora)
-                        const _ConnectionIndicator(),
-
-                        // Divisor antes del usuario
-                        SizedBox(
-                          height: context.iconSizeOf(32),
-                          child: VerticalDivider(
-                            thickness: 1,
-                            width: context.iconSizeOf(28),
-                            color: Colors.grey[300],
-                          ),
-                        ),
-                      ] else ...[
-                        SizedBox(width: context.wp(4)),
-                      ],
-
-                      // Usuario
+                      // User Info
                       const _UserInfo(),
                     ],
                   ),
@@ -214,26 +150,7 @@ class _MainShellState extends State<MainShell> {
             ),
 
             // ======= CONTENIDO =======
-            Expanded(
-              child: Padding(
-                padding: EdgeInsets.all(
-                  context.wp(
-                    context.isDesktop
-                        ? 1.2
-                        : context.isTablet
-                        ? 2.4
-                        : 3.5,
-                  ),
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(16),
-                  child: Container(
-                    color: MangoColors.white,
-                    child: widget.child,
-                  ),
-                ),
-              ),
-            ),
+            Expanded(child: widget.child),
           ],
         ),
       ),
@@ -260,8 +177,8 @@ class _MainShellState extends State<MainShell> {
   }
 }
 
-// ===== ITEM DEL MENÚ =====
-class _TopNavItem extends StatelessWidget {
+// ===== ITEM DEL MENÚ (PILL SHAPE) =====
+class _TopNavItem extends StatefulWidget {
   final String label;
   final String route;
   final String asset;
@@ -270,67 +187,92 @@ class _TopNavItem extends StatelessWidget {
     required this.label,
     required this.route,
     required this.asset,
-    this.iconSize = 26,
+    this.iconSize = 20.0,
   });
+
+  @override
+  State<_TopNavItem> createState() => _TopNavItemState();
+}
+
+class _TopNavItemState extends State<_TopNavItem> {
+  bool _isHovering = false;
 
   @override
   Widget build(BuildContext context) {
     final loc = GoRouterState.of(context).uri.toString();
-    final active = loc == route || (route != '/' && loc.startsWith(route));
+    final active =
+        loc == widget.route ||
+        (widget.route != '/' && loc.startsWith(widget.route));
 
-    final iconColor = active ? MangoColors.primaryOrange : Colors.grey[600]!;
-    final textColor = active ? MangoColors.darkGray : Colors.grey[700]!;
-    final scaledIconSize = context.iconSizeOf(iconSize);
-
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        splashColor: MangoColors.primaryOrange.withOpacity(0.1),
-        highlightColor: MangoColors.primaryOrange.withOpacity(0.05),
-        onTap: () => context.go(route),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          padding: EdgeInsets.symmetric(
-            horizontal: context.wp(context.isDesktop ? 1.2 : 2),
-            vertical: context.hp(context.isMobile ? 0.6 : 0.4),
-          ),
-          decoration: BoxDecoration(
-            color: active
-                ? MangoColors.primaryOrange.withOpacity(0.08)
-                : Colors.transparent,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
+    return MouseRegion(
+      onEnter: (_) => setState(() => _isHovering = true),
+      onExit: (_) => setState(() => _isHovering = false),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () => context.go(widget.route),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
               color: active
-                  ? MangoColors.primaryOrange.withOpacity(0.2)
-                  : Colors.transparent,
-              width: 1,
+                  ? MangoColors.primaryOrange
+                  : (_isHovering
+                        ? const Color(0xFFF7F7F9)
+                        : Colors.transparent),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ColorFiltered(
+                  colorFilter: ColorFilter.mode(
+                    active ? Colors.white : Colors.grey[600]!,
+                    BlendMode.srcIn,
+                  ),
+                  child: SvgPicture.asset(
+                    widget.asset,
+                    width: widget.iconSize,
+                    height: widget.iconSize,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  widget.label,
+                  style: TextStyle(
+                    fontSize: 15, // Aumentado 2px (antes 13)
+                    fontWeight: active ? FontWeight.bold : FontWeight.w600,
+                    color: active ? Colors.white : Colors.grey[700]!,
+                  ),
+                ),
+              ],
             ),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ColorFiltered(
-                colorFilter: ColorFilter.mode(iconColor, BlendMode.srcIn),
-                child: SvgPicture.asset(
-                  asset,
-                  width: scaledIconSize,
-                  height: scaledIconSize,
-                ),
-              ),
-              SizedBox(height: context.hp(context.isMobile ? 0.6 : 0.4)),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: context.sp(12),
-                  fontWeight: FontWeight.w600,
-                  color: textColor,
-                ),
-              ),
-              SizedBox(height: context.hp(context.isMobile ? 0.8 : 0.5)),
-            ],
-          ),
         ),
+      ),
+    );
+  }
+}
+
+// ===== NOTIFICATION BUTTON (New) =====
+class _NotificationButton extends StatelessWidget {
+  const _NotificationButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        color: Colors.grey[100],
+        shape: BoxShape.circle,
+      ),
+      child: IconButton(
+        icon: Icon(Icons.notifications_none, color: Colors.grey[600]),
+        onPressed: () {
+          // TODO show notifications
+        },
       ),
     );
   }
@@ -511,10 +453,10 @@ class _Logo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final logoHeight = context.hp(context.isMobile ? 6 : 5);
+    // final logoHeight = context.hp(context.isMobile ? 6 : 5);
     return Image.asset(
       'assets/images/logo.png',
-      height: logoHeight,
+      height: 40, // Height fijo para que se vea correctamente
       fit: BoxFit.contain,
     );
   }
@@ -524,296 +466,44 @@ class _Logo extends StatelessWidget {
 class _UserInfo extends StatelessWidget {
   const _UserInfo();
 
-  Future<_UserData> _loadUserInfo() async {
-    final supabase = Supabase.instance.client;
-    final user = supabase.auth.currentUser;
-
-    if (user == null) {
-      return const _UserData(
-        fullName: 'Invitado',
-        uid: '—',
-        businessId: '—',
-        role: 'guest',
-        permissions: <String>[],
-      );
-    }
-
-    String fullName = 'Usuario';
-    try {
-      final profile = await supabase
-          .from('profiles')
-          .select('full_name')
-          .eq('id', user.id)
-          .maybeSingle();
-      final pName = profile?['full_name']?.toString().trim();
-      if (pName != null && pName.isNotEmpty) fullName = pName;
-    } catch (_) {}
-
-    String businessId = '—';
-    String role = 'user';
-    List<dynamic> rawPerms = const [];
-    try {
-      final ub = await supabase
-          .from('user_businesses')
-          .select('business_id, role, permissions')
-          .eq('user_id', user.id)
-          .order('created_at', ascending: true)
-          .limit(1)
-          .maybeSingle();
-      if (ub != null) {
-        if (ub['business_id'] != null) {
-          businessId = ub['business_id'].toString();
-        }
-        if (ub['role'] != null) role = ub['role'].toString().toLowerCase();
-        if (ub['permissions'] != null) rawPerms = (ub['permissions'] as List);
-      }
-    } catch (_) {}
-
-    final permissions = rawPerms
-        .map((e) => e.toString())
-        .toList(growable: false);
-
-    return _UserData(
-      fullName: fullName,
-      uid: user.id,
-      businessId: businessId,
-      role: role,
-      permissions: permissions,
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
-    return FutureBuilder<_UserData>(
-      future: _loadUserInfo(),
-      builder: (context, snap) {
-        if (snap.connectionState == ConnectionState.waiting) {
-          final loaderSize = context.iconSizeOf(16);
-          return Row(
-            children: [
-              SizedBox(
-                width: loaderSize,
-                height: loaderSize,
-                child: const CircularProgressIndicator(strokeWidth: 2),
-              ),
-              SizedBox(width: context.wp(2)),
-              Text('Cargando...', style: text.bodyMedium),
-            ],
-          );
-        }
-        if (snap.hasError || snap.data == null) {
-          return const Text(
-            'Error al cargar usuario',
-            style: TextStyle(color: Colors.red),
-          );
-        }
-
-        final info = snap.data!;
-        final initials = _initialsFromFullName(info.fullName);
-
-        return PopupMenuButton<String>(
-          offset: const Offset(0, 60),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          elevation: 8,
-          onSelected: (value) async {
-            switch (value) {
-              case 'updates':
-                // TODO: Implementar búsqueda de actualizaciones
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Buscando actualizaciones...'),
-                    duration: Duration(seconds: 2),
-                  ),
-                );
-                break;
-              case 'settings':
-                context.go(AppRoutes.settings);
-                break;
-              case 'logout':
-                await _handleLogout(context);
-                break;
-            }
-          },
-          itemBuilder: (context) => [
-            PopupMenuItem<String>(
-              value: 'updates',
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.system_update_outlined,
-                    size: context.iconSizeOf(20),
-                    color: Colors.grey[700],
-                  ),
-                  SizedBox(width: context.wp(2)),
-                  Text(
-                    'Buscar actualización',
-                    style: TextStyle(
-                      fontSize: context.sp(14),
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
+    return Row(
+      children: [
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: const [
+            Text(
+              'Admin',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
+                color: Color(0xFF1F2937),
               ),
             ),
-            PopupMenuItem<String>(
-              value: 'settings',
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.settings_outlined,
-                    size: context.iconSizeOf(20),
-                    color: Colors.grey[700],
-                  ),
-                  SizedBox(width: context.wp(2)),
-                  Text(
-                    'Ajustes del sistema',
-                    style: TextStyle(
-                      fontSize: context.sp(14),
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const PopupMenuDivider(),
-            PopupMenuItem<String>(
-              value: 'logout',
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.logout,
-                    size: context.iconSizeOf(20),
-                    color: Colors.red[600],
-                  ),
-                  SizedBox(width: context.wp(2)),
-                  Text(
-                    'Cerrar sesión',
-                    style: TextStyle(
-                      fontSize: context.sp(14),
-                      fontWeight: FontWeight.w600,
-                      color: Colors.red[600],
-                    ),
-                  ),
-                ],
-              ),
+            Text(
+              'Caja #001',
+              style: TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
             ),
           ],
-          child: Row(
-            children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    info.fullName,
-                    style: text.titleMedium?.copyWith(
-                      fontSize: context.sp(16),
-                      fontWeight: FontWeight.w700,
-                      color: MangoColors.darkGray,
-                    ),
-                  ),
-                  SizedBox(height: context.hp(0.4)),
-                  if (info.role == 'admin' || info.role == 'owner')
-                    Container(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: context.wp(2.2),
-                        vertical: context.hp(0.5),
-                      ),
-                      decoration: BoxDecoration(
-                        color: MangoColors.successGreen,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        'Administrador',
-                        style: TextStyle(
-                          color: MangoColors.white,
-                          fontSize: context.sp(12),
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-              SizedBox(width: context.wp(2.2)),
-              CircleAvatar(
-                radius: context.iconSizeOf(20),
-                backgroundColor: MangoColors.primaryOrange.withOpacity(0.12),
-                child: Text(
-                  initials,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: context.sp(14),
-                    color: MangoColors.primaryOrange,
-                  ),
-                ),
-              ),
-              SizedBox(width: context.wp(1)),
-              Icon(
-                Icons.arrow_drop_down,
-                size: context.iconSizeOf(24),
-                color: Colors.grey[600],
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Future<void> _handleLogout(BuildContext context) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Cerrar sesión'),
-        content: const Text('¿Estás seguro de que deseas cerrar sesión?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: Text('Cancelar', style: TextStyle(color: Colors.grey[600])),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red[600],
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
+        ),
+        const SizedBox(width: 12),
+        Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: const LinearGradient(
+              colors: [Color(0xFFF7941A), Color(0xFFFFB74D)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
             ),
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Cerrar sesión'),
           ),
-        ],
-      ),
+          child: const Icon(Icons.person, color: Colors.white, size: 20),
+        ),
+      ],
     );
-
-    if (confirmed == true && context.mounted) {
-      try {
-        await Supabase.instance.client.auth.signOut();
-        if (context.mounted) {
-          context.go('/login');
-        }
-      } catch (e) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Error al cerrar sesión: $e'),
-              backgroundColor: Colors.red[600],
-            ),
-          );
-        }
-      }
-    }
-  }
-
-  static String _initialsFromFullName(String fullName) {
-    final parts = fullName.trim().split(RegExp(r'\s+'));
-    if (parts.isEmpty) return 'U';
-    if (parts.length == 1) return parts.first[0].toUpperCase();
-    return (parts.first[0] + parts.last[0]).toUpperCase();
   }
 }
 

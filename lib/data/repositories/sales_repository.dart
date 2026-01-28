@@ -306,6 +306,7 @@ class SalesRepository {
     String? customerId,
     String? customerRnc,
     String? cashierSessionId,
+    double changeAmount = 0,
   }) async {
     try {
       final response = await _client.rpc(
@@ -323,10 +324,135 @@ class SalesRepository {
       );
 
       return Payment.fromMap(response);
+    } on PostgrestException catch (e) {
+      final message = '${e.message} ${e.details ?? ''} ${e.hint ?? ''}'.toLowerCase();
+      final missingFn = message.contains('fn_process_payment_v2') ||
+          message.contains('fn_process_payment');
+
+      if (!missingFn) rethrow;
+
+      // Fallback directo contra la tabla payments cuando el RPC no esta disponible
+      return _processPaymentDirect(
+        orderId: orderId,
+        checkId: checkId,
+        paymentMethodId: paymentMethodId,
+        amount: amount,
+        reference: reference,
+        customerId: customerId,
+        customerRnc: customerRnc,
+        cashierSessionId: cashierSessionId,
+        changeAmount: changeAmount,
+      );
     } catch (e) {
-      // No envolver la excepción para permitir manejo específico (ej: PostgrestException)
+      // No envolver la excepcion para permitir manejo especifico (ej: PostgrestException)
       rethrow;
     }
+  }
+
+  Future<Payment> _processPaymentDirect({
+    required String orderId,
+    String? checkId,
+    required String paymentMethodId,
+    required double amount,
+    String? reference,
+    String? customerId,
+    String? customerRnc,
+    String? cashierSessionId,
+    double changeAmount = 0,
+  }) async {
+    // 1) Resolver sesion y negocio
+    final orderData = await _client
+        .from('orders')
+        .select('session_id')
+        .eq('id', orderId)
+        .maybeSingle();
+
+    if (orderData == null) {
+      throw Exception('Orden no encontrada para registrar el pago.');
+    }
+
+    final tableSessionId = orderData['session_id'] as String?;
+
+    String? businessId;
+    if (tableSessionId != null) {
+      final sessionData = await _client
+          .from('table_sessions')
+          .select('business_id')
+          .eq('id', tableSessionId)
+          .maybeSingle();
+      businessId = sessionData?['business_id'] as String?;
+    }
+
+    businessId ??= await resolveBusinessIdOrNull(_client, 'auto');
+
+    if (businessId == null) {
+      throw Exception('No se pudo determinar el negocio para registrar el pago.');
+    }
+
+    // 2) Resolver metodo de pago (acepta UUID o codigo)
+    final paymentMethodData = await _client
+        .from('payment_methods')
+        .select('id, code')
+        .eq('business_id', businessId)
+        .eq(_isUuid(paymentMethodId) ? 'id' : 'code', paymentMethodId)
+        .eq('is_active', true)
+        .maybeSingle();
+
+    if (paymentMethodData == null || paymentMethodData['id'] == null) {
+      throw Exception('Metodo de pago no valido: $paymentMethodId');
+    }
+
+    final resolvedPaymentMethodId = paymentMethodData['id'] as String;
+    final paymentMethodCode = paymentMethodData['code'] as String?;
+    final userId = _client.auth.currentUser?.id;
+
+    // 3) Insertar en payments
+    final paymentRow = await _client
+        .from('payments')
+        .insert({
+          'business_id': businessId,
+          'order_id': orderId,
+          'check_id': checkId,
+          'payment_method_id': resolvedPaymentMethodId,
+          'amount': amount,
+          'reference': reference,
+          'change_amount': changeAmount,
+          'status': 'completed',
+          if (userId != null) 'processed_by': userId,
+          if (cashierSessionId != null) 'session_id': cashierSessionId,
+        })
+        .select()
+        .single();
+
+    // 4) Cerrar orden y mesa
+    await _client.rpc(
+      SalesQueries.rpcCloseOrderAndTable,
+      params: {'p_order_id': orderId, 'p_status': 'paid'},
+    );
+
+    // 5) Registrar transaccion en caja si aplica
+    if (paymentMethodCode == 'cash' && cashierSessionId != null) {
+      try {
+        await _client.from('cash_transactions').insert({
+          'session_id': cashierSessionId,
+          'amount': amount,
+          'type': 'sale',
+          'description': 'Venta ${orderId.substring(0, 8)}',
+          'related_order_id': orderId,
+        });
+      } catch (_) {
+        // Si falla, no bloquear el flujo de pago
+      }
+    }
+
+    return Payment.fromMap(paymentRow);
+  }
+
+  bool _isUuid(String value) {
+    final regex = RegExp(
+      r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+    );
+    return regex.hasMatch(value);
   }
 
   /// Obtener pagos de una orden
@@ -534,10 +660,10 @@ class SalesRepository {
   /// Contar mesas abiertas (LEGACY - usar getActiveSessions)
   Future<int> getOpenTablesCount(String businessId) async {
     final count = await _client
-        .from('orders')
+        .from('table_sessions')
         .count(CountOption.exact)
         .eq('business_id', businessId)
-        .eq('status', 'open');
+        .isFilter('closed_at', null);
     return count;
   }
 

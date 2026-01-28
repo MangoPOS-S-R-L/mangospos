@@ -212,7 +212,7 @@ class _ReceiptTypeCard extends StatelessWidget {
               border: Border.all(color: const Color(0xFFE0E0E0)),
             ),
             child: DropdownButtonFormField<String>(
-              value: receipt.selectedPrinter,
+              initialValue: receipt.selectedPrinter,
               decoration: const InputDecoration(
                 contentPadding: EdgeInsets.symmetric(
                   horizontal: 16,
@@ -235,7 +235,7 @@ class _ReceiptTypeCard extends StatelessWidget {
                     value: printer,
                     child: Text(printer),
                   );
-                }).toList(),
+                }),
               ],
               onChanged: onPrinterChanged,
             ),

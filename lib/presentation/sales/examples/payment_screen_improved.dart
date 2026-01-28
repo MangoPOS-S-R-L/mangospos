@@ -42,6 +42,7 @@ class _PaymentScreenImprovedExampleState
         orderId: widget.orderId,
         paymentMethodId: 'cash', // Ejemplo
         amount: widget.totalAmount,
+        changeAmount: 0,
       );
 
       if (mounted) {

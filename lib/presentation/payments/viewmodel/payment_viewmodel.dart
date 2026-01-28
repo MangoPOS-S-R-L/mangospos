@@ -252,6 +252,7 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         customerId: customerId,
         customerRnc: customerRnc,
         cashierSessionId: state.cashSession?.id,
+        changeAmount: state.change,
       );
 
       // Obtener documento fiscal generado

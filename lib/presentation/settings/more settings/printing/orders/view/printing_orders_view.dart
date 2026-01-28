@@ -493,7 +493,7 @@ class _KitchenAreaCard extends StatelessWidget {
               border: Border.all(color: const Color(0xFFE0E0E0)),
             ),
             child: DropdownButtonFormField<String>(
-              value: selectedPrinter,
+              initialValue: selectedPrinter,
               decoration: const InputDecoration(
                 contentPadding: EdgeInsets.symmetric(
                   horizontal: 16,
@@ -526,7 +526,7 @@ class _KitchenAreaCard extends StatelessWidget {
                       ],
                     ),
                   );
-                }).toList(),
+                }),
               ],
               onChanged: onPrinterChanged,
             ),

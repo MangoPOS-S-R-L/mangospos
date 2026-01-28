@@ -197,6 +197,13 @@ class SettingsView extends StatelessWidget {
             route: AppRoutes.settingsUsers,
           ),
           const _SettingsOption(
+            title: 'Clientes',
+            subtitle: 'Gestión de clientes y contactos',
+            icon: Icons.people_alt_rounded,
+            color: Color(0xFFEAF0FF),
+            route: AppRoutes.customers,
+          ),
+          const _SettingsOption(
             title: 'Cajas',
             subtitle: 'Configuración de puntos de venta',
             icon: Icons.point_of_sale_rounded,

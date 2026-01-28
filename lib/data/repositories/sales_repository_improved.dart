@@ -218,27 +218,149 @@ class SalesRepositoryImproved {
     String? customerId,
     String? customerRnc,
     String? cashierSessionId,
+    double changeAmount = 0,
   }) async {
     return DatabaseOperationWrapper.rpc(
       operationName: 'Procesar Pago',
       operation: () async {
-        final response = await _client.rpc(
-          SalesQueries.rpcProcessPayment,
-          params: {
-            'p_order_id': orderId,
-            'p_check_id': checkId,
-            'p_payment_method_id': paymentMethodId,
-            'p_amount': amount,
-            'p_reference': reference,
-            'p_customer_id': customerId,
-            'p_customer_rnc': customerRnc,
-            'p_cashier_session_id': cashierSessionId,
-          },
-        );
+        try {
+          final response = await _client.rpc(
+            SalesQueries.rpcProcessPayment,
+            params: {
+              'p_order_id': orderId,
+              'p_check_id': checkId,
+              'p_payment_method_id': paymentMethodId,
+              'p_amount': amount,
+              'p_reference': reference,
+              'p_customer_id': customerId,
+              'p_customer_rnc': customerRnc,
+              'p_cashier_session_id': cashierSessionId,
+            },
+          );
 
-        return Payment.fromMap(response);
+          return Payment.fromMap(response);
+        } on PostgrestException catch (e) {
+          final message = '${e.message} ${e.details ?? ''} ${e.hint ?? ''}'.toLowerCase();
+          final missingFn = message.contains('fn_process_payment_v2') ||
+              message.contains('fn_process_payment');
+
+          if (!missingFn) rethrow;
+
+          return _processPaymentDirect(
+            orderId: orderId,
+            checkId: checkId,
+            paymentMethodId: paymentMethodId,
+            amount: amount,
+            reference: reference,
+            customerId: customerId,
+            customerRnc: customerRnc,
+            cashierSessionId: cashierSessionId,
+            changeAmount: changeAmount,
+          );
+        }
       },
     );
+  }
+
+  Future<Payment> _processPaymentDirect({
+    required String orderId,
+    String? checkId,
+    required String paymentMethodId,
+    required double amount,
+    String? reference,
+    String? customerId,
+    String? customerRnc,
+    String? cashierSessionId,
+    double changeAmount = 0,
+  }) async {
+    final orderData = await _client
+        .from('orders')
+        .select('session_id')
+        .eq('id', orderId)
+        .maybeSingle();
+
+    if (orderData == null) {
+      throw Exception('Orden no encontrada para registrar el pago.');
+    }
+
+    final tableSessionId = orderData['session_id'] as String?;
+
+    String? businessId;
+    if (tableSessionId != null) {
+      final sessionData = await _client
+          .from('table_sessions')
+          .select('business_id')
+          .eq('id', tableSessionId)
+          .maybeSingle();
+      businessId = sessionData?['business_id'] as String?;
+    }
+
+    businessId ??= await resolveBusinessIdOrNull(_client, 'auto');
+
+    if (businessId == null) {
+      throw Exception('No se pudo determinar el negocio para registrar el pago.');
+    }
+
+    final paymentMethodData = await _client
+        .from('payment_methods')
+        .select('id, code')
+        .eq('business_id', businessId)
+        .eq(_isUuid(paymentMethodId) ? 'id' : 'code', paymentMethodId)
+        .eq('is_active', true)
+        .maybeSingle();
+
+    if (paymentMethodData == null || paymentMethodData['id'] == null) {
+      throw Exception('Metodo de pago no valido: $paymentMethodId');
+    }
+
+    final resolvedPaymentMethodId = paymentMethodData['id'] as String;
+    final paymentMethodCode = paymentMethodData['code'] as String?;
+    final userId = _client.auth.currentUser?.id;
+
+    final paymentRow = await _client
+        .from('payments')
+        .insert({
+          'business_id': businessId,
+          'order_id': orderId,
+          'check_id': checkId,
+          'payment_method_id': resolvedPaymentMethodId,
+          'amount': amount,
+          'reference': reference,
+          'change_amount': changeAmount,
+          'status': 'completed',
+          if (userId != null) 'processed_by': userId,
+          if (cashierSessionId != null) 'session_id': cashierSessionId,
+        })
+        .select()
+        .single();
+
+    await _client.rpc(
+      SalesQueries.rpcCloseOrderAndTable,
+      params: {'p_order_id': orderId, 'p_status': 'paid'},
+    );
+
+    if (paymentMethodCode == 'cash' && cashierSessionId != null) {
+      try {
+        await _client.from('cash_transactions').insert({
+          'session_id': cashierSessionId,
+          'amount': amount,
+          'type': 'sale',
+          'description': 'Venta ${orderId.substring(0, 8)}',
+          'related_order_id': orderId,
+        });
+      } catch (_) {
+        // No bloquear el pago por errores al registrar caja
+      }
+    }
+
+    return Payment.fromMap(paymentRow);
+  }
+
+  bool _isUuid(String value) {
+    final regex = RegExp(
+      r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+    );
+    return regex.hasMatch(value);
   }
 
   /// Cerrar orden y sesión con reintentos

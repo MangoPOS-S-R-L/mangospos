@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // <-- NECESARIO para bloquear orientacion
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
+import 'package:intl/date_symbol_data_local.dart';
 import 'package:media_kit/media_kit.dart';
 
 import 'env/env.dart';
@@ -142,6 +143,9 @@ Future<void> _lockLandscapeIfMobile() async {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Inicializar datos de localización para español
+  await initializeDateFormatting('es', null);
 
   // Inicializar Supabase con configuración personalizada (timeouts, reintentos, etc.)
   await SupabaseConfig.initialize(

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,6 +9,7 @@ import '../../../data/models/payment_models.dart';
 import '../../../data/models/sales_models.dart';
 import '../state/payment_state.dart';
 import '../viewmodel/payment_viewmodel.dart';
+import '../../cashier/viewmodel/cashier_viewmodel.dart';
 
 class PaymentModal extends ConsumerStatefulWidget {
   final Order order;
@@ -71,6 +74,10 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
         if (Navigator.of(context).canPop()) {
           Navigator.of(context).pop();
         }
+        try {
+          final cashierVM = ref.read(cashierViewModelProvider.notifier);
+          unawaited(cashierVM.refreshSilently());
+        } catch (_) {}
         widget.onPaymentSuccess();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

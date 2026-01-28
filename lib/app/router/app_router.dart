@@ -19,7 +19,7 @@ import '../../presentation/auth/register/register_step1_view.dart';
 import '../../presentation/auth/register/register_step2_view.dart';
 import '../../presentation/dashboard/dashboard_view.dart';
 import '../../presentation/shell/main_shell.dart';
-import '../../presentation/cashier/view/open_close_cash_view.dart';
+import '../../presentation/cashier/view/cashier_view.dart';
 import '../../presentation/kitchen/view/kitchen_view.dart';
 import '../../presentation/customers/view/customers_view.dart';
 import '../../presentation/customers/view/customer_detail_view.dart';
@@ -124,7 +124,7 @@ class AppRouter {
           // ---------- Otros módulos (placeholder por ahora) ----------
           GoRoute(
             path: AppRoutes.cashier,
-            builder: (_, __) => const OpenCloseCashView(),
+            builder: (_, __) => const CashierView(),
           ),
           GoRoute(
             path: AppRoutes.kitchen,

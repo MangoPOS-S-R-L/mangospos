@@ -6,6 +6,7 @@ import 'package:mangopos/data/repositories/sales_repository.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../state/sales_state.dart';
 import '../../../data/models/sales_models.dart';
+import '../../cashier/viewmodel/cashier_viewmodel.dart';
 
 final salesRepositoryProvider = Provider<SalesRepository>(
   (ref) => SalesRepository(Supabase.instance.client),
@@ -95,9 +96,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           );
       unawaited(_loadOrderDetail(orderId));
     } catch (e) {
-      state = state.copyWith(
-        error: 'Error al agregar producto: $e',
-      );
+      state = state.copyWith(error: 'Error al agregar producto: $e');
     }
   }
 
@@ -159,6 +158,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     await ref
         .read(salesRepositoryProvider)
         .closeOrder(orderId: orderId, status: 'paid');
+
+    // Refresh cashier data in the background
+    try {
+      final cashierVM = ref.read(cashierViewModelProvider.notifier);
+      unawaited(cashierVM.refreshSilently());
+    } catch (e) {
+      // Cashier refresh is not critical, just log
+      print('Note: Could not refresh cashier: $e');
+    }
+
     state = const CurrentOrderState();
   }
 
@@ -202,10 +211,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     List<OrderItem> items = const [];
     String? loadError;
     final orderFuture = repo.getOrder(orderId);
-    final itemsFuture = repo.getOrderItems(
-      orderId,
-      includeModifiers: false,
-    );
+    final itemsFuture = repo.getOrderItems(orderId, includeModifiers: false);
 
     try {
       order = await orderFuture;
