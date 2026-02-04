@@ -82,4 +82,17 @@ class AppColors {
   static Color get warningBorder => warning.withOpacity(0.2);
   static Color get infoBorder => info.withOpacity(0.2);
   static Color get primaryBorder => primary.withOpacity(0.2);
+
+  // ============================================================================
+  // TABLE CARD SPECIFIC COLORS (DISENO_CARDS_MESAS.txt)
+  // ============================================================================
+
+  /// Divisor interno de la card (border con 40% opacidad)
+  static Color get borderDivider => border.withOpacity(0.4);
+
+  /// Texto "Toca para asignar" (foreground con 60% opacidad)
+  static Color get foregroundMuted => foreground.withOpacity(0.6);
+
+  /// Fondo del badge "Tu mesa" (success con 10% opacidad)
+  static Color get successBackground => success.withOpacity(0.1);
 }

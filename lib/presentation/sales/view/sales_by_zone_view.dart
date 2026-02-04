@@ -6,6 +6,7 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/data/models/table_status.dart';
+import 'package:mangopos/domain/models/ventas_table.dart' as ventas;
 import 'package:mangopos/presentation/sales/view/theme/sales_theme.dart';
 import 'package:mangopos/presentation/sales/widgets/table_card.dart';
 
@@ -92,6 +93,13 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
         vsync: this,
         initialIndex: initialIndex,
       );
+      // Añadir listener para actualizar la UI cuando cambie el tab
+      _tabController!.addListener(() {
+        if (_tabController!.indexIsChanging ||
+            _tabController!.index != _tabController!.previousIndex) {
+          if (mounted) setState(() {});
+        }
+      });
       _previousZoneCount = currentZoneCount;
     }
   }
@@ -102,6 +110,31 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
     // Filter out 'Ventas manuales' as it is not a physical zone with tables
     final zones = vm.zones.where((z) => z.name != 'Ventas manuales').toList();
     final hasZones = zones.isNotEmpty;
+
+    _updateTabController(zones);
+
+    // Calcular contadores de disponibles y ocupadas SOLO para la zona actual
+    int availableCount = 0;
+    int occupiedCount = 0;
+
+    // Determinamos la zona actual basándonos directamente en el índice del controller
+    final currentZoneId =
+        (hasZones &&
+            _tabController != null &&
+            _tabController!.index < zones.length)
+        ? zones[_tabController!.index].id
+        : null;
+
+    if (currentZoneId != null && vm.statusByZone.containsKey(currentZoneId)) {
+      final currentZoneTables = vm.statusByZone[currentZoneId]!;
+      for (final table in currentZoneTables) {
+        if (table.sessionId == null) {
+          availableCount++;
+        } else {
+          occupiedCount++;
+        }
+      }
+    }
 
     _updateTabController(zones);
 
@@ -135,50 +168,112 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
               automaticallyImplyLeading: false,
               toolbarHeight: 56,
               titleSpacing: 0,
-              title: Container(
+              title: Padding(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 24,
-                  vertical: 8,
+                  vertical: 12,
                 ),
                 child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Expanded(
-                      child: TabBar(
-                        controller: _tabController!,
-                        isScrollable: true,
-                        labelColor: SalesTheme.primary,
-                        unselectedLabelColor: SalesTheme.mutedForeground,
-                        indicatorColor: SalesTheme.primary,
-                        indicatorWeight: 3,
-                        labelStyle: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        unselectedLabelStyle: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
-                        ),
-                        indicatorSize: TabBarIndicatorSize.label,
-                        tabAlignment: TabAlignment.start,
-                        padding: EdgeInsets.zero,
-                        labelPadding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                        ),
-                        tabs: zones
-                            .map((zone) => Tab(text: zone.name))
-                            .toList(),
+                    // TABS LIST - Container con fondo secondary
+                    Container(
+                      padding: const EdgeInsets.all(4), // p-1
+                      decoration: BoxDecoration(
+                        color: SalesTheme.secondary, // bg-secondary
+                        borderRadius: BorderRadius.circular(12), // rounded-xl
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: zones.asMap().entries.map((entry) {
+                          final index = entry.key;
+                          final zone = entry.value;
+                          final isActive = _tabController?.index == index;
+
+                          return MouseRegion(
+                            cursor: SystemMouseCursors.click,
+                            child: GestureDetector(
+                              onTap: () => _tabController?.animateTo(index),
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 150),
+                                curve: Curves.easeInOut,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16, // px-4
+                                  vertical: 8, // py-2
+                                ),
+                                decoration: BoxDecoration(
+                                  color: isActive
+                                      ? SalesTheme
+                                            .cardBackground // bg-card (blanco)
+                                      : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(
+                                    8,
+                                  ), // rounded-lg
+                                  boxShadow: isActive
+                                      ? [
+                                          BoxShadow(
+                                            color: Colors.black.withOpacity(
+                                              0.05,
+                                            ),
+                                            blurRadius: 2,
+                                            offset: const Offset(0, 1),
+                                          ),
+                                        ]
+                                      : null,
+                                ),
+                                child: Text(
+                                  zone.name,
+                                  style: TextStyle(
+                                    fontSize: 14, // text-sm
+                                    fontWeight: FontWeight.w500, // Medium
+                                    color: isActive
+                                        ? SalesTheme
+                                              .foreground // Negro cálido
+                                        : SalesTheme
+                                              .mutedForeground, // Gris medio
+                                    letterSpacing: -0.2,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        }).toList(),
                       ),
                     ),
-                    IconButton(
-                      onPressed: _loadData,
-                      icon: const Icon(
-                        Icons.refresh,
-                        size: 22,
-                        color: SalesTheme.mutedForeground,
-                      ),
-                      tooltip: 'Actualizar',
-                      padding: const EdgeInsets.all(8),
-                      constraints: const BoxConstraints(),
+
+                    // INDICADORES DE ESTADO a la derecha
+                    Row(
+                      children: [
+                        // Indicador DISPONIBLES (verde)
+                        _buildStatusIndicator(
+                          count: availableCount,
+                          label: 'disponible',
+                          color: SalesTheme.success,
+                        ),
+                        const SizedBox(width: 16), // gap-4
+                        // Indicador OCUPADAS (naranja)
+                        _buildStatusIndicator(
+                          count: occupiedCount,
+                          label: 'ocupada',
+                          color: SalesTheme.warning,
+                        ),
+                        const SizedBox(width: 12),
+                        // Botón refresh
+                        IconButton(
+                          onPressed: _loadData,
+                          icon: const Icon(
+                            Icons.refresh_rounded,
+                            size: 20,
+                            color: SalesTheme.mutedForeground,
+                          ),
+                          tooltip: 'Actualizar',
+                          padding: const EdgeInsets.all(8),
+                          constraints: const BoxConstraints(
+                            minWidth: 36,
+                            minHeight: 36,
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -245,6 +340,36 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
       ),
     );
   }
+
+  /// Construye un indicador de estado (disponibles/ocupadas)
+  Widget _buildStatusIndicator({
+    required int count,
+    required String label,
+    required Color color,
+  }) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Dot circular de 12x12px
+        Container(
+          width: 12,
+          height: 12,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 6), // gap-2
+        // Texto del indicador
+        Text(
+          '$count ${label}${count != 1 ? 's' : ''}',
+          style: const TextStyle(
+            fontSize: 14, // text-sm
+            fontWeight: FontWeight.w400, // Regular
+            color: SalesTheme.mutedForeground,
+            height: 1.25, // line-height 20px
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 class _ZoneGrid extends ConsumerStatefulWidget {
@@ -307,50 +432,57 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
       return const Center(child: Text('No hay mesas en esta zona'));
     }
 
-    final availableCount = tables.where((t) => t.sessionId == null).length;
-    final occupiedCount = tables.where((t) => t.sessionId != null).length;
-
     return Column(
       children: [
-        // Indicadores
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-          child: Row(
-            children: [
-              _StatusBadge(
-                label: '$availableCount disponibles',
-                color: SalesTheme.success,
-              ),
-              const SizedBox(width: 12),
-              _StatusBadge(
-                label: '$occupiedCount ocupadas',
-                color: SalesTheme.warning,
-              ),
-            ],
-          ),
-        ),
+        // Eliminamos los indicadores de estado aquí, ya que están en el AppBar
+        // y se actualizarán dinámicamente según la zona seleccionada
         // Grid
         Expanded(
-          child: GridView.builder(
-            padding: const EdgeInsets.all(24),
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: SalesTheme.tableCardMinWidth,
-              childAspectRatio:
-                  SalesTheme.tableCardMinWidth / SalesTheme.tableCardHeight,
-              crossAxisSpacing: SalesTheme.gridGap,
-              mainAxisSpacing: SalesTheme.gridGap,
-            ),
-            itemCount: tables.length,
-            itemBuilder: (context, index) {
-              final table = tables[index];
-              final opening = ref
-                  .watch(byZoneVmProvider)
-                  .openingTables
-                  .contains(table.tableId);
-              return TableCard(
-                status: table,
-                isOpening: opening,
-                onTap: () => _handleTableAction(context, ref, table),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              // Calcular número óptimo de columnas
+              // Usando 220px como referencia para favorecer más columnas (cards más estrechas)
+              final availableWidth =
+                  constraints.maxWidth - 48; // Quitando padding (24px × 2)
+
+              int columns =
+                  ((availableWidth + SalesTheme.gridGap) /
+                          (220.0 +
+                              SalesTheme.gridGap)) // 220px en lugar de 240px
+                      .floor()
+                      .clamp(
+                        1,
+                        5,
+                      ); // Máximo 5 columnas según tabla de referencia
+
+              // Calcular el ancho REAL de cada card
+              final totalGaps = (columns - 1) * SalesTheme.gridGap;
+              final cardWidth = (availableWidth - totalGaps) / columns;
+
+              // Calcular aspect ratio dinámico: cardWidth / cardHeight
+              final aspectRatio = cardWidth / SalesTheme.tableCardHeight;
+
+              return GridView.builder(
+                padding: const EdgeInsets.all(24),
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: columns,
+                  childAspectRatio: aspectRatio, // Dinámico
+                  crossAxisSpacing: SalesTheme.gridGap,
+                  mainAxisSpacing: SalesTheme.gridGap,
+                ),
+                itemCount: tables.length,
+                itemBuilder: (context, index) {
+                  final table = tables[index];
+                  final opening = ref
+                      .watch(byZoneVmProvider)
+                      .openingTables
+                      .contains(table.tableId);
+                  return TableCard(
+                    table: _convertTableStatusToVentasTable(table),
+                    isOpening: opening,
+                    onTap: () => _handleTableAction(context, ref, table),
+                  );
+                },
               );
             },
           ),
@@ -365,7 +497,10 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
     TableStatus ts,
   ) async {
     final byZone = ref.read(byZoneVmProvider.notifier);
-    final opening = ref.read(byZoneVmProvider).openingTables.contains(ts.tableId);
+    final opening = ref
+        .read(byZoneVmProvider)
+        .openingTables
+        .contains(ts.tableId);
     if (opening) return;
 
     byZone.setOpening(ts.tableId, true);
@@ -392,41 +527,43 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
       byZone.setOpening(ts.tableId, false);
     }
   }
-}
 
-class _StatusBadge extends StatelessWidget {
-  final String label;
-  final Color color;
-  const _StatusBadge({required this.label, required this.color});
+  /// Convierte TableStatus a VentasTable para el  nuevo TableCard
+  ventas.VentasTable _convertTableStatusToVentasTable(TableStatus ts) {
+    // Determinar el estado basado en sessionId y status
+    ventas.TableStatus status;
+    if (ts.sessionId == null) {
+      status = ventas.TableStatus.disponible;
+    } else {
+      final statusRaw = (ts.status ?? '').toLowerCase();
+      if (statusRaw == 'paying' ||
+          statusRaw == 'checkout' ||
+          statusRaw == 'payment') {
+        status = ventas.TableStatus.pagando;
+      } else {
+        status = ventas.TableStatus.ocupado;
+      }
+    }
 
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withOpacity(0.2)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 7,
-            height: 7,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 7),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 13,
-              color: color,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
-      ),
+    // Formatear el tiempo
+    String? time;
+    if (ts.minutesOpen != null && ts.minutesOpen! > 0) {
+      final hours = ts.minutesOpen! ~/ 60;
+      final mins = ts.minutesOpen! % 60;
+      time =
+          '${hours.toString().padLeft(2, '0')}:${mins.toString().padLeft(2, '0')}';
+    }
+
+    return ventas.VentasTable(
+      id: ts.tableId,
+      code: ts.code,
+      status: status,
+      zone: ts.zoneId,
+      guests: ts.peopleCount > 0 ? ts.peopleCount : null,
+      time: time,
+      total: ts.total > 0 ? ts.total : null,
+      waiterId: ts.sessionId, // Usamos sessionId como waiterId temporalmente
+      waiterName: ts.waiterName,
     );
   }
 }

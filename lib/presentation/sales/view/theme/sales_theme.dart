@@ -25,7 +25,7 @@ class SalesTheme {
   static const double tableCardHeight = 140.0;
   static const double tableCardMinWidth = 240.0;
   static const double statusBorderWidth = 6.0;
-  static const double cardBorderRadius = 18.0;
+  static const double cardBorderRadius = 12.0;
   static const double gridGap = 24.0;
   static const EdgeInsets cardPadding = EdgeInsets.all(16.0);
 
