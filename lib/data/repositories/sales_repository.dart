@@ -73,7 +73,7 @@ class SalesRepository {
     try {
       final data = await _client
           .from('table_sessions')
-          .select()
+          .select('*, dining_tables(code, zones(name))')
           .eq('business_id', businessId)
           .isFilter('closed_at', null)
           .order('opened_at', ascending: false);
@@ -153,6 +153,17 @@ class SalesRepository {
         SalesQueries.rpcDeleteItem,
         params: {'p_item_id': itemId},
       );
+    } on PostgrestException catch (e) {
+      final msg = '${e.message} ${e.details ?? ''} ${e.hint ?? ''}'
+          .toLowerCase();
+      final missingFn = e.code == 'PGRST202' ||
+          msg.contains('fn_delete_item') ||
+          msg.contains('could not find the function');
+
+      if (!missingFn) rethrow;
+
+      // Fallback: eliminar directamente el registro del item
+      await _client.from('order_items').delete().eq('id', itemId);
     } catch (e) {
       throw Exception('Error al eliminar item: $e');
     }
@@ -325,8 +336,10 @@ class SalesRepository {
 
       return Payment.fromMap(response);
     } on PostgrestException catch (e) {
-      final message = '${e.message} ${e.details ?? ''} ${e.hint ?? ''}'.toLowerCase();
-      final missingFn = message.contains('fn_process_payment_v2') ||
+      final message = '${e.message} ${e.details ?? ''} ${e.hint ?? ''}'
+          .toLowerCase();
+      final missingFn =
+          message.contains('fn_process_payment_v2') ||
           message.contains('fn_process_payment');
 
       if (!missingFn) rethrow;
@@ -386,7 +399,9 @@ class SalesRepository {
     businessId ??= await resolveBusinessIdOrNull(_client, 'auto');
 
     if (businessId == null) {
-      throw Exception('No se pudo determinar el negocio para registrar el pago.');
+      throw Exception(
+        'No se pudo determinar el negocio para registrar el pago.',
+      );
     }
 
     // 2) Resolver metodo de pago (acepta UUID o codigo)

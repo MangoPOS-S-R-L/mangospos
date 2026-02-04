@@ -3,24 +3,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
-import '../cashier/viewmodel/cashier_viewmodel.dart';
+import 'package:mangopos/core/theme/app_colors.dart';
+import 'package:mangopos/core/theme/app_radius.dart';
+import 'package:mangopos/core/theme/app_shadows.dart';
+import 'package:mangopos/core/theme/app_spacing.dart';
+import 'package:mangopos/core/theme/app_breakpoints.dart';
+import 'package:mangopos/data/models/sales_models.dart';
+import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'widgets/hoverable_card.dart';
-
-// Colores base (según HSL del CSS)
-const _background = Color(0xFFFAF7F5); // hsl(30 20% 98%)
-const _foreground = Color(0xFF221F1E); // hsl(20 14% 12%)
-const _card = Color(0xFFFFFFFF); // hsl(0 0% 100%)
-const _primary = Color(0xFFF7941A); // hsl(25 95% 53%) - Naranja Mango
-const _secondary = Color(0xFFF5F1EE); // hsl(30 15% 95%)
-const _muted = Color(0xFFF0EBE7); // hsl(30 10% 92%)
-const _accent = Color(0xFFF7F3F0); // hsl(30 20% 94%)
-const _success = Color(0xFF10B981); // hsl(142 71% 45%)
-const _warning = Color(0xFFFBBF24); // hsl(38 92% 50%)
-const _info = Color(0xFF3B82F6); // hsl(217 91% 60%)
-const _border = Color(0xFFE8E1DC); // hsl(30 15% 88%)
-const _mutedForeground = Color(
-  0xFF78716C,
-); // Color muted para textos secundarios
 
 class DashboardView extends ConsumerStatefulWidget {
   const DashboardView({super.key});
@@ -43,280 +33,262 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
     final vm = ref.watch(cashierViewModelProvider);
 
     return Scaffold(
-      backgroundColor: Colors.transparent,
-      body: SingleChildScrollView(
-        // Contenedor principal: padding 1.5rem (p-6), separación vertical 1.5rem (space-y-6)
-        padding: const EdgeInsets.all(24), // 1.5rem = 24px
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // 1) WelcomeCard
-            const _WelcomeCard(),
-            const SizedBox(height: 24), // space-y-6 = 1.5rem = 24px
-            // 2) Grid principal: grid-cols-1 en base; en xl: grid-cols-3
-            LayoutBuilder(
-              builder: (context, constraints) {
-                // en xl: grid-cols-3 con gap 1.5rem (gap-6)
-                if (constraints.maxWidth > 1280) {
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Columna izquierda (xl:col-span-2): space-y-6
-                      Expanded(
-                        flex: 2,
-                        child: Column(
-                          children: [
-                            const _QuickActionsSection(),
-                            const SizedBox(height: 24),
-                            _SalesChart(viewModel: vm),
-                          ],
-                        ),
+      backgroundColor: AppColors.background,
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final width = constraints.maxWidth;
+
+          // Responsive Breakpoints (design system)
+          final isMobile = width < AppBreakpoints.mobile;
+          final isDesktopXL = width >= AppBreakpoints.desktop;
+
+          // Split View: Desktop XL and above (>=1280dp)
+          final isSplitView = width >= AppBreakpoints.desktop;
+
+          // Spacing Strategy (design system)
+          final padding = const EdgeInsets.all(AppSpacing.containerPadding);
+          final double gap = AppSpacing.sectionGap;
+
+          return Align(
+            alignment: Alignment.topCenter,
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxl),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(
+                    maxWidth: AppBreakpoints.maxContentWidth,
+                  ),
+                  child: Padding(
+                    padding: padding,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                    // WELCOME CARD
+                    _WelcomeCard(isVertical: isMobile, viewModel: vm),
+                    SizedBox(height: gap),
+
+                    // MAIN LAYOUT
+                    if (isSplitView)
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // LEFT COLUMN (Main Content)
+                          Expanded(
+                            flex: 2,
+                            child: Column(
+                              children: [
+                                _QuickActionsSection(width: width),
+                                SizedBox(height: gap),
+                                _SalesChart(viewModel: vm, isMobile: isMobile),
+                              ],
+                            ),
+                          ),
+                          SizedBox(width: gap),
+                          // RIGHT COLUMN (Sidebar: Active Tables)
+                          Expanded(
+                            flex: 1,
+                            child: _ActiveTablesWidget(
+                              viewModel: vm,
+                              isWide: isDesktopXL,
+                            ),
+                          ),
+                        ],
+                      )
+                    else
+                      // STACKED LAYOUT (Mobile & Tablet)
+                      Column(
+                        children: [
+                          _QuickActionsSection(width: width),
+                          SizedBox(height: gap),
+                          _SalesChart(viewModel: vm, isMobile: isMobile),
+                          SizedBox(height: gap),
+                          _ActiveTablesWidget(
+                            viewModel: vm,
+                            isWide: isDesktopXL,
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 24), // gap-6 = 1.5rem = 24px
-                      // Columna derecha: space-y-6
-                      Expanded(
-                        flex: 1,
-                        child: _ActiveTablesWidget(viewModel: vm),
-                      ),
-                    ],
-                  );
-                } else {
-                  return Column(
-                    children: [
-                      const _QuickActionsSection(),
-                      const SizedBox(height: 24),
-                      _ActiveTablesWidget(viewModel: vm),
-                      const SizedBox(height: 24),
-                      _SalesChart(viewModel: vm),
-                    ],
-                  );
-                }
-              },
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
 }
 
-/// 1) WelcomeCard
-/// - card-elevated + p-6 (1.5rem) + bg-gradient-to-br from-primary/5 via-card to-card
-/// - Layout: flex-col en base, lg:flex-row; gap 1.5rem (gap-6)
+// ============================================================================
+// 1. WELCOME CARD
+// ============================================================================
+
 class _WelcomeCard extends StatelessWidget {
-  const _WelcomeCard();
+  final bool isVertical;
+  final CashierViewModel viewModel;
+  const _WelcomeCard({this.isVertical = false, required this.viewModel});
 
   @override
   Widget build(BuildContext context) {
+    // Padding responsive: mobile 16px, tablet/desktop 24px
+    final cardPadding = isVertical ? 16.0 : 24.0;
+
     return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(cardPadding),
       decoration: BoxDecoration(
-        color: _card, // Solid white background
-        borderRadius: BorderRadius.circular(12), // rounded-xl = 0.75rem = 12px
-        border: Border.all(color: _border, width: 1),
-        boxShadow: [
-          // Consistent shadow for all cards
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: AppColors.border, width: 1),
+        boxShadow: AppShadows.cardElevated,
       ),
-      padding: const EdgeInsets.all(24), // p-6 = 1.5rem = 24px
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final isLarge = constraints.maxWidth > 1024; // lg breakpoint
-          return Flex(
-            direction: isLarge ? Axis.horizontal : Axis.vertical,
-            crossAxisAlignment: isLarge
-                ? CrossAxisAlignment.center
-                : CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              // Zona izquierda
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Texto fecha: text-sm, text-muted-foreground, capitalize
-                    Text(
-                      DateFormat(
-                        'EEEE, d \'De\' MMMM \'De\' yyyy',
-                        'es',
-                      ).format(DateTime.now()).toUpperCase(),
-                      style: const TextStyle(
-                        color: _mutedForeground, // text-muted-foreground
-                        fontSize: 14, // text-sm = 0.875rem = 14px
-                        fontWeight: FontWeight.w500,
+      child: _buildContent(context),
+    );
+  }
+
+  Widget _buildContent(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Date - uppercase per spec
+        Text(
+          DateFormat(
+            'EEEE, d \de\ MMMM yyyy',
+            'es',
+          ).format(DateTime.now()).toUpperCase(),
+          style: const TextStyle(
+            color: AppColors.mutedForeground,
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            letterSpacing: 0.5,
+          ),
+        ),
+        const SizedBox(height: 8),
+
+        // Welcome & Meta
+        Flex(
+          direction: isVertical ? Axis.vertical : Axis.horizontal,
+          crossAxisAlignment: isVertical
+              ? CrossAxisAlignment.start
+              : CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  RichText(
+                    text: TextSpan(
+                      style: TextStyle(
+                        // Título más pequeño en mobile para mejor proporción
+                        fontSize: isVertical ? 24 : 30,
+                        fontWeight: FontWeight.bold,
+                        height: 1.2,
+                        fontFamily: 'Plus Jakarta Sans',
                       ),
-                    ),
-                    const SizedBox(height: 8),
-                    // Título: text-2xl en base, lg:text-3xl; font-bold
-                    RichText(
-                      text: TextSpan(
-                        style: TextStyle(
-                          fontSize: isLarge
-                              ? 30
-                              : 24, // text-3xl = 1.875rem = 30px, text-2xl = 1.5rem = 24px
-                          fontWeight: FontWeight.bold,
-                          height: 1.2,
-                        ),
-                        children: const [
-                          TextSpan(
-                            text: '¡Bienvenido a ',
-                            style: TextStyle(color: _foreground),
-                          ),
-                          TextSpan(
-                            text: 'MangoPOS',
-                            style: TextStyle(
-                              color: _primary,
-                            ), // text-gradient-mango
-                          ),
-                          TextSpan(
-                            text: '!',
-                            style: TextStyle(color: _foreground),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 16), // gap-4 = 1rem = 16px
-                    // Meta info: flex-wrap, gap 1rem (gap-4), text-sm, text-muted-foreground
-                    Wrap(
-                      spacing: 16, // gap-4 = 1rem = 16px
-                      runSpacing: 8,
-                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            // Indicador estado: punto 8px (w-2 h-2), rounded-full, bg-success, animate-pulse
-                            Container(
-                              width: 8,
-                              height: 8,
-                              decoration: const BoxDecoration(
-                                color: _success,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            const Text(
-                              'Restaurante Demo',
-                              style: TextStyle(
-                                color: _mutedForeground,
-                                fontSize: 14, // text-sm
-                              ),
-                            ),
-                          ],
+                        const TextSpan(
+                          text: '¡Bienvenido a ',
+                          style: TextStyle(color: AppColors.foreground),
                         ),
-                        const Text(
-                          '•',
-                          style: TextStyle(color: _mutedForeground),
+                        TextSpan(
+                          text: 'MangoPOS',
+                          style: TextStyle(color: AppColors.primary),
                         ),
-                        const Text(
-                          'Usuario: Admin',
-                          style: TextStyle(
-                            color: _mutedForeground,
-                            fontSize: 14,
-                          ),
-                        ),
-                        const Text(
-                          '•',
-                          style: TextStyle(color: _mutedForeground),
-                        ),
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: const [
-                            Icon(
-                              Icons.attach_money,
-                              size: 16,
-                              color: _mutedForeground,
-                            ),
-                            Text(
-                              'Caja #001',
-                              style: TextStyle(
-                                color: _mutedForeground,
-                                fontSize: 14,
-                              ),
-                            ),
-                          ],
+                        const TextSpan(
+                          text: '!',
+                          style: TextStyle(color: AppColors.foreground),
                         ),
                       ],
                     ),
-                  ],
-                ),
+                  ),
+                  SizedBox(
+                    height: isVertical ? 8 : 12,
+                  ), // Menos espacio en mobile
+                  // Meta Info
+                  Wrap(
+                    spacing: AppSpacing.sectionGap,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      _metaItem(Colors.green, viewModel.businessName),
+                      _metaDot(),
+                      _metaText('Usuario: Admin'),
+                      _metaDot(),
+                      _metaIconText(Icons.attach_money, 'Caja #001'),
+                    ],
+                  ),
+                ],
               ),
-              if (!isLarge) const SizedBox(height: 24),
-              // Zona derecha
-              Row(
-                mainAxisSize: MainAxisSize.min,
+            ),
+
+            // Gap - reducido en mobile
+            SizedBox(height: isVertical ? 16 : 0, width: isVertical ? 0 : 24),
+
+            // Right Zone: Actions - full width en mobile
+            if (isVertical)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Badge "Caja cerrada": px-4 py-2; bg-warning/10; rounded-lg; icono 16px
+                  // Badge "Caja cerrada"
                   Container(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 16, // px-4 = 1rem = 16px
-                      vertical: 8, // py-2 = 0.5rem = 8px
+                      horizontal: 12,
+                      vertical: 8,
                     ),
                     decoration: BoxDecoration(
-                      color: _warning.withOpacity(0.1), // bg-warning/10
-                      borderRadius: BorderRadius.circular(
-                        8,
-                      ), // rounded-lg = 0.5rem = 8px
+                      color: AppColors.warning.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(AppRadius.button),
                     ),
                     child: Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: const [
                         Icon(
                           Icons.watch_later_outlined,
-                          size: 16, // icono 16px
-                          color: _warning, // texto warning
+                          size: 16,
+                          color: AppColors.warning,
                         ),
                         SizedBox(width: 8),
                         Text(
                           'Caja cerrada',
                           style: TextStyle(
-                            color: _warning,
+                            color: AppColors.warning,
                             fontWeight: FontWeight.w600,
-                            fontSize: 14,
+                            fontSize: 13,
                           ),
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(width: 16),
-                  // Botón "Aperturar Caja": btn-mango (gradiente mango, px-4, py-2.5, rounded-lg, font-semibold)
+                  const SizedBox(height: 12),
+                  // Button "Aperturar Caja" - Full width
                   Container(
                     decoration: BoxDecoration(
-                      // Gradiente Mango: linear-gradient(135deg, hsl(25 95% 53%) 0%, hsl(35 95% 55%) 100%)
                       gradient: const LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
                         colors: [
-                          _primary, // hsl(25 95% 53%)
-                          Color(0xFFFFA726), // hsl(35 95% 55%)
+                          AppColors.primary,
+                          AppColors.primaryGradientEnd,
                         ],
                       ),
-                      borderRadius: BorderRadius.circular(8), // rounded-lg
-                      boxShadow: [
-                        BoxShadow(
-                          color: _primary.withOpacity(0.3),
-                          blurRadius: 8,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
+                      borderRadius: BorderRadius.circular(AppRadius.button),
+                      boxShadow: AppShadows.soft,
                     ),
                     child: Material(
                       color: Colors.transparent,
                       child: InkWell(
                         onTap: () {},
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(AppRadius.button),
                         child: Padding(
                           padding: const EdgeInsets.symmetric(
-                            horizontal: 16, // px-4
-                            vertical: 10, // py-2.5 = 0.625rem = 10px
+                            horizontal: 20,
+                            vertical: 12,
                           ),
                           child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
                             children: const [
                               Icon(
-                                Icons.attach_money,
+                                Icons.lock_open,
                                 color: Colors.white,
                                 size: 18,
                               ),
@@ -325,7 +297,88 @@ class _WelcomeCard extends StatelessWidget {
                                 'Aperturar Caja',
                                 style: TextStyle(
                                   color: Colors.white,
-                                  fontWeight: FontWeight.w600, // font-semibold
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              )
+            else
+              // Desktop: Row layout
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Badge "Caja cerrada"
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.warning.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(AppRadius.button),
+                    ),
+                    child: Row(
+                      children: const [
+                        Icon(
+                          Icons.watch_later_outlined,
+                          size: 16,
+                          color: AppColors.warning,
+                        ),
+                        SizedBox(width: 8),
+                        Text(
+                          'Caja cerrada',
+                          style: TextStyle(
+                            color: AppColors.warning,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  // Button "Aperturar Caja"
+                  Container(
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [
+                          AppColors.primary,
+                          AppColors.primaryGradientEnd,
+                        ],
+                      ),
+                      borderRadius: BorderRadius.circular(AppRadius.button),
+                      boxShadow: AppShadows.soft,
+                    ),
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: () {},
+                        borderRadius: BorderRadius.circular(AppRadius.button),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 20,
+                            vertical: 12,
+                          ),
+                          child: Row(
+                            children: const [
+                              Icon(
+                                Icons.lock_open,
+                                color: Colors.white,
+                                size: 18,
+                              ),
+                              SizedBox(width: 8),
+                              Text(
+                                'Aperturar Caja',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w600,
                                   fontSize: 14,
                                 ),
                               ),
@@ -337,110 +390,181 @@ class _WelcomeCard extends StatelessWidget {
                   ),
                 ],
               ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-}
-
-/// 2) QuickActions
-/// - Grid de acciones rápidas: grid-cols-2 en base, lg:grid-cols-4; gap 1rem (gap-4)
-/// - Acciones primarias (grid-cols-2 gap-4, pt-2)
-class _QuickActionsSection extends StatelessWidget {
-  const _QuickActionsSection();
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Título sección: section-title (text-lg, font-semibold, text-foreground, margin-bottom 1rem)
-        const Padding(
-          padding: EdgeInsets.only(bottom: 16), // mb-4 = 1rem = 16px
-          child: Text(
-            'Acciones Rápidas',
-            style: TextStyle(
-              fontSize: 18, // text-lg = 1.125rem = 18px
-              fontWeight: FontWeight.w600, // font-semibold
-              color: _foreground,
-            ),
-          ),
-        ),
-
-        // Grid de acciones rápidas: grid-cols-2 en base, lg:grid-cols-4; gap 1rem (gap-4)
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final isLarge = constraints.maxWidth > 1024;
-            final count = isLarge ? 4 : 2;
-            return GridView.count(
-              crossAxisCount: count,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              mainAxisSpacing: 16, // gap-4 = 1rem = 16px
-              crossAxisSpacing: 16,
-              childAspectRatio: 2.0, // Adjusted for slightly larger cards
-              children: [
-                // Mozos: bg-info/10 text-info
-                _quickActionCard(
-                  context,
-                  Icons.people_outline,
-                  'Mozos',
-                  'Gestionar meseros',
-                  _info,
-                  '/ajustes/mozos',
-                ),
-                // Imprimir Productos: bg-success/10 text-success
-                _quickActionCard(
-                  context,
-                  Icons.print_outlined,
-                  'Imprimir Productos',
-                  'Etiquetas y códigos',
-                  _success,
-                  '/productos',
-                ),
-                // Comprobantes: bg-warning/10 text-warning
-                _quickActionCard(
-                  context,
-                  Icons.description_outlined,
-                  'Comprobantes',
-                  'NCF y facturas',
-                  _warning,
-                  '/reportes',
-                ),
-                // Publicidad: bg-primary/10 text-primary
-                _quickActionCard(
-                  context,
-                  Icons.campaign_outlined,
-                  'Publicidad',
-                  'Promociones activas',
-                  _primary,
-                  '/ajustes/publicidad',
-                ),
-              ],
-            );
-          },
-        ),
-        const SizedBox(height: 8), // pt-2 = 0.5rem = 8px
-        // Acciones primarias (grid-cols-2 gap-4)
-        Row(
-          children: [
-            // "Nueva Venta": card-elevated p-5, bg-gradient-mango, hover:opacity-95
-            Expanded(child: _primaryActionNewSale(context)),
-            const SizedBox(width: 16), // gap-4 = 1rem = 16px
-            // "Delivery": card-interactive p-5
-            Expanded(child: _primaryActionDelivery(context)),
           ],
         ),
       ],
     );
   }
 
-  // Tarjetas de acción: card-interactive p-4 (1rem) group
-  // Icon box: 40x40 (w-10 h-10), rounded-lg
-  // Icono: 20px (w-5 h-5)
-  Widget _quickActionCard(
+  Widget _metaItem(Color color, String text) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          text,
+          style: const TextStyle(
+            color: AppColors.mutedForeground,
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _metaText(String text) {
+    return Text(
+      text,
+      style: const TextStyle(
+        color: AppColors.mutedForeground,
+        fontSize: 14,
+        fontWeight: FontWeight.w500,
+      ),
+    );
+  }
+
+  Widget _metaIconText(IconData icon, String text) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 16, color: AppColors.mutedForeground),
+        const SizedBox(width: 6),
+        Text(
+          text,
+          style: const TextStyle(
+            color: AppColors.mutedForeground,
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _metaDot() {
+    return Container(
+      width: 4,
+      height: 4,
+      decoration: BoxDecoration(
+        color: AppColors.border,
+        shape: BoxShape.circle,
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// 2. QUICK ACTIONS
+// ============================================================================
+
+class _QuickActionsSection extends StatelessWidget {
+  final double width;
+
+  const _QuickActionsSection({required this.width});
+
+  @override
+  Widget build(BuildContext context) {
+    // Quick Actions Grid Columns:
+    // <1024px: 2 columns
+    // >=1024px: 4 columns
+    final gridColumns = width < AppBreakpoints.tablet ? 2 : 4;
+
+    // Aspect ratio responsive with better visual balance
+    final aspectRatio = width < 640
+        ? 1.15
+        : (width < 1024 ? 1.3 : (width < 1280 ? 1.35 : 1.4));
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Acciones Rápidas',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+            color: AppColors.foreground,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.itemGap),
+        GridView.builder(
+          itemCount: 4,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: gridColumns,
+            mainAxisSpacing: AppSpacing.sectionGap,
+            crossAxisSpacing: AppSpacing.sectionGap,
+            childAspectRatio: aspectRatio,
+            mainAxisExtent: 122,
+          ),
+          itemBuilder: (context, index) {
+            final items = [
+              (
+                Icons.people_outline,
+                'Mozos',
+                'Gestionar meseros',
+                AppColors.info,
+                '/ajustes/mozos',
+              ),
+              (
+                Icons.print_outlined,
+                'Imprimir Productos',
+                'Etiquetas y códigos',
+                AppColors.success,
+                '/productos',
+              ),
+              (
+                Icons.receipt_long,
+                'Comprobantes',
+                'NCF y facturas',
+                AppColors.warning,
+                '/reportes',
+              ),
+              (
+                Icons.campaign_outlined,
+                'Publicidad',
+                'Promociones activas',
+                AppColors.primary,
+                '/ajustes/publicidad',
+              ),
+            ];
+            final item = items[index];
+            return _actionCard(
+              context,
+              item.$1,
+              item.$2,
+              item.$3,
+              item.$4,
+              item.$5,
+            );
+          },
+        ),
+        const SizedBox(height: AppSpacing.sectionGap),
+        // Large Buttons Layout - Always 2 columns (matches responsive spec)
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final itemWidth = (constraints.maxWidth - AppSpacing.sectionGap) / 2;
+            return Wrap(
+              spacing: AppSpacing.sectionGap,
+              runSpacing: AppSpacing.sectionGap,
+              children: [
+                SizedBox(width: itemWidth, child: _largeButton(context, true)),
+                SizedBox(width: itemWidth, child: _largeButton(context, false)),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _actionCard(
     BuildContext context,
     IconData icon,
     String title,
@@ -448,56 +572,51 @@ class _QuickActionsSection extends StatelessWidget {
     Color color,
     String route,
   ) {
+    // Spec 3.2.1: Small Action Card
+    // - Icon: 48x48px container with 24px icon
+    // - Padding: 16px
+    // - Left-aligned content
+    // - Min height: 110px (SPEC REQUIREMENT)
     return HoverableCard(
-      onTap: () => GoRouter.of(context).go(route),
+      onTap: () => context.go(route),
+      borderColor: color.withOpacity(0.4), // Different color for each card
       child: Container(
-        padding: const EdgeInsets.all(14), // p-4 slightly reduced
-        decoration: BoxDecoration(
-          color: _card,
-          borderRadius: BorderRadius.circular(15), // 15px border radius
-          border: Border.all(color: _border, width: 1),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 10,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
+        padding: const EdgeInsets.all(14),
+        constraints: const BoxConstraints.tightFor(height: 122),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
           crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.start,
           children: [
-            // Icon box: 40x40 (w-10 h-10)
+            // Icon Container - 48x48px per spec
             Container(
-              width: 40,
-              height: 40,
+              width: 44,
+              height: 44,
               decoration: BoxDecoration(
                 color: color.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(10), // rounded-lg
+                borderRadius: BorderRadius.circular(AppRadius.md), // 8px
               ),
-              alignment: Alignment.center,
-              child: Icon(
-                icon,
-                color: color,
-                size: 20, // w-5 h-5 = 20px
-              ),
+              child: Icon(icon, color: color, size: 22),
             ),
-            const SizedBox(height: 10),
-            // Title
+            const SizedBox(height: 8),
+            // Title - semibold per spec
             Text(
               title,
               style: const TextStyle(
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w600, // semibold
                 fontSize: 14,
-                color: _foreground,
+                color: AppColors.foreground,
               ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 2),
             // Subtitle
             Text(
               subtitle,
-              style: const TextStyle(color: _mutedForeground, fontSize: 12),
+              style: const TextStyle(
+                fontSize: 12,
+                color: AppColors.mutedForeground,
+              ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -507,757 +626,727 @@ class _QuickActionsSection extends StatelessWidget {
     );
   }
 
-  // "Nueva Venta": card-elevated p-5, flex, gap-4, bg-gradient-mango
-  // Icon box: 48x48 (w-12 h-12), rounded-xl, bg-primary-foreground/20; icon 24px (w-6 h-6)
-  Widget _primaryActionNewSale(BuildContext context) {
+  Widget _largeButton(BuildContext context, bool isPrimary) {
+    // Spec 3.2.2: Nueva Venta (gradient)
+    // Spec 3.2.3: Delivery (white card with badge)
     return HoverableCard(
-      onTap: () => GoRouter.of(context).go('/ventas'),
+      onTap: () {
+        if (isPrimary) {
+          context.go('/sales'); // Go to Sales shell
+        } else {
+          context.go('/sales/delivery'); // Go to Delivery
+        }
+      },
       child: Container(
-        padding: const EdgeInsets.all(20), // p-5 = 1.25rem = 20px
+        height: 80, // Fixed 80px per spec
         decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [_primary, Color(0xFFFFA726)],
+          color: isPrimary ? null : Colors.white,
+          gradient: isPrimary
+              ? const LinearGradient(
+                  colors: [AppColors.primary, AppColors.primaryGradientEnd],
+                )
+              : null,
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          border: isPrimary ? null : Border.all(color: AppColors.border),
+          boxShadow: AppShadows.soft,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.start,
+            children: [
+              // Icon Container - 56x56px per spec
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  color: isPrimary
+                      ? Colors.white.withOpacity(0.2)
+                      : AppColors.info.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(AppRadius.card), // 12px
+                ),
+                child: Icon(
+                  isPrimary ? Icons.add : Icons.delivery_dining,
+                  color: isPrimary ? Colors.white : AppColors.info,
+                  size: 28, // 7x7 (28px)
+                ),
+              ),
+              const SizedBox(width: 12),
+              // Text content
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Title - 18px semibold per spec
+                    Text(
+                      isPrimary ? 'Nueva Venta' : 'Delivery',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600, // semibold
+                        fontSize: 18, // text-lg per spec
+                        height: 1,
+                        color: isPrimary ? Colors.white : AppColors.foreground,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    // Subtitle - 14px per spec
+                    Text(
+                      isPrimary ? 'Iniciar orden' : 'Gestionar entregas',
+                      style: TextStyle(
+                        fontSize: 14, // text-sm per spec
+                        color: isPrimary
+                            ? Colors.white.withOpacity(0.8)
+                            : AppColors.mutedForeground,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // Right side element
+              if (isPrimary)
+                // Arrow icon for Nueva Venta
+                Icon(
+                  Icons.arrow_forward,
+                  size: 20,
+                  color: Colors.white.withOpacity(0.7),
+                )
+              else
+                // Badge for Delivery (spec: "4 en ruta")
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.info.withOpacity(0.1),
+                    border: Border.all(color: AppColors.info.withOpacity(0.2)),
+                    borderRadius: BorderRadius.circular(AppRadius.full),
+                  ),
+                  child: const Text(
+                    '4 en ruta',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.info,
+                    ),
+                  ),
+                ),
+            ],
           ),
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 10,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            // Icon box: 48x48 (w-12 h-12), rounded-xl, bg-primary-foreground/20
-            Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(
-                  0.2,
-                ), // bg-primary-foreground/20
-                borderRadius: BorderRadius.circular(12), // rounded-xl
-              ),
-              alignment: Alignment.center,
-              child: const Icon(
-                Icons.add,
-                color: Colors.white,
-                size: 24, // w-6 h-6 = 1.5rem = 24px
-              ),
-            ),
-            const SizedBox(width: 16), // gap-4 = 1rem = 16px
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: const [
-                Text(
-                  'Nueva Venta',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 16,
-                  ),
-                ),
-                SizedBox(height: 2),
-                Text(
-                  'Ir al punto de venta',
-                  style: TextStyle(color: Colors.white70, fontSize: 12),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // "Delivery": card-interactive p-5, flex, gap-4
-  // Icon box: 48x48, rounded-xl, bg-info/10; icon 24px color info
-  Widget _primaryActionDelivery(BuildContext context) {
-    return HoverableCard(
-      onTap: () => GoRouter.of(context).go('/ventas?mode=delivery'),
-      child: Container(
-        padding: const EdgeInsets.all(20), // p-5
-        decoration: BoxDecoration(
-          color: _card,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: _border, width: 1),
-          boxShadow: [
-            BoxShadow(
-              color: _foreground.withOpacity(0.05),
-              blurRadius: 3,
-              offset: const Offset(0, 1),
-            ),
-            BoxShadow(
-              color: _foreground.withOpacity(0.08),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            // Icon box: 48x48, rounded-xl, bg-info/10
-            Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                color: _info.withOpacity(0.1), // bg-info/10
-                borderRadius: BorderRadius.circular(12),
-              ),
-              alignment: Alignment.center,
-              child: const Icon(
-                Icons.shopping_bag_outlined,
-                color: _info,
-                size: 24,
-              ),
-            ),
-            const SizedBox(width: 16),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: const [
-                Text(
-                  'Delivery',
-                  style: TextStyle(
-                    color: _foreground,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 16,
-                  ),
-                ),
-                SizedBox(height: 2),
-                Text(
-                  'Pedidos para entrega',
-                  style: TextStyle(color: _mutedForeground, fontSize: 12),
-                ),
-              ],
-            ),
-          ],
         ),
       ),
     );
   }
 }
 
-/// 3) SalesChart - MANTIENE BACKEND COMPLETO
-/// - card-elevated p-6
-/// - Stats row: grid-cols-3 gap-4; mb-6
-/// - Stat cards: p-4, rounded-xl, border 1px
-/// - Chart: altura fija 16rem (h-64)
+//
+
+// ============================================================================
+// 3. SALES CHART
+// ============================================================================
+
 class _SalesChart extends StatelessWidget {
   final CashierViewModel viewModel;
-  const _SalesChart({required this.viewModel});
+  final bool isMobile;
+
+  const _SalesChart({required this.viewModel, required this.isMobile});
 
   @override
   Widget build(BuildContext context) {
-    final currency = NumberFormat.simpleCurrency(name: 'DOP');
+    // 1. Prepare Data
+    final currency = NumberFormat('#,##0', 'en_US');
+    final sales = viewModel.weeklySales; // List<double> of length 7
+    final totalSales = viewModel.totalWeeklySales;
+    final weeklyAverage = viewModel.weeklyAverage;
+    final bestDay = viewModel.bestDayAmount;
 
-    final List<FlSpot> spots = [];
-    if (viewModel.weeklySales.isNotEmpty) {
-      for (int i = 0; i < viewModel.weeklySales.length; i++) {
-        spots.add(FlSpot(i.toDouble(), viewModel.weeklySales[i]));
-      }
-    } else {
-      spots.addAll(List.generate(7, (i) => FlSpot(i.toDouble(), 0)));
-    }
+    // 2. Create Spots
+    final spots = List.generate(sales.length, (index) {
+      return FlSpot(index.toDouble(), sales[index]);
+    });
 
-    double maxY = 100;
-    for (var spot in spots) {
-      if (spot.y > maxY) maxY = spot.y * 1.2;
+    // 3. Dynamic Y-Axis
+    double maxSale = 0;
+    for (final s in sales) {
+      if (s > maxSale) maxSale = s;
     }
+    final maxY = maxSale > 0 ? maxSale * 1.2 : 10000.0;
+    final interval = maxY / 4;
+
+    final padding = const EdgeInsets.all(AppSpacing.cardPadding);
+    final chartHeight = 256.0;
 
     return Container(
+      padding: padding,
       decoration: BoxDecoration(
-        color: _card,
-        borderRadius: BorderRadius.circular(12), // rounded-xl
-        border: Border.all(color: _border, width: 1),
-        boxShadow: [
-          BoxShadow(
-            color: _foreground.withOpacity(0.05),
-            blurRadius: 3,
-            offset: const Offset(0, 1),
-          ),
-          BoxShadow(
-            color: _foreground.withOpacity(0.08),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: AppColors.border, width: 1),
+        boxShadow: AppShadows.soft,
       ),
-      padding: const EdgeInsets.all(24), // p-6 = 1.5rem = 24px
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header: flex-col en base; sm:flex-row; gap 1rem; mb-6
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final isSm = constraints.maxWidth > 640;
-              return Flex(
-                direction: isSm ? Axis.horizontal : Axis.vertical,
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: const [
-                      Text(
-                        'Resumen de Ventas',
-                        style: TextStyle(
-                          fontSize: 18, // text-lg
-                          fontWeight: FontWeight.w600,
-                          color: _foreground,
-                        ),
-                      ),
-                      SizedBox(height: 4),
-                      Text(
-                        'Últimos 7 días',
-                        style: TextStyle(
-                          color: _mutedForeground,
-                          fontSize: 14, // text-sm
-                        ),
-                      ),
-                    ],
+                  const Text(
+                    'Resumen de Ventas',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.foreground,
+                    ),
                   ),
-                  if (!isSm) const SizedBox(height: 16),
-                  // Botón "Esta semana": px-4 py-2, bg-secondary, rounded-lg
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16, // px-4
-                      vertical: 8, // py-2
-                    ),
-                    decoration: BoxDecoration(
-                      color: _secondary, // bg-secondary
-                      borderRadius: BorderRadius.circular(8), // rounded-lg
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: const [
-                        Icon(
-                          Icons.calendar_today_rounded,
-                          size: 14,
-                          color: _foreground,
-                        ),
-                        SizedBox(width: 8),
-                        Text(
-                          'Esta semana',
-                          style: TextStyle(
-                            fontSize: 14, // text-sm
-                            fontWeight: FontWeight.w500, // font-medium
-                            color: _foreground,
-                          ),
-                        ),
-                      ],
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Últimos 7 días',
+                    style: TextStyle(
+                      color: AppColors.mutedForeground,
+                      fontSize: 13,
                     ),
                   ),
                 ],
-              );
-            },
-          ),
-          const SizedBox(height: 24), // mb-6 = 1.5rem = 24px
-          // Stats row: grid-cols-3 gap-4; mb-6
-          Row(
-            children: [
-              // Total Ventas: bg-success/5, border-success/20, texto success
-              _statCard(
-                'Total Ventas',
-                currency.format(viewModel.totalWeeklySales),
-                _success.withOpacity(0.05), // bg-success/5
-                _success.withOpacity(0.2), // border-success/20
-                _success,
               ),
-              const SizedBox(width: 16), // gap-4
-              // Promedio Diario: bg-info/5, border-info/20, texto info
-              _statCard(
-                'Promedio Diario',
-                currency.format(viewModel.weeklyAverage),
-                _info.withOpacity(0.05),
-                _info.withOpacity(0.2),
-                _info,
-              ),
-              const SizedBox(width: 16),
-              // Día Récord: bg-primary/5, border-primary/20, texto primary
-              _statCard(
-                'Día Récord',
-                currency.format(viewModel.bestDayAmount),
-                _primary.withOpacity(0.05),
-                _primary.withOpacity(0.2),
-                _primary,
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.muted.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: const [
+                    Icon(
+                      Icons.calendar_today,
+                      size: 14,
+                      color: AppColors.mutedForeground,
+                    ),
+                    SizedBox(width: 8),
+                    Text(
+                      'Esta semana',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: AppColors.mutedForeground,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 24), // mb-6
-          // Chart: altura fija 16rem (h-64)
+          const SizedBox(height: AppSpacing.sectionGap),
+
+          // Metrics Grid
+          // Mobile/Tablet (<1024px): 2 columns (wrapped)
+          // Desktop (≥1024px): 3-4 columns in a row
+          // Wide (≥1440px): Can show more
+          _buildMetricsGrid(currency, totalSales, weeklyAverage, bestDay),
+          const SizedBox(height: AppSpacing.sectionGap),
+
+          // Chart
           SizedBox(
-            height: 256, // h-64 = 16rem = 256px
+            height: chartHeight,
             child: LineChart(
               LineChartData(
                 gridData: FlGridData(
                   show: true,
                   drawVerticalLine: false,
-                  horizontalInterval: maxY / 4,
-                  getDrawingHorizontalLine: (value) {
-                    return FlLine(
-                      color: _border.withOpacity(0.5),
-                      strokeWidth: 1,
-                    );
-                  },
+                  horizontalInterval: interval,
+                  getDrawingHorizontalLine: (value) => FlLine(
+                    color: AppColors.border.withOpacity(0.5),
+                    strokeWidth: 1,
+                    dashArray: [4, 4],
+                  ),
                 ),
                 titlesData: FlTitlesData(
-                  bottomTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      reservedSize: 28,
-                      interval: 1,
-                      getTitlesWidget: (val, meta) {
-                        const days = [
-                          'Lun',
-                          'Mar',
-                          'Mié',
-                          'Jue',
-                          'Vie',
-                          'Sáb',
-                          'Dom',
-                        ];
-                        if (val.toInt() >= 0 && val.toInt() < days.length) {
-                          return Padding(
-                            padding: const EdgeInsets.only(top: 8.0),
-                            child: Text(
-                              days[val.toInt()],
-                              style: const TextStyle(
-                                fontSize: 12, // text-xs
-                                color: _mutedForeground,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          );
-                        }
-                        return const SizedBox();
-                      },
-                    ),
-                  ),
                   leftTitles: AxisTitles(
                     sideTitles: SideTitles(
                       showTitles: true,
-                      interval: maxY / 4,
+                      interval: interval,
                       reservedSize: 40,
-                      getTitlesWidget: (val, meta) {
-                        if (val == 0) return const SizedBox.shrink();
+                      getTitlesWidget: (value, meta) {
+                        if (value == 0) return const SizedBox();
                         return Text(
-                          '${(val / 1000).toStringAsFixed(0)}k',
+                          NumberFormat.compact().format(value),
                           style: const TextStyle(
-                            fontSize: 12, // text-xs
-                            color: _mutedForeground,
+                            color: AppColors.mutedForeground,
+                            fontSize: 10,
                           ),
                         );
                       },
                     ),
                   ),
-                  topTitles: AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: false, // Keep concise
+                    ),
                   ),
                   rightTitles: AxisTitles(
                     sideTitles: SideTitles(showTitles: false),
                   ),
-                ),
-                borderData: FlBorderData(show: false),
-                minX: 0,
-                maxX: 6,
-                minY: 0,
-                maxY: maxY,
-                lineTouchData: LineTouchData(
-                  enabled: true,
-                  touchTooltipData: LineTouchTooltipData(
-                    getTooltipColor: (touchedSpot) => _card,
-                    tooltipPadding: const EdgeInsets.all(12),
-                    tooltipBorder: BorderSide(color: _border, width: 1),
-                    getTooltipItems: (touchedSpots) {
-                      return touchedSpots.map((spot) {
-                        const days = [
-                          'Lun',
-                          'Mar',
-                          'Mié',
-                          'Jue',
-                          'Vie',
-                          'Sáb',
-                          'Dom',
-                        ];
-                        final day = days[spot.x.toInt()];
-                        return LineTooltipItem(
-                          '$day\n',
-                          const TextStyle(
-                            color: _foreground,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 14,
-                          ),
-                          children: [
-                            TextSpan(
-                              text: currency.format(spot.y),
-                              style: const TextStyle(
-                                color: _primary,
-                                fontWeight: FontWeight.w600,
-                                fontSize: 12,
-                              ),
-                            ),
-                          ],
-                        );
-                      }).toList();
-                    },
+                  topTitles: AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
                   ),
                 ),
+                borderData: FlBorderData(show: false),
                 lineBarsData: [
                   LineChartBarData(
                     spots: spots,
                     isCurved: true,
-                    curveSmoothness: 0.35,
-                    color: _primary,
+                    color: AppColors.primary,
                     barWidth: 3,
                     isStrokeCapRound: true,
-                    dotData: FlDotData(
-                      show: true,
-                      getDotPainter: (spot, percent, barData, index) {
-                        return FlDotCirclePainter(
-                          radius: 4,
-                          color: _card,
-                          strokeWidth: 2,
-                          strokeColor: _primary,
-                        );
-                      },
-                    ),
+                    dotData: FlDotData(show: false),
                     belowBarData: BarAreaData(
                       show: true,
-                      gradient: LinearGradient(
-                        colors: [
-                          _primary.withOpacity(0.15),
-                          _primary.withOpacity(0.01),
-                        ],
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                      ),
+                      color: AppColors.primary.withOpacity(0.1),
                     ),
                   ),
                 ],
               ),
             ),
           ),
-
-          // Trend indicator: mt-4 pt-4 con border-t
-          Container(
-            margin: const EdgeInsets.only(top: 16), // mt-4 = 1rem = 16px
-            padding: const EdgeInsets.only(top: 16), // pt-4
-            decoration: const BoxDecoration(
-              border: Border(top: BorderSide(color: _border, width: 1)),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.trending_up, size: 16, color: _success),
-                const SizedBox(width: 6),
-                const Text(
-                  '+12.5%',
-                  style: TextStyle(
-                    color: _success,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 14,
-                  ),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              Container(
+                width: 8,
+                height: 8,
+                decoration: const BoxDecoration(
+                  color: AppColors.success,
+                  shape: BoxShape.circle,
                 ),
-                const SizedBox(width: 6),
-                const Text(
-                  'vs. semana anterior',
-                  style: TextStyle(color: _mutedForeground, fontSize: 14),
+              ),
+              const SizedBox(width: 6),
+              const Text(
+                'Datos actualizados en tiempo real',
+                style: TextStyle(
+                  color: AppColors.mutedForeground,
+                  fontSize: 12,
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  // Stat cards: p-4, rounded-xl, border 1px
-  // Textos: label text-xs muted; valor text-xl font-bold
-  Widget _statCard(
-    String label,
-    String value,
-    Color bgColor,
-    Color borderColor,
-    Color textColor,
+  Widget _buildMetricsGrid(
+    NumberFormat currency,
+    double totalSales,
+    double weeklyAverage,
+    double bestDay,
   ) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(16), // p-4 = 1rem = 16px
-        decoration: BoxDecoration(
-          color: bgColor,
-          borderRadius: BorderRadius.circular(12), // rounded-xl
-          border: Border.all(color: borderColor, width: 1),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              label,
-              style: const TextStyle(
-                color: _mutedForeground, // text-xs muted
-                fontSize: 12, // text-xs
-                fontWeight: FontWeight.w500,
+    final metrics = [
+      {
+        'label': 'Total Ventas',
+        'value': 'RD\$${currency.format(totalSales)}',
+        'color': AppColors.success,
+      },
+      {
+        'label': 'Promedio Diario',
+        'value': 'RD\$${currency.format(weeklyAverage)}',
+        'color': AppColors.info,
+      },
+      {
+        'label': 'Día Récord',
+        'value': 'RD\$${currency.format(bestDay)}',
+        'color': AppColors.primary,
+      },
+    ];
+
+    // Responsive layout:
+    // Mobile/Tablet: Wrap with 2 columns
+    // Desktop+: Row with equal expansion
+    if (isMobile) {
+      // Use Wrap for 2-column layout on mobile/tablet
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final itemWidth = (constraints.maxWidth - AppSpacing.sectionGap) / 2;
+          return Wrap(
+            spacing: AppSpacing.sectionGap,
+            runSpacing: AppSpacing.sectionGap,
+            children: metrics.map((m) {
+              return SizedBox(
+                width: itemWidth,
+                child: _metricBox(
+                  m['label'] as String,
+                  m['value'] as String,
+                  m['color'] as Color,
+                ),
+              );
+            }).toList(),
+          );
+        },
+      );
+    } else {
+      // Desktop: Row layout with equal expansion
+      return Row(
+        children: [
+          for (int i = 0; i < metrics.length; i++) ...[
+            Expanded(
+              child: _metricBox(
+                metrics[i]['label'] as String,
+                metrics[i]['value'] as String,
+                metrics[i]['color'] as Color,
               ),
             ),
-            const SizedBox(height: 8),
-            Text(
-              value,
-              style: TextStyle(
-                color: textColor,
-                fontWeight: FontWeight.bold, // font-bold
-                fontSize: 20, // text-xl = 1.25rem = 20px
-              ),
-            ),
+            if (i < metrics.length - 1) const SizedBox(width: 16),
           ],
-        ),
+        ],
+      );
+    }
+  }
+
+  Widget _metricBox(String label, String value, Color color) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.1)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 11,
+              color: AppColors.mutedForeground,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-/// 4) ActiveTablesWidget
-/// - card-elevated p-6
-/// - Badge ocupadas: badge-warning (px-2.5 py-1, rounded-full)
-/// - Item de mesa: p-3 (0.75rem); bg-secondary/50; rounded-xl
-/// - Icon box: 40x40 (w-10 h-10), bg-warning/10, rounded-lg
+// ============================================================================
+// 4. ACTIVE TABLES WIDGET
+// ============================================================================
+
 class _ActiveTablesWidget extends StatelessWidget {
   final CashierViewModel viewModel;
-  const _ActiveTablesWidget({required this.viewModel});
+  final bool isWide;
+  const _ActiveTablesWidget({required this.viewModel, this.isWide = false});
+
+  String _formatDuration(Duration duration) {
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes.remainder(60);
+    final seconds = duration.inSeconds.remainder(60);
+
+    if (hours > 0) {
+      return '${hours}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+    }
+    return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+  }
+
+  String _resolveTableCode(TableSession session, int index) {
+    final code = session.tableName;
+    if (code != null && code.trim().isNotEmpty) {
+      return code.trim();
+    }
+
+    if (session.origin == 'dine_in') {
+      return 'SP${(index + 1).toString().padLeft(2, '0')}';
+    }
+    if (session.origin == 'takeout') {
+      return 'TO${(index + 1).toString().padLeft(2, '0')}';
+    }
+    if (session.origin == 'delivery') {
+      return 'DL${(index + 1).toString().padLeft(2, '0')}';
+    }
+    if (session.origin == 'self_service') {
+      return 'SS${(index + 1).toString().padLeft(2, '0')}';
+    }
+    return 'M${(index + 1).toString().padLeft(2, '0')}';
+  }
+
+  String _resolveZoneName(TableSession session) {
+    final zone = session.zoneName;
+    if (zone != null && zone.trim().isNotEmpty) {
+      return zone.trim();
+    }
+    return 'Salon Principal';
+  }
 
   @override
   Widget build(BuildContext context) {
-    final sessions = viewModel.activeSessions;
+    // Filter out manual sales
+    final sessions = viewModel.activeSessions
+        .where((s) => s.origin != 'manual')
+        .toList();
+
+    final visibleSessions =
+        isWide ? sessions : sessions.take(5).toList(growable: false);
+
+    Widget list;
+    if (visibleSessions.isEmpty) {
+      list = Container(
+        height: 160,
+        decoration: BoxDecoration(
+          color: AppColors.secondary.withOpacity(0.5),
+          borderRadius: BorderRadius.circular(16),
+        ),
+      );
+    } else if (isWide && visibleSessions.length > 3) {
+      list = ListView.separated(
+        itemCount: visibleSessions.length,
+        shrinkWrap: false,
+        physics: const AlwaysScrollableScrollPhysics(),
+        separatorBuilder: (_, __) => const SizedBox(height: 16),
+        itemBuilder: (context, index) {
+          final s = visibleSessions[index];
+          final total = viewModel.sessionTotals[s.id] ?? 0.0;
+          final formattedTotal =
+              'RD\$ ${NumberFormat('#,##0', 'en_US').format(total)}';
+          final duration = DateTime.now().difference(s.openedAt);
+
+          return _ActiveTableRow(
+            tableCode: _resolveTableCode(s, index),
+            zoneName: _resolveZoneName(s),
+            peopleCount: s.peopleCount,
+            timeStr: _formatDuration(duration),
+            formattedTotal: formattedTotal,
+            onTap: () => context.go('/sales'),
+          );
+        },
+      );
+    } else {
+      list = Column(
+        children: [
+          for (int i = 0; i < visibleSessions.length; i++) ...[
+            _ActiveTableRow(
+              tableCode: _resolveTableCode(visibleSessions[i], i),
+              zoneName: _resolveZoneName(visibleSessions[i]),
+              peopleCount: visibleSessions[i].peopleCount,
+              timeStr: _formatDuration(
+                DateTime.now().difference(visibleSessions[i].openedAt),
+              ),
+              formattedTotal:
+                  'RD\$ ${NumberFormat('#,##0', 'en_US').format(viewModel.sessionTotals[visibleSessions[i].id] ?? 0.0)}',
+              onTap: () => context.go('/sales'),
+            ),
+            if (i < visibleSessions.length - 1) const SizedBox(height: 16),
+          ],
+        ],
+      );
+    }
 
     return Container(
       decoration: BoxDecoration(
-        color: _card,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _border, width: 1),
-        boxShadow: [
-          BoxShadow(
-            color: _foreground.withOpacity(0.05),
-            blurRadius: 3,
-            offset: const Offset(0, 1),
-          ),
-          BoxShadow(
-            color: _foreground.withOpacity(0.08),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: AppColors.border, width: 1),
+        boxShadow: AppShadows.soft,
       ),
-      padding: const EdgeInsets.all(24), // p-6
+      padding: const EdgeInsets.all(24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header: flex items-center justify-between; mb-4
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text(
                 'Mesas Activas',
                 style: TextStyle(
-                  fontSize: 18, // text-lg
-                  fontWeight: FontWeight.w600,
-                  color: _foreground,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.foreground,
                 ),
               ),
-              // Badge ocupadas: px-2.5 py-1, rounded-full, bg-warning/10, text-warning
               Container(
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 10, // px-2.5 = 0.625rem = 10px
-                  vertical: 4, // py-1 = 0.25rem = 4px
+                  horizontal: 16,
+                  vertical: 8,
                 ),
                 decoration: BoxDecoration(
-                  color: _warning.withOpacity(0.1), // bg-warning/10
-                  borderRadius: BorderRadius.circular(9999), // rounded-full
+                  color: AppColors.warningBg,
+                  borderRadius: BorderRadius.circular(999),
                 ),
                 child: Text(
                   '${sessions.length} ocupadas',
                   style: const TextStyle(
-                    color: _warning,
-                    fontSize: 12, // text-xs
-                    fontWeight: FontWeight.w500, // font-medium
+                    color: AppColors.warning,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 16), // mb-4 = 1rem = 16px
-
-          if (sessions.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 24),
-              child: Center(
-                child: Text(
-                  'No hay mesas ocupadas',
-                  style: TextStyle(color: _mutedForeground),
-                ),
-              ),
+          const SizedBox(height: AppSpacing.sectionGap),
+          if (isWide && visibleSessions.length > 3)
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 600),
+              child: list,
             )
           else
-            // Lista de mesas: space-y-3
-            ListView.separated(
-              itemCount: sessions.take(5).length,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              separatorBuilder: (_, __) =>
-                  const SizedBox(height: 12), // space-y-3 = 0.75rem = 12px
-              itemBuilder: (context, index) {
-                final s = sessions[index];
-                final duration = DateTime.now().difference(s.openedAt);
-                final hours = duration.inHours;
-                final minutes = duration.inMinutes % 60;
-
-                return HoverableCard(
-                  child: Container(
-                    // Item de mesa: p-3 (0.75rem); bg-secondary/50; rounded-xl
-                    padding: const EdgeInsets.all(12), // p-3 = 0.75rem = 12px
-                    decoration: BoxDecoration(
-                      color: _secondary.withOpacity(0.5), // bg-secondary/50
-                      borderRadius: BorderRadius.circular(12), // rounded-xl
-                    ),
-                    child: Row(
-                      children: [
-                        // Icon box: 40x40 (w-10 h-10), bg-warning/10, rounded-lg
-                        Container(
-                          width: 40,
-                          height: 40,
-                          decoration: BoxDecoration(
-                            color: _warning.withOpacity(0.1), // bg-warning/10
-                            borderRadius: BorderRadius.circular(
-                              8,
-                            ), // rounded-lg
-                          ),
-                          alignment: Alignment.center,
-                          child: Text(
-                            s.customerName != null && s.customerName!.isNotEmpty
-                                ? s.customerName!
-                                      .substring(
-                                        0,
-                                        s.customerName!.length > 4
-                                            ? 4
-                                            : s.customerName!.length,
-                                      )
-                                      .toUpperCase()
-                                : 'SP${(index + 1).toString().padLeft(2, '0')}',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w700,
-                              color: _warning, // texto warning
-                              fontSize: 11,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                s.origin == 'dine_in'
-                                    ? 'Salón Principal'
-                                    : 'Terraza',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 14,
-                                  color: _foreground,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              // Meta: texto xs muted con iconos 12px (w-3 h-3)
-                              Row(
-                                children: [
-                                  const Icon(
-                                    Icons.people_outline,
-                                    size: 12, // w-3 h-3 = 0.75rem = 12px
-                                    color: _mutedForeground,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    '${s.peopleCount} personas',
-                                    style: const TextStyle(
-                                      fontSize: 12, // text-xs
-                                      color: _mutedForeground,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  const Icon(
-                                    Icons.access_time,
-                                    size: 12,
-                                    color: _mutedForeground,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    '${hours}:${minutes.toString().padLeft(2, '0')}',
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      color: _mutedForeground,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                        // Total: texto bold en foreground
-                        const Text(
-                          'RD\$ 2,850',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: _foreground,
-                            fontSize: 14,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
+            list,
+          if (sessions.isNotEmpty) ...[
+            const SizedBox(height: AppSpacing.sectionGap),
+            Container(
+              height: 1,
+              color: AppColors.border,
             ),
-
-          // Footer link: mt-4 pt-4, border-t; icono 16px
-          Container(
-            margin: const EdgeInsets.only(top: 16), // mt-4
-            padding: const EdgeInsets.only(top: 16), // pt-4
-            decoration: const BoxDecoration(
-              border: Border(top: BorderSide(color: _border, width: 1)),
-            ),
-            child: Center(
+            const SizedBox(height: AppSpacing.sectionGap),
+            Center(
               child: TextButton(
-                onPressed: () {},
+                onPressed: () => context.go('/sales'),
                 style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 6,
+                  foregroundColor: AppColors.primary,
+                  textStyle: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: const [
-                    Text(
-                      'Ver todas las mesas',
-                      style: TextStyle(
-                        color: _primary, // texto primary
-                        fontWeight: FontWeight.w500, // font-medium
-                        fontSize: 14,
-                      ),
-                    ),
-                    SizedBox(width: 6),
-                    Icon(
-                      Icons.arrow_forward,
-                      size: 16, // icono 16px
-                      color: _primary,
-                    ),
+                    Text('Ver todas las mesas'),
+                    SizedBox(width: 8),
+                    Icon(Icons.arrow_forward, size: 18),
                   ],
                 ),
               ),
             ),
-          ),
+          ],
         ],
+      ),
+    );
+  }
+}
+
+class _ActiveTableRow extends StatelessWidget {
+  final String tableCode;
+  final String zoneName;
+  final int peopleCount;
+  final String timeStr;
+  final String formattedTotal;
+  final VoidCallback onTap;
+
+  const _ActiveTableRow({
+    required this.tableCode,
+    required this.zoneName,
+    required this.peopleCount,
+    required this.timeStr,
+    required this.formattedTotal,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: AppColors.secondary.withOpacity(0.6),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  color: AppColors.warningBg,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  tableCode,
+                  style: const TextStyle(
+                    color: AppColors.warning,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      zoneName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.foreground,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.people_outline,
+                          size: 14,
+                          color: AppColors.mutedForeground,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          '${peopleCount} personas',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: AppColors.mutedForeground,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        const Icon(
+                          Icons.access_time,
+                          size: 14,
+                          color: AppColors.mutedForeground,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          timeStr,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: AppColors.mutedForeground,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 16),
+              Text(
+                formattedTotal,
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.foreground,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -1,13 +1,35 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
-import 'package:mangopos/presentation/sales/view/theme/sales_theme.dart';
 import 'package:mangopos/presentation/payments/widgets/payment_modal.dart';
-import 'package:mangopos/presentation/split_bill/widgets/split_bill_modal.dart';
+
+const Color _salesSurface = Color(0xFFFFFFFF);
+const Color _salesDivider = Color(0xFFE9E6E2);
+const Color _salesTextPrimary = Color(0xFF2C2C2C);
+const Color _salesTextSecondary = Color(0xFF7A7A7A);
+const Color _salesTextHint = Color(0xFF9A9A9A);
+const Color _salesKitchenButton = Color(0xFFFB8A3C); // naranja cocina sólido
+const Color _salesPayButton = Color(0xFF22C55E); // verde puro (success)
+const Color _salesTotalColor = Color(0xFFFB7116); // mango fuerte
+const Color _salesTabActiveBg = Color(0xFFF3F0ED);
+
+const double _salesRadiusCard = 14;
+const double _salesRadiusButton = 20; // botones pill
+const double _salesRadiusField = 14;
+const double _salesRadiusTab = 12;
+
+const List<BoxShadow> _salesSoftShadow = [
+  BoxShadow(
+    color: Color(0x10000000),
+    blurRadius: 6,
+    offset: Offset(0, 2),
+  ),
+];
 
 class TableOrderScreen extends ConsumerStatefulWidget {
   final String tableId;
@@ -59,242 +81,88 @@ class _TableOrderScreenState extends ConsumerState<TableOrderScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: SalesTheme.background,
+      backgroundColor: _salesSurface,
       body: SafeArea(
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // 1. RAIL DE HERRAMIENTAS (Izquierda extrema - ~80px)
-            _ToolsRail(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.maxWidth;
+            final isWide = width >= 1200;
+            final isMedium = width >= 900 && width < 1200;
+            final isStacked = width < 900;
+
+            final cartWidth = isWide
+                ? 400.0
+                : isMedium
+                    ? 360.0
+                    : 320.0;
+
+            final cart = _CartView(tableCode: widget.tableCode);
+            final catalog = _CatalogArea(
+              tableCode: widget.tableCode,
               onBack: () => _handleBack(context),
-              onAction: (action) => _handleToolAction(context, action),
-            ),
+              onAssignClient: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Asignar cliente')),
+                );
+              },
+              onProductTap: (product) {
+                final orderState = ref.read(currentOrderProvider);
+                if (orderState.loading) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Cargando orden. Intenta de nuevo.'),
+                    ),
+                  );
+                  return;
+                }
+                if (orderState.order == null) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('No hay una orden activa.')),
+                  );
+                  return;
+                }
+                ref
+                    .read(currentOrderProvider.notifier)
+                    .addItem(menuItemId: product.id);
+              },
+            );
 
-            // 2. COLUMNA DE ORDEN / CARRITO (380px)
-            Container(
-              width: 380,
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                border: Border(right: BorderSide(color: SalesTheme.border)),
-              ),
-              child: _CartView(tableCode: widget.tableCode),
-            ),
+            if (isStacked) {
+              return Column(
+                children: [
+                  // Mobile: cart primero, luego catálogo
+                  Expanded(child: cart),
+                  Container(height: 1, color: _salesDivider),
+                  Expanded(child: catalog),
+                ],
+              );
+            }
 
-            // 3. AREA PRINCIPAL (CATALOGO)
-            Expanded(
-              child: _CatalogArea(
-                onProductTap: (product) {
-                  final orderState = ref.read(currentOrderProvider);
-                  if (orderState.loading) {
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _SalesToolsRail(
+                  onBack: () => _handleBack(context),
+                  onAction: (action) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Cargando orden. Intenta de nuevo.'),
-                      ),
+                      SnackBar(content: Text('Accion: $action')),
                     );
-                    return;
-                  }
-                  if (orderState.order == null) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('No hay una orden activa.')),
-                    );
-                    return;
-                  }
-                  ref
-                      .read(currentOrderProvider.notifier)
-                      .addItem(menuItemId: product.id);
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _handleToolAction(BuildContext context, String action) {
-    if (action == 'split') {
-      final order = ref.read(currentOrderProvider).order;
-      if (order == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No hay una orden activa')),
-        );
-        return;
-      }
-      showDialog(
-        context: context,
-        builder: (context) => SplitBillModal(
-          order: order,
-          onSplitApplied: () {
-            ref.read(currentOrderProvider.notifier).refreshOrder();
+                  },
+                ),
+                SizedBox(
+                  width: cartWidth,
+                  child: cart,
+                ),
+                Container(width: 1, color: _salesDivider),
+                Expanded(child: catalog),
+              ],
+            );
           },
         ),
-      );
-      return;
-    }
-
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('Accion: $action')));
-  }
-}
-
-// -----------------------------------------------------------------------------
-// 1. RAIL DE HERRAMIENTAS
-// -----------------------------------------------------------------------------
-class _ToolsRail extends StatelessWidget {
-  final VoidCallback onBack;
-  final Function(String) onAction;
-
-  const _ToolsRail({required this.onBack, required this.onAction});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 80,
-      color: Colors.white, // O SalesTheme.cardBackground
-      child: Column(
-        children: [
-          // Boton Regresar destacado
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            child: _ToolButton(
-              icon: Icons.arrow_back_ios_new_rounded,
-              label: 'Regresar',
-              isBack: true,
-              onTap: onBack,
-            ),
-          ),
-          const Divider(height: 1, color: SalesTheme.border),
-
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Column(
-                children: [
-                  const SizedBox(height: 8),
-                  // Opciones de pago (en el diseno es un header pequeno)
-                  Text(
-                    'OPCIONES',
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: SalesTheme.mutedForeground,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-
-                  _ToolButton(
-                    icon: Icons.edit_note_rounded,
-                    label: 'Editar\nmesa',
-                    onTap: () => onAction('edit_table'),
-                  ),
-                  _ToolButton(
-                    icon: Icons.logout_rounded,
-                    label: 'Liberar\nmesa',
-                    onTap: () => onAction('release_table'),
-                  ),
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: Divider(height: 1),
-                  ),
-                  _ToolButton(
-                    icon: Icons.call_split_rounded,
-                    label: 'Dividir\ncuentas',
-                    onTap: () => onAction('split'),
-                  ),
-                  _ToolButton(
-                    icon: Icons.merge_type_rounded,
-                    label: 'Unir\nmesas',
-                    onTap: () => onAction('merge'),
-                  ),
-                  _ToolButton(
-                    icon: Icons.move_up_rounded,
-                    label: 'Mover\npedidos',
-                    onTap: () => onAction('move'),
-                  ),
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: Divider(height: 1),
-                  ),
-                  _ToolButton(
-                    icon: Icons.percent_rounded,
-                    label: 'Desc.',
-                    onTap: () => onAction('discount'),
-                  ),
-                  _ToolButton(
-                    icon: Icons.receipt_long_rounded,
-                    label: 'Vale\npago',
-                    onTap: () => onAction('voucher'),
-                  ),
-                  const SizedBox(height: 16),
-                ],
-              ),
-            ),
-          ),
-
-          // Botones inferiores fijos
-          _ToolButton(
-            icon: Icons.print_rounded,
-            label: 'Imprimir',
-            onTap: () => onAction('print'),
-          ),
-          const SizedBox(height: 16),
-        ],
       ),
     );
   }
-}
 
-class _ToolButton extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-  final bool isBack;
-
-  const _ToolButton({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-    this.isBack = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final color = isBack ? SalesTheme.primary : SalesTheme.foreground;
-    final bg = isBack
-        ? SalesTheme.primary.withOpacity(0.1)
-        : Colors.transparent;
-
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        width: 70,
-        margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        decoration: BoxDecoration(
-          color: bg,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: color, size: 24),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 10,
-                color: color,
-                fontWeight: isBack ? FontWeight.w700 : FontWeight.w500,
-                height: 1.1,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 // -----------------------------------------------------------------------------
@@ -326,318 +194,200 @@ class _CartView extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final orderState = ref.watch(currentOrderProvider);
     final allItems = orderState.items;
+    final itemsCount = allItems.length;
     final orderTotal = orderState.order?.total ?? 0.0;
+    final orderSubtotal = orderState.order?.subtotal ?? 0.0;
+    final orderTax = orderState.order?.tax ?? 0.0;
     final itemsTotal = allItems.fold<double>(
       0.0,
       (sum, item) => sum + item.total,
     );
     final total = orderTotal > 0 ? orderTotal : itemsTotal;
-
-    // Filter items
+    final subtotal = orderSubtotal > 0 ? orderSubtotal : itemsTotal;
+    final tax = orderTotal > 0 ? orderTax : 0.0;
+    final currency = NumberFormat('#,##0.00', 'en_US');
     final sentItems = allItems.where((i) => i.status != 'draft').toList();
     final draftItems = allItems.where((i) => i.status == 'draft').toList();
+    final hasItems = allItems.isNotEmpty;
 
     return Column(
       children: [
-        // Header
         Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (orderState.error != null) ...[
-                Container(
-                  width: double.infinity,
-                  margin: const EdgeInsets.only(bottom: 12),
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Colors.red.shade50,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.red.shade200),
-                  ),
-                  child: Text(
-                    orderState.error!,
-                    style: TextStyle(
-                      color: Colors.red.shade700,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
+              Text(
+                'Mesa $tableCode',
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w600,
+                  color: _salesTextPrimary,
                 ),
-              ],
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  const Icon(
-                    Icons.table_restaurant_rounded,
-                    color: SalesTheme.primary,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Mesa $tableCode',
-                    style: SalesTheme.textTheme.titleLarge?.copyWith(
-                      fontSize: 16,
-                      color: SalesTheme.primary,
-                    ),
-                  ),
-                  const Spacer(),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 2,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.green.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(
-                      'Activa',
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: Colors.green,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ],
               ),
               const SizedBox(height: 4),
-              Row(
-                children: [
-                  const Icon(
-                    Icons.person_outline,
-                    size: 14,
-                    color: SalesTheme.mutedForeground,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    'Mozo: Jhon Peralta',
-                    style: SalesTheme.textTheme.bodySmall,
-                  ), // Placeholder logic
-                ],
-              ),
-              const SizedBox(height: 2),
-              Row(
-                children: [
-                  const Icon(
-                    Icons.groups_outlined,
-                    size: 14,
-                    color: SalesTheme.mutedForeground,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    'Cant. Personas: 1',
-                    style: SalesTheme.textTheme.bodySmall,
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-
-        // Select Client
-        Container(
-          width: double.infinity,
-          margin: const EdgeInsets.symmetric(horizontal: 16),
-          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-          decoration: BoxDecoration(
-            color: SalesTheme.primary.withOpacity(0.08),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Row(
-            children: [
-              const Icon(
-                Icons.person_add_alt_1_rounded,
-                size: 18,
-                color: SalesTheme.primary,
-              ),
-              const SizedBox(width: 8),
-              const Text(
-                'Selecciona un cliente',
-                style: TextStyle(
-                  color: SalesTheme.primary,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13,
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        const SizedBox(height: 12),
-
-        // Column Headers
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          color: SalesTheme.background,
-          child: Row(
-            children: const [
-              SizedBox(
-                width: 40,
-                child: Text(
-                  'Cant.',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                    color: SalesTheme.mutedForeground,
-                  ),
-                ),
-              ),
-              Expanded(
-                child: Text(
-                  'Producto',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                    color: SalesTheme.mutedForeground,
-                  ),
-                ),
-              ),
               Text(
-                'Precio',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  color: SalesTheme.mutedForeground,
+                '$itemsCount productos',
+                style: const TextStyle(
+                  fontSize: 14,
+                  color: _salesTextSecondary,
                 ),
               ),
             ],
           ),
         ),
-
-        // List
+        Container(height: 1, color: _salesDivider),
         Expanded(
           child: allItems.isEmpty
-              ? const Center(
-                  child: Text(
-                    'Sin productos',
-                    style: TextStyle(color: Colors.black26),
+              ? Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: const [
+                      Text(
+                        'No hay productos en el carrito',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: _salesTextSecondary,
+                        ),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        'Selecciona productos del menú',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: _salesTextHint,
+                        ),
+                      ),
+                    ],
                   ),
                 )
               : ListView(
+                  padding: const EdgeInsets.all(24),
                   children: [
-                    // Sent Items (Fixed)
-                    if (sentItems.isNotEmpty) ...[
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-                        child: Text(
-                          'ENVIADOS A COCINA',
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.green,
-                          ),
-                        ),
-                      ),
+      if (sentItems.isNotEmpty) ...[
+        const _SectionLabel(
+          label: 'ENVIADOS A COCINA',
+          color: Color(0xFF22C55E),
+        ),
+                      const SizedBox(height: 8),
                       ...sentItems.map(
-                        (item) =>
-                            _CartItemSimpleRow(item: item, isDraft: false),
-                      ),
-                      const Divider(),
-                    ],
-
-                    // Draft Items (Editable)
-                    if (draftItems.isNotEmpty) ...[
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-                        child: Text(
-                          'POR CONFIRMAR (Nuevos)',
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.orange,
-                          ),
+                        (item) => _CartLineItem(
+                          item: item,
+                          isDraft: false,
+                          onDelete: null,
                         ),
                       ),
+                      const SizedBox(height: 16),
+                    ],
+                    if (draftItems.isNotEmpty) ...[
+                      const _SectionLabel(
+                        label: 'POR CONFIRMAR',
+                        color: Color(0xFFF59E0B),
+                      ),
+                      const SizedBox(height: 8),
                       ...draftItems.map(
-                        (item) => _CartItemSimpleRow(item: item, isDraft: true),
+                        (item) => _CartLineItem(
+                          item: item,
+                          isDraft: true,
+                          onDelete: () {
+                            ref
+                                .read(currentOrderProvider.notifier)
+                                .deleteItem(item.id);
+                          },
+                        ),
                       ),
                     ],
                   ],
                 ),
         ),
-
-        // Total Bottom
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            border: Border(top: BorderSide(color: SalesTheme.border)),
-          ),
+        Container(height: 1, color: _salesDivider),
+        Padding(
+          padding: const EdgeInsets.all(24),
           child: Column(
             children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    'Total',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
-                  Text(
-                    'RD\$ ${total.toStringAsFixed(2)}',
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w900,
-                      color: SalesTheme.primary,
-                    ),
-                  ),
-                ],
+              _SummaryRow(
+                label: 'Subtotal',
+                value: 'RD\$ ${currency.format(subtotal)}',
               ),
-              const SizedBox(height: 16),
-
-              // Action Buttons
-              Row(
-                children: [
-                  // Cancel / Void (Only logic for now)
-                  // If we have drafts, we can just clear drafts
-
-                  // Send to Kitchen (Only if drafts exist)
-                  if (draftItems.isNotEmpty)
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: () {
-                          ref
-                              .read(currentOrderProvider.notifier)
-                              .confirmOrder();
-                        },
-                        icon: const Icon(Icons.soup_kitchen, size: 18),
-                        label: const Text('ENVIAR COCINA'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: Colors.orange,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
+              const SizedBox(height: 8),
+              _SummaryRow(
+                label: 'ITBIS',
+                value: 'RD\$ ${currency.format(tax)}',
+              ),
+              const SizedBox(height: 12),
+              _SummaryRow(
+                label: 'Total',
+                value: 'RD\$ ${currency.format(total)}',
+                valueColor: _salesTotalColor,
+                valueWeight: FontWeight.w700,
+              ),
+              if (hasItems) ...[
+                const SizedBox(height: 16),
+                if (draftItems.isNotEmpty) ...[
+                  _ActionButton(
+                    label: 'Enviar a Cocina',
+                    background: _salesKitchenButton,
+                    onPressed: () => ref
+                        .read(currentOrderProvider.notifier)
+                        .confirmOrder(),
+                    icon: Icons.soup_kitchen_outlined,
+                  ),
+                  const SizedBox(height: 12),
+                  _ActionButton(
+                    label: 'Pagar RD\$ ${currency.format(total)}',
+                    background: _salesPayButton,
+                    onPressed: orderState.order == null || total <= 0
+                        ? null
+                        : () => _openPaymentModal(
+                            context,
+                            ref,
+                            orderState.order!,
                           ),
+                    icon: Icons.payments_outlined,
+                  ),
+                ] else if (sentItems.isNotEmpty) ...[
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _SecondaryActionButton(
+                          label: 'Pre-Cuenta',
+                          onPressed: () {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Precuenta')),
+                            );
+                          },
+                          icon: Icons.receipt_long_outlined,
                         ),
                       ),
-                    )
-                  else
-                    // Charge Button (If nothing new to add)
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: orderState.order == null
-                            ? null
-                            : () => _openPaymentModal(
-                                context,
-                                ref,
-                                orderState.order!,
-                              ),
-                        icon: const Icon(Icons.payments_outlined, size: 18),
-                        label: const Text('COBRAR'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: SalesTheme.success,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _SecondaryActionButton(
+                          label: 'Dividir',
+                          onPressed: () {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Dividir cuenta')),
+                            );
+                          },
+                          icon: Icons.call_split_rounded,
                         ),
                       ),
-                    ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  _ActionButton(
+                    label: 'Pagar RD\$ ${currency.format(total)}',
+                    background: _salesPayButton,
+                    onPressed: orderState.order == null || total <= 0
+                        ? null
+                        : () => _openPaymentModal(
+                            context,
+                            ref,
+                            orderState.order!,
+                          ),
+                    icon: Icons.payments_rounded,
+                  ),
                 ],
-              ),
+              ],
             ],
           ),
         ),
@@ -646,165 +396,372 @@ class _CartView extends ConsumerWidget {
   }
 }
 
-class _CartItemSimpleRow extends ConsumerWidget {
-  final dynamic item;
-  final bool isDraft;
-  const _CartItemSimpleRow({required this.item, required this.isDraft});
+class _SalesToolsRail extends StatelessWidget {
+  final VoidCallback onBack;
+  final Function(String) onAction;
+
+  const _SalesToolsRail({required this.onBack, required this.onAction});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final name = item.productName ?? '';
-    final qty = (item.quantity ?? 1).toString();
-    final total = (item.total ?? 0.0).toStringAsFixed(2);
+  Widget build(BuildContext context) {
+    return Container(
+      width: 88,
+      decoration: const BoxDecoration(
+        color: _salesSurface,
+        border: Border(right: BorderSide(color: _salesDivider)),
+      ),
+      child: Column(
+        children: [
+          const SizedBox(height: 16),
+          _RailButton(
+            icon: Icons.arrow_back_ios_new_rounded,
+            label: 'Regresar',
+            isPrimary: true,
+            onTap: onBack,
+          ),
+          const SizedBox(height: 16),
+          const Divider(height: 1, color: _salesDivider),
+          const SizedBox(height: 12),
+          const Text(
+            'OPCIONES',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: _salesTextSecondary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          _RailButton(
+            icon: Icons.edit_note_rounded,
+            label: 'Editar\nmesa',
+            onTap: () => onAction('edit_table'),
+          ),
+          _RailButton(
+            icon: Icons.logout_rounded,
+            label: 'Liberar\nmesa',
+            onTap: () => onAction('release_table'),
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Divider(height: 1, color: _salesDivider),
+          ),
+          _RailButton(
+            icon: Icons.call_split_rounded,
+            label: 'Dividir\ncuentas',
+            onTap: () => onAction('split'),
+          ),
+          _RailButton(
+            icon: Icons.merge_type_rounded,
+            label: 'Unir\nmesas',
+            onTap: () => onAction('merge'),
+          ),
+          _RailButton(
+            icon: Icons.move_up_rounded,
+            label: 'Mover\npedidos',
+            onTap: () => onAction('move'),
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Divider(height: 1, color: _salesDivider),
+          ),
+          _RailButton(
+            icon: Icons.percent_rounded,
+            label: 'Desc.',
+            onTap: () => onAction('discount'),
+          ),
+          _RailButton(
+            icon: Icons.receipt_long_rounded,
+            label: 'Vale\npago',
+            onTap: () => onAction('voucher'),
+          ),
+          const Spacer(),
+          _RailButton(
+            icon: Icons.print_rounded,
+            label: 'Imprimir',
+            onTap: () => onAction('print'),
+          ),
+          const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+}
+
+class _RailButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool isPrimary;
+
+  const _RailButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.isPrimary = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isPrimary ? _salesTotalColor : _salesTextPrimary;
+    final bg = isPrimary ? _salesTotalColor.withOpacity(0.12) : _salesSurface;
 
     return InkWell(
-      onLongPress: !isDraft
-          ? () {
-              showDialog(
-                context: context,
-                builder: (c) => Dialog(
-                  backgroundColor: SalesTheme.cardBackground,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Container(
-                    padding: const EdgeInsets.all(24),
-                    constraints: const BoxConstraints(maxWidth: 400),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.warning_amber_rounded,
-                          color: Colors.orange,
-                          size: 48,
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          'Anular producto?',
-                          style: SalesTheme.textTheme.titleLarge,
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Se eliminara "$name" de la orden de cocina.\nEsta accion puede requerir autorizacion.',
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 24),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: OutlinedButton(
-                                onPressed: () => Navigator.pop(c),
-                                style: OutlinedButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 16,
-                                  ),
-                                ),
-                                child: const Text('Cancelar'),
-                              ),
-                            ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: FilledButton(
-                                onPressed: () {
-                                  Navigator.pop(c);
-                                  ref
-                                      .read(currentOrderProvider.notifier)
-                                      .deleteItem(item.id);
-                                },
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: Colors.red,
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 16,
-                                  ),
-                                ),
-                                child: const Text('ANULAR'),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            }
-          : null,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        width: 72,
+        margin: const EdgeInsets.symmetric(vertical: 6),
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            // Delete X for drafts
-            if (isDraft)
-              GestureDetector(
-                onTap: () {
-                  ref.read(currentOrderProvider.notifier).deleteItem(item.id);
-                },
-                child: const Padding(
-                  padding: EdgeInsets.only(right: 8.0),
-                  child: Icon(Icons.close, color: Colors.red, size: 18),
-                ),
-              ),
-
-            SizedBox(
-              width: 30,
-              child: Text(
-                qty,
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 13,
-                ),
-              ),
-            ),
-            Expanded(
-              child: Row(
-                children: [
-                  if (!isDraft)
-                    const Padding(
-                      padding: EdgeInsets.only(right: 6.0),
-                      child: Icon(
-                        Icons.check_circle,
-                        size: 14,
-                        color: Colors.green,
-                      ),
-                    ),
-                  Container(
-                    padding: const EdgeInsets.all(4),
-                    decoration: BoxDecoration(
-                      color: Colors.blue.shade50,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: const Text(
-                      'P',
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: Colors.blue,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      name,
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                        color: isDraft ? Colors.black : Colors.black87,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            Icon(icon, color: color, size: 20),
+            const SizedBox(height: 6),
             Text(
-              'RD\$ $total',
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: SalesTheme.primary,
+              label,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 11,
+                color: color,
+                fontWeight: isPrimary ? FontWeight.w700 : FontWeight.w500,
+                height: 1.1,
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SummaryRow extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color? valueColor;
+  final FontWeight? valueWeight;
+
+  const _SummaryRow({
+    required this.label,
+    required this.value,
+    this.valueColor,
+    this.valueWeight,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: _salesTextPrimary,
+          ),
+        ),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: valueWeight ?? FontWeight.w600,
+            color: valueColor ?? _salesTextPrimary,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SectionLabel extends StatelessWidget {
+  final String label;
+  final Color color;
+
+  const _SectionLabel({required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      label,
+      style: TextStyle(
+        fontSize: 11,
+        fontWeight: FontWeight.w700,
+        color: color,
+        letterSpacing: 0.3,
+      ),
+    );
+  }
+}
+
+class _CartLineItem extends StatelessWidget {
+  final dynamic item;
+  final bool isDraft;
+  final VoidCallback? onDelete;
+
+  const _CartLineItem({
+    required this.item,
+    required this.isDraft,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final name = item.productName ?? '';
+    final qty = (item.quantity ?? 1).toStringAsFixed(1);
+    final totalItem = (item.total ?? 0.0).toStringAsFixed(2);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          if (isDraft && onDelete != null)
+            IconButton(
+              onPressed: onDelete,
+              icon: const Icon(Icons.close, color: Color(0xFFEF4444), size: 18),
+              splashRadius: 16,
+            )
+          else
+            const SizedBox(width: 36),
+          Text(
+            qty,
+            style: const TextStyle(
+              fontWeight: FontWeight.w600,
+              color: _salesTextPrimary,
+            ),
+          ),
+          const SizedBox(width: 10),
+          if (!isDraft)
+            const Padding(
+              padding: EdgeInsets.only(right: 6),
+              child: Icon(Icons.check_circle, size: 16, color: Color(0xFF22C55E)),
+            ),
+          Container(
+            width: 22,
+            height: 22,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: const Color(0xFFE6F0FF),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: const Text(
+              'P',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF3B82F6),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 14,
+                color: _salesTextPrimary,
+              ),
+            ),
+          ),
+          Text(
+            'RD\$ $totalItem',
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: _salesTotalColor,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ActionButton extends StatelessWidget {
+  final String label;
+  final Color background;
+  final VoidCallback? onPressed;
+  final IconData icon;
+
+  const _ActionButton({
+    required this.label,
+    required this.background,
+    required this.onPressed,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isEnabled = onPressed != null;
+    return SizedBox(
+      width: double.infinity,
+      height: 50,
+      child: ElevatedButton.icon(
+        onPressed: onPressed,
+        icon: Icon(icon, size: 20, color: Colors.white),
+        label: Text(
+          label,
+          style: const TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+            color: Colors.white,
+          ),
+        ),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: background,
+          disabledBackgroundColor: background.withOpacity(0.35),
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(_salesRadiusButton),
+          ),
+        ).copyWith(
+          overlayColor: MaterialStateProperty.all(
+            Colors.white.withOpacity(0.08),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SecondaryActionButton extends StatelessWidget {
+  final String label;
+  final VoidCallback onPressed;
+  final IconData icon;
+
+  const _SecondaryActionButton({
+    required this.label,
+    required this.onPressed,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      height: 50,
+      child: OutlinedButton.icon(
+        onPressed: onPressed,
+        icon: Icon(icon, size: 18, color: _salesTextPrimary),
+        label: Text(
+          label,
+          style: const TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+            color: _salesTextPrimary,
+          ),
+        ),
+        style: OutlinedButton.styleFrom(
+          backgroundColor: _salesTabActiveBg,
+          side: const BorderSide(color: _salesDivider),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(_salesRadiusButton),
+          ),
         ),
       ),
     );
@@ -815,8 +772,16 @@ class _CartItemSimpleRow extends ConsumerWidget {
 // 3. CATALOG AREA
 // -----------------------------------------------------------------------------
 class _CatalogArea extends ConsumerStatefulWidget {
+  final String tableCode;
+  final VoidCallback onBack;
+  final VoidCallback onAssignClient;
   final Function(dynamic) onProductTap;
-  const _CatalogArea({required this.onProductTap});
+  const _CatalogArea({
+    required this.tableCode,
+    required this.onBack,
+    required this.onAssignClient,
+    required this.onProductTap,
+  });
 
   @override
   ConsumerState<_CatalogArea> createState() => _CatalogAreaState();
@@ -825,51 +790,106 @@ class _CatalogArea extends ConsumerStatefulWidget {
 class _CatalogAreaState extends ConsumerState<_CatalogArea>
     with TickerProviderStateMixin {
   late TabController _mainTabController;
+  final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    // 4 Tabs: Categoria, Menu, Busqueda, Favoritos
-    _mainTabController = TabController(length: 4, vsync: this);
+    // Tabs: Categorias, Menu, Favoritos
+    _mainTabController = TabController(length: 3, vsync: this);
   }
 
   @override
   void dispose() {
     _mainTabController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final orderState = ref.watch(currentOrderProvider);
+    final elapsed = orderState.order == null
+        ? '--:--'
+        : _formatElapsed(DateTime.now().difference(orderState.order!.createdAt));
+
     return Column(
       children: [
-        // Tabs Superiores (Estilo clean)
-        Container(
-          color: Colors.white,
-          child: TabBar(
-            controller: _mainTabController,
-            isScrollable: false,
-            labelColor: SalesTheme.primary,
-            unselectedLabelColor: SalesTheme.mutedForeground,
-            indicatorColor: SalesTheme.primary,
-            indicatorWeight: 3,
-            labelStyle: const TextStyle(
-              fontWeight: FontWeight.bold,
-              fontSize: 14,
-            ),
-            tabs: const [
-              Tab(text: 'Categoria'),
-              Tab(text: 'Menu'),
-              Tab(text: 'Busqueda'),
-              Tab(text: 'Favoritos'),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+          child: Row(
+            children: [
+              IconButton(
+                onPressed: widget.onBack,
+                icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18),
+                color: _salesTextPrimary,
+              ),
+              const SizedBox(width: 8),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Mesa ${widget.tableCode}',
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: _salesTextPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Pedido activo • $elapsed',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: _salesTextSecondary,
+                    ),
+                  ),
+                ],
+              ),
+              const Spacer(),
+              ElevatedButton(
+                onPressed: widget.onAssignClient,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _salesSurface,
+                  elevation: 0,
+                  side: const BorderSide(color: _salesDivider),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(_salesRadiusButton),
+                  ),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                ),
+                child: const Text(
+                  'Asignar cliente',
+                  style: TextStyle(
+                    color: _salesTextPrimary,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
             ],
           ),
         ),
-
-        // Contenido
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: _SearchField(
+            controller: _searchController,
+            onChanged: (value) {},
+          ),
+        ),
+        const SizedBox(height: 12),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: _SegmentedTabs(
+            controller: _mainTabController,
+            labels: const ['Categorias', 'Menu', 'Favoritos'],
+          ),
+        ),
+        const SizedBox(height: 16),
         Expanded(
           child: Container(
-            color: const Color(0xFFF3F6F9), // Light grey bg like image
+            color: _salesSurface,
             child: TabBarView(
               controller: _mainTabController,
               children: [
@@ -885,15 +905,120 @@ class _CatalogAreaState extends ConsumerState<_CatalogArea>
                 ),
                 // 2. Grid Productos
                 _ProductsGrid(onProductTap: widget.onProductTap),
-                // 3. Busqueda
-                const Center(child: Text('Busqueda')),
-                // 4. Favoritos
-                const Center(child: Text('Favoritos')),
+                // 3. Favoritos
+                const Center(
+                  child: Text(
+                    'Sin favoritos',
+                    style: TextStyle(color: _salesTextSecondary),
+                  ),
+                ),
               ],
             ),
           ),
         ),
       ],
+    );
+  }
+
+  String _formatElapsed(Duration duration) {
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes.remainder(60);
+    final seconds = duration.inSeconds.remainder(60);
+    if (hours > 0) {
+      return '${hours}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+    }
+    return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+  }
+}
+
+class _SearchField extends StatelessWidget {
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+
+  const _SearchField({required this.controller, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 46,
+      child: TextField(
+        controller: controller,
+        onChanged: onChanged,
+        decoration: InputDecoration(
+          hintText: 'Buscar productos',
+          hintStyle: const TextStyle(color: _salesTextHint, fontSize: 13),
+          prefixIcon: const Icon(Icons.search, size: 18),
+          filled: true,
+          fillColor: _salesSurface,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(_salesRadiusField),
+            borderSide: const BorderSide(color: _salesDivider),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(_salesRadiusField),
+            borderSide: const BorderSide(color: _salesDivider),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SegmentedTabs extends StatelessWidget {
+  final TabController controller;
+  final List<String> labels;
+
+  const _SegmentedTabs({required this.controller, required this.labels});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        return Container(
+          height: 40,
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+            color: _salesTabActiveBg,
+            borderRadius: BorderRadius.circular(_salesRadiusTab),
+            border: Border.all(color: _salesDivider),
+          ),
+          child: Row(
+            children: [
+              for (int i = 0; i < labels.length; i++) ...[
+                Expanded(
+                  child: InkWell(
+                    onTap: () => controller.animateTo(i),
+                    borderRadius: BorderRadius.circular(_salesRadiusTab - 2),
+                    child: Container(
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: controller.index == i
+                            ? _salesSurface
+                            : Colors.transparent,
+                        borderRadius:
+                            BorderRadius.circular(_salesRadiusTab - 2),
+                      ),
+                      child: Text(
+                        labels[i],
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: controller.index == i
+                              ? _salesTextPrimary
+                              : _salesTextSecondary,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                if (i < labels.length - 1) const SizedBox(width: 6),
+              ],
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -909,63 +1034,62 @@ class _CategoriesGrid extends ConsumerWidget {
 
     if (state.loading) return const Center(child: CircularProgressIndicator());
 
-    return GridView.builder(
-      padding: const EdgeInsets.all(24),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 220,
-        childAspectRatio: 1.4,
-        crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
-      ),
-      itemCount: categories.length,
-      itemBuilder: (context, index) {
-        final cat = categories[index];
-        // Diseno Card Blanca Bordeada
-        return InkWell(
-          onTap: () => onCategoryTap(cat.id),
-          borderRadius: BorderRadius.circular(12),
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.black.withOpacity(0.08)),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.02),
-                  blurRadius: 8,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  cat.name,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                    color: SalesTheme.foreground,
-                  ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const Spacer(),
-                Align(
-                  alignment: Alignment.bottomRight,
-                  child: Text(
-                    '${(index * 2) + 4} prod.', // Mock count
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: SalesTheme.mutedForeground,
-                    ),
-                  ),
-                ),
-              ],
-            ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return GridView.builder(
+          padding: const EdgeInsets.all(16),
+          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: 220, // cards pequeñas
+            mainAxisExtent: 190,
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
           ),
+          itemCount: categories.length,
+          itemBuilder: (context, index) {
+            final cat = categories[index];
+            return InkWell(
+              onTap: () => onCategoryTap(cat.id),
+              borderRadius: BorderRadius.circular(_salesRadiusCard),
+              child: Container(
+                constraints: const BoxConstraints(minHeight: 140, minWidth: 160),
+                decoration: BoxDecoration(
+                  color: _salesSurface,
+                  borderRadius: BorderRadius.circular(_salesRadiusCard),
+                  border: Border.all(color: _salesDivider),
+                  boxShadow: _salesSoftShadow,
+                ),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                child: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Text(
+                        cat.name,
+                        textAlign: TextAlign.center,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 16,
+                          color: _salesTextPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'Ver items',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: _salesTextSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
         );
       },
     );
@@ -983,7 +1107,7 @@ class _ProductsGrid extends ConsumerWidget {
 
     if (state.loading) {
       return const Center(
-        child: CircularProgressIndicator(color: SalesTheme.primary),
+        child: CircularProgressIndicator(color: _salesTotalColor),
       );
     }
     if (products.isEmpty) {
@@ -993,12 +1117,12 @@ class _ProductsGrid extends ConsumerWidget {
     }
 
     return GridView.builder(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.all(16),
       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 200,
-        childAspectRatio: 0.9,
-        crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
+        maxCrossAxisExtent: 220, // mismo ancho que categorías
+        mainAxisExtent: 190, // mismo alto que categorías
+        crossAxisSpacing: 12,
+        mainAxisSpacing: 12,
       ),
       itemCount: products.length,
       itemBuilder: (context, index) {
@@ -1006,60 +1130,40 @@ class _ProductsGrid extends ConsumerWidget {
         return GestureDetector(
           onTap: () => onProductTap(product),
           child: Container(
+            constraints:
+                const BoxConstraints(minHeight: 140, minWidth: 160, maxWidth: 220),
             decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: SalesTheme.primary.withOpacity(0.3),
-              ), // Borde active style
+              color: _salesSurface,
+              borderRadius: BorderRadius.circular(_salesRadiusCard),
+              border: Border.all(color: _salesDivider),
+              boxShadow: _salesSoftShadow,
             ),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                // Image placeholder logic
-                Expanded(
-                  child: Container(
-                    decoration: const BoxDecoration(
-                      color: SalesTheme.secondary,
-                      borderRadius: BorderRadius.vertical(
-                        top: Radius.circular(11),
-                      ),
-                    ),
-                    child: product.imageUrl != null
-                        ? Image.network(product.imageUrl!, fit: BoxFit.cover)
-                        : const Center(
-                            child: Icon(
-                              Icons.fastfood,
-                              color: Colors.black12,
-                              size: 40,
-                            ),
-                          ),
+                _ProductAvatar(imageUrl: product.imageUrl),
+                const SizedBox(height: 10),
+                Text(
+                  product.name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: _salesTextPrimary,
                   ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        product.name,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 13,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'RD\$ ${product.price.toStringAsFixed(0)}',
-                        style: const TextStyle(
-                          color: SalesTheme.primary,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 14,
-                        ),
-                      ),
-                    ],
+                const SizedBox(height: 6),
+                Text(
+                  'RD\$ ${product.price.toStringAsFixed(0)}',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: _salesTotalColor,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
                   ),
                 ),
               ],
@@ -1067,6 +1171,32 @@ class _ProductsGrid extends ConsumerWidget {
           ),
         );
       },
+    );
+  }
+}
+
+class _ProductAvatar extends StatelessWidget {
+  final String? imageUrl;
+  const _ProductAvatar({this.imageUrl});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 96,
+      height: 96,
+      decoration: BoxDecoration(
+        color: _salesTabActiveBg,
+        shape: BoxShape.circle,
+        image: imageUrl != null
+            ? DecorationImage(
+                image: NetworkImage(imageUrl!),
+                fit: BoxFit.cover,
+              )
+            : null,
+      ),
+      child: imageUrl == null
+          ? const Icon(Icons.fastfood, color: _salesTextHint, size: 32)
+          : null,
     );
   }
 }

@@ -14,6 +14,8 @@ class TableSession extends Equatable {
   final String
   origin; // 'dine_in', 'manual', 'quick_sale', 'delivery', 'self_service'
   final int peopleCount;
+  final String? tableName;
+  final String? zoneName;
 
   const TableSession({
     required this.id,
@@ -27,6 +29,8 @@ class TableSession extends Equatable {
     this.note,
     required this.origin,
     required this.peopleCount,
+    this.tableName,
+    this.zoneName,
   });
 
   factory TableSession.fromMap(Map<String, dynamic> map) {
@@ -44,6 +48,13 @@ class TableSession extends Equatable {
       note: map['note'],
       origin: map['origin'] ?? 'dine_in',
       peopleCount: map['people_count'] ?? 1,
+      tableName: map['dining_tables'] != null
+          ? map['dining_tables']['code']
+          : map['table_name'],
+      zoneName:
+          map['dining_tables'] != null && map['dining_tables']['zones'] != null
+          ? map['dining_tables']['zones']['name']
+          : map['zone_name'],
     );
   }
 
@@ -62,6 +73,8 @@ class TableSession extends Equatable {
     note,
     origin,
     peopleCount,
+    tableName,
+    zoneName,
   ];
 }
 

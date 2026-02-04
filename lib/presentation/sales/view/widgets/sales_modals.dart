@@ -18,7 +18,7 @@ class SalesModals {
     );
   }
 
-  static Future<void> showPayment(BuildContext context) {
+  static Future<void> showPayment(BuildContext context, {double total = 0.0}) {
     return showDialog(
       context: context,
       builder: (context) => Dialog(
@@ -27,7 +27,7 @@ class SalesModals {
         // Max width 672
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 672),
-          child: const _PaymentContent(),
+          child: _PaymentContent(total: total),
         ),
       ),
     );
@@ -209,7 +209,8 @@ class _ProductCustomizationContent extends StatelessWidget {
 }
 
 class _PaymentContent extends StatelessWidget {
-  const _PaymentContent();
+  final double total;
+  const _PaymentContent({this.total = 0.0});
 
   @override
   Widget build(BuildContext context) {
@@ -277,7 +278,7 @@ class _PaymentContent extends StatelessWidget {
                                 style: SalesTheme.textTheme.bodySmall,
                               ),
                               Text(
-                                'RD\$ 1,475.00',
+                                'RD\$ ${total.toStringAsFixed(2)}',
                                 style: SalesTheme.textTheme.displaySmall,
                               ),
                             ],
@@ -334,7 +335,9 @@ class _PaymentContent extends StatelessWidget {
                             backgroundColor: SalesTheme.success,
                             padding: const EdgeInsets.symmetric(vertical: 16),
                           ),
-                          child: const Text('COBRAR RD\$ 1,475'),
+                          child: Text(
+                            'COBRAR RD\$ ${total.toStringAsFixed(2)}',
+                          ),
                         ),
                       ),
                     ],

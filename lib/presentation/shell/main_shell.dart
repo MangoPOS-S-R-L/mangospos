@@ -4,6 +4,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http; // ✅ check internet
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import 'package:mangopos/utils/responsive_utils.dart';
 import 'package:mangopos/widgets/responsive/responsive_icon.dart';
@@ -204,6 +205,8 @@ class _TopNavItemState extends State<_TopNavItem> {
         loc == widget.route ||
         (widget.route != '/' && loc.startsWith(widget.route));
 
+    final showLabel = MediaQuery.of(context).size.width >= 1024;
+
     return MouseRegion(
       onEnter: (_) => setState(() => _isHovering = true),
       onExit: (_) => setState(() => _isHovering = false),
@@ -237,15 +240,17 @@ class _TopNavItemState extends State<_TopNavItem> {
                     height: widget.iconSize,
                   ),
                 ),
-                const SizedBox(width: 8),
-                Text(
-                  widget.label,
-                  style: TextStyle(
-                    fontSize: 15, // Aumentado 2px (antes 13)
-                    fontWeight: active ? FontWeight.bold : FontWeight.w600,
-                    color: active ? Colors.white : Colors.grey[700]!,
+                if (showLabel) ...[
+                  const SizedBox(width: 8),
+                  Text(
+                    widget.label,
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 15,
+                      fontWeight: active ? FontWeight.bold : FontWeight.w600,
+                      color: active ? Colors.white : Colors.grey[700]!,
+                    ),
                   ),
-                ),
+                ],
               ],
             ),
           ),

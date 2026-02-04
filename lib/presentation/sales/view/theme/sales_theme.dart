@@ -2,34 +2,48 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 class SalesTheme {
-  // 🎨 Paleta de Colores
-  static const Color primary = Color(0xFFF97316);
+  // 🎨 Paleta de Colores (segun especificaciones)
+  static const Color primary = Color(0xFFFB7116);
   static const Color primaryForeground = Colors.white;
 
-  static const Color background = Color(0xFFFAF9F8);
-  static const Color cardBackground = Colors.white;
+  static const Color background = Color(0xFFFAF9F7);
+  static const Color cardBackground = Color(0xFFFFFFFF);
   static const Color secondary = Color(0xFFF3F1EF);
-  static const Color secondaryForeground = Color(
-    0xFF1C1917,
-  ); // Asumido para contraste en secondary
+  static const Color secondaryForeground = Color(0xFF231F1D);
 
-  static const Color foreground = Color(0xFF1C1917);
-  static const Color mutedForeground = Color(0xFF78716C);
+  static const Color foreground = Color(0xFF231F1D);
+  static const Color mutedForeground = Color(0xFF7D726D);
 
   static const Color success = Color(0xFF22C55E);
   static const Color warning = Color(0xFFF59E0B);
-  static const Color destructive = Color(0xFFEF4444);
   static const Color info = Color(0xFF3B82F6);
+  static const Color destructive = Color(0xFFEF4444);
 
-  static const Color border = Color(0xFFE5E2DE);
+  static const Color border = Color(0xFFE0DBD9);
 
-  // 🧱 Sombras
-  static BoxShadow get shadowCard => BoxShadow(
+  // 📏 Dimensiones clave
+  static const double tableCardHeight = 140.0;
+  static const double tableCardMinWidth = 240.0;
+  static const double statusBorderWidth = 6.0;
+  static const double cardBorderRadius = 18.0;
+  static const double gridGap = 24.0;
+  static const EdgeInsets cardPadding = EdgeInsets.all(16.0);
+
+  // 🧱 Sombras (sm / md)
+  static BoxShadow get shadowSm => BoxShadow(
     color: Colors.black.withOpacity(0.05),
+    blurRadius: 3,
+    offset: const Offset(0, 1),
+  );
+
+  static BoxShadow get shadowMd => BoxShadow(
+    color: Colors.black.withOpacity(0.08),
     blurRadius: 12,
     offset: const Offset(0, 4),
   );
 
+  // Compatibilidad con usos existentes
+  static BoxShadow get shadowCard => shadowSm;
   static BoxShadow get shadowElevated => BoxShadow(
     color: Colors.black.withOpacity(0.15),
     blurRadius: 24,
@@ -81,7 +95,7 @@ class SalesTheme {
         ),
         bodySmall: GoogleFonts.plusJakartaSans(
           fontSize: 12,
-          fontWeight: FontWeight.w400,
+          fontWeight: FontWeight.w600,
           color: mutedForeground,
         ),
         labelLarge: GoogleFonts.plusJakartaSans(
@@ -89,5 +103,21 @@ class SalesTheme {
           fontWeight: FontWeight.w600,
           color: foreground,
         ),
+        labelSmall: GoogleFonts.plusJakartaSans(
+          fontSize: 10,
+          fontWeight: FontWeight.w500,
+          color: foreground,
+        ),
       );
+
+  // Utilidades
+  static Color statusColor({required bool isOccupied, required bool isPaying}) {
+    if (isPaying) return info;
+    return isOccupied ? warning : success;
+  }
+
+  static String statusLabel({required bool isOccupied, required bool isPaying}) {
+    if (isPaying) return 'Pagando';
+    return isOccupied ? 'Ocupado' : 'Disponible';
+  }
 }

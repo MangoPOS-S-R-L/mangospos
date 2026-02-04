@@ -29,9 +29,11 @@ class CashierViewModel extends ChangeNotifier {
   int _pendingTables = 0;
   String? _currentRegisterId;
   String? _businessId;
+  String _businessName = '';
   Map<String, dynamic> _todaySummary = {};
   List<Map<String, dynamic>> _recentMovements = [];
   List<TableSession> _activeSessions = [];
+  Map<String, double> _sessionTotals = {};
   List<double> _weeklySales = List.filled(7, 0.0);
   double _totalWeeklySales = 0.0;
   double _weeklyAverage = 0.0;
@@ -41,11 +43,13 @@ class CashierViewModel extends ChangeNotifier {
   CashierViewModel(this._repository, this._salesRepository);
 
   bool get isLoading => _isLoading;
+  String get businessName => _businessName;
   Map<String, dynamic>? get lastSession => _lastSession;
   int get pendingTables => _pendingTables;
   Map<String, dynamic> get todaySummary => _todaySummary;
   List<Map<String, dynamic>> get recentMovements => _recentMovements;
   List<TableSession> get activeSessions => _activeSessions;
+  Map<String, double> get sessionTotals => _sessionTotals;
   List<double> get weeklySales => _weeklySales;
   double get totalWeeklySales => _totalWeeklySales;
   double get weeklyAverage => _weeklyAverage;
@@ -60,6 +64,21 @@ class CashierViewModel extends ChangeNotifier {
       _businessId = await resolveBusinessIdOrNull(client, 'auto');
 
       if (_businessId != null) {
+        // Fetch Business Name
+        try {
+          final businessData = await client
+              .from('businesses')
+              .select('name')
+              .eq('id', _businessId!)
+              .maybeSingle();
+
+          if (businessData != null) {
+            _businessName = businessData['name'] as String? ?? '';
+          }
+        } catch (e) {
+          debugPrint('Error fetching business name: $e');
+        }
+
         final registers = await _repository.getCashRegisters(_businessId!);
         if (registers.isNotEmpty) {
           _currentRegisterId = registers.first['id'] as String;
@@ -455,6 +474,31 @@ class CashierViewModel extends ChangeNotifier {
         return;
       }
       _activeSessions = await _salesRepository.getActiveSessions(_businessId!);
+
+      // Load session totals
+      if (_activeSessions.isNotEmpty) {
+        final sessionIds = _activeSessions.map((s) => s.id).toList();
+        final client = Supabase.instance.client;
+
+        // Fetch open orders for these sessions
+        final ordersData = await client
+            .from('orders')
+            .select('session_id, total')
+            .inFilter('session_id', sessionIds)
+            // We want active orders.
+            .neq('status', 'paid')
+            .neq('status', 'cancelled');
+
+        _sessionTotals = {};
+        for (final order in ordersData) {
+          final sessionId = order['session_id'] as String;
+          final total = (order['total'] as num).toDouble();
+          _sessionTotals[sessionId] = (_sessionTotals[sessionId] ?? 0) + total;
+        }
+      } else {
+        _sessionTotals = {};
+      }
+
       notifyListeners();
     } catch (e) {
       debugPrint('Error loading active sessions: $e');

@@ -1,0 +1,1031 @@
+═══════════════════════════════════════════════════════════════════════════════
+UI TECHNICAL SPECIFICATION - DASHBOARD HOME (MANGO POS)
+═══════════════════════════════════════════════════════════════════════════════
+Version: 2.0 | Date: 2026-02-03
+Purpose: Pixel-perfect UI specification for AI code generation
+Framework: React + TypeScript + Tailwind CSS + Recharts
+Design Style: Soft UI with rounded corners, subtle shadows, vibrant colors
+Font: Plus Jakarta Sans (Google Fonts)
+
+═══════════════════════════════════════════════════════════════════════════════
+1. DESIGN TOKENS (Token System - HSL Source of Truth)
+═══════════════════════════════════════════════════════════════════════════════
+
+1.1 COLOR PALETTE (HSL → HEX Conversion)
+────────────────────────────────────────────────────────────────────────────────
+Primary Colors:
+  --background:   hsl(30, 20%, 98%)  → #FAF9F7  /* Soft cream page background */
+  --primary:      hsl(25, 95%, 53%)  → #FB7116  /* Mango Orange */
+  --foreground:   hsl(20, 14%, 12%)  → #231F1D  /* Dark brown text */
+  --card:         hsl(0, 0%, 100%)   → #FFFFFF  /* Pure white cards */
+  --muted:        hsl(20, 10%, 45%)  → #7D726D  /* Warm gray secondary text */
+  --border:       hsl(30, 15%, 88%)  → #E0DBD9  /* Subtle border */
+
+State Colors:
+  --success:      hsl(142, 71%, 45%) → #22C55E  /* Green */
+  --warning:      hsl(38, 92%, 50%)  → #F59E0B  /* Amber */
+  --info:         hsl(217, 91%, 60%) → #3B82F6  /* Blue */
+  --destructive:  hsl(0, 84%, 60%)   → #EF4444  /* Red */
+
+Gradients:
+  --gradient-mango: linear-gradient(135deg, hsl(25, 95%, 53%) 0%, hsl(35, 95%, 55%) 100%)
+                    → linear-gradient(135deg, #FB7116 0%, #FBAA16 100%)
+
+Background Variations:
+  --accent:       hsl(30, 20%, 96%)  → #F5F3F1  /* Light hover state */
+  --secondary:    hsl(30, 15%, 95%)  → #F5F5F4  /* Card alternative */
+
+Color Usage with Opacity:
+  - primary/10:   rgba(251, 113, 22, 0.1)   /* Ultra light orange backgrounds */
+  - success/10:   rgba(34, 197, 94, 0.1)    /* Light green backgrounds */
+  - warning/10:   rgba(245, 158, 11, 0.1)   /* Light amber backgrounds */
+  - info/10:      rgba(59, 130, 246, 0.1)   /* Light blue backgrounds */
+  - secondary/50: rgba(245, 245, 244, 0.5)  /* Semi-transparent gray */
+
+1.2 TYPOGRAPHY (Plus Jakarta Sans)
+────────────────────────────────────────────────────────────────────────────────
+Import URL:
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
+Font Family:
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+Weights:
+  - Regular:    400
+  - Medium:     500
+  - SemiBold:   600
+  - Bold:       700
+  - ExtraBold:  800
+
+Type Scale:
+  H1 (Main Title):        text-3xl (30px / 1.875rem) / font-bold / leading-tight
+  H2 (Section Title):     text-xl (20px / 1.25rem) / font-bold / leading-snug
+  H3 (Card Title):        text-lg (18px / 1.125rem) / font-semibold / leading-snug
+  Body Large:             text-base (16px / 1rem) / font-medium / leading-normal
+  Body:                   text-sm (14px / 0.875rem) / font-medium / leading-relaxed
+  Small:                  text-xs (12px / 0.75rem) / font-medium / leading-normal
+  Caption:                text-[11px] / font-semibold / uppercase / tracking-wide
+
+Metric Numbers:
+  Large Metric:           text-4xl (36px) / font-black / tabular-nums
+  Medium Metric:          text-2xl (24px) / font-bold / tabular-nums
+  Small Metric:           text-xl (20px) / font-bold / tabular-nums
+
+1.3 SPACING SYSTEM (Base 4px)
+────────────────────────────────────────────────────────────────────────────────
+Container Padding:
+  - Main Container:       p-6 (24px all sides)
+  - Mobile:               p-4 (16px all sides)
+  
+Grid Gap:
+  - Primary Gap:          gap-6 (24px)
+  - Mobile Gap:           gap-4 (16px)
+  
+Card Padding:
+  - Standard Card:        p-5 (20px)
+  - Large Card:           p-6 (24px)
+  - Compact Card:         p-4 (16px)
+
+Internal Spacing:
+  - Section Margin:       mb-6 (24px between sections)
+  - Element Gap:          gap-3 (12px between related elements)
+  - Icon-Text Gap:        gap-2 (8px between icon and text)
+
+1.4 SHADOWS & ELEVATION
+────────────────────────────────────────────────────────────────────────────────
+Card Shadow (Default):
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05), 0 4px 12px rgba(0, 0, 0, 0.08);
+  Tailwind: shadow-[0_1px_3px_rgba(0,0,0,0.05),0_4px_12px_rgba(0,0,0,0.08)]
+
+Soft Shadow (Subtle):
+  box-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.08);
+  Tailwind: shadow-[0_2px_8px_-2px_rgba(0,0,0,0.08)]
+
+Hover Shadow (Elevated):
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  Tailwind: hover:shadow-[0_4px_16px_rgba(0,0,0,0.12)]
+
+Button Shadow:
+  box-shadow: 0 2px 4px rgba(251, 113, 22, 0.2);
+  Tailwind: shadow-[0_2px_4px_rgba(251,113,22,0.2)]
+
+Inner Shadow (Inset effects):
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.06);
+
+1.5 BORDER RADIUS
+────────────────────────────────────────────────────────────────────────────────
+Standard:
+  - Cards:                rounded-xl (12px)
+  - Buttons:              rounded-lg (8px)
+  - Input Fields:         rounded-lg (8px)
+  - Badges/Pills:         rounded-full (9999px)
+  - Icons Containers:     rounded-lg (8px)
+  - Modals:               rounded-2xl (16px)
+
+1.6 BORDER STYLES
+────────────────────────────────────────────────────────────────────────────────
+Default Border:
+  - Color:                border-border (#E0DBD9)
+  - Width:                1px (border)
+  - Style:                solid
+
+Hover States:
+  - Hover Color:          border-primary/40 (rgba(251, 113, 22, 0.4))
+
+Focus States:
+  - Focus Ring:           ring-2 ring-primary/20 ring-offset-2
+
+═══════════════════════════════════════════════════════════════════════════════
+2. LAYOUT STRUCTURE (Page Architecture)
+═══════════════════════════════════════════════════════════════════════════════
+
+2.1 GLOBAL CONTAINER
+────────────────────────────────────────────────────────────────────────────────
+<div className="min-h-screen bg-background">
+  <!-- Fixed Header: 64px height -->
+  <header className="sticky top-0 z-20 h-16 bg-card border-b border-border" />
+  
+  <!-- Main Content: Flexible height -->
+  <main className="p-4 md:p-6" />
+</div>
+
+Dimensions:
+  - Min Height:           100vh
+  - Background:           bg-background (#FAF9F7)
+  - Overflow:             overflow-x-hidden
+
+2.2 HEADER (Top Navigation - Sticky)
+────────────────────────────────────────────────────────────────────────────────
+<header className="sticky top-0 z-20 h-16 bg-card border-b border-border px-4 md:px-6 flex items-center justify-between">
+  <!-- Left Section: Logo + Navigation -->
+  <div className="flex items-center gap-6">
+    <!-- Logo -->
+    <div className="flex items-center gap-3">
+      <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-primary to-[#FBAA16] flex items-center justify-center shadow-md">
+        <span className="text-white font-bold text-xl">M</span>
+      </div>
+      <span className="text-lg font-bold text-foreground hidden md:block">MangoPOS</span>
+    </div>
+
+    <!-- Navigation Menu -->
+    <nav className="hidden lg:flex items-center gap-1">
+      <!-- Active Item -->
+      <button className="h-9 px-4 rounded-lg bg-primary/10 text-primary font-semibold text-sm flex items-center gap-2">
+        <Home className="w-4 h-4" />
+        <span>Dashboard</span>
+      </button>
+
+      <!-- Inactive Items -->
+      <button className="h-9 px-4 rounded-lg text-foreground font-semibold text-sm hover:bg-accent flex items-center gap-2 transition-colors">
+        <ShoppingCart className="w-4 h-4" />
+        <span>Ventas</span>
+      </button>
+
+      <button className="h-9 px-4 rounded-lg text-foreground font-semibold text-sm hover:bg-accent flex items-center gap-2 transition-colors">
+        <Package className="w-4 h-4" />
+        <span>Productos</span>
+      </button>
+
+      <button className="h-9 px-4 rounded-lg text-foreground font-semibold text-sm hover:bg-accent flex items-center gap-2 transition-colors">
+        <ChartBar className="w-4 h-4" />
+        <span>Reportes</span>
+      </button>
+    </nav>
+  </div>
+
+  <!-- Right Section: Actions + User -->
+  <div className="flex items-center gap-3">
+    <!-- Notifications -->
+    <button className="relative w-9 h-9 rounded-lg hover:bg-accent flex items-center justify-center transition-colors">
+      <Bell className="w-5 h-5 text-foreground" />
+      <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-destructive rounded-full"></span>
+    </button>
+
+    <!-- Settings -->
+    <button className="w-9 h-9 rounded-lg hover:bg-accent flex items-center justify-center transition-colors hidden md:flex">
+      <Settings className="w-5 h-5 text-foreground" />
+    </button>
+
+    <!-- User Avatar -->
+    <div className="flex items-center gap-3 pl-3 border-l border-border">
+      <div className="text-right hidden md:block">
+        <p className="text-sm font-semibold text-foreground leading-none">Admin User</p>
+        <p className="text-xs text-muted mt-0.5">Administrador</p>
+      </div>
+      <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center">
+        <User className="w-5 h-5 text-primary" />
+      </div>
+    </div>
+  </div>
+</header>
+
+KEY SPECS:
+- Height: Fixed 64px (h-16)
+- Position: Sticky top-0
+- Z-Index: 20
+- Icon Color: IMPORTANT: Use foreground (#231F1D) NOT gray for high contrast
+- Active State: bg-primary/10 + text-primary
+- Hover State: bg-accent
+- Mobile: Icons only (<1024px)
+- Desktop: Icons + Text (≥1024px)
+
+2.3 RESPONSIVE GRID SYSTEM
+────────────────────────────────────────────────────────────────────────────────
+Breakpoints (Tailwind):
+  - Mobile:       < 768px    (Default)
+  - Tablet:       ≥ 768px    (md:)
+  - Desktop:      ≥ 1024px   (lg:)
+  - Wide:         ≥ 1280px   (xl:)
+  - Ultra Wide:   ≥ 1440px   (2xl:)
+
+Layout Behavior:
+Mobile/Tablet (< 1280px):
+  - Stack: 1 Column Vertical
+  - Order: Welcome Card → Quick Actions → Sales Chart → Active Tables
+
+Desktop XL (≥ 1280px):
+  - Grid: 3 Columns
+  - Layout:
+    <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+      <!-- Left Column (2/3 width) -->
+      <div className="xl:col-span-2 space-y-6">
+        <!-- Welcome Card -->
+        <!-- Quick Actions -->
+        <!-- Sales Chart -->
+      </div>
+
+      <!-- Right Column (1/3 width) -->
+      <div className="xl:col-span-1">
+        <!-- Active Tables Widget -->
+      </div>
+    </div>
+
+═══════════════════════════════════════════════════════════════════════════════
+3. COMPONENTS SPECIFICATION (Detailed Breakdown)
+═══════════════════════════════════════════════════════════════════════════════
+
+3.1 WELCOME CARD (Hero Section)
+────────────────────────────────────────────────────────────────────────────────
+Container:
+<div className="bg-card rounded-xl border border-border shadow-[0_1px_3px_rgba(0,0,0,0.05),0_4px_12px_rgba(0,0,0,0.08)] p-6 relative overflow-hidden">
+  <!-- Subtle Gradient Background (Top Right Corner) -->
+  <div className="absolute top-0 right-0 w-64 h-64 bg-gradient-to-br from-primary/5 to-transparent rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
+
+  <!-- Content -->
+  <div className="relative z-10 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+    <!-- Left Section -->
+    <div className="flex-1 text-left">
+      <!-- Date -->
+      <p className="text-xs text-muted font-medium uppercase tracking-wide mb-2">
+        Lunes, 3 de Febrero 2026
+      </p>
+
+      <!-- Greeting -->
+      <h1 className="text-3xl font-bold text-foreground mb-4 leading-tight">
+        Bienvenido a MangoPOS
+      </h1>
+
+      <!-- Info Chips -->
+      <div className="flex flex-wrap items-center gap-2">
+        <!-- User Chip -->
+        <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-secondary border border-border">
+          <User className="w-3.5 h-3.5 text-muted" />
+          <span className="text-xs font-semibold text-foreground">Admin User</span>
+        </div>
+
+        <!-- Cash Register Chip -->
+        <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-secondary border border-border">
+          <Building className="w-3.5 h-3.5 text-muted" />
+          <span className="text-xs font-semibold text-foreground">Caja Principal</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Section: Actions -->
+    <div className="flex flex-col items-start md:items-end gap-3">
+      <!-- Status Badge -->
+      <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-warning/10 border border-warning/20">
+        <div className="w-2 h-2 rounded-full bg-warning animate-pulse"></div>
+        <span className="text-sm font-bold text-warning">Caja Cerrada</span>
+      </div>
+
+      <!-- Primary Action Button ("btn-mango" style) -->
+      <button className="
+        h-11 px-6 rounded-lg
+        bg-gradient-to-r from-primary to-[#FBAA16]
+        text-white font-bold text-sm
+        shadow-[0_2px_4px_rgba(251,113,22,0.2)]
+        hover:shadow-[0_4px_16px_rgba(251,113,22,0.3)]
+        hover:-translate-y-0.5
+        active:translate-y-0
+        transition-all duration-200
+        flex items-center gap-2
+      ">
+        <Unlock className="w-4 h-4" />
+        <span>Aperturar Caja</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+KEY SPECS:
+- Width: Full width (100%)
+- Background: White card with subtle gradient overlay (5% opacity orange in top-right)
+- Alignment: ALL content aligned LEFT (text-left, items-start)
+- Shadow: Card shadow (soft)
+- Border: 1px solid border color
+- Gradient Position: Absolute positioned, top-right corner, blurred
+- Button Style: "btn-mango" = gradient background + shadow on hover
+
+3.2 QUICK ACTIONS SECTION
+────────────────────────────────────────────────────────────────────────────────
+Container:
+<div className="space-y-4">
+  <!-- Small Action Cards Grid -->
+  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+    <!-- Action Card Template -->
+  </div>
+
+  <!-- Large Action Buttons Grid -->
+  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <!-- Large Button Template -->
+  </div>
+</div>
+
+3.2.1 SMALL ACTION CARD
+<button className="
+  group
+  bg-card rounded-xl border border-border
+  shadow-[0_2px_8px_-2px_rgba(0,0,0,0.08)]
+  hover:shadow-[0_4px_16px_rgba(0,0,0,0.12)]
+  hover:border-primary/40
+  hover:-translate-y-1
+  transition-all duration-200
+  p-4
+  flex flex-col items-start gap-3
+  text-left
+  min-h-[110px]
+">
+  <!-- Icon Container -->
+  <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
+    <ShoppingCart className="w-6 h-6 text-primary group-hover:scale-110 transition-transform" />
+  </div>
+
+  <!-- Text -->
+  <div className="flex-1 flex flex-col items-start">
+    <h3 className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors">
+      Ventas
+    </h3>
+    <p className="text-xs text-muted mt-0.5">
+      Ver todas
+    </p>
+  </div>
+</button>
+
+KEY SPECS:
+- Grid: 2 cols mobile, 4 cols desktop
+- Min Height: 110px
+- Alignment: CRITICAL - All content aligned LEFT (items-start, text-left)
+- Icon: Centered INSIDE its own 48x48px container, but container aligned left
+- Hover: Scale icon 1.1x, lift card -4px, increase shadow
+- Colors: Icon bg changes from primary/10 to primary/20
+
+Cards List (4 items):
+1. Ventas (ShoppingCart icon, primary color)
+2. Productos (Package icon, info color - replace bg-primary/10 with bg-info/10, etc.)
+3. Clientes (Users icon, success color)
+4. Reportes (ChartBar icon, warning color)
+
+3.2.2 LARGE ACTION BUTTON (Nueva Venta)
+<button className="
+  group
+  h-20 rounded-xl
+  bg-gradient-to-r from-primary to-[#FBAA16]
+  shadow-[0_2px_4px_rgba(251,113,22,0.2)]
+  hover:shadow-[0_4px_16px_rgba(251,113,22,0.3)]
+  hover:-translate-y-0.5
+  transition-all duration-200
+  flex items-center gap-4
+  px-6
+  text-left
+">
+  <!-- Icon -->
+  <div className="w-14 h-14 rounded-xl bg-white/20 flex items-center justify-center">
+    <Plus className="w-7 h-7 text-white" />
+  </div>
+
+  <!-- Text -->
+  <div className="flex-1 text-left">
+    <h3 className="text-lg font-bold text-white leading-none">Nueva Venta</h3>
+    <p className="text-sm text-white/80 mt-1">Iniciar orden</p>
+  </div>
+
+  <!-- Arrow Icon -->
+  <ArrowRight className="w-5 h-5 text-white/70 group-hover:text-white group-hover:translate-x-1 transition-all" />
+</button>
+
+3.2.3 LARGE ACTION BUTTON (Delivery)
+<button className="
+  group
+  h-20 rounded-xl
+  bg-card border border-border
+  shadow-[0_2px_8px_-2px_rgba(0,0,0,0.08)]
+  hover:shadow-[0_4px_16px_rgba(0,0,0,0.12)]
+  hover:border-info/40
+  hover:-translate-y-0.5
+  transition-all duration-200
+  flex items-center gap-4
+  px-6
+  text-left
+">
+  <!-- Icon -->
+  <div className="w-14 h-14 rounded-xl bg-info/10 flex items-center justify-center group-hover:bg-info/20 transition-colors">
+    <Bike className="w-7 h-7 text-info" />
+  </div>
+
+  <!-- Text -->
+  <div className="flex-1 text-left">
+    <h3 className="text-lg font-semibold text-foreground leading-none">Delivery</h3>
+    <p className="text-sm text-muted mt-1">Gestionar entregas</p>
+  </div>
+
+  <!-- Badge -->
+  <div className="px-3 py-1 rounded-full bg-info/10 border border-info/20">
+    <span className="text-xs font-bold text-info">4 en ruta</span>
+  </div>
+</button>
+
+KEY SPECS:
+- Grid: 1 col mobile, 2 cols desktop
+- Height: Fixed 80px (h-20)
+- Alignment: ALL content LEFT (items-start, text-left)
+- Nueva Venta: Gradient background (mango)
+- Delivery: White card with blue accent
+- Hover: Lift -2px, increase shadow
+
+3.3 SALES CHART CARD
+────────────────────────────────────────────────────────────────────────────────
+Container:
+<div className="bg-card rounded-xl border border-border shadow-[0_1px_3px_rgba(0,0,0,0.05),0_4px_12px_rgba(0,0,0,0.08)] p-6">
+  <!-- Header -->
+  <div className="flex items-center justify-between mb-6">
+    <div>
+      <h2 className="text-xl font-bold text-foreground">Ventas Recientes</h2>
+      <p className="text-xs text-muted mt-1">Últimos 7 días</p>
+    </div>
+
+    <!-- Filter Tabs -->
+    <div className="flex gap-2">
+      <button className="h-8 px-3 rounded-lg bg-primary text-white text-xs font-semibold">
+        Esta semana
+      </button>
+      <button className="h-8 px-3 rounded-lg bg-transparent text-muted hover:bg-accent text-xs font-medium">
+        Este mes
+      </button>
+    </div>
+  </div>
+
+  <!-- Metrics Row -->
+  <div className="grid grid-cols-3 gap-3 mb-6">
+    <!-- Metric Box 1 (Total) -->
+    <div className="p-4 rounded-xl bg-success/10 border border-success/20">
+      <p className="text-xs font-semibold text-success uppercase tracking-wide mb-2">Total</p>
+      <p className="text-2xl font-black text-foreground tabular-nums">RD$ 45.2K</p>
+      <div className="flex items-center gap-1 mt-2">
+        <TrendingUp className="w-3 h-3 text-success" />
+        <span className="text-xs font-bold text-success">+12%</span>
+      </div>
+    </div>
+
+    <!-- Metric Box 2 (Promedio) -->
+    <div className="p-4 rounded-xl bg-info/10 border border-info/20">
+      <p className="text-xs font-semibold text-info uppercase tracking-wide mb-2">Promedio</p>
+      <p className="text-2xl font-black text-foreground tabular-nums">RD$ 6.5K</p>
+      <div className="flex items-center gap-1 mt-2">
+        <TrendingUp className="w-3 h-3 text-info" />
+        <span className="text-xs font-bold text-info">+8%</span>
+      </div>
+    </div>
+
+    <!-- Metric Box 3 (Récord) -->
+    <div className="p-4 rounded-xl bg-warning/10 border border-warning/20">
+      <p className="text-xs font-semibold text-warning uppercase tracking-wide mb-2">Récord</p>
+      <p className="text-2xl font-black text-foreground tabular-nums">RD$ 9.8K</p>
+      <p className="text-xs text-muted mt-2">Ayer</p>
+    </div>
+  </div>
+
+  <!-- Chart Container -->
+  <div className="h-[300px] w-full">
+    <!-- Recharts AreaChart -->
+  </div>
+</div>
+
+3.3.1 AREA CHART CONFIGURATION (Recharts)
+────────────────────────────────────────────────────────────────────────────────
+Library: recharts
+Component: AreaChart
+
+<AreaChart
+  data={chartData}
+  height={300}
+  margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
+>
+  <defs>
+    <linearGradient id="salesGradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stopColor="#FB7116" stopOpacity={0.3} />
+      <stop offset="95%" stopColor="#FB7116" stopOpacity={0} />
+    </linearGradient>
+  </defs>
+
+  <CartesianGrid
+    strokeDasharray="3 3"
+    stroke="#E0DBD9"
+    vertical={false}
+    opacity={0.5}
+  />
+
+  <XAxis
+    dataKey="day"
+    stroke="#E0DBD9"
+    tick={{ fill: '#7D726D', fontSize: 12 }}
+    tickLine={false}
+    axisLine={{ stroke: '#E0DBD9' }}
+  />
+
+  <YAxis
+    stroke="#E0DBD9"
+    tick={{ fill: '#7D726D', fontSize: 12 }}
+    tickLine={false}
+    axisLine={{ stroke: '#E0DBD9' }}
+    tickFormatter={(value) => `$${value/1000}K`}
+  />
+
+  <Tooltip
+    contentStyle={{
+      backgroundColor: '#FFFFFF',
+      border: '1px solid #E0DBD9',
+      borderRadius: '8px',
+      padding: '12px',
+      boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
+    }}
+    labelStyle={{ color: '#231F1D', fontWeight: 600, marginBottom: '8px' }}
+    itemStyle={{ color: '#7D726D', fontSize: '13px' }}
+  />
+
+  <Area
+    type="monotone"
+    dataKey="amount"
+    stroke="#FB7116"
+    strokeWidth={2}
+    fill="url(#salesGradient)"
+    dot={false}
+    activeDot={{ r: 6, fill: '#FB7116', stroke: '#FFFFFF', strokeWidth: 2 }}
+  />
+</AreaChart>
+
+Data Structure:
+const chartData = [
+  { day: 'Lun', amount: 4200 },
+  { day: 'Mar', amount: 5800 },
+  { day: 'Mié', amount: 7200 },
+  { day: 'Jue', amount: 6500 },
+  { day: 'Vie', amount: 9800 },
+  { day: 'Sáb', amount: 8200 },
+  { day: 'Dom', amount: 6300 }
+];
+
+KEY SPECS:
+- Curve Type: Monotone (smooth)
+- Line Color: #FB7116 (primary)
+- Line Width: 2px
+- Fill: Vertical gradient (orange to transparent)
+- Grid: Horizontal lines only, dashed
+- Tooltip: Custom styled (white bg, shadow)
+- Active Dot: 6px radius with white stroke
+
+3.4 ACTIVE TABLES WIDGET (Right Column)
+────────────────────────────────────────────────────────────────────────────────
+Container:
+<div className="bg-card rounded-xl border border-border shadow-[0_1px_3px_rgba(0,0,0,0.05),0_4px_12px_rgba(0,0,0,0.08)] p-6 xl:sticky xl:top-20">
+  <!-- Header -->
+  <div className="flex items-center justify-between mb-5">
+    <h2 className="text-lg font-bold text-foreground">Mesas Activas</h2>
+    <div className="px-3 py-1 rounded-full bg-warning/10 border border-warning/20">
+      <span className="text-xs font-bold text-warning">8 activas</span>
+    </div>
+  </div>
+
+  <!-- Tables List -->
+  <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1">
+    <!-- Table Item -->
+  </div>
+
+  <!-- Footer Link -->
+  <button className="w-full mt-4 h-10 rounded-lg border border-border hover:bg-accent text-sm font-semibold text-foreground transition-colors">
+    Ver todas las mesas
+  </button>
+</div>
+
+3.4.1 TABLE ITEM COMPONENT
+<div className="p-3 rounded-lg bg-secondary/50 border border-border hover:bg-secondary hover:border-primary/40 transition-all cursor-pointer">
+  <div className="flex items-center gap-3">
+    <!-- Table Icon/ID -->
+    <div className="w-11 h-11 rounded-lg bg-gradient-to-br from-primary to-[#FBAA16] flex items-center justify-center flex-shrink-0 shadow-sm">
+      <span className="text-white font-bold text-base">SP02</span>
+    </div>
+
+    <!-- Info -->
+    <div className="flex-1 min-w-0">
+      <div className="flex items-center justify-between mb-1">
+        <p className="text-sm font-semibold text-foreground truncate">Salón Principal</p>
+        <p className="text-sm font-bold text-foreground tabular-nums">RD$ 1,250</p>
+      </div>
+
+      <!-- Details Row -->
+      <div className="flex items-center gap-3 text-xs text-muted">
+        <div className="flex items-center gap-1">
+          <Users className="w-3 h-3" />
+          <span>4 personas</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <Clock className="w-3 h-3" />
+          <span>32 min</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+KEY SPECS:
+- Background: bg-secondary/50 (#F5F5F4 with 50% opacity)
+- Hover: bg-secondary (full opacity) + border-primary/40
+- Icon Container: 44x44px, gradient mango background
+- Icon Text: White, bold, 16px
+- Layout: Flex row with icon left, info filling space, price right
+- Max Height: 600px with scroll
+- Sticky: Position sticky at top-20 (desktop only)
+
+═══════════════════════════════════════════════════════════════════════════════
+4. INTERACTIVE STATES (Hover / Focus / Active)
+═══════════════════════════════════════════════════════════════════════════════
+
+4.1 BUTTON STATES
+────────────────────────────────────────────────────────────────────────────────
+Primary Button ("btn-mango"):
+  Default:
+    bg-gradient-to-r from-primary to-[#FBAA16]
+    shadow-[0_2px_4px_rgba(251,113,22,0.2)]
+
+  Hover:
+    shadow-[0_4px_16px_rgba(251,113,22,0.3)]
+    transform: translateY(-2px)
+
+  Active:
+    transform: translateY(0)
+    
+  Focus:
+    ring-2 ring-primary/20 ring-offset-2
+
+  Disabled:
+    opacity-50
+    cursor-not-allowed
+    pointer-events-none
+
+Secondary Button (Outline):
+  Default:
+    bg-transparent border border-border text-foreground
+
+  Hover:
+    bg-accent border-primary/40
+
+  Active:
+    bg-secondary
+
+  Focus:
+    ring-2 ring-border ring-offset-2
+
+4.2 CARD STATES
+────────────────────────────────────────────────────────────────────────────────
+Default:
+  shadow-[0_1px_3px_rgba(0,0,0,0.05),0_4px_12px_rgba(0,0,0,0.08)]
+  border border-border
+
+Hover:
+  shadow-[0_4px_16px_rgba(0,0,0,0.12)]
+  border-primary/40
+  transform: translateY(-4px)
+
+Active/Selected:
+  border-primary
+  bg-primary/5
+
+4.3 INPUT STATES
+────────────────────────────────────────────────────────────────────────────────
+Default:
+  border border-border
+  bg-white
+
+Focus:
+  ring-2 ring-primary/20
+  border-primary
+  outline-none
+
+Error:
+  border-destructive
+  ring-2 ring-destructive/20
+
+Disabled:
+  bg-secondary
+  opacity-50
+  cursor-not-allowed
+
+═══════════════════════════════════════════════════════════════════════════════
+5. ANIMATIONS & TRANSITIONS
+═══════════════════════════════════════════════════════════════════════════════
+
+5.1 STANDARD TRANSITIONS
+────────────────────────────────────────────────────────────────────────────────
+Duration:
+  - Fast:         150ms (hover states, color changes)
+  - Standard:     200ms (card movements, shadows)
+  - Slow:         300ms (page transitions, modals)
+
+Easing:
+  - Default:      ease-in-out
+  - Entrance:     ease-out
+  - Exit:         ease-in
+
+Common Classes:
+  transition-all duration-200
+  transition-colors duration-150
+  transition-transform duration-200
+
+5.2 HOVER EFFECTS
+────────────────────────────────────────────────────────────────────────────────
+Card Lift:
+  hover:-translate-y-1
+  transition-transform duration-200
+
+Icon Scale:
+  group-hover:scale-110
+  transition-transform duration-200
+
+Shadow Grow:
+  hover:shadow-[0_4px_16px_rgba(0,0,0,0.12)]
+  transition-shadow duration-200
+
+5.3 LOADING STATES
+────────────────────────────────────────────────────────────────────────────────
+Spinner (Primary):
+<div className="animate-spin rounded-full h-10 w-10 border-4 border-primary border-t-transparent"></div>
+
+Skeleton Loader:
+<div className="animate-pulse bg-secondary rounded-xl h-24"></div>
+
+Shimmer Effect:
+<div className="
+  relative overflow-hidden
+  bg-gradient-to-r from-secondary via-accent to-secondary
+  bg-[length:200%_100%]
+  animate-shimmer
+"></div>
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+Pulse Animation (Badges):
+<div className="w-2 h-2 rounded-full bg-warning animate-pulse"></div>
+
+5.4 PAGE ENTRANCE
+────────────────────────────────────────────────────────────────────────────────
+Fade In:
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  animation: fadeIn 300ms ease-out;
+
+Slide Up:
+  @keyframes slideUp {
+    from { transform: translateY(20px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+  animation: slideUp 400ms ease-out;
+
+Stagger Children:
+  Apply delay to each card:
+  style={{ animationDelay: `${index * 50}ms` }}
+
+═══════════════════════════════════════════════════════════════════════════════
+6. EMPTY & ERROR STATES
+═══════════════════════════════════════════════════════════════════════════════
+
+6.1 EMPTY STATE (No Data)
+────────────────────────────────────────────────────────────────────────────────
+<div className="bg-card rounded-xl border border-border p-12 text-center">
+  <div className="w-20 h-20 mx-auto mb-4 rounded-full bg-secondary flex items-center justify-center">
+    <Inbox className="w-10 h-10 text-muted" />
+  </div>
+  <h3 className="text-lg font-semibold text-foreground mb-2">
+    No hay datos disponibles
+  </h3>
+  <p className="text-sm text-muted max-w-sm mx-auto mb-6">
+    Los datos de ventas aparecerán aquí cuando haya actividad registrada
+  </p>
+  <button className="h-10 px-6 rounded-lg bg-primary text-white font-semibold hover:bg-primary/90 transition-colors">
+    Actualizar
+  </button>
+</div>
+
+6.2 ERROR STATE
+────────────────────────────────────────────────────────────────────────────────
+<div className="bg-destructive/10 border border-destructive/20 rounded-xl p-6">
+  <div className="flex items-start gap-3">
+    <div className="w-10 h-10 rounded-lg bg-destructive/20 flex items-center justify-center flex-shrink-0">
+      <AlertTriangle className="w-5 h-5 text-destructive" />
+    </div>
+    <div className="flex-1">
+      <h3 className="text-base font-semibold text-foreground mb-1">
+        Error al cargar datos
+      </h3>
+      <p className="text-sm text-muted mb-3">
+        No se pudieron cargar las ventas recientes. Por favor, intenta nuevamente.
+      </p>
+      <button className="h-9 px-4 rounded-lg border border-destructive text-destructive hover:bg-destructive hover:text-white font-semibold transition-colors">
+        Reintentar
+      </button>
+    </div>
+  </div>
+</div>
+
+6.3 LOADING STATE (Card Skeleton)
+────────────────────────────────────────────────────────────────────────────────
+<div className="bg-card rounded-xl border border-border p-6">
+  <div className="animate-pulse space-y-4">
+    <div className="h-4 bg-secondary rounded w-1/4"></div>
+    <div className="h-8 bg-secondary rounded w-1/2"></div>
+    <div className="grid grid-cols-3 gap-3">
+      <div className="h-24 bg-secondary rounded-xl"></div>
+      <div className="h-24 bg-secondary rounded-xl"></div>
+      <div className="h-24 bg-secondary rounded-xl"></div>
+    </div>
+    <div className="h-[300px] bg-secondary rounded-xl"></div>
+  </div>
+</div>
+
+═══════════════════════════════════════════════════════════════════════════════
+7. RESPONSIVE BEHAVIOR (Mobile Adaptations)
+═══════════════════════════════════════════════════════════════════════════════
+
+7.1 MOBILE SPECIFIC (<768px)
+────────────────────────────────────────────────────────────────────────────────
+Header:
+  - Navigation: Hidden (show hamburger menu)
+  - Logo text: Hidden
+  - User name: Hidden
+
+Welcome Card:
+  - Stack vertically
+  - Chips: Wrap to multiple lines
+  - Button: Full width
+
+Quick Actions:
+  - Small cards: 2 columns
+  - Large buttons: 1 column
+  - Card height: Auto
+
+Sales Chart:
+  - Metrics: Stack vertically or 2x2 grid if very small
+  - Chart height: 250px
+  - Hide some axis labels
+
+Active Tables:
+  - Sticky position: Disabled
+  - Max height: None
+  - Show first 3 items + "Ver más" button
+
+7.2 TABLET (768px - 1024px)
+────────────────────────────────────────────────────────────────────────────────
+Header:
+  - Navigation: Partial (icons + text for main items)
+  - User info: Show name
+
+Content:
+  - Still single column
+  - Quick actions: 4 columns for small cards
+  - Large buttons: 2 columns
+
+7.3 DESKTOP (≥1024px)
+────────────────────────────────────────────────────────────────────────────────
+All features visible
+Full navigation with text
+User info complete
+
+7.4 WIDE (≥1280px)
+────────────────────────────────────────────────────────────────────────────────
+3-column grid activated:
+  - Left column (2/3): Welcome + Quick Actions + Sales Chart
+  - Right column (1/3): Active Tables (sticky)
+
+═══════════════════════════════════════════════════════════════════════════════
+8. ICON LIBRARY (Lucide React)
+═══════════════════════════════════════════════════════════════════════════════
+
+8.1 IMPORT
+────────────────────────────────────────────────────────────────────────────────
+import {
+  Home, ShoppingCart, Package, ChartBar, Bell, Settings, User,
+  Users, Clock, TrendingUp, TrendingDown, Plus, Bike, Building,
+  Unlock, ArrowRight, Inbox, AlertTriangle, RefreshCw
+} from 'lucide-react';
+
+8.2 ICON SIZES
+────────────────────────────────────────────────────────────────────────────────
+- Tiny:         w-3 h-3 (12px)   - Inline badges
+- Small:        w-4 h-4 (16px)   - Buttons, nav items
+- Medium:       w-5 h-5 (20px)   - Header icons
+- Large:        w-6 h-6 (24px)   - Card icons
+- X-Large:      w-7 h-7 (28px)   - Large button icons
+- XX-Large:     w-10 h-10 (40px) - Empty states
+
+8.3 ICON COLORS
+────────────────────────────────────────────────────────────────────────────────
+Default: text-foreground (#231F1D)
+Muted: text-muted (#7D726D)
+Primary: text-primary (#FB7116)
+Success: text-success (#22C55E)
+Warning: text-warning (#F59E0B)
+Info: text-info (#3B82F6)
+Destructive: text-destructive (#EF4444)
+
+═══════════════════════════════════════════════════════════════════════════════
+9. IMPLEMENTATION CHECKLIST
+═══════════════════════════════════════════════════════════════════════════════
+
+Dependencies:
+✅ react, react-dom
+✅ typescript
+✅ tailwindcss
+✅ lucide-react
+✅ recharts
+✅ date-fns (optional for date formatting)
+
+Tailwind Config Extensions:
+✅ Custom colors (primary, success, warning, info, destructive, muted, etc.)
+✅ Plus Jakarta Sans font
+✅ Custom shadows
+✅ Custom animations (shimmer, pulse)
+
+Components to Build:
+✅ Header (TopNavigation)
+✅ WelcomeCard
+✅ QuickActionCard (small)
+✅ QuickActionButton (large)
+✅ SalesChart (with Recharts)
+✅ ActiveTablesWidget
+✅ TableItem
+
+State Management:
+✅ Dashboard metrics data
+✅ Chart data
+✅ Active tables list
+✅ Loading states
+✅ Error handling
+
+API Endpoints (Expected):
+✅ GET /api/dashboard/overview
+✅ GET /api/dashboard/sales-chart?period=week
+✅ GET /api/tables/active
+
+═══════════════════════════════════════════════════════════════════════════════
+10. ACCESSIBILITY NOTES
+═══════════════════════════════════════════════════════════════════════════════
+
+- All buttons have aria-labels
+- Proper heading hierarchy (h1 → h2 → h3)
+- Focus indicators visible (ring-2)
+- Color is not sole indicator (use icons + text)
+- Keyboard navigation support
+- Screen reader friendly
+- Minimum touch target 44x44px (mobile)
+- Alt text for any images/icons
+
+═══════════════════════════════════════════════════════════════════════════════
+END OF UI SPECIFICATION
+═══════════════════════════════════════════════════════════════════════════════
+
+This document contains COMPLETE specifications to generate pixel-perfect code.
+All measurements, colors, shadows, animations, and behaviors are defined.
+Ready for AI code generation or manual implementation.
+
+CRITICAL DESIGN PRINCIPLES:
+✅ Soft UI aesthetic (rounded corners, subtle shadows)
+✅ Left-aligned text throughout (NO centering)
+✅ High contrast (foreground #231F1D, NOT gray)
+✅ Gradient mango accent (primary to amber)
+✅ Responsive 3-column grid (desktop XL)
+✅ Plus Jakarta Sans typography
+✅ Warm color palette (cream background)

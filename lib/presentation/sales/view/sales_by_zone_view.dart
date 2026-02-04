@@ -7,6 +7,7 @@ import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.da
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/data/models/table_status.dart';
 import 'package:mangopos/presentation/sales/view/theme/sales_theme.dart';
+import 'package:mangopos/presentation/sales/widgets/table_card.dart';
 
 class SalesByZoneView extends ConsumerStatefulWidget {
   final String businessId;
@@ -98,7 +99,8 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
   @override
   Widget build(BuildContext context) {
     final vm = ref.watch(byZoneVmProvider);
-    final zones = vm.zones;
+    // Filter out 'Ventas manuales' as it is not a physical zone with tables
+    final zones = vm.zones.where((z) => z.name != 'Ventas manuales').toList();
     final hasZones = zones.isNotEmpty;
 
     _updateTabController(zones);
@@ -317,12 +319,12 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
             children: [
               _StatusBadge(
                 label: '$availableCount disponibles',
-                color: const Color(0xFF10B981),
+                color: SalesTheme.success,
               ),
               const SizedBox(width: 12),
               _StatusBadge(
                 label: '$occupiedCount ocupadas',
-                color: const Color(0xFFF59E0B),
+                color: SalesTheme.warning,
               ),
             ],
           ),
@@ -330,19 +332,65 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
         // Grid
         Expanded(
           child: GridView.builder(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(24),
             gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 240,
-              childAspectRatio: 2.0,
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 12,
+              maxCrossAxisExtent: SalesTheme.tableCardMinWidth,
+              childAspectRatio:
+                  SalesTheme.tableCardMinWidth / SalesTheme.tableCardHeight,
+              crossAxisSpacing: SalesTheme.gridGap,
+              mainAxisSpacing: SalesTheme.gridGap,
             ),
             itemCount: tables.length,
-            itemBuilder: (context, index) => _TableCard(ts: tables[index]),
+            itemBuilder: (context, index) {
+              final table = tables[index];
+              final opening = ref
+                  .watch(byZoneVmProvider)
+                  .openingTables
+                  .contains(table.tableId);
+              return TableCard(
+                status: table,
+                isOpening: opening,
+                onTap: () => _handleTableAction(context, ref, table),
+              );
+            },
           ),
         ),
       ],
     );
+  }
+
+  Future<void> _handleTableAction(
+    BuildContext context,
+    WidgetRef ref,
+    TableStatus ts,
+  ) async {
+    final byZone = ref.read(byZoneVmProvider.notifier);
+    final opening = ref.read(byZoneVmProvider).openingTables.contains(ts.tableId);
+    if (opening) return;
+
+    byZone.setOpening(ts.tableId, true);
+
+    try {
+      await ref.read(currentOrderProvider.notifier).openTable(ts.tableId);
+      if (!context.mounted) return;
+      context.go(
+        Uri(
+          path: '${AppRoutes.sales}/table/${ts.tableId}',
+          queryParameters: {'code': ts.code, 'zone': ts.zoneId},
+        ).toString(),
+      );
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al abrir mesa: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      byZone.setOpening(ts.tableId, false);
+    }
   }
 }
 
@@ -372,7 +420,7 @@ class _StatusBadge extends StatelessWidget {
           Text(
             label,
             style: TextStyle(
-              fontSize: 12,
+              fontSize: 13,
               color: color,
               fontWeight: FontWeight.w600,
             ),
@@ -380,275 +428,5 @@ class _StatusBadge extends StatelessWidget {
         ],
       ),
     );
-  }
-}
-
-class _TableCard extends ConsumerStatefulWidget {
-  final TableStatus ts;
-  const _TableCard({required this.ts});
-
-  @override
-  ConsumerState<_TableCard> createState() => _TableCardState();
-}
-
-class _TableCardState extends ConsumerState<_TableCard>
-    with SingleTickerProviderStateMixin {
-  bool _isHovered = false;
-  late AnimationController _animController;
-  late Animation<double> _scaleAnimation;
-
-  @override
-  void initState() {
-    super.initState();
-    _animController = AnimationController(
-      duration: const Duration(milliseconds: 150),
-      vsync: this,
-    );
-    _scaleAnimation = Tween<double>(begin: 1.0, end: 0.98).animate(
-      CurvedAnimation(parent: _animController, curve: Curves.easeInOut),
-    );
-  }
-
-  @override
-  void dispose() {
-    _animController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final occupied = widget.ts.sessionId != null;
-    final borderColor = occupied
-        ? const Color(0xFFF59E0B)
-        : const Color(0xFF10B981);
-
-    final opening = ref
-        .watch(byZoneVmProvider)
-        .openingTables
-        .contains(widget.ts.tableId);
-
-    return MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
-      child: GestureDetector(
-        onTapDown: (_) => _animController.forward(),
-        onTapUp: (_) {
-          _animController.reverse();
-          if (!opening) _handleTableAction(context, ref);
-        },
-        onTapCancel: () => _animController.reverse(),
-        child: ScaleTransition(
-          scale: _scaleAnimation,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            curve: Curves.easeOut,
-            transform: Matrix4.translationValues(0, _isHovered ? -2 : 0, 0),
-            constraints: const BoxConstraints(minHeight: 120),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFFE2E8F0), width: 1),
-              boxShadow: [
-                if (_isHovered)
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.08),
-                    blurRadius: 16,
-                    offset: const Offset(0, 4),
-                  )
-                else
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.04),
-                    blurRadius: 8,
-                    offset: const Offset(0, 2),
-                  ),
-              ],
-            ),
-            child: Stack(
-              children: [
-                // Borde de color izquierdo
-                Positioned(
-                  left: 0,
-                  top: 0,
-                  bottom: 0,
-                  child: Container(
-                    width: 4,
-                    decoration: BoxDecoration(
-                      color: borderColor,
-                      borderRadius: const BorderRadius.only(
-                        topLeft: Radius.circular(12),
-                        bottomLeft: Radius.circular(12),
-                      ),
-                    ),
-                  ),
-                ),
-                // Contenido
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      // Header
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            widget.ts.code,
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                              color: Color(0xFF0F172A),
-                              letterSpacing: -0.5,
-                            ),
-                          ),
-                          if (occupied && widget.ts.total > 0)
-                            Text(
-                              'RD\$ ${widget.ts.total.toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d)(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]},')}',
-                              style: const TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF0F172A),
-                              ),
-                            ),
-                        ],
-                      ),
-
-                      const SizedBox(height: 4),
-
-                      // Status text (sin badge)
-                      Text(
-                        occupied ? 'Ocupado' : 'Disponible',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                          color: borderColor,
-                        ),
-                      ),
-
-                      const SizedBox(height: 6),
-
-                      // Divider
-                      Container(height: 1, color: const Color(0xFFE2E8F0)),
-
-                      const SizedBox(height: 6),
-
-                      // Bottom info
-                      if (opening) ...[
-                        Row(
-                          children: [
-                            SizedBox(
-                              width: 14,
-                              height: 14,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: borderColor,
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              'Abriendo...',
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: borderColor,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ] else if (occupied) ...[
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.people_outline,
-                              size: 16,
-                              color: const Color(0xFF64748B),
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              '${widget.ts.peopleCount}',
-                              style: const TextStyle(
-                                fontSize: 14,
-                                color: Color(0xFF64748B),
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            const SizedBox(width: 16),
-                            Icon(
-                              Icons.access_time,
-                              size: 16,
-                              color: const Color(0xFF64748B),
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              _formatTime(widget.ts.minutesOpen ?? 0),
-                              style: const TextStyle(
-                                fontSize: 14,
-                                color: Color(0xFF64748B),
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ] else ...[
-                        const Text(
-                          'Toca para asignar',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Color(0xFF94A3B8),
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  String _formatTime(int minutes) {
-    final hours = minutes ~/ 60;
-    final mins = minutes % 60;
-    return '${hours.toString().padLeft(2, '0')}:${mins.toString().padLeft(2, '0')}';
-  }
-
-  Future<void> _handleTableAction(BuildContext context, WidgetRef ref) async {
-    final byZone = ref.read(byZoneVmProvider.notifier);
-    final ts = widget.ts;
-
-    final opening = ref
-        .read(byZoneVmProvider)
-        .openingTables
-        .contains(ts.tableId);
-    if (opening) return;
-
-    byZone.setOpening(ts.tableId, true);
-
-    try {
-      await ref.read(currentOrderProvider.notifier).openTable(ts.tableId);
-      if (!context.mounted) return;
-      context.go(
-        Uri(
-          path: '${AppRoutes.sales}/table/${ts.tableId}',
-          queryParameters: {'code': ts.code, 'zone': ts.zoneId},
-        ).toString(),
-      );
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al abrir mesa: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } finally {
-      byZone.setOpening(ts.tableId, false);
-    }
   }
 }
