@@ -161,6 +161,35 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
     return check.position;
   }
 
+  /// Retornar item a 'Sin Asignar' (Check position 0)
+  Future<void> unassignItem(String itemId) async {
+    state = state.copyWith(loading: true, error: null);
+
+    try {
+      await _salesRepo.moveItemToCheck(
+        itemId: itemId,
+        checkPosition: 0, // 0 = Unassigned / Pool
+      );
+
+      // Recargar items actualizados
+      if (state.order != null) {
+        final updatedItems = await _salesRepo.getOrderItems(state.order!.id);
+        final updatedChecks = await _salesRepo.getOrderChecks(state.order!.id);
+
+        state = state.copyWith(
+          loading: false,
+          allItems: updatedItems,
+          checks: updatedChecks,
+        );
+      }
+    } catch (e) {
+      state = state.copyWith(
+        loading: false,
+        error: 'Error al remover item: $e',
+      );
+    }
+  }
+
   // ============================================================
   // ⚖️ DIVISIÓN IGUALITARIA
   // ============================================================

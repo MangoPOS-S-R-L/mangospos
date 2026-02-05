@@ -63,51 +63,54 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                    // WELCOME CARD
-                    _WelcomeCard(isVertical: isMobile, viewModel: vm),
-                    SizedBox(height: gap),
+                        // WELCOME CARD
+                        _WelcomeCard(isVertical: isMobile, viewModel: vm),
+                        SizedBox(height: gap),
 
-                    // MAIN LAYOUT
-                    if (isSplitView)
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          // LEFT COLUMN (Main Content)
-                          Expanded(
-                            flex: 2,
-                            child: Column(
-                              children: [
-                                _QuickActionsSection(width: width),
-                                SizedBox(height: gap),
-                                _SalesChart(viewModel: vm, isMobile: isMobile),
-                              ],
-                            ),
+                        // MAIN LAYOUT
+                        if (isSplitView)
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // LEFT COLUMN (Main Content)
+                              Expanded(
+                                flex: 2,
+                                child: Column(
+                                  children: [
+                                    _QuickActionsSection(width: width),
+                                    SizedBox(height: gap),
+                                    _SalesChart(
+                                      viewModel: vm,
+                                      isMobile: isMobile,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              SizedBox(width: gap),
+                              // RIGHT COLUMN (Sidebar: Active Tables)
+                              Expanded(
+                                flex: 1,
+                                child: _ActiveTablesWidget(
+                                  viewModel: vm,
+                                  isWide: isDesktopXL,
+                                ),
+                              ),
+                            ],
+                          )
+                        else
+                          // STACKED LAYOUT (Mobile & Tablet)
+                          Column(
+                            children: [
+                              _QuickActionsSection(width: width),
+                              SizedBox(height: gap),
+                              _SalesChart(viewModel: vm, isMobile: isMobile),
+                              SizedBox(height: gap),
+                              _ActiveTablesWidget(
+                                viewModel: vm,
+                                isWide: isDesktopXL,
+                              ),
+                            ],
                           ),
-                          SizedBox(width: gap),
-                          // RIGHT COLUMN (Sidebar: Active Tables)
-                          Expanded(
-                            flex: 1,
-                            child: _ActiveTablesWidget(
-                              viewModel: vm,
-                              isWide: isDesktopXL,
-                            ),
-                          ),
-                        ],
-                      )
-                    else
-                      // STACKED LAYOUT (Mobile & Tablet)
-                      Column(
-                        children: [
-                          _QuickActionsSection(width: width),
-                          SizedBox(height: gap),
-                          _SalesChart(viewModel: vm, isMobile: isMobile),
-                          SizedBox(height: gap),
-                          _ActiveTablesWidget(
-                            viewModel: vm,
-                            isWide: isDesktopXL,
-                          ),
-                        ],
-                      ),
                       ],
                     ),
                   ),
@@ -549,7 +552,8 @@ class _QuickActionsSection extends StatelessWidget {
         // Large Buttons Layout - Always 2 columns (matches responsive spec)
         LayoutBuilder(
           builder: (context, constraints) {
-            final itemWidth = (constraints.maxWidth - AppSpacing.sectionGap) / 2;
+            final itemWidth =
+                (constraints.maxWidth - AppSpacing.sectionGap) / 2;
             return Wrap(
               spacing: AppSpacing.sectionGap,
               runSpacing: AppSpacing.sectionGap,
@@ -1096,8 +1100,9 @@ class _ActiveTablesWidget extends StatelessWidget {
         .where((s) => s.origin != 'manual')
         .toList();
 
-    final visibleSessions =
-        isWide ? sessions : sessions.take(5).toList(growable: false);
+    final visibleSessions = isWide
+        ? sessions
+        : sessions.take(5).toList(growable: false);
 
     Widget list;
     if (visibleSessions.isEmpty) {
@@ -1204,10 +1209,7 @@ class _ActiveTablesWidget extends StatelessWidget {
             list,
           if (sessions.isNotEmpty) ...[
             const SizedBox(height: AppSpacing.sectionGap),
-            Container(
-              height: 1,
-              color: AppColors.border,
-            ),
+            Container(height: 1, color: AppColors.border),
             const SizedBox(height: AppSpacing.sectionGap),
             Center(
               child: TextButton(

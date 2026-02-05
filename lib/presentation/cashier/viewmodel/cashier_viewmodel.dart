@@ -68,12 +68,15 @@ class CashierViewModel extends ChangeNotifier {
         try {
           final businessData = await client
               .from('businesses')
-              .select('name')
+              .select() // Select all to avoid column errors
               .eq('id', _businessId!)
               .maybeSingle();
 
           if (businessData != null) {
-            _businessName = businessData['name'] as String? ?? '';
+            _businessName =
+                businessData['name'] as String? ??
+                businessData['business_name'] as String? ??
+                '';
           }
         } catch (e) {
           debugPrint('Error fetching business name: $e');
@@ -257,32 +260,45 @@ class CashierViewModel extends ChangeNotifier {
         // Try to get a better description from order
         if (payment['order_id'] != null) {
           try {
+            // 1. Get Order and Session
             final orderData = await client
                 .from('orders')
-                .select('id, table_id')
+                .select('id, session_id')
                 .eq('id', payment['order_id'])
                 .maybeSingle();
 
-            if (orderData != null && orderData is Map<String, dynamic>) {
-              if (orderData['table_id'] != null) {
-                // Try to get table name
-                final tableData = await client
-                    .from('tables')
-                    .select('table_code')
-                    .eq('id', orderData['table_id'])
+            if (orderData != null) {
+              final orderIdShort = (orderData['id'] ?? payment['id'])
+                  .toString()
+                  .substring(0, 8);
+              description = 'Venta #$orderIdShort'; // Fallback
+
+              // 2. Get Table Session
+              if (orderData['session_id'] != null) {
+                final sessionData = await client
+                    .from('table_sessions')
+                    .select('table_id')
+                    .eq('id', orderData['session_id'])
                     .maybeSingle();
 
-                if (tableData != null && tableData is Map<String, dynamic>) {
-                  description = 'Venta ${tableData['table_code'] ?? 'Mesa'}';
+                // 3. Get Table Code
+                if (sessionData != null && sessionData['table_id'] != null) {
+                  final tableData = await client
+                      .from('dining_tables') // Correct table name
+                      .select('code, label') // Correct columns
+                      .eq('id', sessionData['table_id'])
+                      .maybeSingle();
+
+                  if (tableData != null) {
+                    final code =
+                        tableData['code'] ?? tableData['label'] ?? '??';
+                    description = 'Venta Mesa $code';
+                  }
                 }
-              } else {
-                description =
-                    'Venta #${(orderData['id'] ?? payment['id']).toString().substring(0, 8)}';
               }
             }
           } catch (e) {
             debugPrint('Could not get order details: $e');
-            // Continue with default description
           }
         }
 

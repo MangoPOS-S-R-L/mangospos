@@ -1,0 +1,25 @@
+{
+    "name": "mangopos-print-agent",
+    "version": "1.0.0",
+    "description": "Local Print Agent for MangoPOS",
+    "main": "src/index.js",
+    "scripts": {
+        "start": "node src/index.js",
+        "dev": "nodemon src/index.js"
+    },
+    "dependencies": {
+        "cors": "^2.8.6",
+        "dotenv": "^16.4.1",
+        "escpos": "^3.0.0-alpha.6",
+        "escpos-network": "^3.0.0-alpha.5",
+        "escpos-usb": "^3.0.0-alpha.4",
+        "express": "^5.2.1",
+        "node-windows": "^1.0.0-beta.8",
+        "socket.io": "^4.8.3",
+        "socket.io-client": "^4.7.4",
+        "winston": "^3.11.0"
+    },
+    "devDependencies": {
+        "nodemon": "^3.0.3"
+    }
+}

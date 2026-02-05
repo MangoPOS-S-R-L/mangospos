@@ -56,6 +56,13 @@ dependencies:
   universal_ble: ^0.21.1
   web_socket_channel: ^3.0.3
   google_fonts: ^7.0.0
+  tuple: ^2.0.2
+  shared_preferences: ^2.2.2
+  connectivity_plus: ^6.0.0
+  crypto: ^3.0.3
+  uuid: ^4.5.1
+  http: ^1.6.0
+
 
 dev_dependencies:
   flutter_test:

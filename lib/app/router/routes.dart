@@ -46,4 +46,7 @@ class AppRoutes {
   static const printingProducts = '$settings/printing/products';
   static const printingReceipts = '$settings/printing/receipts';
   static const printingOrders = '$settings/printing/orders';
+
+  // ---- Tests ----
+  static const cacheTest = '/cache-test';
 }

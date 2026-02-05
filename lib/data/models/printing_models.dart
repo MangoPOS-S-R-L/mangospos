@@ -81,6 +81,30 @@ class PrinterDevice {
       'last_seen': lastSeen?.toIso8601String(),
     };
   }
+
+  PrinterDevice copyWith({
+    String? id,
+    String? businessId,
+    String? name,
+    String? ip,
+    String? mac,
+    PrinterType? type,
+    bool? online,
+    DateTime? lastSeen,
+    DateTime? createdAt,
+  }) {
+    return PrinterDevice(
+      id: id ?? this.id,
+      businessId: businessId ?? this.businessId,
+      name: name ?? this.name,
+      ip: ip ?? this.ip,
+      mac: mac ?? this.mac,
+      type: type ?? this.type,
+      online: online ?? this.online,
+      lastSeen: lastSeen ?? this.lastSeen,
+      createdAt: createdAt ?? this.createdAt,
+    );
+  }
 }
 
 /// 🖨️ Configuración de impresora

@@ -1,5 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:mangopos/core/services/local_print_service.dart';
+
 import '../models/printing_models.dart';
 
 /// 🖨️ Repositorio de Impresión
@@ -303,22 +305,87 @@ class PrintingRepository {
     );
   }
 
-  /// Verificar si agent está activo (stub - no implementado)
+  // Local Print Service
+  final _localService = LocalPrintService();
+
+  /// Verificar si agent (Mango Local Agent) está activo
   Future<bool> isAgentUp() async {
-    return false; // Por ahora retornar false
+    return await _localService.isAgentAvailable();
   }
 
-  /// Test via agent (stub - no implementado)
+  /// Verificar estado de conectividad de una lista de impresoras
+  Future<Map<String, bool>> checkPrintersHealth(
+    List<PrinterConfig> printers,
+  ) async {
+    final payload = printers
+        .where((p) => p.ipAddress != null)
+        .map((p) => {'ip': p.ipAddress, 'port': p.port ?? 9100})
+        .toList();
+
+    return await _localService.checkConnectivity(payload);
+  }
+
+  /// Test via agent (Local Agent)
   Future<void> testPrintViaAgent({
     required String ip,
     required int port,
+    List<int>? customData,
   }) async {
-    throw UnimplementedError('Agent no implementado aún');
+    // Construct Job Payload for Agent
+    final job = {
+      'id': 'TEST-${DateTime.now().millisecondsSinceEpoch}',
+      'printer': {'type': 'network', 'ip': ip, 'port': port},
+      'content': {
+        'title': 'Test de Impresión',
+        'body': 'Si lees esto, el Agente Local funciona correctamente.',
+        'lines': [
+          '--------------------------------',
+          'Conexión: OK',
+          'IP: $ip',
+          '--------------------------------',
+        ],
+      },
+    };
+
+    final success = await _localService.printJob(job);
+    if (!success) {
+      throw Exception('El agente no pudo completar la impresión');
+    }
   }
 
-  /// Descubrir con agent (stub - no implementado)
+  /// Imprimir Job genérico vía Agente (Público)
+  Future<void> printJobViaAgent(Map<String, dynamic> jobPayload) async {
+    final success = await _localService.printJob(jobPayload);
+    if (!success) {
+      throw Exception('El agente local rechazó el trabajo de impresión.');
+    }
+  }
+
+  /// Descubrir con agent (Scan Subnet)
   Future<List<dynamic>> discoverWithAgent(String businessId) async {
+    // TODO: Implementar endpoint /scan en el agente
+    // Por ahora retornamos lista vacía o mock
     return [];
+  }
+
+  // ... (Resto de métodos de compatibilidad)
+
+  /// Print Custom ESC/POS Data via Agent
+  Future<void> printCustomData({
+    required String ip,
+    required List<int> data,
+  }) async {
+    // Para RAW printing el agente necesitaría soportar base64 o similar
+    // Por ahora enviamos un mensaje genérico.
+    final job = {
+      'id': 'RAW-${DateTime.now().millisecondsSinceEpoch}',
+      'printer': {'type': 'network', 'ip': ip, 'port': 9100},
+      'content': {
+        'title': 'RAW DATA PRINT',
+        'body': 'Raw printing not yet fully implemented in dart-side.',
+      },
+    };
+    await _localService.printJob(job);
   }
 
   /// Crear área de impresión (compatibilidad)

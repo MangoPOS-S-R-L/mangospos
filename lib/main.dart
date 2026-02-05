@@ -12,6 +12,7 @@ import 'package:media_kit/media_kit.dart';
 import 'env/env.dart';
 import 'app/router/app_router.dart';
 import 'core/network/supabase_config.dart';
+import 'core/cache/cache_manager.dart';
 
 /// === CONFIG DEL AGENTE ===
 /// Cambia estas rutas/puerto segun tu instalacion.
@@ -160,6 +161,9 @@ void main() async {
 
   // Arranca o "precalienta" el agente ANTES de montar el arbol de widgets
   await _ensurePrinterAgentStarted();
+
+  // Inicializar CacheManager
+  await CacheManager.initialize();
 
   runApp(const ProviderScope(child: MyApp()));
 }

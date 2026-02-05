@@ -121,7 +121,27 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       _lastLoadedBusinessId = _businessId;
 
       final configs = await _repo.getPrinters(_businessId!);
-      final items = configs.map(_toPrinterDevice).toList();
+      var items = configs.map(_toPrinterDevice).toList();
+
+      // NEW: Health Check via Agent if on Web
+      if (kIsWeb) {
+        try {
+          final isAgentUp = await _repo.isAgentUp();
+          if (isAgentUp) {
+            final health = await _repo.checkPrintersHealth(configs);
+            // Update items status based on health map 'ip' -> bool
+            items = items.map((item) {
+              if (item.ip != null && health.containsKey(item.ip)) {
+                return item.copyWith(online: health[item.ip]!);
+              }
+              return item;
+            }).toList();
+          }
+        } catch (e) {
+          _log('Health Check Error: $e');
+        }
+      }
+
       state = state.copyWith(items: items, isLoading: false);
     } catch (e, st) {
       _log('load() ERROR: $e\n$st');

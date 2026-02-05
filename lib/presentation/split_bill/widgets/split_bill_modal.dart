@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../data/models/sales_models.dart';
 import '../viewmodel/split_bill_viewmodel.dart';
+import '../state/split_bill_state.dart';
 
 /// 📄 Modal de división de cuenta
 class SplitBillModal extends ConsumerStatefulWidget {
@@ -19,19 +20,31 @@ class SplitBillModal extends ConsumerStatefulWidget {
   ConsumerState<SplitBillModal> createState() => _SplitBillModalState();
 }
 
-class _SplitBillModalState extends ConsumerState<SplitBillModal> {
+class _SplitBillModalState extends ConsumerState<SplitBillModal>
+    with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 2, vsync: this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(splitBillViewModelProvider.notifier).initialize(widget.order);
     });
   }
 
   @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final state = ref.watch(splitBillViewModelProvider);
     final viewModel = ref.read(splitBillViewModelProvider.notifier);
+    final size = MediaQuery.of(context).size;
+    final isMobile = size.width < 900;
 
     // Si la división fue aplicada exitosamente
     if (state.splitApplied) {
@@ -49,9 +62,16 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal> {
     }
 
     return Dialog(
+      insetPadding: isMobile
+          ? const EdgeInsets.symmetric(horizontal: 16, vertical: 24)
+          : const EdgeInsets.symmetric(horizontal: 40, vertical: 40),
       child: Container(
-        width: 1000,
-        height: 700,
+        width: 1100,
+        height: isMobile ? double.infinity : 750,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+        ),
         padding: const EdgeInsets.all(24),
         child: state.loading
             ? const Center(child: CircularProgressIndicator())
@@ -59,52 +79,92 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // Header
-                  _buildHeader(context),
-                  const SizedBox(height: 24),
+                  _buildHeader(context, isMobile),
+                  const SizedBox(height: 16),
 
                   // Error message
                   if (state.error != null) _buildErrorMessage(state.error!),
 
                   // Content
                   Expanded(
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // Left side - Items list
-                        Expanded(
-                          flex: 3,
-                          child: _buildItemsList(state, viewModel),
-                        ),
-                        const SizedBox(width: 24),
-                        // Right side - Checks
-                        Expanded(
-                          flex: 4,
-                          child: _buildChecksList(state, viewModel),
-                        ),
-                      ],
-                    ),
+                    child: isMobile
+                        ? Column(
+                            children: [
+                              TabBar(
+                                controller: _tabController,
+                                labelColor: Colors.orange,
+                                unselectedLabelColor: Colors.grey,
+                                indicatorColor: Colors.orange,
+                                tabs: const [
+                                  Tab(text: 'Productos'),
+                                  Tab(text: 'Subcuentas'),
+                                ],
+                              ),
+                              const SizedBox(height: 16),
+                              Expanded(
+                                child: TabBarView(
+                                  controller: _tabController,
+                                  children: [
+                                    _buildItemsList(state, viewModel, isMobile),
+                                    _buildChecksList(
+                                      state,
+                                      viewModel,
+                                      isMobile,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          )
+                        : Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Left side - Items list
+                              Expanded(
+                                flex: 4,
+                                child: _buildItemsList(
+                                  state,
+                                  viewModel,
+                                  isMobile,
+                                ),
+                              ),
+                              const SizedBox(width: 24),
+                              // Right side - Checks
+                              Expanded(
+                                flex: 5,
+                                child: _buildChecksList(
+                                  state,
+                                  viewModel,
+                                  isMobile,
+                                ),
+                              ),
+                            ],
+                          ),
                   ),
 
                   const SizedBox(height: 16),
 
                   // Footer buttons
-                  _buildFooter(state, viewModel),
+                  _buildFooter(state, viewModel, isMobile),
                 ],
               ),
       ),
     );
   }
 
-  Widget _buildHeader(BuildContext context) {
+  Widget _buildHeader(BuildContext context, bool isMobile) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            Text(
               'Dividir Cuenta',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                fontSize: isMobile ? 20 : 24,
+                fontWeight: FontWeight.bold,
+              ),
             ),
             const SizedBox(height: 4),
             Text(
@@ -142,12 +202,17 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal> {
     );
   }
 
-  Widget _buildItemsList(state, viewModel) {
+  Widget _buildItemsList(
+    SplitBillState state,
+    SplitBillViewModel viewModel,
+    bool isMobile,
+  ) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.grey[50],
         borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey[200]!),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -173,7 +238,10 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal> {
                 TextButton.icon(
                   onPressed: () => viewModel.selectAllUnassigned(),
                   icon: const Icon(Icons.select_all, size: 16),
-                  label: const Text('Seleccionar todos'),
+                  label: const Text('Todos'),
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                  ),
                 ),
             ],
           ),
@@ -193,7 +261,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal> {
                         ),
                         const SizedBox(height: 16),
                         Text(
-                          'Todos los productos están asignados',
+                          'Todos los productos asignados',
                           style: TextStyle(
                             fontSize: 14,
                             color: Colors.grey[600],
@@ -248,7 +316,11 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal> {
     );
   }
 
-  Widget _buildChecksList(state, viewModel) {
+  Widget _buildChecksList(
+    SplitBillState state,
+    SplitBillViewModel viewModel,
+    bool isMobile,
+  ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -264,17 +336,17 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '${state.checks.length} subcuentas creadas',
+                  '${state.checks.length} subcuentas',
                   style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                 ),
               ],
             ),
             Row(
               children: [
-                OutlinedButton.icon(
+                IconButton(
                   onPressed: () => viewModel.toggleEqualSplit(),
-                  icon: const Icon(Icons.pie_chart, size: 16),
-                  label: const Text('Partes iguales'),
+                  tooltip: 'Dividir en partes iguales',
+                  icon: const Icon(Icons.pie_chart_outline),
                 ),
                 const SizedBox(width: 8),
                 ElevatedButton.icon(
@@ -319,6 +391,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal> {
                       const SizedBox(height: 8),
                       Text(
                         'Crea una subcuenta para asignar productos',
+                        textAlign: TextAlign.center,
                         style: TextStyle(fontSize: 14, color: Colors.grey[500]),
                       ),
                     ],
@@ -336,6 +409,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal> {
                       onDelete: items.isEmpty
                           ? () => viewModel.deleteCheck(check.id)
                           : null,
+                      onRemoveItem: (itemId) => viewModel.unassignItem(itemId),
                     );
                   },
                 ),
@@ -344,7 +418,10 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal> {
     );
   }
 
-  Widget _buildEqualSplitPanel(state, viewModel) {
+  Widget _buildEqualSplitPanel(
+    SplitBillState state,
+    SplitBillViewModel viewModel,
+  ) {
     return Container(
       padding: const EdgeInsets.all(16),
       margin: const EdgeInsets.only(bottom: 16),
@@ -372,42 +449,52 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal> {
             ],
           ),
           const SizedBox(height: 12),
-          Row(
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 16,
+            runSpacing: 12,
             children: [
-              const Icon(Icons.people, size: 20),
-              const SizedBox(width: 8),
-              const Text('Número de personas:'),
-              const SizedBox(width: 16),
-              SizedBox(
-                width: 100,
-                child: TextField(
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
-                    contentPadding: EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.people, size: 20, color: Colors.orange),
+                  const SizedBox(width: 8),
+                  const Text('Personas:'),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 80,
+                    height: 36,
+                    child: TextField(
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 0,
+                        ),
+                      ),
+                      textAlign: TextAlign.center,
+                      controller: TextEditingController(
+                        text: state.equalSplitPeople.toString(),
+                      ),
+                      onChanged: (value) {
+                        final people = int.tryParse(value);
+                        if (people != null) {
+                          viewModel.setEqualSplitPeople(people);
+                        }
+                      },
                     ),
                   ),
-                  controller: TextEditingController(
-                    text: state.equalSplitPeople.toString(),
-                  ),
-                  onChanged: (value) {
-                    final people = int.tryParse(value);
-                    if (people != null) {
-                      viewModel.setEqualSplitPeople(people);
-                    }
-                  },
-                ),
+                ],
               ),
-              const SizedBox(width: 16),
               ElevatedButton(
                 onPressed: () => viewModel.applyEqualSplit(),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.orange,
                   foregroundColor: Colors.white,
+                  minimumSize: const Size(100, 36),
                 ),
-                child: const Text('Dividir'),
+                child: const Text('Dividir Items'),
               ),
             ],
           ),
@@ -416,23 +503,46 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal> {
     );
   }
 
-  Widget _buildFooter(state, viewModel) {
+  Widget _buildFooter(
+    SplitBillState state,
+    SplitBillViewModel viewModel,
+    bool isMobile,
+  ) {
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      mainAxisAlignment: MainAxisAlignment.end,
       children: [
-        TextButton(
+        if (state.canApplySplit)
+          Expanded(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: const Text(
+                'Todos los items asignados',
+                style: TextStyle(
+                  color: Colors.green,
+                  fontWeight: FontWeight.w600,
+                ),
+                textAlign: TextAlign.right,
+              ),
+            ),
+          ),
+        const SizedBox(width: 12),
+        OutlinedButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancelar División'),
+          child: const Text('Cancelar'),
         ),
+        const SizedBox(width: 12),
         ElevatedButton(
           onPressed: state.canApplySplit ? () => viewModel.applySplit() : null,
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.orange,
             foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+            padding: EdgeInsets.symmetric(
+              horizontal: isMobile ? 24 : 32,
+              vertical: 16,
+            ),
           ),
           child: const Text(
-            'Aplicar División',
+            'Confirmar División',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
           ),
         ),
@@ -478,8 +588,11 @@ class _ItemCard extends StatelessWidget {
               value: isSelected,
               onChanged: (_) => onTap(),
               activeColor: Colors.orange,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(4),
+              ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 8),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -492,7 +605,7 @@ class _ItemCard extends StatelessWidget {
                     ),
                   ),
                   if (item.notes != null && item.notes!.isNotEmpty) ...[
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 2),
                     Text(
                       item.notes!,
                       style: TextStyle(
@@ -512,11 +625,10 @@ class _ItemCard extends StatelessWidget {
                   'x${item.quantity.toInt()}',
                   style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                 ),
-                const SizedBox(height: 4),
                 Text(
                   'RD\$ ${item.total.toStringAsFixed(2)}',
                   style: const TextStyle(
-                    fontSize: 14,
+                    fontSize: 13,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -533,8 +645,14 @@ class _CheckCard extends StatelessWidget {
   final OrderCheck check;
   final List<OrderItem> items;
   final VoidCallback? onDelete;
+  final Function(String) onRemoveItem;
 
-  const _CheckCard({required this.check, required this.items, this.onDelete});
+  const _CheckCard({
+    required this.check,
+    required this.items,
+    this.onDelete,
+    required this.onRemoveItem,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -544,13 +662,20 @@ class _CheckCard extends StatelessWidget {
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.grey[300]!),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x08000000),
+            blurRadius: 4,
+            offset: Offset(0, 2),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Header
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
             decoration: BoxDecoration(
               color: Colors.grey[100],
               borderRadius: const BorderRadius.only(
@@ -566,6 +691,7 @@ class _CheckCard extends StatelessWidget {
                   style: const TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
+                    color: Colors.black87,
                   ),
                 ),
                 if (onDelete != null)
@@ -573,6 +699,7 @@ class _CheckCard extends StatelessWidget {
                     icon: const Icon(Icons.delete_outline, size: 20),
                     onPressed: onDelete,
                     color: Colors.red,
+                    tooltip: 'Eliminar subcuenta',
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(),
                   ),
@@ -583,12 +710,12 @@ class _CheckCard extends StatelessWidget {
           // Items
           if (items.isEmpty)
             Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(24),
               child: Center(
                 child: Text(
                   'Sin productos asignados',
                   style: TextStyle(
-                    fontSize: 12,
+                    fontSize: 13,
                     color: Colors.grey[500],
                     fontStyle: FontStyle.italic,
                   ),
@@ -596,28 +723,56 @@ class _CheckCard extends StatelessWidget {
               ),
             )
           else
-            ListView.builder(
+            ListView.separated(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               itemCount: items.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
               itemBuilder: (context, index) {
                 final item = items[index];
                 return ListTile(
                   dense: true,
+                  visualDensity: VisualDensity.compact,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 0,
+                  ),
                   leading: Text(
                     'x${item.quantity.toInt()}',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey[700],
+                    ),
                   ),
                   title: Text(
                     item.productName,
                     style: const TextStyle(fontSize: 13),
                   ),
-                  trailing: Text(
-                    'RD\$ ${item.total.toStringAsFixed(2)}',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'RD\$ ${item.total.toStringAsFixed(2)}',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      IconButton(
+                        icon: const Icon(Icons.remove_circle_outline, size: 18),
+                        onPressed: () => onRemoveItem(item.id),
+                        color: Colors.red[300],
+                        tooltip: 'Remover',
+                        splashRadius: 16,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(
+                          minWidth: 24,
+                          minHeight: 24,
+                        ),
+                      ),
+                    ],
                   ),
                 );
               },
@@ -632,14 +787,20 @@ class _CheckCard extends StatelessWidget {
                 bottomLeft: Radius.circular(12),
                 bottomRight: Radius.circular(12),
               ),
+              border: Border(top: BorderSide(color: Colors.grey[200]!)),
             ),
             child: Column(
               children: [
                 _SummaryRow(label: 'Subtotal', value: check.subtotal),
                 const SizedBox(height: 4),
-                _SummaryRow(label: 'ITBIS', value: check.tax),
-                const Divider(height: 16),
-                _SummaryRow(label: 'Total', value: check.total, isBold: true),
+                _SummaryRow(label: 'ITBIS (18%)', value: check.tax),
+                const Divider(height: 12),
+                _SummaryRow(
+                  label: 'TOTAL',
+                  value: check.total,
+                  isBold: true,
+                  fontSize: 15,
+                ),
               ],
             ),
           ),
@@ -653,11 +814,13 @@ class _SummaryRow extends StatelessWidget {
   final String label;
   final double value;
   final bool isBold;
+  final double? fontSize;
 
   const _SummaryRow({
     required this.label,
     required this.value,
     this.isBold = false,
+    this.fontSize,
   });
 
   @override
@@ -668,16 +831,17 @@ class _SummaryRow extends StatelessWidget {
         Text(
           label,
           style: TextStyle(
-            fontSize: isBold ? 14 : 12,
+            fontSize: fontSize ?? (isBold ? 14 : 12),
             fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
-            color: Colors.grey[700],
+            color: Colors.grey[800],
           ),
         ),
         Text(
           'RD\$ ${value.toStringAsFixed(2)}',
           style: TextStyle(
-            fontSize: isBold ? 14 : 12,
+            fontSize: fontSize ?? (isBold ? 14 : 12),
             fontWeight: isBold ? FontWeight.bold : FontWeight.w600,
+            color: Colors.black87,
           ),
         ),
       ],

@@ -219,6 +219,7 @@ class SalesRepositoryImproved {
     String? customerRnc,
     String? cashierSessionId,
     double changeAmount = 0,
+    bool closeOrder = true,
   }) async {
     return DatabaseOperationWrapper.rpc(
       operationName: 'Procesar Pago',
@@ -240,11 +241,18 @@ class SalesRepositoryImproved {
 
           return Payment.fromMap(response);
         } on PostgrestException catch (e) {
-          final message = '${e.message} ${e.details ?? ''} ${e.hint ?? ''}'.toLowerCase();
-          final missingFn = message.contains('fn_process_payment_v2') ||
+          final message = '${e.message} ${e.details ?? ''} ${e.hint ?? ''}'
+              .toLowerCase();
+          final missingFn =
+              message.contains('fn_process_payment_v2') ||
               message.contains('fn_process_payment');
 
-          if (!missingFn) rethrow;
+          final isFkError =
+              e.code == '23503' &&
+              (message.contains('session_id') ||
+                  message.contains('foreign key'));
+
+          if (!missingFn && !isFkError) rethrow;
 
           return _processPaymentDirect(
             orderId: orderId,
@@ -256,6 +264,7 @@ class SalesRepositoryImproved {
             customerRnc: customerRnc,
             cashierSessionId: cashierSessionId,
             changeAmount: changeAmount,
+            closeOrder: closeOrder,
           );
         }
       },
@@ -272,6 +281,7 @@ class SalesRepositoryImproved {
     String? customerRnc,
     String? cashierSessionId,
     double changeAmount = 0,
+    bool closeOrder = true,
   }) async {
     final orderData = await _client
         .from('orders')
@@ -298,7 +308,9 @@ class SalesRepositoryImproved {
     businessId ??= await resolveBusinessIdOrNull(_client, 'auto');
 
     if (businessId == null) {
-      throw Exception('No se pudo determinar el negocio para registrar el pago.');
+      throw Exception(
+        'No se pudo determinar el negocio para registrar el pago.',
+      );
     }
 
     final paymentMethodData = await _client
@@ -317,27 +329,61 @@ class SalesRepositoryImproved {
     final paymentMethodCode = paymentMethodData['code'] as String?;
     final userId = _client.auth.currentUser?.id;
 
-    final paymentRow = await _client
-        .from('payments')
-        .insert({
-          'business_id': businessId,
-          'order_id': orderId,
-          'check_id': checkId,
-          'payment_method_id': resolvedPaymentMethodId,
-          'amount': amount,
-          'reference': reference,
-          'change_amount': changeAmount,
-          'status': 'completed',
-          if (userId != null) 'processed_by': userId,
-          if (cashierSessionId != null) 'session_id': cashierSessionId,
-        })
-        .select()
-        .single();
+    Map<String, dynamic> paymentRow;
 
-    await _client.rpc(
-      SalesQueries.rpcCloseOrderAndTable,
-      params: {'p_order_id': orderId, 'p_status': 'paid'},
-    );
+    try {
+      paymentRow = await _client
+          .from('payments')
+          .insert({
+            'business_id': businessId,
+            'order_id': orderId,
+            'check_id': checkId,
+            'payment_method_id': resolvedPaymentMethodId,
+            'amount': amount,
+            'reference': reference,
+            'change_amount': changeAmount,
+            'status': 'completed',
+            if (userId != null) 'processed_by': userId,
+            if (cashierSessionId != null) 'session_id': cashierSessionId,
+          })
+          .select()
+          .single();
+    } on PostgrestException catch (e) {
+      // 🛡️ RECOVERY: If session_id is invalid (FK Error), retry without it.
+      if (cashierSessionId != null &&
+          e.code == '23503' &&
+          (e.message.contains('session_id') ||
+              e.details.toString().contains('session_id'))) {
+        // Log warning
+        // debugPrint('⚠️ Invalid Cashier Session ID detected. Retrying payment without session link.');
+
+        paymentRow = await _client
+            .from('payments')
+            .insert({
+              'business_id': businessId,
+              'order_id': orderId,
+              'check_id': checkId,
+              'payment_method_id': resolvedPaymentMethodId,
+              'amount': amount,
+              'reference': reference,
+              'change_amount': changeAmount,
+              'status': 'completed',
+              if (userId != null) 'processed_by': userId,
+              // session_id specifically omitted
+            })
+            .select()
+            .single();
+      } else {
+        rethrow;
+      }
+    }
+
+    if (closeOrder) {
+      await _client.rpc(
+        SalesQueries.rpcCloseOrderAndTable,
+        params: {'p_order_id': orderId, 'p_status': 'paid'},
+      );
+    }
 
     if (paymentMethodCode == 'cash' && cashierSessionId != null) {
       try {

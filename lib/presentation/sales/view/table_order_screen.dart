@@ -6,8 +6,15 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
-import 'package:mangopos/presentation/payments/widgets/payment_modal.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
+import 'package:mangopos/presentation/sales/view/invoice_modal.dart';
+import 'package:mangopos/presentation/split_bill/widgets/split_bill_modal.dart';
+
+import 'package:mangopos/presentation/sales/widgets/precheck/pre_check_dialog.dart';
+import 'package:mangopos/presentation/sales/widgets/printer_selection_dialog.dart';
+import 'package:mangopos/data/models/printing_models.dart';
+
+import 'payment_split_screen.dart';
 
 const Color _salesSurface = Color(0xFFFFFFFF);
 const Color _salesDivider = Color(0xFFE9E6E2);
@@ -20,7 +27,7 @@ const Color _salesTotalColor = Color(0xFFFB7116); // mango fuerte
 const Color _salesTabActiveBg = Color(0xFFF3F0ED);
 
 const double _salesRadiusCard = 14;
-const double _salesRadiusButton = 20; // botones pill
+const double _salesRadiusButton = 12; // botones pill
 const double _salesRadiusField = 14;
 const double _salesRadiusTab = 12;
 
@@ -83,15 +90,13 @@ class _TableOrderScreenState extends ConsumerState<TableOrderScreen> {
         child: LayoutBuilder(
           builder: (context, constraints) {
             final width = constraints.maxWidth;
-            final isWide = width >= 1200;
-            final isMedium = width >= 900 && width < 1200;
-            final isStacked = width < 900;
+            final isDesktop = width >= 1200;
+            final isMobile = width < 600;
 
-            final cartWidth = isWide
-                ? 400.0
-                : isMedium
-                ? 360.0
-                : 320.0;
+            double cartWidth = 320.0;
+            if (isDesktop) {
+              cartWidth = 400.0;
+            }
 
             final cart = _CartView(tableCode: widget.tableCode);
             final catalog = _CatalogArea(
@@ -124,13 +129,19 @@ class _TableOrderScreenState extends ConsumerState<TableOrderScreen> {
               },
             );
 
-            if (isStacked) {
+            if (isMobile) {
               return Column(
                 children: [
-                  // Mobile: cart primero, luego catálogo
-                  Expanded(child: cart),
+                  // Mobile: cart primero (40%), luego catálogo (60%)
+                  Expanded(
+                    flex: 4,
+                    child: _CartView(
+                      tableCode: widget.tableCode,
+                      isStacked: true,
+                    ),
+                  ),
                   Container(height: 1, color: _salesDivider),
-                  Expanded(child: catalog),
+                  Expanded(flex: 6, child: catalog),
                 ],
               );
             }
@@ -146,9 +157,10 @@ class _TableOrderScreenState extends ConsumerState<TableOrderScreen> {
                     ).showSnackBar(SnackBar(content: Text('Accion: $action')));
                   },
                 ),
+                // Usamos ancho fijo según especificación (400px o 320px)
                 SizedBox(width: cartWidth, child: cart),
                 Container(width: 1, color: _salesDivider),
-                Expanded(child: catalog),
+                Expanded(child: catalog), // Resto disponible
               ],
             );
           },
@@ -163,23 +175,142 @@ class _TableOrderScreenState extends ConsumerState<TableOrderScreen> {
 // -----------------------------------------------------------------------------
 class _CartView extends ConsumerWidget {
   final String tableCode;
-  const _CartView({required this.tableCode});
+  final bool isStacked;
+  const _CartView({required this.tableCode, this.isStacked = false});
 
-  void _openPaymentModal(BuildContext context, WidgetRef ref, Order order) {
-    final parentContext = context;
-    showDialog(
-      context: parentContext,
-      builder: (context) => PaymentModal(
-        order: order,
-        onPaymentSuccess: () {
-          ref
-              .read(currentOrderProvider.notifier)
-              .refreshOrder(clearIfPaid: true);
-          if (parentContext.mounted) {
-            parentContext.go(AppRoutes.salesByZone);
+  // --- 🪄 UI HELPERS ----------------------------------------------------
+
+  void _openPaymentModal(
+    BuildContext context,
+    WidgetRef ref,
+    Order order,
+    double total,
+  ) {
+    // Usamos el tableCode disponible en la vista
+    final tableName = tableCode;
+
+    _showSmoothDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => PaymentSplitDialog(
+        orderId: order.id,
+        totalAmount: total,
+        tableName: tableName,
+      ),
+    ).then((result) async {
+      if (result == true) {
+        if (!context.mounted) return;
+
+        // Mostrar Modal de Factura
+        // 1. Obtener datos actualizados de pagos
+        try {
+          final salesRepo = ref.read(salesRepositoryProvider);
+          final payments = await salesRepo.getOrderPayments(order.id);
+          final items = await salesRepo.getOrderItems(order.id);
+
+          double totalChange = 0;
+          for (final p in payments) {
+            totalChange += p.changeAmount;
           }
+
+          if (context.mounted) {
+            _showSmoothDialog(
+              context: context,
+              barrierDismissible: false,
+              builder: (ctx) => InvoiceModal(
+                order:
+                    order, // Nota: idealmente refrescar la orden para estado 'paid'
+                items: items,
+                payments: payments,
+                tableName: tableName,
+                change: totalChange,
+                onNewSale: () {
+                  Navigator.of(ctx).pop();
+                  // Reset flow logic here if needed, e.g. back to zone
+                  context.go(AppRoutes.salesByZone);
+                },
+                onPrint: () {
+                  final invoiceData = {
+                    'title': '*** FACTURA ***',
+                    'restaurantName': 'MANGO POS RESTAURANT',
+                    'rnc': '101-00000-1',
+                    'phone': '809-555-0101',
+                    'tableName': tableName,
+                    'waiterName': 'Juan Pérez',
+                    'items': items
+                        .map(
+                          (i) => {
+                            'quantity': i.quantity,
+                            'name': i.productName,
+                            'price': i.total,
+                          },
+                        )
+                        .toList(),
+                    'subtotal': order.subtotal,
+                    'tax': order.tax,
+                    'total': order.total,
+                  };
+
+                  _handlePrintFlow(
+                    context,
+                    ref,
+                    'precheck', // Usamos el mismo formato de 'precheck' en el agente
+                    invoiceData,
+                  );
+                },
+              ),
+            );
+          }
+        } catch (e) {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Error al cargar factura: $e')),
+            );
+          }
+        }
+      }
+    });
+  }
+
+  void _openSplitBillModal(BuildContext context, WidgetRef ref, Order order) {
+    _showSmoothDialog(
+      context: context,
+      builder: (context) => SplitBillModal(
+        order: order,
+        onSplitApplied: () {
+          // Refrescar la orden actual
+          ref.read(currentOrderProvider.notifier).refreshOrder();
         },
       ),
+    );
+  }
+
+  /// Helper para transiciones suaves
+  Future<T?> _showSmoothDialog<T>({
+    required BuildContext context,
+    required WidgetBuilder builder,
+    bool barrierDismissible = true,
+  }) {
+    return showGeneralDialog<T>(
+      context: context,
+      barrierDismissible: barrierDismissible,
+      barrierLabel: 'Dismiss',
+      barrierColor: Colors.black54, // Fondo oscuro estándar
+      transitionDuration: const Duration(milliseconds: 300),
+      pageBuilder: (ctx, anim1, anim2) => builder(ctx),
+      transitionBuilder: (ctx, anim1, anim2, child) {
+        // Combinación de Fade y Scale para un efecto "Pop" suave
+        return FadeTransition(
+          opacity: CurvedAnimation(parent: anim1, curve: Curves.easeOut),
+          child: ScaleTransition(
+            scale: CurvedAnimation(
+              parent: anim1,
+              curve: Curves.easeOutBack, // Rebote muy sutil
+            ),
+            child: child,
+          ),
+        );
+      },
     );
   }
 
@@ -227,31 +358,33 @@ class _CartView extends ConsumerWidget {
 
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Mesa $tableCode',
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w600,
-                  color: _salesTextPrimary,
+        if (!isStacked)
+          Padding(
+            // Reducimos padding vertical aun más como solicitó el usuario
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Mesa $tableCode',
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w600,
+                    color: _salesTextPrimary,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                '$itemsCount productos',
-                style: const TextStyle(
-                  fontSize: 14,
-                  color: _salesTextSecondary,
+                const SizedBox(height: 4),
+                Text(
+                  '$itemsCount productos',
+                  style: const TextStyle(
+                    fontSize: 14,
+                    color: _salesTextSecondary,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-        Container(height: 1, color: _salesDivider),
+        if (!isStacked) Container(height: 1, color: _salesDivider),
         Expanded(
           child: allItems.isEmpty
               ? Center(
@@ -274,7 +407,7 @@ class _CartView extends ConsumerWidget {
                   ),
                 )
               : ListView(
-                  padding: const EdgeInsets.all(24),
+                  padding: EdgeInsets.all(isStacked ? 12 : 24),
                   children: [
                     if (groupedSentItems.isNotEmpty) ...[
                       const _SectionLabel(
@@ -299,6 +432,7 @@ class _CartView extends ConsumerWidget {
                               width: 52,
                               child: Text(
                                 'Cant.',
+                                textAlign: TextAlign.center,
                                 style: TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w600,
@@ -320,6 +454,7 @@ class _CartView extends ConsumerWidget {
                             SizedBox(width: 6),
                             Text(
                               'Precio',
+                              textAlign: TextAlign.right,
                               style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
@@ -372,6 +507,7 @@ class _CartView extends ConsumerWidget {
                               width: 52,
                               child: Text(
                                 'Cant.',
+                                textAlign: TextAlign.center,
                                 style: TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w600,
@@ -393,6 +529,7 @@ class _CartView extends ConsumerWidget {
                             SizedBox(width: 6),
                             Text(
                               'Precio',
+                              textAlign: TextAlign.right,
                               style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
@@ -420,7 +557,7 @@ class _CartView extends ConsumerWidget {
         ),
         Container(height: 1, color: _salesDivider),
         Padding(
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.all(isStacked ? 12 : 24),
           child: Column(
             children: [
               _SummaryRow(
@@ -459,6 +596,7 @@ class _CartView extends ConsumerWidget {
                             context,
                             ref,
                             orderState.order!,
+                            total,
                           ),
                     icon: Icons.payments_outlined,
                   ),
@@ -470,16 +608,55 @@ class _CartView extends ConsumerWidget {
                           label: 'Pre-Cuenta',
                           onPressed: () {
                             if (orderState.order != null) {
+                              // Preparar datos para el diálogo
+                              final preCheckData = {
+                                'restaurantName':
+                                    'MANGO POS RESTAURANT', // TODO: Obtener del negocio
+                                'rnc': '101-00000-1',
+                                'phone': '809-555-0101',
+                                'tableName': tableCode,
+                                'waiterName':
+                                    'Juan Pérez', // TODO: Obtener del usuario actual
+                                'items': sentItems.isNotEmpty
+                                    ? sentItems
+                                          .map(
+                                            (i) => {
+                                              'quantity': i.quantity,
+                                              'name': i.productName,
+                                              'price': i
+                                                  .total, // Corregido: total por item
+                                            },
+                                          )
+                                          .toList()
+                                    : allItems
+                                          .map(
+                                            (i) => {
+                                              'quantity': i.quantity,
+                                              'name': i.productName,
+                                              'price': i.total,
+                                            },
+                                          )
+                                          .toList(),
+                                'subtotal': subtotal,
+                                'tax': tax,
+                                'total': total,
+                              };
+
                               showDialog(
                                 context: context,
                                 barrierDismissible: true,
-                                builder: (ctx) => _PrebillDialog(
-                                  order: orderState.order!,
-                                  items: sentItems.isNotEmpty
-                                      ? sentItems
-                                      : allItems,
-                                  tableCode: tableCode,
-                                  waiterName: '--',
+                                builder: (ctx) => PreCheckDialog(
+                                  data: preCheckData,
+                                  onPrint: () async {
+                                    Navigator.pop(ctx);
+                                    await _handlePrintFlow(
+                                      context,
+                                      ref,
+                                      'precheck',
+                                      preCheckData,
+                                    );
+                                  },
+                                  onCancel: () => Navigator.pop(ctx),
                                 ),
                               );
                             }
@@ -491,11 +668,11 @@ class _CartView extends ConsumerWidget {
                       Expanded(
                         child: _SecondaryActionButton(
                           label: 'Dividir',
-                          onPressed: () {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('Dividir cuenta')),
-                            );
-                          },
+                          onPressed: () => _openSplitBillModal(
+                            context,
+                            ref,
+                            orderState.order!,
+                          ),
                           icon: Icons.call_split_rounded,
                         ),
                       ),
@@ -511,6 +688,7 @@ class _CartView extends ConsumerWidget {
                             context,
                             ref,
                             orderState.order!,
+                            total,
                           ),
                     icon: Icons.payments_rounded,
                   ),
@@ -521,6 +699,88 @@ class _CartView extends ConsumerWidget {
         ),
       ],
     );
+  }
+
+  Future<void> _handlePrintFlow(
+    BuildContext context,
+    WidgetRef ref,
+    String type,
+    Map<String, dynamic> data,
+  ) async {
+    try {
+      // 1. Obtener repositorio
+      final printRepo = ref.read(printingPrintersRepositoryProvider);
+
+      // 2. Cargar impresoras disponibles
+      final printersVm = ref.read(printingPrintersViewModelProvider.notifier);
+      var printers = ref.read(printingPrintersViewModelProvider).items;
+
+      if (printers.isEmpty) {
+        await printersVm.load(businessId: '');
+        printers = ref.read(printingPrintersViewModelProvider).items;
+      }
+
+      // Filtrar impresoras válidas con IP
+      final validPrinters = printers
+          .where((p) => (p.ip?.isNotEmpty ?? false))
+          .toList();
+
+      if (validPrinters.isEmpty) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No hay impresoras configuradas'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+
+      // 3. Mostrar diálogo de selección
+      if (!context.mounted) return;
+
+      final PrinterDevice? selected = await showDialog<PrinterDevice>(
+        context: context,
+        builder: (context) => PrinterSelectionDialog(printers: validPrinters),
+      );
+
+      if (selected == null) return; // Cancelado por usuario
+
+      // 4. Enviar al Agente Local
+      final jobPayload = {
+        'id': '${type.toUpperCase()}-${DateTime.now().millisecondsSinceEpoch}',
+        'printer': {
+          'type': 'network',
+          'ip': selected.ip?.split('/').first,
+          'port': 9100,
+        },
+        'content': {
+          'type': type, // 'precheck' o 'invoice'
+          'data': data,
+        },
+      };
+
+      await printRepo.printJobViaAgent(jobPayload);
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Imprimiendo en ${selected.name}...'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al imprimir: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 }
 
@@ -538,77 +798,85 @@ class _SalesToolsRail extends StatelessWidget {
         color: _salesSurface,
         border: Border(right: BorderSide(color: _salesDivider)),
       ),
-      child: Column(
-        children: [
-          const SizedBox(height: 16),
-          _RailButton(
-            icon: Icons.arrow_back_ios_new_rounded,
-            label: 'Regresar',
-            isPrimary: true,
-            onTap: onBack,
-          ),
-          const SizedBox(height: 16),
-          const Divider(height: 1, color: _salesDivider),
-          const SizedBox(height: 12),
-          const Text(
-            'OPCIONES',
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: _salesTextSecondary,
+      child: CustomScrollView(
+        slivers: [
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: Column(
+              children: [
+                const SizedBox(height: 16),
+                _RailButton(
+                  icon: Icons.arrow_back_ios_new_rounded,
+                  label: 'Regresar',
+                  isPrimary: true,
+                  onTap: onBack,
+                ),
+                const SizedBox(height: 16),
+                const Divider(height: 1, color: _salesDivider),
+                const SizedBox(height: 12),
+                const Text(
+                  'OPCIONES',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: _salesTextSecondary,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                _RailButton(
+                  icon: Icons.edit_note_rounded,
+                  label: 'Editar\nmesa',
+                  onTap: () => onAction('edit_table'),
+                ),
+                _RailButton(
+                  icon: Icons.logout_rounded,
+                  label: 'Liberar\nmesa',
+                  onTap: () => onAction('release_table'),
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Divider(height: 1, color: _salesDivider),
+                ),
+                _RailButton(
+                  icon: Icons.call_split_rounded,
+                  label: 'Dividir\ncuentas',
+                  onTap: () => onAction('split'),
+                ),
+                _RailButton(
+                  icon: Icons.merge_type_rounded,
+                  label: 'Unir\nmesas',
+                  onTap: () => onAction('merge'),
+                ),
+                _RailButton(
+                  icon: Icons.move_up_rounded,
+                  label: 'Mover\npedidos',
+                  onTap: () => onAction('move'),
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Divider(height: 1, color: _salesDivider),
+                ),
+                _RailButton(
+                  icon: Icons.percent_rounded,
+                  label: 'Desc.',
+                  onTap: () => onAction('discount'),
+                ),
+                _RailButton(
+                  icon: Icons.receipt_long_rounded,
+                  label: 'Vale\npago',
+                  onTap: () => onAction('voucher'),
+                ),
+                const Spacer(),
+                const SizedBox(height: 16),
+                _RailButton(
+                  icon: Icons.print_rounded,
+                  label: 'Imprimir',
+                  onTap: () => onAction('print'),
+                ),
+                const SizedBox(height: 16),
+              ],
             ),
           ),
-          const SizedBox(height: 8),
-          _RailButton(
-            icon: Icons.edit_note_rounded,
-            label: 'Editar\nmesa',
-            onTap: () => onAction('edit_table'),
-          ),
-          _RailButton(
-            icon: Icons.logout_rounded,
-            label: 'Liberar\nmesa',
-            onTap: () => onAction('release_table'),
-          ),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Divider(height: 1, color: _salesDivider),
-          ),
-          _RailButton(
-            icon: Icons.call_split_rounded,
-            label: 'Dividir\ncuentas',
-            onTap: () => onAction('split'),
-          ),
-          _RailButton(
-            icon: Icons.merge_type_rounded,
-            label: 'Unir\nmesas',
-            onTap: () => onAction('merge'),
-          ),
-          _RailButton(
-            icon: Icons.move_up_rounded,
-            label: 'Mover\npedidos',
-            onTap: () => onAction('move'),
-          ),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Divider(height: 1, color: _salesDivider),
-          ),
-          _RailButton(
-            icon: Icons.percent_rounded,
-            label: 'Desc.',
-            onTap: () => onAction('discount'),
-          ),
-          _RailButton(
-            icon: Icons.receipt_long_rounded,
-            label: 'Vale\npago',
-            onTap: () => onAction('voucher'),
-          ),
-          const Spacer(),
-          _RailButton(
-            icon: Icons.print_rounded,
-            label: 'Imprimir',
-            onTap: () => onAction('print'),
-          ),
-          const SizedBox(height: 16),
         ],
       ),
     );
@@ -631,7 +899,9 @@ class _RailButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = isPrimary ? _salesTotalColor : _salesTextPrimary;
-    final bg = isPrimary ? _salesTotalColor.withOpacity(0.12) : _salesSurface;
+    final bg = isPrimary
+        ? _salesTotalColor.withValues(alpha: 0.12)
+        : _salesSurface;
 
     return InkWell(
       onTap: onTap,
@@ -853,14 +1123,14 @@ class _ActionButton extends StatelessWidget {
         style:
             ElevatedButton.styleFrom(
               backgroundColor: background,
-              disabledBackgroundColor: background.withOpacity(0.35),
+              disabledBackgroundColor: background.withValues(alpha: 0.35),
               elevation: 0,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(_salesRadiusButton),
               ),
             ).copyWith(
-              overlayColor: MaterialStateProperty.all(
-                Colors.white.withOpacity(0.08),
+              overlayColor: WidgetStateProperty.all(
+                Colors.white.withValues(alpha: 0.08),
               ),
             ),
       ),
@@ -910,561 +1180,10 @@ class _SecondaryActionButton extends StatelessWidget {
 // ---------------------------------------------------------------------------
 // Pre-Cuenta Dialog
 // ---------------------------------------------------------------------------
-class _PrebillDialog extends StatelessWidget {
-  final Order order;
-  final List<dynamic> items;
-  final String tableCode;
-  final String waiterName;
-
-  const _PrebillDialog({
-    required this.order,
-    required this.items,
-    required this.tableCode,
-    required this.waiterName,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final currency = NumberFormat('#,##0.00', 'en_US');
-    final date = DateFormat('dd/MM/yyyy').format(order.createdAt);
-    final time = DateFormat('HH:mm').format(order.createdAt);
-    final subtotal = order.subtotal;
-    final tax = order.tax;
-    final total = order.total;
-
-    return Dialog(
-      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-      backgroundColor: Colors.white,
-      surfaceTintColor: Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 420),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 12, 8),
-              child: Row(
-                children: [
-                  const Text(
-                    'Pre-Cuenta',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w700,
-                      color: _salesTextPrimary,
-                    ),
-                  ),
-                  const Spacer(),
-                  _CloseBadgeButton(onTap: () => Navigator.of(context).pop()),
-                ],
-              ),
-            ),
-            const Divider(color: _salesDivider, height: 1),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
-              child: Column(
-                children: [
-                  const Text(
-                    'MangoPOS Restaurant',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                      color: _salesTextPrimary,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    'RNC: 131-12345-6\nTel: (809) 555-0123',
-                    style: TextStyle(fontSize: 13, color: _salesTextSecondary),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
-            ),
-            const Divider(color: _salesDivider, height: 1),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 14, 24, 10),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text.rich(
-                          TextSpan(
-                            text: 'Mesa: ',
-                            style: const TextStyle(
-                              fontSize: 13,
-                              color: _salesTextSecondary,
-                            ),
-                            children: [
-                              TextSpan(
-                                text: tableCode,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  color: _salesTextPrimary,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Fecha: $date',
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: _salesTextSecondary,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Text(
-                          'Hora: $time',
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: _salesTextSecondary,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Mesero: $waiterName',
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: _salesTextSecondary,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const Divider(color: _salesDivider, height: 1),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 12, 24, 6),
-              child: Row(
-                children: const [
-                  SizedBox(
-                    width: 40,
-                    child: Text(
-                      'QTY',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: _salesTextSecondary,
-                        letterSpacing: 0.2,
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    child: Text(
-                      'DESCRIPCIÓN',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: _salesTextSecondary,
-                        letterSpacing: 0.2,
-                      ),
-                    ),
-                  ),
-                  Text(
-                    'PRECIO',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: _salesTextSecondary,
-                      letterSpacing: 0.2,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Column(
-                children: [
-                  for (final item in items) ...[
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 6),
-                      child: Row(
-                        children: [
-                          SizedBox(
-                            width: 40,
-                            child: Text(
-                              (item.quantity ?? 1).toStringAsFixed(
-                                (item.quantity ?? 1) % 1 == 0 ? 0 : 1,
-                              ),
-                              style: const TextStyle(
-                                fontSize: 13,
-                                color: _salesTextPrimary,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                          Expanded(
-                            child: Text(
-                              item.productName ?? '',
-                              style: const TextStyle(
-                                fontSize: 13,
-                                color: _salesTextPrimary,
-                              ),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          Text(
-                            'RD\$ ${currency.format(item.total)}',
-                            style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                              color: _salesTextPrimary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Divider(color: _salesDivider, height: 1),
-                  ],
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 12, 24, 8),
-              child: Column(
-                children: [
-                  _SummaryRow(
-                    label: 'Subtotal',
-                    value: 'RD\$ ${currency.format(subtotal)}',
-                  ),
-                  const SizedBox(height: 6),
-                  _SummaryRow(
-                    label: 'ITBIS (18%)',
-                    value: 'RD\$ ${currency.format(tax)}',
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        'TOTAL',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
-                          color: _salesTextPrimary,
-                        ),
-                      ),
-                      Text(
-                        'RD\$ ${currency.format(total)}',
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                          color: _salesTotalColor,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    '* Este documento no tiene validez fiscal *\nGracias por su preferencia',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: _salesTextSecondary,
-                      height: 1.3,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const Divider(color: _salesDivider, height: 1),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: _salesDivider),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(
-                            _salesRadiusButton,
-                          ),
-                        ),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                      ),
-                      child: const Text(
-                        'Cerrar',
-                        style: TextStyle(
-                          color: _salesTextPrimary,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: () {
-                        showDialog(
-                          context: context,
-                          builder: (ctx) => _PrinterSelectDialog(
-                            onSelect: (printer) {
-                              Navigator.of(ctx).pop();
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text('Enviando a $printer...'),
-                                ),
-                              );
-                            },
-                          ),
-                        );
-                      },
-                      icon: const Icon(
-                        Icons.print,
-                        color: Colors.white,
-                        size: 18,
-                      ),
-                      label: Text(
-                        'Imprimir',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 15,
-                        ),
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _salesTotalColor,
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(
-                            _salesRadiusButton,
-                          ),
-                        ),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Selector de impresora
 // ---------------------------------------------------------------------------
-class _PrinterSelectDialog extends ConsumerWidget {
-  final void Function(String printerId) onSelect;
-  const _PrinterSelectDialog({required this.onSelect});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final printersState = ref.watch(printingPrintersViewModelProvider);
-    final printersVm = ref.read(printingPrintersViewModelProvider.notifier);
-
-    // Trigger load safely outside the build phase to avoid "modify provider while building".
-    if (!printersState.isLoading && printersState.items.isEmpty) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        // Double-check to avoid duplicate calls if multiple frames queue this block.
-        final latest = ref.read(printingPrintersViewModelProvider);
-        if (!latest.isLoading && latest.items.isEmpty) {
-          printersVm.load(businessId: '');
-        }
-      });
-    }
-
-    String? selected = printersState.items.isNotEmpty
-        ? printersState.items.first.id
-        : null;
-
-    return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-      backgroundColor: Colors.white,
-      surfaceTintColor: Colors.white,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 460, maxHeight: 520),
-        child: StatefulBuilder(
-          builder: (ctx, setState) {
-            final items = ref.watch(printingPrintersViewModelProvider).items;
-            if (items.isNotEmpty && selected == null) {
-              selected = items.first.id;
-            }
-
-            return Padding(
-              padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
-                    children: [
-                      const Text(
-                        'Seleccionar impresora',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          color: _salesTextPrimary,
-                        ),
-                      ),
-                      const Spacer(),
-                      _CloseBadgeButton(
-                        onTap: () => Navigator.of(context).pop(),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  if (printersState.isLoading)
-                    const Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Center(child: CircularProgressIndicator()),
-                    )
-                  else if (items.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Text(
-                        'No hay impresoras configuradas.',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: _salesTextSecondary,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    )
-                  else
-                    Flexible(
-                      child: SingleChildScrollView(
-                        child: Column(
-                          children: items
-                              .map(
-                                (p) => RadioListTile<String>(
-                                  value: p.id,
-                                  groupValue: selected,
-                                  onChanged: (v) =>
-                                      setState(() => selected = v),
-                                  title: Text(
-                                    p.name,
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      color: _salesTextPrimary,
-                                    ),
-                                  ),
-                                  subtitle: p.ip != null
-                                      ? Text(
-                                          p.ip!,
-                                          style: const TextStyle(
-                                            fontSize: 12,
-                                            color: _salesTextSecondary,
-                                          ),
-                                        )
-                                      : null,
-                                  dense: true,
-                                  activeColor: _salesTotalColor,
-                                  contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 4,
-                                  ),
-                                ),
-                              )
-                              .toList(),
-                        ),
-                      ),
-                    ),
-                  const SizedBox(height: 14),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: () => Navigator.of(context).pop(),
-                          style: OutlinedButton.styleFrom(
-                            side: const BorderSide(color: _salesDivider),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(
-                                _salesRadiusButton,
-                              ),
-                            ),
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                          ),
-                          child: const Text(
-                            'Cancelar',
-                            style: TextStyle(
-                              color: _salesTextPrimary,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: selected == null
-                              ? null
-                              : () => onSelect(selected!),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: _salesTotalColor,
-                            disabledBackgroundColor: _salesTotalColor
-                                .withOpacity(0.4),
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(
-                                _salesRadiusButton,
-                              ),
-                            ),
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                          ),
-                          child: const Text(
-                            'Imprimir',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            );
-          },
-        ),
-      ),
-    );
-  }
-}
-
-class _CloseBadgeButton extends StatelessWidget {
-  final VoidCallback onTap;
-  const _CloseBadgeButton({required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        width: 34,
-        height: 34,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border.all(color: _salesTotalColor, width: 1.6),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: const Icon(Icons.close, size: 18, color: _salesTextPrimary),
-      ),
-    );
-  }
-}
 
 class _SentLineItem extends StatelessWidget {
   final String name;
@@ -1484,18 +1203,25 @@ class _SentLineItem extends StatelessWidget {
       child: Row(
         children: [
           // Cantidad
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: _salesDivider),
-            ),
-            child: Text(
-              qty.toStringAsFixed(qty % 1 == 0 ? 0 : 1),
-              style: const TextStyle(
-                fontWeight: FontWeight.w700,
-                color: _salesTextPrimary,
+          // Cantidad: Centrada en 52px y más compacta
+          SizedBox(
+            width: 52,
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: _salesDivider),
+                ),
+                child: Text(
+                  qty.toStringAsFixed(qty % 1 == 0 ? 0 : 1),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                    color: _salesTextPrimary,
+                  ),
+                ),
               ),
             ),
           ),

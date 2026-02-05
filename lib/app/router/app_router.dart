@@ -15,6 +15,7 @@ import 'package:mangopos/presentation/settings/more%20settings/system%20settings
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/users/view/roles_permissions_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/users/view/users_view.dart';
 import '../../presentation/auth/login/login_view.dart';
+import '../../tests/cache_test_page.dart';
 import '../../presentation/auth/register/register_step1_view.dart';
 import '../../presentation/auth/register/register_step2_view.dart';
 import '../../presentation/dashboard/dashboard_view.dart';
@@ -56,6 +57,10 @@ class AppRouter {
     routes: [
       // ---------- Auth ----------
       GoRoute(path: AppRoutes.login, builder: (_, __) => const LoginView()),
+      GoRoute(
+        path: AppRoutes.cacheTest,
+        builder: (_, __) => const CacheTestPage(),
+      ),
       GoRoute(
         path: AppRoutes.register,
         builder: (_, __) => const RegisterStep1View(),
