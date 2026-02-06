@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dart';
@@ -13,6 +14,7 @@ import 'package:mangopos/presentation/split_bill/widgets/split_bill_modal.dart';
 import 'package:mangopos/presentation/sales/widgets/precheck/pre_check_dialog.dart';
 import 'package:mangopos/presentation/sales/widgets/printer_selection_dialog.dart';
 import 'package:mangopos/data/models/printing_models.dart';
+import 'package:mangopos/services/printing/print_ticket_service.dart';
 
 import 'payment_split_screen.dart';
 
@@ -184,8 +186,9 @@ class _CartView extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     Order order,
-    double total,
-  ) {
+    double total, {
+    String? checkId,
+  }) {
     // Usamos el tableCode disponible en la vista
     final tableName = tableCode;
 
@@ -196,6 +199,7 @@ class _CartView extends ConsumerWidget {
         orderId: order.id,
         totalAmount: total,
         tableName: tableName,
+        checkId: checkId,
       ),
     ).then((result) async {
       if (result == true) {
@@ -256,6 +260,10 @@ class _CartView extends ConsumerWidget {
                     ref,
                     'precheck', // Usamos el mismo formato de 'precheck' en el agente
                     invoiceData,
+                    orderObj: order,
+                    orderItems: items,
+                    tableName: tableName,
+                    waiterName: 'Juan Pérez',
                   );
                 },
               ),
@@ -316,25 +324,82 @@ class _CartView extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final orderState = ref.watch(currentOrderProvider);
-    final allItems = orderState.items;
-    final itemsCount = allItems.length;
-    final orderTotal = orderState.order?.total ?? 0.0;
-    final orderSubtotal = orderState.order?.subtotal ?? 0.0;
-    final orderTax = orderState.order?.tax ?? 0.0;
-    final itemsTotal = allItems.fold<double>(
-      0.0,
-      (sum, item) => sum + item.total,
-    );
-    final total = orderTotal > 0 ? orderTotal : itemsTotal;
-    final subtotal = orderSubtotal > 0 ? orderSubtotal : itemsTotal;
-    final tax = orderTotal > 0 ? orderTax : 0.0;
-    final currency = NumberFormat('#,##0.00', 'en_US');
-    final sentItems = allItems.where((i) => i.status != 'draft').toList();
-    final draftItems = allItems.where((i) => i.status == 'draft').toList();
-    final hasItems = allItems.isNotEmpty;
+    final orderState = ref.watch(currentOrderProvider); // RESTORED
+    final allItems = orderState.items; // RESTORED
 
-    // Agrupar items enviados por nombre para evitar duplicados
+    final selectedCheckId = orderState.selectedCheckId;
+    final allChecks = orderState.checks;
+    final hasChecks = allChecks.length > 1;
+
+    // Filter Items
+    final List<OrderItem> displayedItems;
+    if (selectedCheckId != null) {
+      displayedItems = allItems
+          .where((i) => i.checkId == selectedCheckId)
+          .toList();
+    } else {
+      displayedItems = allItems;
+    }
+
+    // Calculate Totals based on View
+    double displayTotal = 0.0;
+    double displaySubtotal = 0.0;
+    double displayTax = 0.0;
+
+    if (selectedCheckId != null) {
+      final check = allChecks.firstWhere(
+        (c) => c.id == selectedCheckId,
+        orElse: () => OrderCheck(
+          id: 'temp',
+          orderId: '',
+          label: '',
+          position: 0,
+          isClosed: false,
+          subtotal: 0,
+          discounts: 0,
+          tax: 0,
+          total: 0,
+        ),
+      );
+      // If check exists use its totals, otherwise calculate from items
+      if (check.id != 'temp') {
+        displayTotal = check.total;
+        displaySubtotal = check.subtotal;
+        displayTax = check.tax;
+      } else {
+        // Fallback calculation
+        displayTotal = displayedItems.fold(0.0, (sum, i) => sum + i.total);
+        displaySubtotal = displayedItems.fold(
+          0.0,
+          (sum, i) => sum + i.subtotal,
+        );
+        displayTax = displayedItems.fold(0.0, (sum, i) => sum + i.tax);
+      }
+    } else {
+      // Global View
+      displayTotal = orderState.order?.total ?? 0.0;
+      displaySubtotal = orderState.order?.subtotal ?? 0.0;
+      displayTax = orderState.order?.tax ?? 0.0;
+      // If order total is 0 (e.g. optimistic), sum items
+      if (displayTotal == 0 && displayedItems.isNotEmpty) {
+        displayTotal = displayedItems.fold(0.0, (sum, i) => sum + i.total);
+        displaySubtotal = displayedItems.fold(
+          0.0,
+          (sum, i) => sum + i.subtotal,
+        );
+        displayTax = displayedItems.fold(0.0, (sum, i) => sum + i.tax);
+      }
+    }
+
+    final currency = NumberFormat('#,##0.00', 'en_US');
+
+    // Group items for display
+    final sentItems = displayedItems.where((i) => i.status != 'draft').toList();
+    final draftItems = displayedItems
+        .where((i) => i.status == 'draft')
+        .toList();
+    final itemsCount = displayedItems.length; // Count of visible items
+
     final Map<String, _GroupedSentItem> groupedSent = {};
     for (final item in sentItems) {
       final name = item.productName ?? 'Producto';
@@ -360,18 +425,41 @@ class _CartView extends ConsumerWidget {
       children: [
         if (!isStacked)
           Padding(
-            // Reducimos padding vertical aun más como solicitó el usuario
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Mesa $tableCode',
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w600,
-                    color: _salesTextPrimary,
-                  ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Mesa $tableCode',
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w600,
+                        color: _salesTextPrimary,
+                      ),
+                    ),
+                    if (selectedCheckId != null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Text(
+                          'Subcuenta',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Colors.blue,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
                 const SizedBox(height: 4),
                 Text(
@@ -384,24 +472,83 @@ class _CartView extends ConsumerWidget {
               ],
             ),
           ),
-        if (!isStacked) Container(height: 1, color: _salesDivider),
+
+        // CHECK SELECTOR (TABS)
+        if (hasChecks)
+          Container(
+            height: 110,
+            width: double.infinity,
+            decoration: const BoxDecoration(
+              border: Border(bottom: BorderSide(color: _salesDivider)),
+            ),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  _BigCheckSelector(
+                    label: 'TODAS',
+                    isSelected: selectedCheckId == null,
+                    onTap: () => ref
+                        .read(currentOrderProvider.notifier)
+                        .selectCheck(null),
+                    itemCount: allItems.length,
+                    isGlobal: true,
+                  ),
+                  const SizedBox(width: 8),
+                  ...allChecks
+                      .where(
+                        (c) => !hasChecks || c.position > 1,
+                      ) // Ocultar cuenta principal si esta dividida
+                      .map((check) {
+                        final isSelected = check.id == selectedCheckId;
+                        final checkItemsCount = allItems
+                            .where((i) => i.checkId == check.id)
+                            .length;
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: _BigCheckSelector(
+                            label: check.label.isEmpty
+                                ? 'C${check.position}'
+                                : check.label,
+                            isSelected: isSelected,
+                            itemCount: checkItemsCount,
+                            onTap: () => ref
+                                .read(currentOrderProvider.notifier)
+                                .selectCheck(check.id),
+                          ),
+                        );
+                      }),
+                ],
+              ),
+            ),
+          ),
+
+        if (!isStacked && !hasChecks)
+          Container(height: 1, color: _salesDivider),
+
         Expanded(
-          child: allItems.isEmpty
+          child: displayedItems.isEmpty
               ? Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
-                    children: const [
-                      Text(
-                        'No hay productos en el carrito',
+                    children: [
+                      const Text(
+                        'No hay productos',
                         style: TextStyle(
                           fontSize: 14,
                           color: _salesTextSecondary,
                         ),
                       ),
-                      SizedBox(height: 4),
+                      const SizedBox(height: 4),
                       Text(
-                        'Selecciona productos del menú',
-                        style: TextStyle(fontSize: 13, color: _salesTextHint),
+                        selectedCheckId != null
+                            ? 'Esta subcuenta está vacía'
+                            : 'Selecciona productos del menú',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: _salesTextHint,
+                        ),
                       ),
                     ],
                   ),
@@ -490,13 +637,13 @@ class _CartView extends ConsumerWidget {
                         color: Color(0xFFF59E0B),
                       ),
                       const SizedBox(height: 8),
-                      // Encabezado de columnas
+                      // Encabezado
                       Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 8,
                           vertical: 6,
                         ),
-                        decoration: BoxDecoration(
+                        decoration: const BoxDecoration(
                           border: Border(
                             bottom: BorderSide(color: _salesDivider),
                           ),
@@ -562,23 +709,31 @@ class _CartView extends ConsumerWidget {
             children: [
               _SummaryRow(
                 label: 'Subtotal',
-                value: 'RD\$ ${currency.format(subtotal)}',
+                value: 'RD\$ ${currency.format(displaySubtotal)}',
               ),
               const SizedBox(height: 8),
               _SummaryRow(
                 label: 'ITBIS',
-                value: 'RD\$ ${currency.format(tax)}',
+                value: 'RD\$ ${currency.format(displayTax)}',
               ),
               const SizedBox(height: 12),
               _SummaryRow(
                 label: 'Total',
-                value: 'RD\$ ${currency.format(total)}',
+                value: 'RD\$ ${currency.format(displayTotal)}',
                 valueColor: _salesTotalColor,
                 valueWeight: FontWeight.w700,
               ),
-              if (hasItems) ...[
+
+              // REMOVED OLD SPLIT PREVIEW PANEL
+              if (allItems.isNotEmpty) ...[
+                // Use allItems check to keep buttons visible even if view is empty? No prefer items check.
                 const SizedBox(height: 16),
                 if (draftItems.isNotEmpty) ...[
+                  // BOTON ENVIAR A COCINA (Show if there are DRAFT items in CURRENT view? Or global?
+                  // Spec says: "Enviar a Cocina: Comportamiento NO cambia. Envía productos pendientes."
+                  // So we should probably allow sending order if there are drafts, regardless of filters.
+                  // But usually we interact with what we see.
+                  // Let's stick to showing buttons if current view has drafts.
                   _ActionButton(
                     label: 'Enviar a Cocina',
                     background: _salesKitchenButton,
@@ -587,20 +742,30 @@ class _CartView extends ConsumerWidget {
                     icon: Icons.soup_kitchen_outlined,
                   ),
                   const SizedBox(height: 12),
+                  // Pagar solo visible si no hay drafts? Or always?
+                  // Usually you can pay what is sent.
+                  // Existing code only showed Pay if drafts exist alongside Send?
+                  // It seems draft items replace payment flow until sent?
+                  // Let's keep existing logic: if drafts, show Pay AND Send? No, usually Send first.
+                  // Original code showed BOTH.
                   _ActionButton(
-                    label: 'Pagar RD\$ ${currency.format(total)}',
+                    label: 'Pagar RD\$ ${currency.format(displayTotal)}',
                     background: _salesPayButton,
-                    onPressed: orderState.order == null || total <= 0
+                    onPressed: orderState.order == null || displayTotal <= 0
                         ? null
                         : () => _openPaymentModal(
                             context,
                             ref,
                             orderState.order!,
-                            total,
+                            displayTotal,
+                            checkId: selectedCheckId, // Pass Checks ID!
                           ),
                     icon: Icons.payments_outlined,
                   ),
-                ] else if (sentItems.isNotEmpty) ...[
+                ] else if (sentItems.isNotEmpty ||
+                    (selectedCheckId != null && displayedItems.isNotEmpty)) ...[
+                  // If items are sent, show Pre-Check, Split/Edit, Pay
+                  // Also if filtered by check and has items (even if sent status is diff?)
                   Row(
                     children: [
                       Expanded(
@@ -608,38 +773,25 @@ class _CartView extends ConsumerWidget {
                           label: 'Pre-Cuenta',
                           onPressed: () {
                             if (orderState.order != null) {
-                              // Preparar datos para el diálogo
                               final preCheckData = {
-                                'restaurantName':
-                                    'MANGO POS RESTAURANT', // TODO: Obtener del negocio
+                                'restaurantName': 'MANGO POS RESTAURANT',
                                 'rnc': '101-00000-1',
                                 'phone': '809-555-0101',
-                                'tableName': tableCode,
-                                'waiterName':
-                                    'Juan Pérez', // TODO: Obtener del usuario actual
-                                'items': sentItems.isNotEmpty
-                                    ? sentItems
-                                          .map(
-                                            (i) => {
-                                              'quantity': i.quantity,
-                                              'name': i.productName,
-                                              'price': i
-                                                  .total, // Corregido: total por item
-                                            },
-                                          )
-                                          .toList()
-                                    : allItems
-                                          .map(
-                                            (i) => {
-                                              'quantity': i.quantity,
-                                              'name': i.productName,
-                                              'price': i.total,
-                                            },
-                                          )
-                                          .toList(),
-                                'subtotal': subtotal,
-                                'tax': tax,
-                                'total': total,
+                                'tableName':
+                                    '$tableCode ${selectedCheckId != null ? "(Cuentas Separadas)" : ""}',
+                                'waiterName': 'Juan Pérez',
+                                'items': displayedItems
+                                    .map(
+                                      (i) => {
+                                        'quantity': i.quantity,
+                                        'name': i.productName,
+                                        'price': i.total,
+                                      },
+                                    )
+                                    .toList(),
+                                'subtotal': displaySubtotal,
+                                'tax': displayTax,
+                                'total': displayTotal,
                               };
 
                               showDialog(
@@ -654,6 +806,10 @@ class _CartView extends ConsumerWidget {
                                       ref,
                                       'precheck',
                                       preCheckData,
+                                      orderObj: orderState.order!,
+                                      orderItems: displayedItems,
+                                      tableName: preCheckData['tableName'] as String?,
+                                      waiterName: preCheckData['waiterName'] as String?,
                                     );
                                   },
                                   onCancel: () => Navigator.pop(ctx),
@@ -667,28 +823,31 @@ class _CartView extends ConsumerWidget {
                       const SizedBox(width: 12),
                       Expanded(
                         child: _SecondaryActionButton(
-                          label: 'Dividir',
+                          label: hasChecks ? 'Editar cuentas' : 'Dividir',
                           onPressed: () => _openSplitBillModal(
                             context,
                             ref,
                             orderState.order!,
                           ),
-                          icon: Icons.call_split_rounded,
+                          icon: hasChecks
+                              ? Icons.edit_note
+                              : Icons.call_split_rounded,
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 12),
                   _ActionButton(
-                    label: 'Pagar RD\$ ${currency.format(total)}',
+                    label: 'Pagar RD\$ ${currency.format(displayTotal)}',
                     background: _salesPayButton,
-                    onPressed: orderState.order == null || total <= 0
+                    onPressed: orderState.order == null || displayTotal <= 0
                         ? null
                         : () => _openPaymentModal(
                             context,
                             ref,
                             orderState.order!,
-                            total,
+                            displayTotal,
+                            checkId: selectedCheckId,
                           ),
                     icon: Icons.payments_rounded,
                   ),
@@ -705,8 +864,12 @@ class _CartView extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     String type,
-    Map<String, dynamic> data,
-  ) async {
+    Map<String, dynamic> data, {
+    Order? orderObj,
+    List<OrderItem>? orderItems,
+    String? tableName,
+    String? waiterName,
+  }) async {
     try {
       // 1. Obtener repositorio
       final printRepo = ref.read(printingPrintersRepositoryProvider);
@@ -748,20 +911,59 @@ class _CartView extends ConsumerWidget {
       if (selected == null) return; // Cancelado por usuario
 
       // 4. Enviar al Agente Local
-      final jobPayload = {
-        'id': '${type.toUpperCase()}-${DateTime.now().millisecondsSinceEpoch}',
-        'printer': {
-          'type': 'network',
-          'ip': selected.ip?.split('/').first,
-          'port': 9100,
-        },
-        'content': {
-          'type': type, // 'precheck' o 'invoice'
-          'data': data,
-        },
-      };
+      final ip = selected.ip?.split('/').first;
+      if (ip == null || ip.isEmpty) {
+        throw Exception('La impresora seleccionada no tiene IP configurada.');
+      }
+      const fallbackPort = 9100;
 
-      await printRepo.printJobViaAgent(jobPayload);
+      // Si es precuenta y tenemos los objetos, generamos los bytes en Flutter
+      if (type == 'precheck' && orderObj != null && orderItems != null) {
+        final ticket = PrintTicketService.generatePrecheck(
+          order: orderObj,
+          items: orderItems,
+          tableName: tableName ?? 'Mesa',
+          waiterName: waiterName,
+          businessName: data['restaurantName'] as String?,
+          businessAddress: data['address'] as String?,
+          businessPhone: data['phone'] as String?,
+        );
+        if (kIsWeb) {
+          final up = await printRepo.isAgentUp();
+          if (!up) {
+            throw Exception(
+              'Para imprimir desde la Web necesitas el Agente LAN activo en tu PC.',
+            );
+          }
+          await printRepo.printRawViaAgent(
+            ip: ip,
+            port: fallbackPort,
+            data: ticket.escPosCommands,
+          );
+        } else {
+          // En nativo: imprimir directo por TCP
+          await printRepo.printRawDirectTcp(
+            ip: ip,
+            port: fallbackPort,
+            data: ticket.escPosCommands,
+          );
+        }
+      } else {
+        // Fallback: payload clásico
+        final jobPayload = {
+          'id': '${type.toUpperCase()}-${DateTime.now().millisecondsSinceEpoch}',
+          'printer': {
+            'type': 'network',
+            'ip': ip,
+            'port': fallbackPort,
+          },
+          'content': {
+            'type': type, // 'precheck' o 'invoice'
+            'data': data,
+          },
+        };
+        await printRepo.printJobViaAgent(jobPayload);
+      }
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -781,6 +983,131 @@ class _CartView extends ConsumerWidget {
         );
       }
     }
+  }
+}
+
+class _BigCheckSelector extends StatelessWidget {
+  final String label;
+  final bool isSelected;
+  final VoidCallback onTap;
+  final int itemCount;
+  final bool isGlobal;
+
+  const _BigCheckSelector({
+    required this.label,
+    required this.isSelected,
+    required this.onTap,
+    this.itemCount = 0,
+    this.isGlobal = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    const primaryColor = Color(0xFFFB7116);
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 100,
+        height: 90,
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: isSelected ? primaryColor : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: isSelected
+              ? null
+              : Border.all(color: const Color(0xFFE5E7EB), width: 1.5),
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: primaryColor.withOpacity(0.4),
+                    blurRadius: 8,
+                    offset: const Offset(0, 4),
+                  ),
+                ]
+              : null,
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            // Icons Row
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: isGlobal
+                  ? [
+                      _buildIconBox(isSelected),
+                      const SizedBox(width: 4),
+                      _buildIconBox(isSelected),
+                      const SizedBox(width: 4),
+                      _buildIconBox(isSelected),
+                    ]
+                  : [_buildIconBox(isSelected)],
+            ),
+            const SizedBox(height: 8),
+            // Label
+            Text(
+              label,
+              style: TextStyle(
+                color: isSelected ? Colors.white : const Color(0xFF374151),
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
+              ),
+            ),
+            const SizedBox(height: 4),
+            // Items Count
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  '$itemCount',
+                  style: TextStyle(
+                    color: isSelected
+                        ? Colors.white.withOpacity(0.9)
+                        : const Color(0xFF6B7280),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Icon(
+                  Icons.shopping_cart_outlined,
+                  size: 14,
+                  color: isSelected
+                      ? Colors.white.withOpacity(0.9)
+                      : const Color(0xFF6B7280),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildIconBox(bool isSelected) {
+    return Container(
+      width: 16,
+      height: 16,
+      decoration: BoxDecoration(
+        color: isSelected
+            ? Colors.white.withOpacity(0.2)
+            : const Color(0xFFFFF7ED), // Orange 50
+        borderRadius: BorderRadius.circular(4),
+        border: isSelected
+            ? Border.all(color: Colors.white.withOpacity(0.4), width: 1)
+            : Border.all(color: const Color(0xFFFFEDD5), width: 1),
+      ),
+      child: Center(
+        child: Text(
+          '\$',
+          style: TextStyle(
+            color: isSelected ? Colors.white : const Color(0xFFFB7116),
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+    );
   }
 }
 

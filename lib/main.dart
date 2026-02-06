@@ -23,9 +23,9 @@ const int agentPort = 3000;
 ///   - executable: 'node'
 ///   - args: ['agent.js']
 const String agentExecutableWindows = 'node'; // o 'printer-service.exe'
-const List<String> agentArgsWindows = ['agent.js']; // [] si usas .exe
-const String agentWorkingDirWindows =
-    r'D:\MangoPos\Dev\supabase\printer-service';
+// Usa el agente local de MangoPOS (puerto 4000) ubicado en /agent/src/index.js
+const List<String> agentArgsWindows = ['src/index.js']; // [] si usas .exe
+const String agentWorkingDirWindows = r'D:\MangoPos\Dev\mangopos\agent';
 
 const String agentExecutableMac = 'node'; // o './printer-service'
 const List<String> agentArgsMac = ['agent.js']; // [] si usas binario

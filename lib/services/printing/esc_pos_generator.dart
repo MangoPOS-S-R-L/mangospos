@@ -12,6 +12,7 @@ class EscPosGenerator {
   final int paperWidth;
   final String encoding;
   final List<int> _buffer = [];
+  int _textWidthFactor = 1; // Factor de ampliación horizontal actual
 
   EscPosGenerator({this.paperWidth = 80, this.encoding = 'CP437'});
 
@@ -116,9 +117,14 @@ class EscPosGenerator {
 
   /// Establecer tamaño de texto
   void setTextSize({int width = 1, int height = 1}) {
-    final w = (width - 1).clamp(0, 7);
-    final h = (height - 1).clamp(0, 7);
+    final safeWidth = width.clamp(1, 8);
+    final safeHeight = height.clamp(1, 8);
+    final w = (safeWidth - 1).clamp(0, 7);
+    final h = (safeHeight - 1).clamp(0, 7);
     final value = (w << 4) | h;
+
+    // Guardamos el factor para ajustar el ancho disponible en textRow
+    _textWidthFactor = safeWidth;
     _buffer.addAll([GS, 0x21, value]); // GS !
   }
 
@@ -314,8 +320,9 @@ class EscPosGenerator {
   }
 
   int _getMaxChars() {
-    // Aproximación: 80mm ≈ 48 chars, 58mm ≈ 32 chars
-    return paperWidth == 80 ? 48 : 32;
+    final base = paperWidth == 80 ? 48 : 32;
+    final cols = (base / _textWidthFactor).floor();
+    return cols > 0 ? cols : 1;
   }
 
   String _formatDateTime(DateTime dt) {
@@ -326,3 +333,4 @@ class EscPosGenerator {
 
 /// Alineación de texto
 enum Alignment { left, center, right }
+

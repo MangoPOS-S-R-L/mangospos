@@ -109,6 +109,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   final SalesRepositoryImproved _salesRepo;
   final PrintingRepository _printingRepo;
   final String _orderId;
+  final String? _checkId;
   final String? _cashierSessionId;
 
   PaymentSplitViewModel(
@@ -116,8 +117,10 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     this._printingRepo,
     this._orderId,
     double total, {
+    String? checkId,
     String? cashierSessionId,
-  }) : _cashierSessionId = cashierSessionId,
+  }) : _checkId = checkId,
+       _cashierSessionId = cashierSessionId,
        super(PaymentSplitState(totalAmount: total)) {
     _loadOrderForReceipt();
   }
@@ -294,10 +297,14 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
         await _salesRepo
             .processPayment(
               orderId: _orderId,
+              checkId: _checkId,
               paymentMethodId: methodId,
               amount: tx.amount,
               changeAmount: isLast ? state.change : 0,
-              closeOrder: isLast,
+              closeOrder:
+                  isLast &&
+                  _checkId ==
+                      null, // Only close full order if not check payment? Or check backend logic.
               cashierSessionId: _cashierSessionId,
             )
             .catchError((e) async {
@@ -310,10 +317,11 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
                 );
                 return await _salesRepo.processPayment(
                   orderId: _orderId,
+                  checkId: _checkId,
                   paymentMethodId: methodId,
                   amount: tx.amount,
                   changeAmount: isLast ? state.change : 0,
-                  closeOrder: isLast,
+                  closeOrder: isLast && _checkId == null,
                   cashierSessionId: null, // explicit null
                 );
               }
@@ -412,7 +420,7 @@ final paymentSplitProvider =
     StateNotifierProvider.family<
       PaymentSplitViewModel,
       PaymentSplitState,
-      (String, double)
+      (String, double, String?)
     >((ref, params) {
       final salesRepo = SalesRepositoryImproved(Supabase.instance.client);
       final printingRepo = ref.read(printingPrintersRepositoryProvider);
@@ -422,8 +430,9 @@ final paymentSplitProvider =
       return PaymentSplitViewModel(
         salesRepo,
         printingRepo,
-        params.$1,
-        params.$2,
+        params.$1, // orderId
+        params.$2, // amount
+        checkId: params.$3, // checkId
         cashierSessionId: sessionId,
       );
     });

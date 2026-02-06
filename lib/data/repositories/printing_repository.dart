@@ -1,4 +1,6 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'dart:io';
+import 'dart:async';
 
 import 'package:mangopos/core/services/local_print_service.dart';
 
@@ -351,6 +353,31 @@ class PrintingRepository {
     if (!success) {
       throw Exception('El agente no pudo completar la impresión');
     }
+  }
+
+  /// Enviar datos ESC/POS ya formateados (raw) vía agente
+  Future<void> printRawViaAgent({
+    required String ip,
+    int port = 9100,
+    required List<int> data,
+  }) async {
+    final ok = await _localService.printRawData(ip: ip, port: port, data: data);
+    if (!ok) {
+      throw Exception('El agente local rechazó los datos RAW');
+    }
+  }
+
+  /// Enviar datos ESC/POS directos por TCP (solo plataformas nativas)
+  Future<void> printRawDirectTcp({
+    required String ip,
+    int port = 9100,
+    required List<int> data,
+    Duration timeout = const Duration(seconds: 3),
+  }) async {
+    final socket = await Socket.connect(ip, port, timeout: timeout);
+    socket.add(data);
+    await socket.flush();
+    await socket.close();
   }
 
   /// Imprimir Job genérico vía Agente (Público)

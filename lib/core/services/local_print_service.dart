@@ -65,4 +65,34 @@ class LocalPrintService {
       throw Exception('Failed to communicate with Local Agent');
     }
   }
+
+  /// Enviar datos RAW (base64) directo a /api/printers/raw
+  Future<bool> printRawData({
+    required String ip,
+    int port = 9100,
+    required List<int> data,
+  }) async {
+    try {
+      final payload = {
+        'ip': ip,
+        'port': port,
+        'dataBase64': base64Encode(data),
+      };
+
+      final response = await http.post(
+        Uri.parse('$_baseUrl/api/printers/raw'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode(payload),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        return data['ok'] == true;
+      }
+      return false;
+    } catch (e) {
+      debugPrint('Error sending raw data: $e');
+      throw Exception('Failed to communicate with Local Agent');
+    }
+  }
 }

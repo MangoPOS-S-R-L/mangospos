@@ -35,17 +35,47 @@ class Order extends Equatable {
   }
 
   Map<String, dynamic> toMap() => {
-        'id': id,
-        'session_id': sessionId,
-        'status_ext': status,
-        'subtotal': subtotal,
-        'discounts': discounts,
-        'tax': tax,
-        'total': total,
-        'created_at': createdAt.toIso8601String(),
-      };
+    'id': id,
+    'session_id': sessionId,
+    'status_ext': status,
+    'subtotal': subtotal,
+    'discounts': discounts,
+    'tax': tax,
+    'total': total,
+    'created_at': createdAt.toIso8601String(),
+  };
+
+  Order copyWith({
+    String? id,
+    String? sessionId,
+    String? status,
+    double? subtotal,
+    double? discounts,
+    double? tax,
+    double? total,
+    DateTime? createdAt,
+  }) {
+    return Order(
+      id: id ?? this.id,
+      sessionId: sessionId ?? this.sessionId,
+      status: status ?? this.status,
+      subtotal: subtotal ?? this.subtotal,
+      discounts: discounts ?? this.discounts,
+      tax: tax ?? this.tax,
+      total: total ?? this.total,
+      createdAt: createdAt ?? this.createdAt,
+    );
+  }
 
   @override
-  List<Object?> get props =>
-      [id, sessionId, status, subtotal, discounts, tax, total, createdAt];
+  List<Object?> get props => [
+    id,
+    sessionId,
+    status,
+    subtotal,
+    discounts,
+    tax,
+    total,
+    createdAt,
+  ];
 }

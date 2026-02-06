@@ -49,73 +49,54 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
           final padding = const EdgeInsets.all(AppSpacing.containerPadding);
           final double gap = AppSpacing.sectionGap;
 
-          return Align(
-            alignment: Alignment.topCenter,
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxl),
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(
-                    maxWidth: AppBreakpoints.maxContentWidth,
-                  ),
-                  child: Padding(
-                    padding: padding,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        // WELCOME CARD
-                        _WelcomeCard(isVertical: isMobile, viewModel: vm),
-                        SizedBox(height: gap),
+          return SingleChildScrollView(
+            padding: padding,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // WELCOME CARD
+                _WelcomeCard(isVertical: isMobile, viewModel: vm),
+                SizedBox(height: gap),
 
-                        // MAIN LAYOUT
-                        if (isSplitView)
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // LEFT COLUMN (Main Content)
-                              Expanded(
-                                flex: 2,
-                                child: Column(
-                                  children: [
-                                    _QuickActionsSection(width: width),
-                                    SizedBox(height: gap),
-                                    _SalesChart(
-                                      viewModel: vm,
-                                      isMobile: isMobile,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              SizedBox(width: gap),
-                              // RIGHT COLUMN (Sidebar: Active Tables)
-                              Expanded(
-                                flex: 1,
-                                child: _ActiveTablesWidget(
-                                  viewModel: vm,
-                                  isWide: isDesktopXL,
-                                ),
-                              ),
-                            ],
-                          )
-                        else
-                          // STACKED LAYOUT (Mobile & Tablet)
-                          Column(
-                            children: [
-                              _QuickActionsSection(width: width),
-                              SizedBox(height: gap),
-                              _SalesChart(viewModel: vm, isMobile: isMobile),
-                              SizedBox(height: gap),
-                              _ActiveTablesWidget(
-                                viewModel: vm,
-                                isWide: isDesktopXL,
-                              ),
-                            ],
-                          ),
-                      ],
-                    ),
+                // MAIN LAYOUT
+                if (isSplitView)
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // LEFT COLUMN (Main Content)
+                      Expanded(
+                        flex: 2,
+                        child: Column(
+                          children: [
+                            _QuickActionsSection(width: width),
+                            SizedBox(height: gap),
+                            _SalesChart(viewModel: vm, isMobile: isMobile),
+                          ],
+                        ),
+                      ),
+                      SizedBox(width: gap),
+                      // RIGHT COLUMN (Sidebar: Active Tables)
+                      Expanded(
+                        flex: 1,
+                        child: _ActiveTablesWidget(
+                          viewModel: vm,
+                          isWide: isDesktopXL,
+                        ),
+                      ),
+                    ],
+                  )
+                else
+                  // STACKED LAYOUT (Mobile & Tablet)
+                  Column(
+                    children: [
+                      _QuickActionsSection(width: width),
+                      SizedBox(height: gap),
+                      _SalesChart(viewModel: vm, isMobile: isMobile),
+                      SizedBox(height: gap),
+                      _ActiveTablesWidget(viewModel: vm, isWide: isDesktopXL),
+                    ],
                   ),
-                ),
-              ),
+              ],
             ),
           );
         },
@@ -1107,10 +1088,43 @@ class _ActiveTablesWidget extends StatelessWidget {
     Widget list;
     if (visibleSessions.isEmpty) {
       list = Container(
-        height: 160,
+        height: 200,
+        width: double.infinity,
         decoration: BoxDecoration(
-          color: AppColors.secondary.withOpacity(0.5),
+          color: AppColors.secondary.withOpacity(0.3),
           borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: AppColors.border.withOpacity(0.5)),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.5),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.table_restaurant_outlined,
+                size: 32,
+                color: AppColors.mutedForeground,
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'No hay mesas ocupadas',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: AppColors.foreground,
+              ),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Las mesas activas aparecerán aquí',
+              style: TextStyle(fontSize: 14, color: AppColors.mutedForeground),
+            ),
+          ],
         ),
       );
     } else if (isWide && visibleSessions.length > 3) {

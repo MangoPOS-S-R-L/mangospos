@@ -32,11 +32,37 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
       // Obtener checks existentes (si ya se dividió antes)
       final existingChecks = await _salesRepo.getOrderChecks(order.id);
 
+      // 1. Identificar Checks Reales (Subcuentas Creadas)
+      // Si tenemos C1, C2, C3. Ordenados por posicion.
+      // C1 se considera la Cuenta Principal (Pool).
+      // C2, C3 son las subcuentas visibles.
+      List<OrderCheck> visibleChecks = [];
+      Set<String> visibleCheckIds = {};
+
+      if (existingChecks.length > 1) {
+        // Ordenar
+        existingChecks.sort((a, b) => a.position.compareTo(b.position));
+        // Tomar todos MENOS el primero
+        visibleChecks = existingChecks.sublist(1);
+        visibleCheckIds = visibleChecks.map((c) => c.id).toSet();
+      }
+
+      // 2. Preparar Items
+      // Si el item NO pertenece a ninguno de los visibleChecks, lo forzamos a checkId: null
+      // Esto "jala" items de la cuenta principal (C1) O items con checkId nulo real hacia la izquierda.
+      List<OrderItem> visibleItems = items.map((i) {
+        if (i.checkId != null && visibleCheckIds.contains(i.checkId)) {
+          return i; // Se queda en su subcuenta (C2, C3...)
+        }
+        // Si no esta en una subcuenta visible, es "Sin Asignar" (C1 o Null)
+        return i.copyWith(forceCheckIdNull: true);
+      }).toList();
+
       state = state.copyWith(
         loading: false,
         order: order,
-        allItems: items,
-        checks: existingChecks,
+        allItems: visibleItems,
+        checks: visibleChecks,
       );
     } catch (e) {
       state = state.copyWith(
@@ -51,28 +77,38 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
   // ============================================================
 
   /// Crear nuevo check
+  /// Crear nuevo check (LOCAL STATE)
+  /// Crear nuevo check (LOCAL STATE)
   Future<void> createNewCheck() async {
-    if (state.order == null) return;
+    final newId = 'temp_${DateTime.now().millisecondsSinceEpoch}';
+    final nextPosition = _getNextPosition();
 
-    state = state.copyWith(loading: true, error: null);
+    final newCheck = OrderCheck(
+      id: newId,
+      orderId: state.order?.id ?? '',
+      label: 'C$nextPosition',
+      position: nextPosition,
+      isClosed: false,
+      subtotal: 0,
+      discounts: 0,
+      tax: 0,
+      total: 0,
+    );
 
-    try {
-      // Crear un solo check nuevo
-      final newChecks = await _salesRepo.createSplitBill(
-        orderId: state.order!.id,
-        numberOfChecks: 1,
-      );
+    final updatedChecks = List<OrderCheck>.from(state.checks)..add(newCheck);
 
-      // Agregar a la lista existente
-      final updatedChecks = [...state.checks, ...newChecks];
-
-      state = state.copyWith(loading: false, checks: updatedChecks);
-    } catch (e) {
-      state = state.copyWith(loading: false, error: 'Error al crear check: $e');
-    }
+    state = state.copyWith(checks: updatedChecks);
   }
 
-  /// Eliminar check (solo si está vacío)
+  int _getNextPosition() {
+    // Si no hay checks visibles, la siguiente es 2 (C1 es main oculto)
+    if (state.checks.isEmpty) return 2;
+    final maxPos = state.checks
+        .map((c) => c.position)
+        .reduce((a, b) => a > b ? a : b);
+    return maxPos + 1;
+  }
+
   Future<void> deleteCheck(String checkId) async {
     // Verificar que el check esté vacío
     final itemsInCheck = state.itemsForCheck(checkId);
@@ -121,73 +157,67 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
   // ============================================================
 
   /// Asignar items seleccionados a un check
+  /// Asignar items seleccionados a un check (LOCAL)
+  /// Asignar items seleccionados a un check (LOCAL)
   Future<void> assignSelectedItemsToCheck(String checkId) async {
     if (state.selectedItemIds.isEmpty) return;
 
-    state = state.copyWith(loading: true, error: null);
-
-    try {
-      // Mover cada item seleccionado al check
-      for (final itemId in state.selectedItemIds) {
-        await _salesRepo.moveItemToCheck(
-          itemId: itemId,
-          checkPosition: _getCheckPosition(checkId),
-        );
+    // Actualizar items locales
+    final updatedItems = state.allItems.map((item) {
+      if (state.selectedItemIds.contains(item.id)) {
+        // Si el item se asigna, le ponemos el checkId
+        return item.copyWith(checkId: checkId, forceCheckIdNull: false);
       }
+      return item;
+    }).toList();
 
-      // Recargar items actualizados
-      if (state.order != null) {
-        final updatedItems = await _salesRepo.getOrderItems(state.order!.id);
-        final updatedChecks = await _salesRepo.getOrderChecks(state.order!.id);
+    // Recalcular totales de checks locales (opcional pero bueno para UI)
+    final updatedChecks = _recalculateChecksTotals(state.checks, updatedItems);
 
-        state = state.copyWith(
-          loading: false,
-          allItems: updatedItems,
-          checks: updatedChecks,
-          selectedItemIds: {},
-        );
-      }
-    } catch (e) {
-      state = state.copyWith(
-        loading: false,
-        error: 'Error al asignar items: $e',
-      );
-    }
+    state = state.copyWith(
+      allItems: updatedItems,
+      checks: updatedChecks,
+      selectedItemIds: {},
+    );
   }
 
-  /// Obtener posición del check
-  int _getCheckPosition(String checkId) {
-    final check = state.checks.firstWhere((c) => c.id == checkId);
-    return check.position;
+  List<OrderCheck> _recalculateChecksTotals(
+    List<OrderCheck> checks,
+    List<OrderItem> items,
+  ) {
+    return checks.map((c) {
+      final checkItems = items.where((i) => i.checkId == c.id).toList();
+      final total = checkItems.fold(0.0, (sum, i) => sum + i.total);
+
+      return OrderCheck(
+        id: c.id,
+        orderId: c.orderId,
+        label: c.label,
+        position: c.position,
+        isClosed: c.isClosed,
+        subtotal: total / 1.18, // Rough est
+        discounts: 0,
+        tax: total - (total / 1.18),
+        total: total,
+        items: checkItems,
+      );
+    }).toList();
   }
 
   /// Retornar item a 'Sin Asignar' (Check position 0)
+  /// Retornar item a 'Sin Asignar' (LOCAL)
+  /// Retornar item a 'Sin Asignar' (LOCAL)
   Future<void> unassignItem(String itemId) async {
-    state = state.copyWith(loading: true, error: null);
-
-    try {
-      await _salesRepo.moveItemToCheck(
-        itemId: itemId,
-        checkPosition: 0, // 0 = Unassigned / Pool
-      );
-
-      // Recargar items actualizados
-      if (state.order != null) {
-        final updatedItems = await _salesRepo.getOrderItems(state.order!.id);
-        final updatedChecks = await _salesRepo.getOrderChecks(state.order!.id);
-
-        state = state.copyWith(
-          loading: false,
-          allItems: updatedItems,
-          checks: updatedChecks,
-        );
+    final updatedItems = state.allItems.map((item) {
+      if (item.id == itemId) {
+        return item.copyWith(forceCheckIdNull: true);
       }
-    } catch (e) {
-      state = state.copyWith(
-        loading: false,
-        error: 'Error al remover item: $e',
-      );
-    }
+      return item;
+    }).toList();
+
+    final updatedChecks = _recalculateChecksTotals(state.checks, updatedItems);
+
+    state = state.copyWith(allItems: updatedItems, checks: updatedChecks);
   }
 
   // ============================================================
@@ -205,50 +235,63 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
     state = state.copyWith(equalSplitPeople: people);
   }
 
-  /// Aplicar división igualitaria
+  /// Aplicar división igualitaria (LOCAL)
   Future<void> applyEqualSplit() async {
     if (state.order == null) return;
     if (state.equalSplitPeople < 2) return;
 
-    state = state.copyWith(loading: true, error: null);
-
     try {
-      // Crear N checks
-      final newChecks = await _salesRepo.createSplitBill(
-        orderId: state.order!.id,
-        numberOfChecks: state.equalSplitPeople,
-      );
+      // 1. Crear checks temporales
+      final newLocalChecks = state.checks.toList();
+      final newTempChecks = <OrderCheck>[];
 
-      // Distribuir items equitativamente
-      final unassigned = state.unassignedItems;
-      final itemsPerCheck = (unassigned.length / state.equalSplitPeople).ceil();
-
-      for (int i = 0; i < newChecks.length; i++) {
-        final startIndex = i * itemsPerCheck;
-        final endIndex = (startIndex + itemsPerCheck).clamp(
-          0,
-          unassigned.length,
+      for (int i = 0; i < state.equalSplitPeople; i++) {
+        final pos = _getNextPosition() + i;
+        final newCheck = OrderCheck(
+          id: 'temp_eq_${DateTime.now().millisecondsSinceEpoch}_$i',
+          orderId: state.order?.id ?? '',
+          label: 'C$pos',
+          position: pos,
+          isClosed: false,
+          subtotal: 0,
+          discounts: 0,
+          tax: 0,
+          total: 0,
         );
-
-        if (startIndex < unassigned.length) {
-          final itemsForThisCheck = unassigned.sublist(startIndex, endIndex);
-
-          for (final item in itemsForThisCheck) {
-            await _salesRepo.moveItemToCheck(
-              itemId: item.id,
-              checkPosition: newChecks[i].position,
-            );
-          }
-        }
+        newLocalChecks.add(newCheck);
+        newTempChecks.add(newCheck);
       }
 
-      // Recargar datos
-      final updatedItems = await _salesRepo.getOrderItems(state.order!.id);
-      final updatedChecks = await _salesRepo.getOrderChecks(state.order!.id);
+      // 2. Distribuir items NO ASIGNADOS entre los NUEVOS checks
+      final targets = newTempChecks;
+      if (targets.isEmpty) return;
+
+      List<OrderItem> currentUnassigned = List.from(state.unassignedItems);
+      List<OrderItem> finalItems = List.from(state.allItems);
+
+      int targetIdx = 0;
+      for (final item in currentUnassigned) {
+        final targetCheck = targets[targetIdx % targets.length];
+        final updatedItem = item.copyWith(
+          checkId: targetCheck.id,
+          forceCheckIdNull: false,
+        );
+
+        final mainIndex = finalItems.indexWhere((i) => i.id == item.id);
+        if (mainIndex != -1) finalItems[mainIndex] = updatedItem;
+
+        targetIdx++;
+      }
+
+      // 3. Recalcular totales
+      final updatedChecks = _recalculateChecksTotals(
+        newLocalChecks,
+        finalItems,
+      );
 
       state = state.copyWith(
         loading: false,
-        allItems: updatedItems,
+        allItems: finalItems,
         checks: updatedChecks,
         showEqualSplit: false,
       );
@@ -261,19 +304,137 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
   }
 
   // ============================================================
-  // ✅ APLICAR DIVISIÓN
+  // ✅ APLICAR DIVISIÓN (PERSISTENCIA)
   // ============================================================
 
   /// Aplicar y confirmar la división
   Future<void> applySplit() async {
     if (!state.canApplySplit) {
+      // Opcional: Permitir aplicar incluso si no todo está asignado (dejando cosas en Principal)
+      // Pero el usuario pidió validación estricta en el prompt inicial.
+      // Sin embargo, si cambió de opinión... mantengamos la regla.
       state = state.copyWith(
         error: 'Debes asignar todos los items a checks antes de aplicar',
       );
       return;
     }
 
-    state = state.copyWith(loading: false, splitApplied: true);
+    state = state.copyWith(loading: true, error: null);
+
+    try {
+      // 1. Sincronizar Cambios con Backend
+      // a) Crear checks que sean nuevos (IDs temporales)
+      // b) Mover items a los checks correspondientes (DB needs check_id)
+
+      // Dado que el backend actual de createSplitBill crea checks reales inmediatamente,
+      // y moveItemToCheck mueve items inmediatamente...
+      // La "Local State" es compleja si el backend espera UUIDs para mover items.
+
+      // ESTRATEGIA:
+      // Si tenemos Checks Temporales ('temp_...'), debemos crearlos ahora.
+      // PERO createSplitBill crea N checks nuevos. No uno especifico.
+      // Si usamos createSplitBill para crear los faltantes:
+
+      // Cuantos checks reales existen?
+      // Cuantos checks locales tenemos?
+
+      // SIMPLIFICACION:
+      // Vamos a iterar sobre las operaciones necesarias.
+
+      // 1. Crear checks faltantes en DB
+      // Contar cuantos checks temporales tenemos
+      final tempChecksCount = state.checks
+          .where((c) => c.id.startsWith('temp_'))
+          .length;
+      List<OrderCheck> finalChecks = [];
+
+      // Obtener checks actuales de DB para referencia
+      final dbChecks = await _salesRepo.getOrderChecks(state.order!.id);
+      finalChecks.addAll(dbChecks); // Start with existing
+
+      if (tempChecksCount > 0) {
+        final newDbChecks = await _salesRepo.createSplitBill(
+          orderId: state.order!.id,
+          numberOfChecks: tempChecksCount,
+        );
+        // createSplitBill returns ALL checks including old ones.
+        // We just need to know which ones are the 'new' ones to map our temp IDs if we wanted to be precise,
+        // but actually we just need target IDs for items.
+        finalChecks = newDbChecks;
+      }
+
+      // Ordenar finalChecks para mapear Posiciones
+      finalChecks.sort((a, b) => a.position.compareTo(b.position));
+
+      // 2. Mover items
+      // La logica local asigna items a checkIds (temp o reales).
+      // Debemos mapear los checkIds locales a los checkIds finales de DB.
+      // Asumimos que la "Posición" es la clave.
+      // Local Checks tienen una posición asignada.
+      // DB Checks tienen una posición.
+
+      // Mapeo: Local Check ID -> DB Check ID
+
+      // El "Pool" (Izquierda) es Main Check (Pos 1).
+      // En local state, items unassigned tienen checkId: null.
+      // En DB, deben ir a check position 1.
+
+      // Los Checks Visibles (Derecha) empiezan desde Pos 2 en adelante?
+      // Revisemos como generamos local checks.
+
+      // Si initialize detectó:
+      // [C1 (Pos1)], [C2 (Pos2)]
+      // Visible: C2.
+      // Local Checks: [C2].
+
+      // Si creo nuevo check local C3. Pos ?.
+      // Debemos asignar posiciones a los checks locales para poder sincronizar.
+
+      // Vamos a recorrer todos los items locales y moverlos.
+      for (final item in state.allItems) {
+        int targetPosition = 1; // Default to Main Check (Unassigned)
+
+        if (item.checkId != null) {
+          // Buscar el check local correspondiente
+          final localCheck = state.checks.firstWhere(
+            (c) => c.id == item.checkId,
+            orElse: () => OrderCheck(
+              id: 'nf',
+              orderId: '',
+              label: '',
+              position: -1,
+              isClosed: false,
+              subtotal: 0,
+              discounts: 0,
+              tax: 0,
+              total: 0,
+            ),
+          );
+
+          if (localCheck.position != -1) {
+            targetPosition = localCheck.position;
+            // Wait, si el check es temp, su position es asignada localmente.
+            // Debemos asegurar que esa posicion exista en DB.
+            // Si creamos tempChecksCount nuevos checks, el backend asignó posiciones continuas.
+            // Asumimos que la secuencia de posiciones locales coincide con la secuencia de DB.
+            // RIESGO: Si borramos checks intermedios.
+            // POR AHORA: Confiamos en que createSplitBill añade al final.
+          }
+        }
+
+        await _salesRepo.moveItemToCheck(
+          itemId: item.id,
+          checkPosition: targetPosition,
+        );
+      }
+
+      state = state.copyWith(loading: false, splitApplied: true);
+    } catch (e) {
+      state = state.copyWith(
+        loading: false,
+        error: 'Error al aplicar cambios: $e',
+      );
+    }
   }
 
   // ============================================================

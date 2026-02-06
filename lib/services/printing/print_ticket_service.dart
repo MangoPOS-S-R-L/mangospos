@@ -79,7 +79,7 @@ class PrintTicketService {
     );
   }
 
-  /// Generar precuenta
+  /// Generar precuenta - DISEÑO PROFESIONAL CON PUNTOS EN LÍNEA
   static PrintTicket generatePrecheck({
     required Order order,
     required List<OrderItem> items,
@@ -91,51 +91,169 @@ class PrintTicketService {
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
 
-    // Header
-    gen.ticketHeader(
-      businessName: businessName ?? 'Restaurant',
-      address: businessAddress,
-      phone: businessPhone,
-    );
+    gen.initialize();
+    gen.lineFeed(2);
 
-    // Tipo de documento
+    // ════════════════════════════════════════════
+    // HEADER - Nombre del negocio
+    // ════════════════════════════════════════════
+    if (businessName != null && businessName.isNotEmpty) {
+      gen.setTextSize(width: 2, height: 2);
+      gen.setBold(true);
+      gen.textCentered(businessName.toUpperCase());
+      gen.setBold(false);
+      gen.setTextSize();
+    }
+
+    // Info de contacto centrada
+    if (businessAddress != null && businessAddress.isNotEmpty) {
+      gen.textCentered(businessAddress);
+    }
+    if (businessPhone != null && businessPhone.isNotEmpty) {
+      gen.textCentered('Tel: $businessPhone');
+    }
+
+    gen.lineFeed();
+    _thinSeparator(gen);
+    gen.lineFeed();
+
+    // ════════════════════════════════════════════
+    // TÍTULO DEL DOCUMENTO
+    // ════════════════════════════════════════════
     gen.setTextSize(width: 2, height: 2);
     gen.setBold(true);
     gen.textCentered('PRECUENTA');
     gen.setBold(false);
     gen.setTextSize();
-    gen.separator();
 
-    // Información de orden
-    gen.orderInfo(
-      orderNumber: order.id.substring(0, 8).toUpperCase(),
-      tableName: tableName,
-      dateTime: order.createdAt,
-      waiterName: waiterName,
-    );
+    gen.lineFeed();
+    _thickSeparator(gen);
+    gen.lineFeed();
 
-    // Items
-    for (final item in items) {
-      gen.orderItem(
-        name: item.productName,
-        quantity: item.quantity,
-        price: item.total,
-        modifiers: item.modifiers.map((m) => m.name).toList(),
-        notes: item.notes,
+    // ════════════════════════════════════════════
+    // INFORMACIÓN DE LA ORDEN
+    // ════════════════════════════════════════════
+    gen.setBold(true);
+    gen.textRow('Orden:', order.id.substring(0, 8).toUpperCase());
+    gen.setBold(false);
+
+    if (tableName.isNotEmpty) {
+      gen.textRow('Mesa:', tableName);
+    }
+    gen.textRow('Fecha:', _formatDateTime(order.createdAt));
+
+    if (waiterName != null && waiterName.isNotEmpty) {
+      gen.textRow('Mesero:', waiterName);
+    }
+
+    gen.lineFeed();
+    _thinSeparator(gen);
+    gen.lineFeed();
+
+    // ════════════════════════════════════════════
+    // ITEMS - PRODUCTOS (TAMAÑO PEQUEÑO + PUNTOS EN MÍSMA LÍNEA)
+    // ════════════════════════════════════════════
+    for (int i = 0; i < items.length; i++) {
+      final item = items[i];
+      final unitPrice = item.total / item.quantity;
+
+      // Nombre del producto (tamaño normal, negrita)
+      gen.setTextSize(); // tamaño normal para items
+      gen.setBold(true);
+      gen.text(item.productName);
+      gen.setBold(false);
+
+      // Cantidad x precio ......... TOTAL (puntos pegados)
+      final leftPart =
+          '${item.quantity.toInt()} x RD\$ ${unitPrice.toStringAsFixed(2)}';
+      gen.textRow(
+        '$leftPart ..........', // puntos van en misma línea
+        'RD\$ ${item.total.toStringAsFixed(2)}',
+      );
+
+      // Modificadores con indentación y bullet
+      if (item.modifiers.isNotEmpty) {
+        for (final mod in item.modifiers) {
+          gen.text('  · ${mod.name}');
+        }
+      }
+
+      // Notas especiales destacadas
+      if (item.notes != null && item.notes!.isNotEmpty) {
+        gen.setBold(true);
+        gen.text('  Nota: ${item.notes}');
+        gen.setBold(false);
+      }
+
+      // Separador visual suave entre items (excepto último)
+      if (i < items.length - 1) {
+        gen.lineFeed();
+        gen.text('.........................');
+        gen.lineFeed();
+      }
+    }
+
+    gen.lineFeed();
+    _thinSeparator(gen);
+    gen.lineFeed();
+
+    // ════════════════════════════════════════════
+    // TOTALES (TAMAÑO NORMAL)
+    // ════════════════════════════════════════════
+
+    gen.setTextSize(); // totales en tamaño normal
+
+    // Subtotal
+    gen.textRow('Subtotal:', 'RD\$ ${order.subtotal.toStringAsFixed(2)}');
+
+    // Descuentos
+    if (order.discounts > 0) {
+      gen.textRow('Descuento:', '-RD\$ ${order.discounts.toStringAsFixed(2)}');
+    }
+
+    // Cargo por servicio
+    if (order.serviceFee > 0) {
+      final servicePct = ((order.serviceFee / order.subtotal) * 100)
+          .toStringAsFixed(0);
+      gen.textRow(
+        'Servicio ($servicePct%):',
+        'RD\$ ${order.serviceFee.toStringAsFixed(2)}',
       );
     }
 
-    // Totales
-    gen.totals(
-      subtotal: order.subtotal,
-      discounts: order.discounts > 0 ? order.discounts : null,
-      serviceFee: order.serviceFee > 0 ? order.serviceFee : null,
-      tax: order.tax,
-      total: order.total,
-    );
+    // ITBIS
+    gen.textRow('ITBIS (18%):', 'RD\$ ${order.tax.toStringAsFixed(2)}');
 
-    // Footer
-    gen.ticketFooter(message: 'ESTE NO ES UN COMPROBANTE FISCAL');
+    gen.lineFeed();
+    _thickSeparator(gen);
+    gen.lineFeed();
+
+    // TOTAL - Solo aquí tamaño 2x para resaltar
+    gen.setBold(true);
+    gen.setTextSize(width: 2, height: 2);
+    gen.textRow('TOTAL:', 'RD\$ ${order.total.toStringAsFixed(2)}');
+    gen.setTextSize(); // regresamos a normal
+    gen.setBold(false);
+
+    gen.lineFeed();
+    _thickSeparator(gen);
+
+    // ════════════════════════════════════════════
+    // FOOTER
+    // ════════════════════════════════════════════
+    gen.lineFeed(2);
+    gen.setBold(true);
+    gen.textCentered('ESTE DOCUMENTO ES SOLO');
+    gen.textCentered('UNA PRECUENTA');
+    gen.setBold(false);
+
+    gen.lineFeed();
+    _thinSeparator(gen);
+    gen.lineFeed();
+
+    gen.textCentered('Gracias por su preferencia');
+    gen.textCentered('Por favor verifique los datos');
+    gen.lineFeed(3);
 
     gen.cut();
 
@@ -319,9 +437,9 @@ class PrintTicketService {
     return PrintTicket(type: 'cash_close', escPosCommands: gen.getCommands());
   }
 
-  // ============================================================
+  // ════════════════════════════════════════════
   // 🔧 UTILIDADES
-  // ============================================================
+  // ════════════════════════════════════════════
 
   static String _getNcfTypeName(String code) {
     switch (code) {
@@ -341,5 +459,13 @@ class PrintTicketService {
   static String _formatDateTime(DateTime dt) {
     return '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year} '
         '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+  }
+
+  static void _thinSeparator(EscPosGenerator gen) {
+    gen.textCentered('--------------------------------');
+  }
+
+  static void _thickSeparator(EscPosGenerator gen) {
+    gen.textCentered('================================');
   }
 }

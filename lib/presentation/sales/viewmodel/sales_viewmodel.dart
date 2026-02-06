@@ -82,6 +82,20 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       state = state.copyWith(error: 'Orden no disponible. Reintenta.');
       return;
     }
+
+    // Si hay un check seleccionado, usar su posición (salvo que checkPos sea explícito > 1)
+    int effectiveCheckPos = checkPos;
+    if (checkPos == 1 && state.selectedCheckId != null) {
+      try {
+        final check = state.checks.firstWhere(
+          (c) => c.id == state.selectedCheckId,
+        );
+        effectiveCheckPos = check.position;
+      } catch (_) {
+        // Si no se encuentra, default a 1
+      }
+    }
+
     state = state.copyWith(error: null);
     try {
       await ref
@@ -90,7 +104,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             orderId: orderId,
             menuItemId: menuItemId,
             quantity: qty,
-            checkPosition: checkPos,
+            checkPosition: effectiveCheckPos,
             isTakeout: takeout,
             notes: notes,
           );
@@ -113,8 +127,41 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   Future<void> deleteItem(String itemId) async {
     final orderId = state.order?.id;
     if (orderId == null) return;
-    await ref.read(salesRepositoryProvider).deleteItem(itemId: itemId);
-    await _loadOrderDetail(orderId);
+
+    // 1. Snapshot for rollback
+    final previousItems = state.items;
+    final previousOrder = state.order;
+
+    // 2. Optimistic Local Update
+    final updatedItems = state.items.where((i) => i.id != itemId).toList();
+
+    // Calculate simple totals for immediate feedback
+    final newTotal = updatedItems.fold(0.0, (sum, i) => sum + i.total);
+    final newSubtotal = updatedItems.fold(0.0, (sum, i) => sum + i.subtotal);
+    final newTax = updatedItems.fold(0.0, (sum, i) => sum + i.tax);
+
+    final updatedOrder = state.order?.copyWith(
+      total: newTotal,
+      subtotal: newSubtotal,
+      tax: newTax,
+    );
+
+    state = state.copyWith(items: updatedItems, order: updatedOrder);
+
+    try {
+      // 3. Perform Backend Operation
+      await ref.read(salesRepositoryProvider).deleteItem(itemId: itemId);
+
+      // 4. Sync State (to ensure server calculations/triggers are reflected)
+      await _loadOrderDetail(orderId);
+    } catch (e) {
+      // 5. Revert on Error
+      state = state.copyWith(
+        items: previousItems,
+        order: previousOrder,
+        error: 'Error al eliminar: $e',
+      );
+    }
   }
 
   Future<void> updateItemQuantity(String itemId, double quantity) async {
@@ -205,16 +252,26 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
   }
 
+  void selectCheck(String? checkId) {
+    state = state.copyWith(
+      selectedCheckId: checkId,
+      clearSelectedCheck: checkId == null,
+    );
+  }
+
   Future<void> _loadOrderDetail(String orderId, {String? origin}) async {
     final repo = ref.read(salesRepositoryProvider);
     Order? order;
     List<OrderItem> items = const [];
+    List<OrderCheck> checks = const [];
     String? loadError;
     final orderFuture = repo.getOrder(orderId);
     final itemsFuture = repo.getOrderItems(orderId, includeModifiers: false);
+    final checksFuture = repo.getOrderChecks(orderId);
 
     try {
       order = await orderFuture;
+      checks = await checksFuture;
     } catch (e) {
       loadError = e.toString();
     }
@@ -233,12 +290,25 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       return;
     }
 
+    // Verificar si el check seleccionado todavía existe
+    String? newSelectedCheckId = state.selectedCheckId;
+    if (newSelectedCheckId != null) {
+      final exists = checks.any((c) => c.id == newSelectedCheckId);
+      if (!exists) {
+        newSelectedCheckId = null;
+      }
+    }
+
     state = state.copyWith(
       loading: false,
       order: order ?? state.order,
       items: items,
+      checks: checks,
       origin: origin ?? state.origin,
       error: items.isEmpty ? (loadError ?? state.error) : null,
+      selectedCheckId: newSelectedCheckId,
+      clearSelectedCheck:
+          newSelectedCheckId == null && state.selectedCheckId != null,
     );
   }
 }

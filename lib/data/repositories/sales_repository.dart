@@ -146,26 +146,21 @@ class SalesRepository {
     }
   }
 
-  /// Eliminar item
+  /// Eliminar item (Directo para evitar timeout en RPC)
   Future<void> deleteItem({required String itemId}) async {
     try {
-      await _client.rpc(
-        SalesQueries.rpcDeleteItem,
-        params: {'p_item_id': itemId},
-      );
-    } on PostgrestException catch (e) {
-      final msg = '${e.message} ${e.details ?? ''} ${e.hint ?? ''}'
-          .toLowerCase();
-      final missingFn = e.code == 'PGRST202' ||
-          msg.contains('fn_delete_item') ||
-          msg.contains('could not find the function');
-
-      if (!missingFn) rethrow;
-
-      // Fallback: eliminar directamente el registro del item
+      // Intentar directo primero para rapidez y evitar timeout de funcion compleja
       await _client.from('order_items').delete().eq('id', itemId);
     } catch (e) {
-      throw Exception('Error al eliminar item: $e');
+      // Fallback a RPC si falla por permisos o triggers complejos (aunque delete directo suele ser mejor)
+      try {
+        await _client.rpc(
+          SalesQueries.rpcDeleteItem,
+          params: {'p_item_id': itemId},
+        );
+      } catch (_) {
+        throw Exception('Error al eliminar item: $e');
+      }
     }
   }
 

@@ -14,12 +14,14 @@ class PaymentSplitDialog extends ConsumerStatefulWidget {
   final String orderId;
   final double totalAmount;
   final String tableName;
+  final String? checkId;
 
   const PaymentSplitDialog({
     super.key,
     required this.orderId,
     required this.totalAmount,
     required this.tableName,
+    this.checkId,
   });
 
   @override
@@ -32,7 +34,11 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
     final size = MediaQuery.of(context).size;
     final isMobile = size.width < 920;
 
-    final provider = paymentSplitProvider((widget.orderId, widget.totalAmount));
+    final provider = paymentSplitProvider((
+      widget.orderId,
+      widget.totalAmount,
+      widget.checkId,
+    ));
     final state = ref.watch(provider);
     final vm = ref.read(provider.notifier);
 

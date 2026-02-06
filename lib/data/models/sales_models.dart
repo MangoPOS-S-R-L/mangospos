@@ -134,6 +134,32 @@ class Order extends Equatable {
     'closed_at': closedAt?.toIso8601String(),
   };
 
+  Order copyWith({
+    String? id,
+    String? sessionId,
+    String? status,
+    double? subtotal,
+    double? discounts,
+    double? serviceFee,
+    double? tax,
+    double? total,
+    DateTime? createdAt,
+    DateTime? closedAt,
+  }) {
+    return Order(
+      id: id ?? this.id,
+      sessionId: sessionId ?? this.sessionId,
+      status: status ?? this.status,
+      subtotal: subtotal ?? this.subtotal,
+      discounts: discounts ?? this.discounts,
+      serviceFee: serviceFee ?? this.serviceFee,
+      tax: tax ?? this.tax,
+      total: total ?? this.total,
+      createdAt: createdAt ?? this.createdAt,
+      closedAt: closedAt ?? this.closedAt,
+    );
+  }
+
   bool get isOpen => status == 'open' || status == 'draft';
   bool get isSent => status == 'sent' || status == 'preparing';
   bool get isPaid => status == 'paid';
@@ -229,6 +255,7 @@ class OrderItem extends Equatable {
     double? tax,
     double? total,
     String? checkId,
+    bool forceCheckIdNull = false,
     bool? isTakeout,
     String? status,
     String? notes,
@@ -247,7 +274,7 @@ class OrderItem extends Equatable {
       discounts: discounts ?? this.discounts,
       tax: tax ?? this.tax,
       total: total ?? this.total,
-      checkId: checkId ?? this.checkId,
+      checkId: forceCheckIdNull ? null : (checkId ?? this.checkId),
       isTakeout: isTakeout ?? this.isTakeout,
       status: status ?? this.status,
       notes: notes ?? this.notes,
