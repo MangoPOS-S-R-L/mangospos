@@ -666,6 +666,10 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                       return _CheckCard(
                         check: check,
                         items: items,
+                        selectedItemIds:
+                            state.selectedItemIds, // Pass selection
+                        onToggleSelection: viewModel
+                            .toggleItemSelection, // Pass toggle callback
                         onDelete: () => viewModel.deleteCheck(check.id),
                         onRemoveItem: viewModel.unassignItem,
                         primaryColor: _primary,
@@ -801,6 +805,8 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
 class _CheckCard extends StatelessWidget {
   final OrderCheck check;
   final List<OrderItem> items;
+  final Set<String> selectedItemIds; // New prop
+  final Function(String) onToggleSelection; // New prop
   final VoidCallback onDelete;
   final Function(String) onRemoveItem;
   final Color primaryColor;
@@ -808,6 +814,8 @@ class _CheckCard extends StatelessWidget {
   const _CheckCard({
     required this.check,
     required this.items,
+    required this.selectedItemIds,
+    required this.onToggleSelection,
     required this.onDelete,
     required this.onRemoveItem,
     required this.primaryColor,
@@ -907,32 +915,40 @@ class _CheckCard extends StatelessWidget {
               separatorBuilder: (_, __) => const Divider(height: 1),
               itemBuilder: (context, index) {
                 final item = items[index];
-                return Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
-                  child: Row(
-                    children: [
-                      SizedBox(
-                        width: 40,
-                        child: Text('${item.quantity.toInt()}'),
-                      ),
-                      Expanded(child: Text(item.productName)),
-                      SizedBox(
-                        width: 80,
-                        child: Text('RD\$${item.total.toStringAsFixed(0)}'),
-                      ),
-                      // 'Más' action (Remove)
-                      InkWell(
-                        onTap: () => onRemoveItem(item.id),
-                        child: const Icon(
-                          Icons.close,
-                          color: Colors.red,
-                          size: 18,
+                final isSelected = selectedItemIds.contains(item.id);
+
+                return InkWell(
+                  onTap: () => onToggleSelection(item.id),
+                  child: Container(
+                    color: isSelected
+                        ? primaryColor.withOpacity(0.05)
+                        : Colors.transparent,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 40,
+                          child: Text('${item.quantity.toInt()}'),
                         ),
-                      ),
-                    ],
+                        Expanded(child: Text(item.productName)),
+                        SizedBox(
+                          width: 80,
+                          child: Text('RD\$${item.total.toStringAsFixed(0)}'),
+                        ),
+                        // 'Más' action (Remove)
+                        InkWell(
+                          onTap: () => onRemoveItem(item.id),
+                          child: const Icon(
+                            Icons.close,
+                            color: Colors.red,
+                            size: 18,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 );
               },

@@ -188,9 +188,13 @@ class _ProductCard extends ConsumerWidget {
       borderRadius: BorderRadius.circular(16),
       onTap: () async {
         try {
-          await ref
-              .read(currentOrderProvider.notifier)
-              .addItem(menuItemId: item.id, qty: 1, takeout: false);
+          await ref.read(currentOrderProvider.notifier).addItem(
+                menuItemId: item.id,
+                qty: 1,
+                takeout: false,
+                productName: item.name,
+                productPrice: item.price,
+              );
           onAddProduct();
           if (context.mounted) {
             ScaffoldMessenger.of(context).showSnackBar(

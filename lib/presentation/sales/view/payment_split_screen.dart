@@ -411,6 +411,25 @@ class _RightPanel extends StatelessWidget {
               ),
             ),
           ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            height: 46,
+            child: TextButton.icon(
+              onPressed: () => Navigator.pop(context, false),
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.black87,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              icon: const Icon(Icons.arrow_back_ios_new, size: 18),
+              label: const Text(
+                'Volver a la mesa',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -492,6 +511,25 @@ class _MobileLayout extends StatelessWidget {
             ),
             child: const Text(
               'Cancelar',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          width: double.infinity,
+          height: 46,
+          child: TextButton.icon(
+            onPressed: () => Navigator.pop(context, false),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.black87,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            icon: const Icon(Icons.arrow_back_ios_new, size: 18),
+            label: const Text(
+              'Volver a la mesa',
               style: TextStyle(fontWeight: FontWeight.w700),
             ),
           ),

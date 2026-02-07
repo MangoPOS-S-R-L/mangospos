@@ -11,10 +11,17 @@ class EscPosGenerator {
 
   final int paperWidth;
   final String encoding;
+  final int codeTable;
   final List<int> _buffer = [];
   int _textWidthFactor = 1; // Factor de ampliación horizontal actual
 
-  EscPosGenerator({this.paperWidth = 80, this.encoding = 'CP437'});
+  /// [codeTable] envía comando ESC t con la tabla de caracteres del firmware.
+  /// 16 = CP1252 (recomendado para español/acentos), valor por defecto.
+  EscPosGenerator({
+    this.paperWidth = 80,
+    this.encoding = 'CP437',
+    this.codeTable = 16,
+  });
 
   /// Obtener comandos generados
   List<int> getCommands() => List.from(_buffer);
@@ -29,6 +36,8 @@ class EscPosGenerator {
   /// Inicializar impresora
   void initialize() {
     _buffer.addAll([ESC, 0x40]); // ESC @
+    // Seleccionar tabla de caracteres para acentos/ñ
+    _buffer.addAll([ESC, 0x74, codeTable]); // ESC t n
   }
 
   /// Salto de línea
@@ -80,6 +89,18 @@ class EscPosGenerator {
         : left;
     final spaces = maxWidth - leftPart.length - right.length;
     final row = leftPart + (' ' * spaces) + right;
+    text(row);
+  }
+
+  /// Línea con relleno personalizado (p.ej. puntos) entre izquierda y derecha
+  void dotRow(String left, String right, {String fill = '.'}) {
+    final maxWidth = _getMaxChars();
+    final leftPart = left.length > maxWidth - right.length - 1
+        ? left.substring(0, maxWidth - right.length - 1)
+        : left;
+    final filler = fill.isNotEmpty ? fill[0] : '.';
+    final dots = (maxWidth - leftPart.length - right.length).clamp(1, maxWidth);
+    final row = leftPart + (filler * dots) + right;
     text(row);
   }
 
@@ -141,6 +162,17 @@ class EscPosGenerator {
   /// Texto invertido (blanco sobre negro)
   void setInverse(bool enabled) {
     _buffer.addAll([GS, 0x42, enabled ? 1 : 0]); // GS B
+  }
+
+  /// Seleccionar fuente (A = más grande, B = más densa/nítida)
+  void setFont(Font font) {
+    final value = font == Font.a ? 0 : 1; // ESC M n (0=A, 1=B)
+    _buffer.addAll([ESC, 0x4D, value]);
+  }
+
+  /// Cambiar tabla de caracteres en caliente (ESC t n)
+  void setCodeTable(int table) {
+    _buffer.addAll([ESC, 0x74, table]);
   }
 
   // ============================================================
@@ -333,4 +365,7 @@ class EscPosGenerator {
 
 /// Alineación de texto
 enum Alignment { left, center, right }
+
+/// Fuente ESC/POS
+enum Font { a, b }
 

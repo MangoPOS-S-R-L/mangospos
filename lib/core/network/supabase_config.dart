@@ -1,4 +1,4 @@
-// lib/core/network/supabase_config.dart
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// 🔧 Configuración personalizada de Supabase
@@ -33,6 +33,7 @@ class SupabaseConfig {
     await Supabase.initialize(
       url: url,
       anonKey: anonKey,
+      debug: kDebugMode || kIsWeb, // Enable debug
       authOptions: const FlutterAuthClientOptions(
         authFlowType: AuthFlowType.pkce,
         // Mantener sesión activa

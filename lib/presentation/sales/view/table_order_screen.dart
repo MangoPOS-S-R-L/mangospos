@@ -127,7 +127,11 @@ class _TableOrderScreenState extends ConsumerState<TableOrderScreen> {
                 }
                 ref
                     .read(currentOrderProvider.notifier)
-                    .addItem(menuItemId: product.id);
+                    .addItem(
+                      menuItemId: product.id,
+                      productName: product.name,
+                      productPrice: product.price,
+                    );
               },
             );
 
@@ -227,11 +231,16 @@ class _CartView extends ConsumerWidget {
                 items: items,
                 payments: payments,
                 tableName: tableName,
+                checkId: checkId,
                 change: totalChange,
                 onNewSale: () {
                   Navigator.of(ctx).pop();
-                  // Reset flow logic here if needed, e.g. back to zone
-                  context.go(AppRoutes.salesByZone);
+                  if (checkId == null) {
+                    context.go(AppRoutes.salesByZone);
+                  } else {
+                    // Si solo se pagó una subcuenta, refrescamos y nos quedamos
+                    ref.read(currentOrderProvider.notifier).refreshOrder();
+                  }
                 },
                 onPrint: () {
                   final invoiceData = {
@@ -329,7 +338,10 @@ class _CartView extends ConsumerWidget {
 
     final selectedCheckId = orderState.selectedCheckId;
     final allChecks = orderState.checks;
-    final hasChecks = allChecks.length > 1;
+    final activeChecks = allChecks.where((c) => !c.isClosed).toList();
+    final hasChecks =
+        activeChecks.length > 1 ||
+        (activeChecks.length == 1 && activeChecks.first.position > 1);
 
     // Filter Items
     final List<OrderItem> displayedItems;
@@ -338,7 +350,10 @@ class _CartView extends ConsumerWidget {
           .where((i) => i.checkId == selectedCheckId)
           .toList();
     } else {
-      displayedItems = allItems;
+      // Si estamos en vista global, no mostrar items de subcuentas cerradas
+      displayedItems = allItems
+          .where((i) => !allChecks.any((c) => c.id == i.checkId && c.isClosed))
+          .toList();
     }
 
     // Calculate Totals based on View
@@ -496,7 +511,7 @@ class _CartView extends ConsumerWidget {
                     isGlobal: true,
                   ),
                   const SizedBox(width: 8),
-                  ...allChecks
+                  ...activeChecks
                       .where(
                         (c) => !hasChecks || c.position > 1,
                       ) // Ocultar cuenta principal si esta dividida
@@ -808,8 +823,10 @@ class _CartView extends ConsumerWidget {
                                       preCheckData,
                                       orderObj: orderState.order!,
                                       orderItems: displayedItems,
-                                      tableName: preCheckData['tableName'] as String?,
-                                      waiterName: preCheckData['waiterName'] as String?,
+                                      tableName:
+                                          preCheckData['tableName'] as String?,
+                                      waiterName:
+                                          preCheckData['waiterName'] as String?,
                                     );
                                   },
                                   onCancel: () => Navigator.pop(ctx),
@@ -951,12 +968,9 @@ class _CartView extends ConsumerWidget {
       } else {
         // Fallback: payload clásico
         final jobPayload = {
-          'id': '${type.toUpperCase()}-${DateTime.now().millisecondsSinceEpoch}',
-          'printer': {
-            'type': 'network',
-            'ip': ip,
-            'port': fallbackPort,
-          },
+          'id':
+              '${type.toUpperCase()}-${DateTime.now().millisecondsSinceEpoch}',
+          'printer': {'type': 'network', 'ip': ip, 'port': fallbackPort},
           'content': {
             'type': type, // 'precheck' o 'invoice'
             'data': data,

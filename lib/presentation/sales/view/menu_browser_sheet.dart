@@ -277,7 +277,12 @@ class _ProductCard extends ConsumerWidget {
         // Al tocar, agrega 1 unidad al pedido actual
         await ref
             .read(currentOrderProvider.notifier)
-            .addItem(menuItemId: item.id, qty: 1);
+            .addItem(
+              menuItemId: item.id,
+              qty: 1,
+              productName: item.name,
+              productPrice: item.price,
+            );
 
         // Feedback visual sutil
         if (context.mounted) {

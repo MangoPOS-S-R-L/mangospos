@@ -505,27 +505,19 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
 
     byZone.setOpening(ts.tableId, true);
 
-    try {
-      await ref.read(currentOrderProvider.notifier).openTable(ts.tableId);
-      if (!context.mounted) return;
-      context.go(
-        Uri(
-          path: '${AppRoutes.sales}/table/${ts.tableId}',
-          queryParameters: {'code': ts.code, 'zone': ts.zoneId},
-        ).toString(),
-      );
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al abrir mesa: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } finally {
-      byZone.setOpening(ts.tableId, false);
-    }
+    // Lanzamos apertura de mesa en background y navegamos de inmediato
+    unawaited(ref
+        .read(currentOrderProvider.notifier)
+        .openTable(ts.tableId)
+        .whenComplete(() => byZone.setOpening(ts.tableId, false)));
+
+    if (!context.mounted) return;
+    context.go(
+      Uri(
+        path: '${AppRoutes.sales}/table/${ts.tableId}',
+        queryParameters: {'code': ts.code, 'zone': ts.zoneId},
+      ).toString(),
+    );
   }
 
   /// Convierte TableStatus a VentasTable para el  nuevo TableCard

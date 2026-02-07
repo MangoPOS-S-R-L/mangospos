@@ -11,6 +11,7 @@ class InvoiceModal extends StatelessWidget {
   final double change;
   final VoidCallback onNewSale;
   final VoidCallback onPrint;
+  final String? checkId; // si se paga solo un check, filtramos
 
   const InvoiceModal({
     super.key,
@@ -22,12 +23,25 @@ class InvoiceModal extends StatelessWidget {
     required this.change,
     required this.onNewSale,
     required this.onPrint,
+    this.checkId,
   });
 
   @override
   Widget build(BuildContext context) {
     final currency = NumberFormat('#,##0.00', 'en_US');
     final dateFormat = DateFormat('dd/MM/yyyy HH:mm:ss');
+
+    final filteredItems = checkId == null
+        ? items
+        : items.where((i) => i.checkId == checkId).toList();
+    final filteredPayments = checkId == null
+        ? payments
+        : payments.where((p) => p.checkId == checkId).toList();
+
+    final subtotal = filteredItems.fold<double>(0, (s, i) => s + i.subtotal);
+    final tax = filteredItems.fold<double>(0, (s, i) => s + i.tax);
+    final service = filteredItems.fold<double>(0, (s, i) => s + i.discounts);
+    final total = filteredItems.fold<double>(0, (s, i) => s + i.total);
 
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -105,7 +119,7 @@ class InvoiceModal extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    ...items.map(
+                    ...filteredItems.map(
                       (item) => Padding(
                         padding: const EdgeInsets.only(bottom: 8),
                         child: Row(
@@ -144,15 +158,20 @@ class InvoiceModal extends StatelessWidget {
 
                     const Divider(height: 32),
 
-                    // Financial Breakdown
-                    _SummaryRow('Subtotal', order.subtotal),
-                    _SummaryRow('ITBIS (18%)', order.tax),
+                    // Financial Breakdown (filtrado al check si aplica)
+                    _SummaryRow('Subtotal', subtotal),
+                    _SummaryRow('ITBIS (18%)', tax),
                     if (order.serviceFee > 0)
-                      _SummaryRow('Propina Ley (10%)', order.serviceFee),
+                      _SummaryRow(
+                        'Propina Ley (10%)',
+                        order.subtotal > 0
+                            ? order.serviceFee * (subtotal / order.subtotal)
+                            : 0,
+                      ),
                     const SizedBox(height: 8),
                     _SummaryRow(
                       'TOTAL',
-                      order.total,
+                      total,
                       isBold: true,
                       fontSize: 18,
                     ),
@@ -171,7 +190,7 @@ class InvoiceModal extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    ...payments.map(
+                    ...filteredPayments.map(
                       (p) => Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -220,11 +239,11 @@ class InvoiceModal extends StatelessWidget {
             // Actions
             Padding(
               padding: const EdgeInsets.all(24),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: onPrint,
+            child: Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: onPrint,
                       icon: const Icon(Icons.print),
                       label: const Text('Imprimir'),
                       style: OutlinedButton.styleFrom(
@@ -232,28 +251,38 @@ class InvoiceModal extends StatelessWidget {
                         side: const BorderSide(color: Color(0xFFFB7116)),
                         foregroundColor: const Color(0xFFFB7116),
                       ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: onNewSale,
+                    icon: const Icon(Icons.add_shopping_cart),
+                    label: const Text('Nueva Venta'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFFB7116),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
                     ),
                   ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: onNewSale,
-                      icon: const Icon(Icons.add_shopping_cart),
-                      label: const Text('Nueva Venta'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(
-                          0xFFFB7116,
-                        ), // Mango Orange
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                      ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: TextButton.icon(
+                    onPressed: () => Navigator.of(context).pop(false),
+                    icon: const Icon(Icons.arrow_back_ios_new),
+                    label: const Text('Volver a la cuenta'),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      foregroundColor: Colors.black87,
                     ),
                   ),
-                ],
-              ),
+                )
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
+      ),
       ),
     );
   }

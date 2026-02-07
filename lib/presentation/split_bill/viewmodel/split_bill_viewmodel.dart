@@ -28,9 +28,11 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
     try {
       // Obtener items de la orden
       final items = await _salesRepo.getOrderItems(order.id);
+      if (!mounted) return;
 
       // Obtener checks existentes (si ya se dividió antes)
       final existingChecks = await _salesRepo.getOrderChecks(order.id);
+      if (!mounted) return;
 
       // 1. Identificar Checks Reales (Subcuentas Creadas)
       // Si tenemos C1, C2, C3. Ordenados por posicion.
@@ -65,6 +67,7 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
         checks: visibleChecks,
       );
     } catch (e) {
+      if (!mounted) return;
       state = state.copyWith(
         loading: false,
         error: 'Error al cargar orden: $e',
@@ -110,18 +113,72 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
   }
 
   Future<void> deleteCheck(String checkId) async {
-    // Verificar que el check esté vacío
-    final itemsInCheck = state.itemsForCheck(checkId);
-    if (itemsInCheck.isNotEmpty) {
-      state = state.copyWith(
-        error: 'No se puede eliminar un check con items asignados',
-      );
-      return;
-    }
+    // 1. SNAPSHOT for revert/reference
+    final previousItems = state.allItems;
 
-    // Remover de la lista local
+    // 2. OPTIMISTIC UPDATE (UI Inmediato)
+
+    // a) Identificar items que estaban en este check
+    // b) Mover items locales a 'Sin Asignar' (checkId: null)
+    final updatedItems = state.allItems.map((item) {
+      if (item.checkId == checkId) {
+        return item.copyWith(checkId: null, forceCheckIdNull: true);
+      }
+      return item;
+    }).toList();
+
+    // c) Remover el check de la lista local
     final updatedChecks = state.checks.where((c) => c.id != checkId).toList();
-    state = state.copyWith(checks: updatedChecks);
+
+    // Actualizar estado para reflejar cambios en UI YA
+    state = state.copyWith(
+      checks: updatedChecks,
+      allItems: updatedItems,
+      selectedItemIds: {}, // limpiar selección
+      error: null,
+    );
+
+    // 3. BACKGROUND SYNC (Solo si existe en DB)
+    if (_isUuid(checkId)) {
+      // Ejecutar en segundo plano sin await para no bloquear UI
+      Future(() async {
+        try {
+          final itemsToMove = previousItems
+              .where((i) => i.checkId == checkId)
+              .toList();
+
+          // Mover items en DB al pool principal
+          for (final item in itemsToMove) {
+            await _salesRepo.moveItemToCheck(
+              itemId: item.id,
+              checkPosition: 1, // 1 = Main/Unassigned
+            );
+          }
+
+          // Eliminar check en DB
+          await _salesRepo.deleteCheck(checkId);
+        } catch (e) {
+          // Manejo de error silencioso o notificación global
+          // Por ahora, solo log en consola o update de error si aún montado
+          if (mounted) {
+            // No revertimos drásticamente para no romper flujo usuario, pero avisamos
+            print('Error sync deleteCheck: $e');
+            // Podríamos poner un mensajito en error state
+            state = state.copyWith(
+              error:
+                  'Error sincronizando eliminación. Recarga si es necesario.',
+            );
+          }
+        }
+      });
+    }
+  }
+
+  bool _isUuid(String value) {
+    final regex = RegExp(
+      r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+    );
+    return regex.hasMatch(value);
   }
 
   // ============================================================

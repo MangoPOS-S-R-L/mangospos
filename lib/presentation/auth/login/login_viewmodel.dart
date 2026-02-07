@@ -1,4 +1,4 @@
-// lib/presentation/auth/login/login_viewmodel.dart
+import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -38,10 +38,12 @@ class LoginViewModel extends Notifier<LoginState> {
     try {
       final supa = Supabase.instance.client;
 
-      final response = await supa.auth.signInWithPassword(
-        email: state.email.trim(),
-        password: state.password,
-      );
+      final response = await supa.auth
+          .signInWithPassword(
+            email: state.email.trim(),
+            password: state.password,
+          )
+          .timeout(const Duration(seconds: 15));
 
       final user = response.user ?? supa.auth.currentUser;
       if (user == null) {
@@ -56,11 +58,13 @@ class LoginViewModel extends Notifier<LoginState> {
       state = state.copyWith(isLoading: false, error: null);
     } on AuthException catch (e) {
       state = state.copyWith(isLoading: false, error: e.message);
-    } catch (_) {
+    } on TimeoutException {
       state = state.copyWith(
         isLoading: false,
-        error: 'Ocurrió un error iniciando sesión',
+        error: 'Tiempo de espera agotado. Revisa tu conexión de red.',
       );
+    } catch (e) {
+      state = state.copyWith(isLoading: false, error: 'Ocurrió un error: $e');
     }
   }
 }

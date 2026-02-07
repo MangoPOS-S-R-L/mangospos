@@ -5,7 +5,9 @@ import 'esc_pos_generator.dart';
 
 /// 🖨️ Servicio de generación de tickets
 class PrintTicketService {
-  /// Generar comanda de cocina
+  /// ============================================================
+  /// COMANDA DE COCINA
+  /// ============================================================
   static PrintTicket generateKitchenTicket({
     required Order order,
     required List<OrderItem> items,
@@ -15,7 +17,6 @@ class PrintTicketService {
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
 
-    // Header simple para cocina
     gen.initialize();
     gen.lineFeed();
 
@@ -35,7 +36,6 @@ class PrintTicketService {
     gen.setTextSize();
     gen.doubleSeparator();
 
-    // Información de orden
     gen.orderInfo(
       orderNumber: order.id.substring(0, 8).toUpperCase(),
       tableName: tableName,
@@ -43,7 +43,6 @@ class PrintTicketService {
       waiterName: waiterName,
     );
 
-    // Items
     for (final item in items) {
       gen.lineFeed();
       gen.setTextSize(width: 2, height: 2);
@@ -52,14 +51,12 @@ class PrintTicketService {
       gen.setBold(false);
       gen.setTextSize();
 
-      // Modificadores
       if (item.modifiers.isNotEmpty) {
         for (final mod in item.modifiers) {
           gen.text('  + ${mod.name}');
         }
       }
 
-      // Notas
       if (item.notes != null && item.notes!.isNotEmpty) {
         gen.lineFeed();
         gen.setBold(true);
@@ -79,7 +76,9 @@ class PrintTicketService {
     );
   }
 
-  /// Generar precuenta - DISEÑO PROFESIONAL CON PUNTOS EN LÍNEA
+  /// ============================================================
+  /// PRECUENTA - DISEÑO TÉRMICO MEJORADO
+  /// ============================================================
   static PrintTicket generatePrecheck({
     required Order order,
     required List<OrderItem> items,
@@ -98,11 +97,9 @@ class PrintTicketService {
     // HEADER - Nombre del negocio
     // ════════════════════════════════════════════
     if (businessName != null && businessName.isNotEmpty) {
-      gen.setTextSize(width: 2, height: 2);
       gen.setBold(true);
       gen.textCentered(businessName.toUpperCase());
       gen.setBold(false);
-      gen.setTextSize();
     }
 
     // Info de contacto centrada
@@ -134,81 +131,86 @@ class PrintTicketService {
     // INFORMACIÓN DE LA ORDEN
     // ════════════════════════════════════════════
     gen.setBold(true);
-    gen.textRow('Orden:', order.id.substring(0, 8).toUpperCase());
+    gen.textRow('ORDEN:', order.id.substring(0, 8).toUpperCase());
     gen.setBold(false);
 
     if (tableName.isNotEmpty) {
-      gen.textRow('Mesa:', tableName);
+      gen.textRow('MESA:', tableName);
     }
-    gen.textRow('Fecha:', _formatDateTime(order.createdAt));
+
+    // Separar fecha y hora en líneas diferentes
+    final dateStr = _formatDate(order.createdAt);
+    final timeStr = _formatTime(order.createdAt);
+    gen.textRow('FECHA:', dateStr);
+    gen.textRow('HORA:', timeStr);
 
     if (waiterName != null && waiterName.isNotEmpty) {
-      gen.textRow('Mesero:', waiterName);
+      gen.textRow('MESERO:', waiterName);
     }
 
     gen.lineFeed();
     _thinSeparator(gen);
-    gen.lineFeed();
 
     // ════════════════════════════════════════════
-    // ITEMS - PRODUCTOS (TAMAÑO PEQUEÑO + PUNTOS EN MÍSMA LÍNEA)
+    // ITEMS - PRODUCTOS (SIN QTY)
     // ════════════════════════════════════════════
+    gen.setBold(true);
+    gen.textRow('DESCRIPCIÓN', 'TOTAL');
+    gen.setBold(false);
+    _thinSeparator(gen);
+    gen.lineFeed(); // línea en blanco debajo del encabezado
+
     for (int i = 0; i < items.length; i++) {
       final item = items[i];
       final unitPrice = item.total / item.quantity;
 
-      // Nombre del producto (tamaño normal, negrita)
-      gen.setTextSize(); // tamaño normal para items
+      // Nombre del producto en negrita
       gen.setBold(true);
       gen.text(item.productName);
       gen.setBold(false);
 
-      // Cantidad x precio ......... TOTAL (puntos pegados)
+      // Cantidad x precio unitario ......... TOTAL
       final leftPart =
-          '${item.quantity.toInt()} x RD\$ ${unitPrice.toStringAsFixed(2)}';
-      gen.textRow(
-        '$leftPart ..........', // puntos van en misma línea
-        'RD\$ ${item.total.toStringAsFixed(2)}',
-      );
+          '${item.quantity.toInt()} x RD\$ ${_formatMoney(unitPrice)}';
+      final rightPart = 'RD\$ ${_formatMoney(item.total)}';
+      gen.dotRow(leftPart, rightPart);
+      gen.lineFeed(); // línea en blanco debajo del detalle
 
-      // Modificadores con indentación y bullet
+      // Modificadores con indentación
       if (item.modifiers.isNotEmpty) {
         for (final mod in item.modifiers) {
-          gen.text('  · ${mod.name}');
+          gen.text('  + ${mod.name}');
         }
+        gen.lineFeed(); // línea en blanco debajo de modificadores
       }
 
       // Notas especiales destacadas
       if (item.notes != null && item.notes!.isNotEmpty) {
         gen.setBold(true);
-        gen.text('  Nota: ${item.notes}');
+        gen.text('  NOTA: ${item.notes}');
         gen.setBold(false);
+        gen.lineFeed(); // línea en blanco debajo de nota
       }
 
-      // Separador visual suave entre items (excepto último)
+      // Espacio ligero entre items (sin separador)
       if (i < items.length - 1) {
-        gen.lineFeed();
-        gen.text('.........................');
         gen.lineFeed();
       }
     }
 
-    gen.lineFeed();
     _thinSeparator(gen);
+
+    // ════════════════════════════════════════════
+    // TOTALES
+    // ════════════════════════════════════════════
     gen.lineFeed();
-
-    // ════════════════════════════════════════════
-    // TOTALES (TAMAÑO NORMAL)
-    // ════════════════════════════════════════════
-
-    gen.setTextSize(); // totales en tamaño normal
 
     // Subtotal
-    gen.textRow('Subtotal:', 'RD\$ ${order.subtotal.toStringAsFixed(2)}');
+    gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(order.subtotal)}');
 
     // Descuentos
     if (order.discounts > 0) {
-      gen.textRow('Descuento:', '-RD\$ ${order.discounts.toStringAsFixed(2)}');
+      gen.textRow('DESCUENTO:', '-RD\$ ${_formatMoney(order.discounts)}');
     }
 
     // Cargo por servicio
@@ -216,51 +218,58 @@ class PrintTicketService {
       final servicePct = ((order.serviceFee / order.subtotal) * 100)
           .toStringAsFixed(0);
       gen.textRow(
-        'Servicio ($servicePct%):',
-        'RD\$ ${order.serviceFee.toStringAsFixed(2)}',
+        'SERVICIO ($servicePct%):',
+        'RD\$ ${_formatMoney(order.serviceFee)}',
       );
     }
 
     // ITBIS
-    gen.textRow('ITBIS (18%):', 'RD\$ ${order.tax.toStringAsFixed(2)}');
+    gen.textRow('ITBIS (18%):', 'RD\$ ${_formatMoney(order.tax)}');
 
     gen.lineFeed();
     _thickSeparator(gen);
     gen.lineFeed();
 
-    // TOTAL - Solo aquí tamaño 2x para resaltar
+    // ════════════════════════════════════════════
+    // TOTAL FINAL - Tamaño grande
+    // ════════════════════════════════════════════
     gen.setBold(true);
     gen.setTextSize(width: 2, height: 2);
-    gen.textRow('TOTAL:', 'RD\$ ${order.total.toStringAsFixed(2)}');
-    gen.setTextSize(); // regresamos a normal
+    gen.textRow('TOTAL:', 'RD\$ ${_formatMoney(order.total)}');
+    gen.setTextSize();
     gen.setBold(false);
 
+    // ════════════════════════════════════════════
+    // AVISO DE PRECUENTA
+    // ════════════════════════════════════════════
     gen.lineFeed();
+
+    // Caja de aviso
     _thickSeparator(gen);
+    gen.setBold(true);
+    gen.textCentered('AVISO: ESTE DOCUMENTO ES SOLO');
+    gen.textCentered('UNA PRECUENTA');
+    gen.setBold(false);
 
     // ════════════════════════════════════════════
     // FOOTER
     // ════════════════════════════════════════════
-    gen.lineFeed(2);
-    gen.setBold(true);
-    gen.textCentered('ESTE DOCUMENTO ES SOLO');
-    gen.textCentered('UNA PRECUENTA');
-    gen.setBold(false);
-
     gen.lineFeed();
-    _thinSeparator(gen);
+    gen.textCentered('GRACIAS POR SU PREFERENCIA');
     gen.lineFeed();
-
-    gen.textCentered('Gracias por su preferencia');
     gen.textCentered('Por favor verifique los datos');
-    gen.lineFeed(3);
+    gen.textCentered('antes de proceder al pago');
+    gen.lineFeed();
 
+    gen.lineFeed(4);
     gen.cut();
 
     return PrintTicket(type: 'precheck', escPosCommands: gen.getCommands());
   }
 
-  /// Generar factura fiscal
+  /// ============================================================
+  /// FACTURA FISCAL
+  /// ============================================================
   static PrintTicket generateFiscalInvoice({
     required Order order,
     required List<OrderItem> items,
@@ -276,7 +285,6 @@ class PrintTicketService {
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
 
-    // Header
     gen.ticketHeader(
       businessName: businessName,
       address: businessAddress,
@@ -284,7 +292,6 @@ class PrintTicketService {
       rnc: businessRnc,
     );
 
-    // Tipo de documento
     gen.setTextSize(width: 2, height: 2);
     gen.setBold(true);
     gen.textCentered('FACTURA');
@@ -292,7 +299,6 @@ class PrintTicketService {
     gen.setTextSize();
     gen.separator();
 
-    // Información fiscal
     gen.fiscalInfo(
       ncf: fiscalDoc.ncfNumber,
       ncfType: _getNcfTypeName(fiscalDoc.ncfType),
@@ -300,7 +306,6 @@ class PrintTicketService {
       customerRnc: fiscalDoc.customerRnc,
     );
 
-    // Información de orden
     gen.orderInfo(
       orderNumber: order.id.substring(0, 8).toUpperCase(),
       tableName: tableName ?? 'N/A',
@@ -308,7 +313,6 @@ class PrintTicketService {
       waiterName: waiterName,
     );
 
-    // Items
     for (final item in items) {
       gen.orderItem(
         name: item.productName,
@@ -318,7 +322,6 @@ class PrintTicketService {
       );
     }
 
-    // Totales
     gen.totals(
       subtotal: order.subtotal,
       discounts: order.discounts > 0 ? order.discounts : null,
@@ -327,7 +330,6 @@ class PrintTicketService {
       total: order.total,
     );
 
-    // Información de pago
     gen.paymentInfo(
       method: paymentMethod.name,
       amount: payment.amount,
@@ -335,9 +337,7 @@ class PrintTicketService {
       reference: payment.reference,
     );
 
-    // Footer
     gen.ticketFooter();
-
     gen.cut();
 
     return PrintTicket(
@@ -346,7 +346,9 @@ class PrintTicketService {
     );
   }
 
-  /// Generar ticket de cierre de caja
+  /// ============================================================
+  /// CIERRE DE CAJA
+  /// ============================================================
   static PrintTicket generateCashCloseTicket({
     required CashRegisterSession session,
     required Map<String, double> summary,
@@ -355,7 +357,6 @@ class PrintTicketService {
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
 
-    // Header
     gen.initialize();
     gen.lineFeed();
     gen.setTextSize(width: 2, height: 2);
@@ -366,7 +367,6 @@ class PrintTicketService {
     gen.lineFeed();
     gen.doubleSeparator();
 
-    // Tipo de documento
     gen.setTextSize(width: 2, height: 2);
     gen.setBold(true);
     gen.textCentered('CIERRE DE CAJA');
@@ -374,7 +374,6 @@ class PrintTicketService {
     gen.setTextSize();
     gen.separator();
 
-    // Información de sesión
     gen.text('Sesión: ${session.id.substring(0, 8).toUpperCase()}');
     if (cashierName != null) gen.text('Cajero: $cashierName');
     gen.text('Apertura: ${_formatDateTime(session.openedAt)}');
@@ -383,7 +382,6 @@ class PrintTicketService {
     }
     gen.separator();
 
-    // Resumen
     gen.lineFeed();
     gen.setBold(true);
     gen.text('RESUMEN DE EFECTIVO:');
@@ -392,40 +390,31 @@ class PrintTicketService {
 
     gen.textRow(
       'Monto inicial:',
-      'RD\$ ${summary['start_amount']!.toStringAsFixed(2)}',
+      'RD\$ ${_formatMoney(summary['start_amount']!)}',
     );
-    gen.textRow('Ventas:', 'RD\$ ${summary['sales']!.toStringAsFixed(2)}');
-    gen.textRow(
-      'Depósitos:',
-      'RD\$ ${summary['deposits']!.toStringAsFixed(2)}',
-    );
-    gen.textRow('Gastos:', '-RD\$ ${summary['expenses']!.toStringAsFixed(2)}');
-    gen.textRow(
-      'Retiros:',
-      '-RD\$ ${summary['withdrawals']!.toStringAsFixed(2)}',
-    );
+    gen.textRow('Ventas:', 'RD\$ ${_formatMoney(summary['sales']!)}');
+    gen.textRow('Depósitos:', 'RD\$ ${_formatMoney(summary['deposits']!)}');
+    gen.textRow('Gastos:', '-RD\$ ${_formatMoney(summary['expenses']!)}');
+    gen.textRow('Retiros:', '-RD\$ ${_formatMoney(summary['withdrawals']!)}');
 
     gen.doubleSeparator();
 
     gen.setBold(true);
     gen.setTextSize(width: 2, height: 2);
-    gen.textRow(
-      'ESPERADO:',
-      'RD\$ ${summary['expected_cash']!.toStringAsFixed(2)}',
-    );
+    gen.textRow('ESPERADO:', 'RD\$ ${_formatMoney(summary['expected_cash']!)}');
     gen.setTextSize();
     gen.setBold(false);
 
     if (session.endAmount != null) {
       gen.lineFeed();
-      gen.textRow('Contado:', 'RD\$ ${session.endAmount!.toStringAsFixed(2)}');
+      gen.textRow('Contado:', 'RD\$ ${_formatMoney(session.endAmount!)}');
 
       final diff = session.endAmount! - summary['expected_cash']!;
       if (diff != 0) {
         gen.setBold(true);
         gen.textRow(
           'Diferencia:',
-          '${diff > 0 ? '+' : ''}RD\$ ${diff.toStringAsFixed(2)}',
+          '${diff > 0 ? '+' : ''}RD\$ ${_formatMoney(diff.abs())}',
         );
         gen.setBold(false);
       }
@@ -437,9 +426,9 @@ class PrintTicketService {
     return PrintTicket(type: 'cash_close', escPosCommands: gen.getCommands());
   }
 
-  // ════════════════════════════════════════════
-  // 🔧 UTILIDADES
-  // ════════════════════════════════════════════
+  // ============================================================
+  // UTILIDADES
+  // ============================================================
 
   static String _getNcfTypeName(String code) {
     switch (code) {
@@ -456,16 +445,55 @@ class PrintTicketService {
     }
   }
 
+  /// Formatear fecha (solo día/mes/año)
+  static String _formatDate(DateTime dt) {
+    return '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}';
+  }
+
+  /// Formatear hora (solo hora:minuto:segundo)
+  static String _formatTime(DateTime dt) {
+    return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}:${dt.second.toString().padLeft(2, '0')}';
+  }
+
+  /// Formatear fecha y hora completa (para otros usos)
   static String _formatDateTime(DateTime dt) {
-    return '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year} '
-        '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    return '${_formatDate(dt)} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
   }
 
+  /// Formatear dinero con comas como separador de miles y punto para decimales
+  static String _formatMoney(double amount) {
+    final parts = amount.toStringAsFixed(2).split('.');
+    final intPart = parts[0];
+    final decPart = parts[1];
+
+    // Agregar comas cada 3 dígitos
+    String formatted = '';
+    int count = 0;
+    for (int i = intPart.length - 1; i >= 0; i--) {
+      if (count == 3) {
+        formatted = ',$formatted';
+        count = 0;
+      }
+      formatted = intPart[i] + formatted;
+      count++;
+    }
+
+    return '$formatted.$decPart';
+  }
+
+  /// Separador delgado (líneas simples)
   static void _thinSeparator(EscPosGenerator gen) {
-    gen.textCentered('--------------------------------');
+    gen.textCentered('-' * 48);
   }
 
+  /// Separador grueso (líneas dobles)
   static void _thickSeparator(EscPosGenerator gen) {
-    gen.textCentered('================================');
+    gen.textCentered('=' * 48);
+  }
+
+  /// Separador punteado
+  static void _dashedSeparator(EscPosGenerator gen) {
+    // Usando caracteres compatibles con impresoras térmicas
+    gen.textCentered('- - - - - - - - - - - - - - - - - - - - - - - -');
   }
 }

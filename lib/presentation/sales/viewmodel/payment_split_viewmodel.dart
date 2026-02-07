@@ -9,6 +9,7 @@ import '../../../data/repositories/printing_repository.dart';
 import '../../../data/repositories/sales_repository_improved.dart';
 import '../../settings/more settings/printing/printers/viewmodel/printers_viewmodel.dart';
 import '../../cashier/viewmodel/cashier_viewmodel.dart';
+import '../viewmodel/sales_viewmodel.dart';
 
 // ==============================================================================
 // 📦 MODELS
@@ -111,6 +112,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   final String _orderId;
   final String? _checkId;
   final String? _cashierSessionId;
+  final Ref _ref;
 
   PaymentSplitViewModel(
     this._salesRepo,
@@ -119,8 +121,10 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     double total, {
     String? checkId,
     String? cashierSessionId,
+    required Ref ref,
   }) : _checkId = checkId,
        _cashierSessionId = cashierSessionId,
+       _ref = ref,
        super(PaymentSplitState(totalAmount: total)) {
     _loadOrderForReceipt();
   }
@@ -301,10 +305,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
               paymentMethodId: methodId,
               amount: tx.amount,
               changeAmount: isLast ? state.change : 0,
-              closeOrder:
-                  isLast &&
-                  _checkId ==
-                      null, // Only close full order if not check payment? Or check backend logic.
+              closeOrder: isLast && _checkId == null,
               cashierSessionId: _cashierSessionId,
             )
             .catchError((e) async {
@@ -329,6 +330,20 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
             });
       }
 
+      // Si se pagó un check parcial, limpiar también en backend y local
+      if (_checkId != null) {
+        try {
+          await _salesRepo.clearCheck(_checkId!);
+        } catch (e) {
+          debugPrint('Error limpiando check en backend: $e');
+        }
+        _ref.read(currentOrderProvider.notifier).removeCheckLocally(_checkId!);
+        await Future.delayed(
+          const Duration(milliseconds: 250),
+        ); // Wait for triggers/propagation
+        await _ref.read(currentOrderProvider.notifier).refreshOrder();
+      }
+
       // 2. Print Receipt via QZ Tray (Agent)
       await _printReceipt();
 
@@ -343,7 +358,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   Future<void> _printReceipt() async {
     try {
       // Basic Receipt Generation using ESC/POS
-      await _printingRepo.getPrinter('default'); // Use default or specific?
+      // await _printingRepo.getPrinter('default'); // REMOVED: Causes invalid input syntax for type uuid
       // We need to know WHICH printer.
       // Assuming 'cashier' printer or similar.
       // For now, finding FIRST available printer via Agent logic or using 'test' IP.
@@ -434,5 +449,6 @@ final paymentSplitProvider =
         params.$2, // amount
         checkId: params.$3, // checkId
         cashierSessionId: sessionId,
+        ref: ref,
       );
     });

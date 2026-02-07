@@ -10,6 +10,9 @@ class SalesRepository {
   final SupabaseClient _client;
   SalesRepository(this._client);
 
+  static const _itemFields =
+      'id,order_id,product_id,product_name,sku,quantity,unit_price,subtotal,discounts,tax,total,check_id,is_takeout,status,notes,created_at';
+
   // ============================================================
   // 📊 SESIONES DE MESA
   // ============================================================
@@ -204,13 +207,19 @@ class SalesRepository {
   Future<List<OrderItem>> getOrderItems(
     String orderId, {
     bool includeModifiers = true,
+    int limit = 500,
   }) async {
     try {
+      final baseSelect = includeModifiers
+          ? '$_itemFields,order_item_modifiers(*)'
+          : _itemFields;
+
       final query = _client
           .from('order_items')
-          .select(includeModifiers ? '*, order_item_modifiers(*)' : '*')
+          .select(baseSelect)
           .eq('order_id', orderId)
-          .order('created_at', ascending: true);
+          .order('created_at', ascending: true)
+          .limit(limit);
 
       final data = await query;
 
@@ -227,6 +236,85 @@ class SalesRepository {
       }).toList();
     } catch (e) {
       throw Exception('Error al obtener items: $e');
+    }
+  }
+
+  /// Elimina todos los items de un check y recalcula totales en DB
+  Future<void> clearCheck(String checkId) async {
+    // Obtener order_id del check
+    final check = await _client
+        .from('order_checks')
+        .select('order_id')
+        .eq('id', checkId)
+        .maybeSingle();
+
+    if (check == null || check['order_id'] == null) return;
+    final orderId = check['order_id'] as String;
+
+    // Borrar items del check
+    await _client.from('order_items').delete().eq('check_id', checkId);
+
+    // Marcar check cerrado y en cero
+    await _client.from('order_checks').update({
+      'is_closed': true,
+      'subtotal': 0,
+      'discounts': 0,
+      'tax': 0,
+      'total': 0,
+    }).eq('id', checkId);
+
+    // Recalcular totales de la orden en DB
+    await _recomputeOrderTotals(orderId);
+  }
+
+  Future<void> _recomputeOrderTotals(String orderId) async {
+    final rows = await _client
+        .from('order_items')
+        .select('subtotal, discounts, tax, total')
+        .eq('order_id', orderId);
+
+    double subtotal = 0, discounts = 0, tax = 0, total = 0;
+    for (final r in rows) {
+      subtotal += (r['subtotal'] ?? 0).toDouble();
+      discounts += (r['discounts'] ?? 0).toDouble();
+      tax += (r['tax'] ?? 0).toDouble();
+      total += (r['total'] ?? 0).toDouble();
+    }
+
+    await _client.from('orders').update({
+      'subtotal': subtotal,
+      'discounts': discounts,
+      'tax': tax,
+      'total': total,
+    }).eq('id', orderId);
+  }
+
+  /// Eliminar un check y sus items
+  Future<void> deleteCheck(String checkId) async {
+    final check = await _client
+        .from('order_checks')
+        .select('order_id')
+        .eq('id', checkId)
+        .maybeSingle();
+    if (check == null || check['order_id'] == null) return;
+    final orderId = check['order_id'] as String;
+
+    await _client.from('order_items').delete().eq('check_id', checkId);
+    await _client.from('order_checks').delete().eq('id', checkId);
+    await _recomputeOrderTotals(orderId);
+  }
+
+  /// Obtener payload compacto de una mesa (usa RPC get_table_live)
+  Future<Map<String, dynamic>?> getTableLive(String tableId) async {
+    try {
+      final res = await _client.rpc(
+        'get_table_live',
+        params: {'p_table_id': tableId},
+      );
+      if (res == null) return null;
+      return Map<String, dynamic>.from(res as Map);
+    } catch (e) {
+      throw Exception('Error al obtener tabla (get_table_live): $e');
     }
   }
 
@@ -313,7 +401,26 @@ class SalesRepository {
     String? customerRnc,
     String? cashierSessionId,
     double changeAmount = 0,
+    bool closeOrder = true,
   }) async {
+    // Si es pago de un check, evitamos RPC que podría cerrar toda la orden
+    final forceDirect = checkId != null && closeOrder == false;
+
+    if (forceDirect) {
+      return _processPaymentDirect(
+        orderId: orderId,
+        checkId: checkId,
+        paymentMethodId: paymentMethodId,
+        amount: amount,
+        reference: reference,
+        customerId: customerId,
+        customerRnc: customerRnc,
+        cashierSessionId: cashierSessionId,
+        changeAmount: changeAmount,
+        closeOrder: closeOrder,
+      );
+    }
+
     try {
       final response = await _client.rpc(
         SalesQueries.rpcProcessPayment,
@@ -350,6 +457,7 @@ class SalesRepository {
         customerRnc: customerRnc,
         cashierSessionId: cashierSessionId,
         changeAmount: changeAmount,
+        closeOrder: closeOrder,
       );
     } catch (e) {
       // No envolver la excepcion para permitir manejo especifico (ej: PostgrestException)
@@ -367,6 +475,7 @@ class SalesRepository {
     String? customerRnc,
     String? cashierSessionId,
     double changeAmount = 0,
+    bool closeOrder = true,
   }) async {
     // 1) Resolver sesion y negocio
     final orderData = await _client
@@ -434,11 +543,13 @@ class SalesRepository {
         .select()
         .single();
 
-    // 4) Cerrar orden y mesa
-    await _client.rpc(
-      SalesQueries.rpcCloseOrderAndTable,
-      params: {'p_order_id': orderId, 'p_status': 'paid'},
-    );
+    // 4) Cerrar orden y mesa solo si corresponde
+    if (closeOrder) {
+      await _client.rpc(
+        SalesQueries.rpcCloseOrderAndTable,
+        params: {'p_order_id': orderId, 'p_status': 'paid'},
+      );
+    }
 
     // 5) Registrar transaccion en caja si aplica
     if (paymentMethodCode == 'cash' && cashierSessionId != null) {

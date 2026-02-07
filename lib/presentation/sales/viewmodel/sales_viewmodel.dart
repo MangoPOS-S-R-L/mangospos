@@ -16,15 +16,24 @@ final currentOrderProvider =
     NotifierProvider<SalesViewModel, CurrentOrderState>(SalesViewModel.new);
 
 class SalesViewModel extends Notifier<CurrentOrderState> {
+  final Map<String, CurrentOrderState> _tableCache = {};
+
   @override
   CurrentOrderState build() => const CurrentOrderState();
 
   Future<void> openTable(String tableId) async {
-    // Reset state completely to avoid showing data from previous table
-    state = const CurrentOrderState(loading: true);
+    // Mostrar inmediatamente la última versión conocida si existe
+    final cached = _tableCache[tableId];
+    if (cached != null) {
+      state = cached.copyWith(loading: true, error: null);
+    } else {
+      state = const CurrentOrderState(loading: true, origin: 'table');
+    }
     try {
       final client = Supabase.instance.client;
       final userId = client.auth.currentUser?.id;
+
+      // 1) Abrir mesa en backend
       final result = await ref
           .read(salesRepositoryProvider)
           .openTable(
@@ -33,7 +42,21 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             peopleCount: 1,
           );
       final orderId = result['order_id'] as String;
-      await _loadOrderDetail(orderId, origin: 'table');
+
+      // 2) Traer snapshot compacto vía RPC (si existe)
+      try {
+        final payload = await ref
+            .read(salesRepositoryProvider)
+            .getTableLive(tableId);
+        if (payload != null) {
+          _applyTableLivePayload(payload, tableId: tableId);
+        }
+      } catch (_) {
+        // Si falla RPC, continuamos con load detallado
+      }
+
+      // 3) Refresco completo (asegura consistencia)
+      await _loadOrderDetail(orderId, origin: 'table', tableId: tableId);
     } catch (e) {
       state = state.copyWith(loading: false, error: e.toString());
     }
@@ -76,6 +99,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     int checkPos = 1,
     bool takeout = false,
     String? notes,
+    String? productName,
+    double? productPrice,
   }) async {
     final orderId = state.order?.id;
     if (orderId == null) {
@@ -97,6 +122,60 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
 
     state = state.copyWith(error: null);
+    final previousItems = state.items;
+    final previousOrder = state.order;
+
+    // Optimistic: solo si tenemos datos del producto y un order cargado
+    OrderItem? optimisticItem;
+    if (productName != null &&
+        productPrice != null &&
+        previousOrder != null &&
+        qty > 0) {
+      final tempId = 'tmp_${DateTime.now().microsecondsSinceEpoch}';
+      final base = productPrice * qty;
+      final taxRate = previousOrder.subtotal > 0
+          ? previousOrder.tax / previousOrder.subtotal
+          : 0;
+      final serviceRate = previousOrder.subtotal > 0
+          ? previousOrder.serviceFee / previousOrder.subtotal
+          : 0;
+      final addTax = base * taxRate;
+      final addService = base * serviceRate;
+      final addTotal = base + addTax + addService;
+
+      optimisticItem = OrderItem(
+        id: tempId,
+        orderId: orderId,
+        productId: menuItemId,
+        productName: productName,
+        sku: null,
+        quantity: qty,
+        unitPrice: productPrice,
+        subtotal: base,
+        discounts: 0,
+        tax: addTax,
+        total: addTotal,
+        checkId: null,
+        isTakeout: takeout,
+        status: 'draft',
+        notes: notes,
+        createdAt: DateTime.now(),
+        modifiers: const [],
+      );
+
+      final updatedOrder = previousOrder.copyWith(
+        subtotal: previousOrder.subtotal + base,
+        tax: previousOrder.tax + addTax,
+        serviceFee: previousOrder.serviceFee + addService,
+        total: previousOrder.total + addTotal,
+      );
+
+      state = state.copyWith(
+        items: [...state.items, optimisticItem],
+        order: updatedOrder,
+      );
+    }
+
     try {
       await ref
           .read(salesRepositoryProvider)
@@ -110,7 +189,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           );
       unawaited(_loadOrderDetail(orderId));
     } catch (e) {
-      state = state.copyWith(error: 'Error al agregar producto: $e');
+      // Revertir si hicimos optimismo
+      if (optimisticItem != null) {
+        state = state.copyWith(
+          items: previousItems,
+          order: previousOrder,
+          error: 'Error al agregar: $e',
+        );
+      } else {
+        state = state.copyWith(error: 'Error al agregar producto: $e');
+      }
     }
   }
 
@@ -199,6 +287,60 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     if (orderId != null) await _loadOrderDetail(orderId);
   }
 
+  /// Remueve localmente un check (subcuenta) y sus items, ajustando totales.
+  void removeCheckLocally(String checkId) {
+    final currentOrder = state.order;
+    if (currentOrder == null) return;
+
+    final removedItems = state.items
+        .where((i) => i.checkId == checkId)
+        .toList();
+    if (removedItems.isEmpty) return;
+
+    final remainingItems = state.items
+        .where((i) => i.checkId != checkId)
+        .toList();
+
+    final remSubtotal = remainingItems.fold<double>(
+      0,
+      (s, i) => s + i.subtotal,
+    );
+    final remDiscounts = remainingItems.fold<double>(
+      0,
+      (s, i) => s + i.discounts,
+    );
+    final remTax = remainingItems.fold<double>(0, (s, i) => s + i.tax);
+    final remTotal = remainingItems.fold<double>(0, (s, i) => s + i.total);
+
+    final newOrder = currentOrder.copyWith(
+      subtotal: remSubtotal,
+      discounts: remDiscounts,
+      tax: remTax,
+      total: remTotal,
+    );
+
+    final remainingChecks = state.checks.where((c) => c.id != checkId).toList();
+
+    state = state.copyWith(
+      items: remainingItems,
+      order: newOrder,
+      checks: remainingChecks,
+      clearSelectedCheck: state.selectedCheckId == checkId,
+    );
+
+    // actualiza cache si mesa activa
+    if (state.origin == 'table') {
+      final activeTableEntry = _tableCache.entries.firstWhere(
+        (e) => e.value.order?.id == currentOrder.id,
+        orElse: () =>
+            MapEntry<String, CurrentOrderState>('', const CurrentOrderState()),
+      );
+      if (activeTableEntry.key.isNotEmpty) {
+        _tableCache[activeTableEntry.key] = state;
+      }
+    }
+  }
+
   Future<void> closeOrderPaid() async {
     final orderId = state.order?.id;
     if (orderId == null) return;
@@ -259,14 +401,22 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     );
   }
 
-  Future<void> _loadOrderDetail(String orderId, {String? origin}) async {
+  Future<void> _loadOrderDetail(
+    String orderId, {
+    String? origin,
+    String? tableId,
+  }) async {
     final repo = ref.read(salesRepositoryProvider);
     Order? order;
     List<OrderItem> items = const [];
     List<OrderCheck> checks = const [];
     String? loadError;
     final orderFuture = repo.getOrder(orderId);
-    final itemsFuture = repo.getOrderItems(orderId, includeModifiers: false);
+    final itemsFuture = repo.getOrderItems(
+      orderId,
+      includeModifiers: false,
+      limit: 500,
+    );
     final checksFuture = repo.getOrderChecks(orderId);
 
     try {
@@ -293,7 +443,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // Verificar si el check seleccionado todavía existe
     String? newSelectedCheckId = state.selectedCheckId;
     if (newSelectedCheckId != null) {
-      final exists = checks.any((c) => c.id == newSelectedCheckId);
+      final exists = checks.any(
+        (c) => c.id == newSelectedCheckId && !c.isClosed,
+      );
       if (!exists) {
         newSelectedCheckId = null;
       }
@@ -310,5 +462,73 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       clearSelectedCheck:
           newSelectedCheckId == null && state.selectedCheckId != null,
     );
+
+    // Cachear última versión por mesa para apertura optimista
+    if (origin == 'table' && tableId != null) {
+      _tableCache[tableId] = state;
+    }
+  }
+
+  void _applyTableLivePayload(
+    Map<String, dynamic> payload, {
+    required String tableId,
+  }) {
+    try {
+      final orderMap = Map<String, dynamic>.from(payload['order'] as Map);
+      final order = Order.fromMap(orderMap);
+
+      final checks = ((payload['checks'] as List?) ?? []).map((c) {
+        final m = Map<String, dynamic>.from(c as Map);
+        return OrderCheck(
+          id: m['id'] ?? '',
+          orderId: order.id,
+          label: m['label'] ?? 'C1',
+          position: (m['position'] ?? 1) as int,
+          isClosed: false,
+          subtotal: (m['subtotal'] ?? 0).toDouble(),
+          discounts: (m['discounts'] ?? 0).toDouble(),
+          tax: (m['tax'] ?? 0).toDouble(),
+          total: (m['total'] ?? 0).toDouble(),
+          items: const [],
+        );
+      }).toList();
+
+      final items = ((payload['items'] as List?) ?? []).map((i) {
+        final m = Map<String, dynamic>.from(i as Map);
+        return OrderItem(
+          id: m['id'] ?? '',
+          orderId: order.id,
+          productId: m['product_id'],
+          productName: m['product_name'] ?? '',
+          sku: m['sku'],
+          quantity: (m['quantity'] ?? m['qty'] ?? 1).toDouble(),
+          unitPrice: (m['unit_price'] ?? 0).toDouble(),
+          subtotal: (m['subtotal'] ?? 0).toDouble(),
+          discounts: (m['discounts'] ?? 0).toDouble(),
+          tax: (m['tax'] ?? 0).toDouble(),
+          total: (m['total'] ?? 0).toDouble(),
+          checkId: m['check_id'],
+          isTakeout: m['is_takeout'] ?? false,
+          status: m['status'] ?? 'draft',
+          notes: m['notes'],
+          createdAt: DateTime.tryParse(m['created_at'] ?? '') ?? DateTime.now(),
+          modifiers: const [],
+        );
+      }).toList();
+
+      final newState = state.copyWith(
+        loading: false,
+        origin: 'table',
+        order: order,
+        items: items,
+        checks: checks,
+        error: null,
+      );
+
+      state = newState;
+      _tableCache[tableId] = newState;
+    } catch (e) {
+      // Si el payload viene incompleto, ignoramos y dejamos al load completo
+    }
   }
 }

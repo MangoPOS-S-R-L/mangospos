@@ -338,7 +338,13 @@ class _ProductCardState extends ConsumerState<_ProductCard>
     try {
       await ref
           .read(currentOrderProvider.notifier)
-          .addItem(menuItemId: widget.item.id, qty: 1, takeout: false);
+          .addItem(
+            menuItemId: widget.item.id,
+            qty: 1,
+            takeout: false,
+            productName: widget.item.name,
+            productPrice: widget.item.price,
+          );
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

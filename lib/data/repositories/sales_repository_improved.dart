@@ -204,6 +204,80 @@ class SalesRepositoryImproved {
     );
   }
 
+  /// Elimina todos los items de un check y recalcula totales en DB
+  Future<void> clearCheck(String checkId) async {
+    final check = await _client
+        .from('order_checks')
+        .select('order_id')
+        .eq('id', checkId)
+        .maybeSingle();
+
+    if (check == null || check['order_id'] == null) return;
+    final orderId = check['order_id'] as String;
+
+    // 1. Borrar items del check
+    try {
+      await _client.from('order_items').delete().eq('check_id', checkId);
+    } catch (e) {
+      // Ignorar si ya estaban borrados o error menor
+    }
+
+    // 2. Recalcular totales de la orden (para limpiar los items borrados)
+    await _recomputeOrderTotals(orderId);
+
+    // 3. ACTUALIZAR CHECK AL FINAL para asegurar que gane sobre cualquier trigger
+    await _client
+        .from('order_checks')
+        .update({
+          'is_closed': true,
+          'subtotal': 0,
+          'discounts': 0,
+          'tax': 0,
+          'total': 0,
+        })
+        .eq('id', checkId);
+  }
+
+  Future<void> _recomputeOrderTotals(String orderId) async {
+    final rows = await _client
+        .from('order_items')
+        .select('subtotal, discounts, tax, total')
+        .eq('order_id', orderId);
+
+    double subtotal = 0, discounts = 0, tax = 0, total = 0;
+    for (final r in rows) {
+      subtotal += (r['subtotal'] ?? 0).toDouble();
+      discounts += (r['discounts'] ?? 0).toDouble();
+      tax += (r['tax'] ?? 0).toDouble();
+      total += (r['total'] ?? 0).toDouble();
+    }
+
+    await _client
+        .from('orders')
+        .update({
+          'subtotal': subtotal,
+          'discounts': discounts,
+          'tax': tax,
+          'total': total,
+        })
+        .eq('id', orderId);
+  }
+
+  /// Eliminar un check y sus items
+  Future<void> deleteCheck(String checkId) async {
+    final check = await _client
+        .from('order_checks')
+        .select('order_id')
+        .eq('id', checkId)
+        .maybeSingle();
+    if (check == null || check['order_id'] == null) return;
+    final orderId = check['order_id'] as String;
+
+    await _client.from('order_items').delete().eq('check_id', checkId);
+    await _client.from('order_checks').delete().eq('id', checkId);
+    await _recomputeOrderTotals(orderId);
+  }
+
   // ============================================================
   // 💰 PAGOS
   // ============================================================
@@ -221,6 +295,23 @@ class SalesRepositoryImproved {
     double changeAmount = 0,
     bool closeOrder = true,
   }) async {
+    // Si es pago parcial por check, evitamos el RPC que podría cerrar la orden completa
+    final forceDirect = checkId != null && closeOrder == false;
+    if (forceDirect) {
+      return _processPaymentDirect(
+        orderId: orderId,
+        checkId: checkId,
+        paymentMethodId: paymentMethodId,
+        amount: amount,
+        reference: reference,
+        customerId: customerId,
+        customerRnc: customerRnc,
+        cashierSessionId: cashierSessionId,
+        changeAmount: changeAmount,
+        closeOrder: closeOrder,
+      );
+    }
+
     return DatabaseOperationWrapper.rpc(
       operationName: 'Procesar Pago',
       operation: () async {

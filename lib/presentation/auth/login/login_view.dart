@@ -24,8 +24,26 @@ class _LoginViewState extends ConsumerState<LoginView> {
 
   @override
   Widget build(BuildContext context) {
-    // AHORA el provider devuelve LoginState directamente (no AsyncValue)
-    final state = ref.watch(loginVmProvider); // LoginState
+    // Listen for errors to show SnackBar
+    ref.listen(loginVmProvider, (prev, next) {
+      if (prev?.isLoading == true &&
+          next.isLoading == false &&
+          next.error != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(next.error!),
+            backgroundColor: Colors.redAccent,
+            action: SnackBarAction(
+              label: 'OK',
+              textColor: Colors.white,
+              onPressed: () {},
+            ),
+          ),
+        );
+      }
+    });
+
+    final state = ref.watch(loginVmProvider);
     final vm = ref.read(loginVmProvider.notifier);
 
     final data = state;
@@ -188,6 +206,19 @@ class _LoginViewState extends ConsumerState<LoginView> {
                       ),
                     ],
                   ),
+
+                  // DEBUG INFO
+                  if (kDebugMode || kIsWeb) ...[
+                    const SizedBox(height: 20),
+                    const Divider(),
+                    Center(
+                      child: Text(
+                        'WASM Build - Debug Mode\nRev: 1.0.1',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.grey, fontSize: 10),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
