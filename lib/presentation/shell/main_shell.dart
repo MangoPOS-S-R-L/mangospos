@@ -188,7 +188,7 @@ class _TopNavItem extends StatefulWidget {
     required this.label,
     required this.route,
     required this.asset,
-    this.iconSize = 20.0,
+    this.iconSize = 22,
   });
 
   @override

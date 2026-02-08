@@ -390,9 +390,7 @@ class PrintingRepository {
 
   /// Descubrir con agent (Scan Subnet)
   Future<List<dynamic>> discoverWithAgent(String businessId) async {
-    // TODO: Implementar endpoint /scan en el agente
-    // Por ahora retornamos lista vacía o mock
-    return [];
+    return await _localService.discoverPrinters();
   }
 
   // ... (Resto de métodos de compatibilidad)
@@ -402,17 +400,7 @@ class PrintingRepository {
     required String ip,
     required List<int> data,
   }) async {
-    // Para RAW printing el agente necesitaría soportar base64 o similar
-    // Por ahora enviamos un mensaje genérico.
-    final job = {
-      'id': 'RAW-${DateTime.now().millisecondsSinceEpoch}',
-      'printer': {'type': 'network', 'ip': ip, 'port': 9100},
-      'content': {
-        'title': 'RAW DATA PRINT',
-        'body': 'Raw printing not yet fully implemented in dart-side.',
-      },
-    };
-    await _localService.printJob(job);
+    await _localService.printRawData(ip: ip, data: data);
   }
 
   /// Crear área de impresión (compatibilidad)

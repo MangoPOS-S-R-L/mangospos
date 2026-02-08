@@ -335,7 +335,6 @@ class _CategoriesView extends ConsumerWidget {
               ),
               TextButton(
                 onPressed: () => onCategorySelect(null),
-                child: const Text('Ver todas'),
                 style: TextButton.styleFrom(
                   foregroundColor: SalesTheme.primary,
                   textStyle: const TextStyle(
@@ -343,6 +342,7 @@ class _CategoriesView extends ConsumerWidget {
                     fontSize: 14,
                   ),
                 ),
+                child: const Text('Ver todas'),
               ),
             ],
           ),

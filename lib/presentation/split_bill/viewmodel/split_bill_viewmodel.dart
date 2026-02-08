@@ -27,7 +27,10 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
 
     try {
       // Obtener items de la orden
-      final items = await _salesRepo.getOrderItems(order.id);
+      final items = await _salesRepo.getOrderItems(
+        order.id,
+        onlyOpen: true,
+      );
       if (!mounted) return;
 
       // Obtener checks existentes (si ya se dividió antes)
@@ -44,8 +47,11 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
       if (existingChecks.length > 1) {
         // Ordenar
         existingChecks.sort((a, b) => a.position.compareTo(b.position));
-        // Tomar todos MENOS el primero
-        visibleChecks = existingChecks.sublist(1);
+        // Tomar todos MENOS el primero y solo abiertos
+        visibleChecks = existingChecks
+            .sublist(1)
+            .where((c) => !c.isClosed)
+            .toList();
         visibleCheckIds = visibleChecks.map((c) => c.id).toSet();
       }
 

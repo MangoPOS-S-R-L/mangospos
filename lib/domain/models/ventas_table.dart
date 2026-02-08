@@ -113,7 +113,7 @@ class VentasTable {
       status: TableStatusX.fromDb(map['status']),
       zone: map['zone'] ?? map['zone_id'] ?? '',
       guests: map['guests'] ?? map['people_count'],
-      time: map['time'] != null ? map['time'] : null,
+      time: map['time'],
       total: map['total'] != null ? (map['total'] as num).toDouble() : null,
       waiterId: map['waiter_id'],
       waiterName: map['waiter_name'],

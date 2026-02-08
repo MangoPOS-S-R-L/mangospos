@@ -1,0 +1,44 @@
+# MangoPOS Print Agent - Professional Configuration
+# Version 2.0.0
+
+# --- General ---
+service:
+  name: "MangoPOSPrintAgent"
+  display_name: "Mango POS Print Agent"
+  description: "Cross-platform LAN printing service for MangoPOS"
+  port: 9100  # API Port (REST + WebSocket)
+
+# --- Security ---
+security:
+  enabled: true
+  api_token: "MANGOPOS_SECURE_TOKEN_123"  # Change this!
+  lan_only: true  # Allow connections only from RFC1918 private IPs
+  whitelist:
+    - "127.0.0.1"
+    - "192.168.0.0/16"
+    - "10.0.0.0/8"
+
+# --- Discovery ---
+discovery:
+  enabled: true
+  interval_ms: 60000  # Check for new devices every minute
+  protocols:
+    - network  # Scan LAN via Ping/Port 9100
+    - usb      # Scan native USB
+    # - bluetooth # Requires OS setup
+
+# --- Printing ---
+queue:
+  max_retries: 3
+  timeout_ms: 10000   # 10s timeout per job
+  history_limit: 100  # Keep last 100 jobs in memory
+  fallback_printer: null # optional printer ID
+
+# --- Printers (Pre-configured) ---
+# Format:
+# - id: unique_id
+#   name: "Display Name"
+#   type: network | usb | serial
+#   endpoint: ip:port (network) or vid:pid (usb) or com_port (serial)
+#   area: "Kitchen"
+printers: []

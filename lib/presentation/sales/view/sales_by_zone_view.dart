@@ -359,7 +359,7 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
         const SizedBox(width: 6), // gap-2
         // Texto del indicador
         Text(
-          '$count ${label}${count != 1 ? 's' : ''}',
+          '$count $label${count != 1 ? 's' : ''}',
           style: const TextStyle(
             fontSize: 14, // text-sm
             fontWeight: FontWeight.w400, // Regular

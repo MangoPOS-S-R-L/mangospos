@@ -1,4 +1,6 @@
 // lib/data/repositories/sales_repository_improved.dart
+import 'dart:async';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../datasources/queries/sales_queries.dart';
@@ -177,31 +179,45 @@ class SalesRepositoryImproved {
   Future<List<OrderItem>> getOrderItems(
     String orderId, {
     bool includeModifiers = true,
+    bool onlyOpen = false,
   }) async {
     return DatabaseOperationWrapper.read(
       operationName: 'Obtener Items de Orden',
       operation: () async {
-        final query = _client
-            .from('order_items')
-            .select(includeModifiers ? '*, order_item_modifiers(*)' : '*')
-            .eq('order_id', orderId)
-            .order('created_at', ascending: true);
+        if (onlyOpen) {
+          final data = await _client
+              .from('order_items')
+              .select(includeModifiers ? '*, order_item_modifiers(*)' : '*')
+              .eq('order_id', orderId)
+              .not('status', 'in', '(paid,void)')
+              .order('created_at', ascending: true);
 
-        final data = await query;
+          return _mapItems(data, includeModifiers);
+        } else {
+          final data = await _client
+              .from('order_items')
+              .select(includeModifiers ? '*, order_item_modifiers(*)' : '*')
+              .eq('order_id', orderId)
+              .order('created_at', ascending: true);
 
-        return data.map((json) {
-          final item = OrderItem.fromMap(json);
-          final modifiers = includeModifiers
-              ? (json['order_item_modifiers'] as List?)
-                        ?.map((m) => OrderItemModifier.fromMap(m))
-                        .toList() ??
-                    []
-              : const <OrderItemModifier>[];
-
-          return item.copyWith(modifiers: modifiers);
-        }).toList();
+          return _mapItems(data, includeModifiers);
+        }
       },
     );
+  }
+
+  List<OrderItem> _mapItems(List<dynamic> data, bool includeModifiers) {
+    return data.map((json) {
+      final item = OrderItem.fromMap(json);
+      final modifiers = includeModifiers
+          ? (json['order_item_modifiers'] as List?)
+                    ?.map((m) => OrderItemModifier.fromMap(m))
+                    .toList() ??
+                []
+          : const <OrderItemModifier>[];
+
+      return item.copyWith(modifiers: modifiers);
+    }).toList();
   }
 
   /// Elimina todos los items de un check y recalcula totales en DB
@@ -215,34 +231,43 @@ class SalesRepositoryImproved {
     if (check == null || check['order_id'] == null) return;
     final orderId = check['order_id'] as String;
 
-    // 1. Borrar items del check
-    try {
-      await _client.from('order_items').delete().eq('check_id', checkId);
-    } catch (e) {
-      // Ignorar si ya estaban borrados o error menor
-    }
+    // 1. Marcar items como PAGADOS (no borrar)
+    await _client
+        .from('order_items')
+        .update({'status': 'paid'})
+        .eq('check_id', checkId)
+        .neq('status', 'void');
 
-    // 2. Recalcular totales de la orden (para limpiar los items borrados)
-    await _recomputeOrderTotals(orderId);
-
-    // 3. ACTUALIZAR CHECK AL FINAL para asegurar que gane sobre cualquier trigger
+    // 2. Marcar check como cerrado
     await _client
         .from('order_checks')
         .update({
           'is_closed': true,
-          'subtotal': 0,
-          'discounts': 0,
-          'tax': 0,
-          'total': 0,
+          'closed_at': DateTime.now().toUtc().toIso8601String(),
         })
         .eq('id', checkId);
+
+    // 3. Recalcular
+    await _recomputeOrderTotals(orderId);
+
+    // 4. Si no quedan items abiertos, cerrar la orden (liberar mesa)
+    final openItemsCount = await _client
+        .from('order_items')
+        .count(CountOption.exact)
+        .eq('order_id', orderId)
+        .not('status', 'in', '(paid,void)');
+
+    if (openItemsCount == 0) {
+      await closeOrder(orderId: orderId, status: 'paid');
+    }
   }
 
   Future<void> _recomputeOrderTotals(String orderId) async {
     final rows = await _client
         .from('order_items')
         .select('subtotal, discounts, tax, total')
-        .eq('order_id', orderId);
+        .eq('order_id', orderId)
+        .neq('status', 'void');
 
     double subtotal = 0, discounts = 0, tax = 0, total = 0;
     for (final r in rows) {
@@ -295,71 +320,46 @@ class SalesRepositoryImproved {
     double changeAmount = 0,
     bool closeOrder = true,
   }) async {
-    // Si es pago parcial por check, evitamos el RPC que podría cerrar la orden completa
-    final forceDirect = checkId != null && closeOrder == false;
-    if (forceDirect) {
-      return _processPaymentDirect(
-        orderId: orderId,
-        checkId: checkId,
-        paymentMethodId: paymentMethodId,
-        amount: amount,
-        reference: reference,
-        customerId: customerId,
-        customerRnc: customerRnc,
-        cashierSessionId: cashierSessionId,
-        changeAmount: changeAmount,
-        closeOrder: closeOrder,
+    // Intentamos usar el RPC optimizado (v2)
+    try {
+      final response = await _client.rpc(
+        SalesQueries.rpcProcessPayment,
+        params: {
+          'p_order_id': orderId,
+          'p_check_id': checkId,
+          'p_payment_method_id': paymentMethodId,
+          'p_amount': amount,
+          'p_reference': reference,
+          'p_customer_id': customerId,
+          'p_customer_rnc': customerRnc,
+          'p_cashier_session_id': cashierSessionId,
+        },
       );
+
+      return Payment.fromMap(response as Map<String, dynamic>);
+    } catch (e) {
+      print(
+        '⚠️ Error en RPC processPayment: $e. Intentando Fallback Directo...',
+      );
+      // Fallback a directo para evitar timeouts/errores del RPC si este falla
+      try {
+        return await _processPaymentDirect(
+          orderId: orderId,
+          checkId: checkId,
+          paymentMethodId: paymentMethodId,
+          amount: amount,
+          reference: reference,
+          customerId: customerId,
+          customerRnc: customerRnc,
+          cashierSessionId: cashierSessionId,
+          changeAmount: changeAmount,
+          closeOrder: closeOrder,
+        );
+      } catch (e2) {
+        print('❌ Error en Fallback Directo: $e2');
+        rethrow;
+      }
     }
-
-    return DatabaseOperationWrapper.rpc(
-      operationName: 'Procesar Pago',
-      operation: () async {
-        try {
-          final response = await _client.rpc(
-            SalesQueries.rpcProcessPayment,
-            params: {
-              'p_order_id': orderId,
-              'p_check_id': checkId,
-              'p_payment_method_id': paymentMethodId,
-              'p_amount': amount,
-              'p_reference': reference,
-              'p_customer_id': customerId,
-              'p_customer_rnc': customerRnc,
-              'p_cashier_session_id': cashierSessionId,
-            },
-          );
-
-          return Payment.fromMap(response);
-        } on PostgrestException catch (e) {
-          final message = '${e.message} ${e.details ?? ''} ${e.hint ?? ''}'
-              .toLowerCase();
-          final missingFn =
-              message.contains('fn_process_payment_v2') ||
-              message.contains('fn_process_payment');
-
-          final isFkError =
-              e.code == '23503' &&
-              (message.contains('session_id') ||
-                  message.contains('foreign key'));
-
-          if (!missingFn && !isFkError) rethrow;
-
-          return _processPaymentDirect(
-            orderId: orderId,
-            checkId: checkId,
-            paymentMethodId: paymentMethodId,
-            amount: amount,
-            reference: reference,
-            customerId: customerId,
-            customerRnc: customerRnc,
-            cashierSessionId: cashierSessionId,
-            changeAmount: changeAmount,
-            closeOrder: closeOrder,
-          );
-        }
-      },
-    );
   }
 
   Future<Payment> _processPaymentDirect({
@@ -434,6 +434,8 @@ class SalesRepositoryImproved {
             'reference': reference,
             'change_amount': changeAmount,
             'status': 'completed',
+            if (customerId != null) 'customer_id': customerId,
+            if (customerRnc != null) 'customer_rnc': customerRnc,
             if (userId != null) 'processed_by': userId,
             if (cashierSessionId != null) 'session_id': cashierSessionId,
           })
@@ -445,9 +447,6 @@ class SalesRepositoryImproved {
           e.code == '23503' &&
           (e.message.contains('session_id') ||
               e.details.toString().contains('session_id'))) {
-        // Log warning
-        // debugPrint('⚠️ Invalid Cashier Session ID detected. Retrying payment without session link.');
-
         paymentRow = await _client
             .from('payments')
             .insert({
@@ -459,6 +458,8 @@ class SalesRepositoryImproved {
               'reference': reference,
               'change_amount': changeAmount,
               'status': 'completed',
+              if (customerId != null) 'customer_id': customerId,
+              if (customerRnc != null) 'customer_rnc': customerRnc,
               if (userId != null) 'processed_by': userId,
               // session_id specifically omitted
             })
@@ -469,13 +470,22 @@ class SalesRepositoryImproved {
       }
     }
 
-    if (closeOrder) {
+    // 4) Marcar líneas/cheques como pagados
+    if (checkId != null) {
+      await _markCheckPaid(orderId: orderId, checkId: checkId);
+    } else if (closeOrder) {
+      await _markOrderPaid(orderId);
+    }
+
+    // 5) Cerrar orden si corresponde
+    if (closeOrder && checkId == null) {
       await _client.rpc(
         SalesQueries.rpcCloseOrderAndTable,
         params: {'p_order_id': orderId, 'p_status': 'paid'},
       );
     }
 
+    // 6) Registrar transaccion en caja si aplica
     if (paymentMethodCode == 'cash' && cashierSessionId != null) {
       try {
         await _client.from('cash_transactions').insert({
@@ -498,6 +508,48 @@ class SalesRepositoryImproved {
       r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
     );
     return regex.hasMatch(value);
+  }
+
+  // ============================================================
+  // 💰 Helpers de pago de subcuentas / items
+  // ============================================================
+
+  Future<void> _markCheckPaid({
+    required String orderId,
+    required String checkId,
+  }) async {
+    await _client
+        .from('order_items')
+        .update({'status': 'paid'})
+        .eq('order_id', orderId)
+        .eq('check_id', checkId)
+        .neq('status', 'void');
+
+    await _client
+        .from('order_checks')
+        .update({
+          'is_closed': true,
+          'closed_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('id', checkId);
+
+    final openItemsCount = await _client
+        .from('order_items')
+        .count(CountOption.exact)
+        .eq('order_id', orderId)
+        .not('status', 'in', '(paid,void)');
+
+    if (openItemsCount == 0) {
+      await closeOrder(orderId: orderId, status: 'paid');
+    }
+  }
+
+  Future<void> _markOrderPaid(String orderId) async {
+    await _client
+        .from('order_items')
+        .update({'status': 'paid'})
+        .eq('order_id', orderId)
+        .neq('status', 'void');
   }
 
   /// Cerrar orden y sesión con reintentos

@@ -19,7 +19,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   final Map<String, CurrentOrderState> _tableCache = {};
 
   @override
-  CurrentOrderState build() => const CurrentOrderState();
+  CurrentOrderState build() {
+    ref.onDispose(() {
+      _realtimeChannel?.unsubscribe();
+    });
+    return const CurrentOrderState();
+  }
 
   Future<void> openTable(String tableId) async {
     // Mostrar inmediatamente la última versión conocida si existe
@@ -416,6 +421,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       orderId,
       includeModifiers: false,
       limit: 500,
+      onlyOpen: true,
     );
     final checksFuture = repo.getOrderChecks(orderId);
 
@@ -467,6 +473,80 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     if (origin == 'table' && tableId != null) {
       _tableCache[tableId] = state;
     }
+
+    _subscribeToOrderUpdates(orderId);
+  }
+
+  RealtimeChannel? _realtimeChannel;
+
+  void _subscribeToOrderUpdates(String orderId) {
+    if (_realtimeChannel != null) {
+      // If already subscribed to this order, do nothing
+      // We could check if channel topic matches, but simple unsubscribe/resubscribe is safer
+      _realtimeChannel!.unsubscribe();
+    }
+
+    final client = Supabase.instance.client;
+    _realtimeChannel = client.channel('order_view_$orderId');
+
+    _realtimeChannel!
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'order_items',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'order_id',
+            value: orderId,
+          ),
+          callback: (payload) {
+            // Refresh order on any item change
+            refreshOrder();
+          },
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'order_checks',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'order_id',
+            value: orderId,
+          ),
+          callback: (payload) {
+            // Refresh on check changes (splits, payments, closing)
+            refreshOrder();
+          },
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'orders',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'id',
+            value: orderId,
+          ),
+          callback: (payload) {
+            // Refresh on order status change (e.g. paid/closed)
+            // Check if order is closed/paid to clear state or navigate back could be logic here
+            refreshOrder(clearIfPaid: true);
+          },
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'payments',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'order_id',
+            value: orderId,
+          ),
+          callback: (payload) {
+            refreshOrder();
+          },
+        )
+        .subscribe();
   }
 
   void _applyTableLivePayload(

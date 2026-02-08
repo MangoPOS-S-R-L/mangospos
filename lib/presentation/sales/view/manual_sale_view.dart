@@ -649,8 +649,9 @@ class _CartSection extends ConsumerWidget {
                             ? null
                             : () {
                                 if (orderState.order == null) return;
-                                if (isMobileModal)
+                                if (isMobileModal) {
                                   Navigator.pop(context); // Close sheet
+                                }
                                 showDialog(
                                   context: context,
                                   builder: (context) => PaymentModal(

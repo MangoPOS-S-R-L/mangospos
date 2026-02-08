@@ -139,7 +139,7 @@ class _WelcomeCard extends StatelessWidget {
         // Date - uppercase per spec
         Text(
           DateFormat(
-            'EEEE, d \de\ MMMM yyyy',
+            'EEEE, d de MMMM yyyy',
             'es',
           ).format(DateTime.now()).toUpperCase(),
           style: const TextStyle(
@@ -1040,7 +1040,7 @@ class _ActiveTablesWidget extends StatelessWidget {
     final seconds = duration.inSeconds.remainder(60);
 
     if (hours > 0) {
-      return '${hours}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+      return '$hours:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
     }
     return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
   }
@@ -1326,7 +1326,7 @@ class _ActiveTableRow extends StatelessWidget {
                         ),
                         const SizedBox(width: 6),
                         Text(
-                          '${peopleCount} personas',
+                          '$peopleCount personas',
                           style: const TextStyle(
                             fontSize: 13,
                             color: AppColors.mutedForeground,

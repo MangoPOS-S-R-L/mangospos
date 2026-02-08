@@ -1,44 +1,74 @@
-# MangoPOS Print Agent
+# MangoPOS - Professional Print Agent
+v2.0.0
 
-Este es el agente local que gestiona la comunicación con las impresoras físicas. Se ejecuta como un servicio de Windows para asegurar que siempre esté disponible.
+A high-performance, background service for LAN printing integration with MangoPOS. Supports Network, USB, and other POS printers.
 
-## Instalación Automática (Recomendada)
+## Features
+- **Auto-Discovery**: Detects printers on the local network (Port 9100) automatically.
+- **Queue Management**: Reliable job queuing with retries and timeout handling.
+- **Secure API**: RESTful API protected by Bearer Token.
+- **Cross-Platform**: Runs on Windows, Linux, and macOS.
+- **Configurable**: Simple `config.yaml` for advanced settings.
 
-Simplemente ejecuta el archivo instalador incluido:
+## Installation
 
-1.  Haz doble clic en **`setup.bat`**.
-2.  El script verificará e instalará Node.js si falta (o te pedirá instalarlo).
-3.  Instalará las dependencias necesarias.
-4.  Creará el **Servicio de Windows** para que el agente inicie automáticamente con el sistema.
+### Prerequisites
+- Node.js (Latest LTS recommended) installed.
+- Administrative privileges (for installing service).
 
-## Gestión del Servicio
+### Steps
+1. **Clone/Download** this repository.
+2. **Install Dependencies**:
+   ```bash
+   npm install
+   ```
+3. **Configure**:
+   - Copy `config.yaml` if needed and edit settings (Port, API Token).
+   - Default Token: `MANGOPOS_SECURE_TOKEN_123`
 
-*   **Detener/Desinstalar**: Ejecuta `uninstall.bat`.
-*   **Logs**: Revisa el archivo `agent.log` en esta carpeta para ver el historial de impresión y errores.
+4. **Install Service** (Start Automatically on Boot):
+   ```bash
+   npm run install-service
+   ```
+   *Verify it's running in Windows Services (services.msc).*
 
-## Configuración Manual
+5. **Start Manually (Dev Mode)**:
+   ```bash
+   npm start
+   ```
 
-Si prefieres hacerlo manualmente:
+## API Documentation
 
-1.  Instala Node.js.
-2.  `npm install`
-3.  Configura `.env` (se crea un ejemplo automáticamente con el setup).
-4.  Para iniciar como servicio: `node install_service.js`
-5.  Para iniciar consola (dev): `npm start`
+The agent exposes a REST API on Port 9100 (default).
 
-## Dependencias de Hardware (Impresoras USB)
+### 1. Get Status
+`GET /status`
+Check service health and queue status.
 
-Para usar impresoras USB en Windows a través del modo RAW:
+### 2. List Printers
+`GET /printers`
+Headers: `Authorization: Bearer <TOKEN>`
+Returns configured and discovered printers.
 
-1.  Descarga **[Zadig](https://zadig.akeo.ie/)**.
-2.  Conecta tu impresora USB.
-3.  Abre Zadig > Options > List All Devices.
-4.  Selecciona tu impresora.
-5.  Instala el driver **WinUSB** (o libusb-win32).
+### 3. Print Job
+`POST /print`
+Headers: `Authorization: Bearer <TOKEN>`, `Content-Type: application/json`
+Body:
+```json
+{
+  "printerId": "192.168.0.172",
+  "type": "text", 
+  "content": "Hello World\n\n"
+}
+```
+*Note: `type` can be 'text' (simple) or 'raw' (base64 encoded ESC/POS bytes).*
 
-*Nota: Para impresoras de red (Ethernet/WiFi), esto no es necesario.*
+### 4. Test Print
+`POST /test-print`
+Body: `{ "printerId": "..." }`
+Queue a test page.
 
-## Estructura
-
-*   `src/index.js`: Lógica principal.
-*   `install_service.js`: Script de registro del servicio de Windows.
+## Troubleshooting
+- **Logs**: Check `logs/agent.log` for detailed errors.
+- **Port Conflicts**: Ensure port 9100 is free or change it in `config.yaml`.
+- **Permissions**: Run `npm run install-service` as Administrator.

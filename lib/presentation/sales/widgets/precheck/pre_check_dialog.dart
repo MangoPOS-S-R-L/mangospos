@@ -181,7 +181,7 @@ class PreCheckDialog extends StatelessWidget {
                           ],
                         ),
                       );
-                    }).toList(),
+                    }),
 
                     const SizedBox(height: 16),
                     const Divider(color: Color(0xFFE5E5E5)),

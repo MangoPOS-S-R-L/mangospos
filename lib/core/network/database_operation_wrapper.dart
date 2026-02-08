@@ -118,11 +118,16 @@ class DatabaseOperationWrapper {
   static Future<T> rpc<T>({
     required Future<T> Function() operation,
     String operationName = 'RPC Call',
+    Duration? timeout,
+    int? maxRetries,
+    bool enableRetry = true,
   }) {
     return execute(
       operation: operation,
       operationName: operationName,
-      timeout: SupabaseConfig.rpcTimeout,
+      timeout: timeout ?? SupabaseConfig.rpcTimeout,
+      maxRetries: maxRetries ?? SupabaseConfig.maxRetries,
+      enableRetry: enableRetry,
     );
   }
 

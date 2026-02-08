@@ -333,11 +333,11 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       // Si se pagó un check parcial, limpiar también en backend y local
       if (_checkId != null) {
         try {
-          await _salesRepo.clearCheck(_checkId!);
+          await _salesRepo.clearCheck(_checkId);
         } catch (e) {
           debugPrint('Error limpiando check en backend: $e');
         }
-        _ref.read(currentOrderProvider.notifier).removeCheckLocally(_checkId!);
+        _ref.read(currentOrderProvider.notifier).removeCheckLocally(_checkId);
         await Future.delayed(
           const Duration(milliseconds: 250),
         ); // Wait for triggers/propagation

@@ -184,6 +184,10 @@ class _CartView extends ConsumerWidget {
   final bool isStacked;
   const _CartView({required this.tableCode, this.isStacked = false});
 
+  bool _isOpenItem(OrderItem item) {
+    return item.status != 'paid' && item.status != 'void';
+  }
+
   // --- 🪄 UI HELPERS ----------------------------------------------------
 
   void _openPaymentModal(
@@ -335,6 +339,7 @@ class _CartView extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final orderState = ref.watch(currentOrderProvider); // RESTORED
     final allItems = orderState.items; // RESTORED
+    final openItems = allItems.where(_isOpenItem).toList();
 
     final selectedCheckId = orderState.selectedCheckId;
     final allChecks = orderState.checks;
@@ -346,14 +351,18 @@ class _CartView extends ConsumerWidget {
     // Filter Items
     final List<OrderItem> displayedItems;
     if (selectedCheckId != null) {
-      displayedItems = allItems
+      displayedItems = openItems
           .where((i) => i.checkId == selectedCheckId)
           .toList();
     } else {
-      // Si estamos en vista global, no mostrar items de subcuentas cerradas
-      displayedItems = allItems
-          .where((i) => !allChecks.any((c) => c.id == i.checkId && c.isClosed))
-          .toList();
+      // Global View (TODAS)
+      // Filter out items from closed checks (paid subcuentas)
+      displayedItems = openItems.where((i) {
+        final checkIsClosed = allChecks.any(
+          (c) => c.id == i.checkId && c.isClosed,
+        );
+        return !checkIsClosed;
+      }).toList();
     }
 
     // Calculate Totals based on View
@@ -362,48 +371,19 @@ class _CartView extends ConsumerWidget {
     double displayTax = 0.0;
 
     if (selectedCheckId != null) {
-      final check = allChecks.firstWhere(
-        (c) => c.id == selectedCheckId,
-        orElse: () => OrderCheck(
-          id: 'temp',
-          orderId: '',
-          label: '',
-          position: 0,
-          isClosed: false,
-          subtotal: 0,
-          discounts: 0,
-          tax: 0,
-          total: 0,
-        ),
+      displayTotal = displayedItems.fold(0.0, (sum, i) => sum + i.total);
+      displaySubtotal = displayedItems.fold(
+        0.0,
+        (sum, i) => sum + i.subtotal,
       );
-      // If check exists use its totals, otherwise calculate from items
-      if (check.id != 'temp') {
-        displayTotal = check.total;
-        displaySubtotal = check.subtotal;
-        displayTax = check.tax;
-      } else {
-        // Fallback calculation
-        displayTotal = displayedItems.fold(0.0, (sum, i) => sum + i.total);
-        displaySubtotal = displayedItems.fold(
-          0.0,
-          (sum, i) => sum + i.subtotal,
-        );
-        displayTax = displayedItems.fold(0.0, (sum, i) => sum + i.tax);
-      }
+      displayTax = displayedItems.fold(0.0, (sum, i) => sum + i.tax);
     } else {
-      // Global View
-      displayTotal = orderState.order?.total ?? 0.0;
-      displaySubtotal = orderState.order?.subtotal ?? 0.0;
-      displayTax = orderState.order?.tax ?? 0.0;
-      // If order total is 0 (e.g. optimistic), sum items
-      if (displayTotal == 0 && displayedItems.isNotEmpty) {
-        displayTotal = displayedItems.fold(0.0, (sum, i) => sum + i.total);
-        displaySubtotal = displayedItems.fold(
-          0.0,
-          (sum, i) => sum + i.subtotal,
-        );
-        displayTax = displayedItems.fold(0.0, (sum, i) => sum + i.tax);
-      }
+      // Global View (TODAS)
+      // Calculate totals from displayed items only (excluding closed checks)
+      // This ensures the total matches what is seen on screen
+      displayTotal = displayedItems.fold(0.0, (sum, i) => sum + i.total);
+      displaySubtotal = displayedItems.fold(0.0, (sum, i) => sum + i.subtotal);
+      displayTax = displayedItems.fold(0.0, (sum, i) => sum + i.tax);
     }
 
     final currency = NumberFormat('#,##0.00', 'en_US');
@@ -507,7 +487,7 @@ class _CartView extends ConsumerWidget {
                     onTap: () => ref
                         .read(currentOrderProvider.notifier)
                         .selectCheck(null),
-                    itemCount: allItems.length,
+                    itemCount: openItems.length,
                     isGlobal: true,
                   ),
                   const SizedBox(width: 8),
@@ -517,7 +497,7 @@ class _CartView extends ConsumerWidget {
                       ) // Ocultar cuenta principal si esta dividida
                       .map((check) {
                         final isSelected = check.id == selectedCheckId;
-                        final checkItemsCount = allItems
+                        final checkItemsCount = openItems
                             .where((i) => i.checkId == check.id)
                             .length;
                         return Padding(
@@ -1798,7 +1778,7 @@ class _CatalogAreaState extends ConsumerState<_CatalogArea>
     final minutes = duration.inMinutes.remainder(60);
     final seconds = duration.inSeconds.remainder(60);
     if (hours > 0) {
-      return '${hours}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+      return '$hours:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
     }
     return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
   }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../datasources/queries/sales_queries.dart';
@@ -208,20 +210,25 @@ class SalesRepository {
     String orderId, {
     bool includeModifiers = true,
     int limit = 500,
+    bool onlyOpen = false,
   }) async {
     try {
       final baseSelect = includeModifiers
           ? '$_itemFields,order_item_modifiers(*)'
           : _itemFields;
 
-      final query = _client
+      var query = _client
           .from('order_items')
           .select(baseSelect)
-          .eq('order_id', orderId)
+          .eq('order_id', orderId);
+
+      if (onlyOpen) {
+        query = query.not('status', 'in', '(paid,void)');
+      }
+
+      final data = await query
           .order('created_at', ascending: true)
           .limit(limit);
-
-      final data = await query;
 
       return data.map((json) {
         final item = OrderItem.fromMap(json);
@@ -251,27 +258,42 @@ class SalesRepository {
     if (check == null || check['order_id'] == null) return;
     final orderId = check['order_id'] as String;
 
-    // Borrar items del check
-    await _client.from('order_items').delete().eq('check_id', checkId);
+    // Marcar items como pagados (conservando historial)
+    await _client
+        .from('order_items')
+        .update({'status': 'paid'})
+        .eq('check_id', checkId)
+        .neq('status', 'void');
 
-    // Marcar check cerrado y en cero
-    await _client.from('order_checks').update({
-      'is_closed': true,
-      'subtotal': 0,
-      'discounts': 0,
-      'tax': 0,
-      'total': 0,
-    }).eq('id', checkId);
+    // Marcar check cerrado
+    await _client
+        .from('order_checks')
+        .update({
+          'is_closed': true,
+          'closed_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('id', checkId);
 
     // Recalcular totales de la orden en DB
     await _recomputeOrderTotals(orderId);
+
+    // Cerrar orden/mesa si no quedan lÃ­neas abiertas
+    final openItemsCount = await _client
+        .from('order_items')
+        .count(CountOption.exact)
+        .eq('order_id', orderId)
+        .not('status', 'in', '(paid,void)');
+    if (openItemsCount == 0) {
+      await closeOrder(orderId: orderId, status: 'paid');
+    }
   }
 
   Future<void> _recomputeOrderTotals(String orderId) async {
     final rows = await _client
         .from('order_items')
         .select('subtotal, discounts, tax, total')
-        .eq('order_id', orderId);
+        .eq('order_id', orderId)
+        .neq('status', 'void'); // Excluir items anulados
 
     double subtotal = 0, discounts = 0, tax = 0, total = 0;
     for (final r in rows) {
@@ -281,12 +303,15 @@ class SalesRepository {
       total += (r['total'] ?? 0).toDouble();
     }
 
-    await _client.from('orders').update({
-      'subtotal': subtotal,
-      'discounts': discounts,
-      'tax': tax,
-      'total': total,
-    }).eq('id', orderId);
+    await _client
+        .from('orders')
+        .update({
+          'subtotal': subtotal,
+          'discounts': discounts,
+          'tax': tax,
+          'total': total,
+        })
+        .eq('id', orderId);
   }
 
   /// Eliminar un check y sus items
@@ -403,25 +428,8 @@ class SalesRepository {
     double changeAmount = 0,
     bool closeOrder = true,
   }) async {
-    // Si es pago de un check, evitamos RPC que podría cerrar toda la orden
-    final forceDirect = checkId != null && closeOrder == false;
-
-    if (forceDirect) {
-      return _processPaymentDirect(
-        orderId: orderId,
-        checkId: checkId,
-        paymentMethodId: paymentMethodId,
-        amount: amount,
-        reference: reference,
-        customerId: customerId,
-        customerRnc: customerRnc,
-        cashierSessionId: cashierSessionId,
-        changeAmount: changeAmount,
-        closeOrder: closeOrder,
-      );
-    }
-
     try {
+      // Intentamos usar el RPC optimizado (v2) que tiene mayor timeout configurado
       final response = await _client.rpc(
         SalesQueries.rpcProcessPayment,
         params: {
@@ -436,17 +444,9 @@ class SalesRepository {
         },
       );
 
-      return Payment.fromMap(response);
-    } on PostgrestException catch (e) {
-      final message = '${e.message} ${e.details ?? ''} ${e.hint ?? ''}'
-          .toLowerCase();
-      final missingFn =
-          message.contains('fn_process_payment_v2') ||
-          message.contains('fn_process_payment');
-
-      if (!missingFn) rethrow;
-
-      // Fallback directo contra la tabla payments cuando el RPC no esta disponible
+      return Payment.fromMap(response as Map<String, dynamic>);
+    } catch (e) {
+      // Si falla el RPC, intentamos el método directo como fallback
       return _processPaymentDirect(
         orderId: orderId,
         checkId: checkId,
@@ -459,9 +459,6 @@ class SalesRepository {
         changeAmount: changeAmount,
         closeOrder: closeOrder,
       );
-    } catch (e) {
-      // No envolver la excepcion para permitir manejo especifico (ej: PostgrestException)
-      rethrow;
     }
   }
 
@@ -543,15 +540,22 @@ class SalesRepository {
         .select()
         .single();
 
-    // 4) Cerrar orden y mesa solo si corresponde
-    if (closeOrder) {
+    // 4) Marcar líneas/cheques como pagados
+    if (checkId != null) {
+      await _markCheckPaid(orderId: orderId, checkId: checkId);
+    } else if (closeOrder) {
+      await _markOrderPaid(orderId);
+    }
+
+    // 5) Cerrar orden y mesa solo si corresponde
+    if (closeOrder && checkId == null) {
       await _client.rpc(
         SalesQueries.rpcCloseOrderAndTable,
         params: {'p_order_id': orderId, 'p_status': 'paid'},
       );
     }
 
-    // 5) Registrar transaccion en caja si aplica
+    // 6) Registrar transaccion en caja si aplica
     if (paymentMethodCode == 'cash' && cashierSessionId != null) {
       try {
         await _client.from('cash_transactions').insert({
@@ -653,6 +657,46 @@ class SalesRepository {
     } catch (e) {
       throw Exception('Error al cerrar orden: $e');
     }
+  }
+
+  // ============================================================
+  // 💰 Helpers de pago de subcuentas / items
+  // ============================================================
+
+  Future<void> _markCheckPaid({
+    required String orderId,
+    required String checkId,
+  }) async {
+    await _client
+        .from('order_items')
+        .update({'status': 'paid'})
+        .eq('order_id', orderId)
+        .eq('check_id', checkId);
+
+    await _client
+        .from('order_checks')
+        .update({
+          'is_closed': true,
+          'closed_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('id', checkId);
+
+    final openItemsCount = await _client
+        .from('order_items')
+        .count(CountOption.exact)
+        .eq('order_id', orderId)
+        .not('status', 'in', '(paid,void)');
+    if (openItemsCount == 0) {
+      await closeOrder(orderId: orderId, status: 'paid');
+    }
+  }
+
+  Future<void> _markOrderPaid(String orderId) async {
+    await _client
+        .from('order_items')
+        .update({'status': 'paid'})
+        .eq('order_id', orderId)
+        .neq('status', 'void');
   }
 
   // ============================================================

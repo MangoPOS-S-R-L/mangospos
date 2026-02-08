@@ -709,7 +709,13 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
           .scanOnLANUnified(); // ← NO guarda en BD
       _foundPrinters = results
           .map(
-            (d) => {'ip': d.ip, 'mac': d.mac, 'name': d.name, 'id': d.idHint},
+            (d) => {
+              'ip': d.ip,
+              'mac': d.mac,
+              'name': d.name,
+              'id': d.idHint,
+              'type': d.type.name, // Add type
+            },
           )
           .toList();
       setState(() => _isSearching = false);
@@ -746,6 +752,23 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
         ).showSnackBar(SnackBar(content: Text('Error al buscar: $e')));
       }
     }
+  }
+
+  Future<void> _savePrinter() async {
+    // Si hay una impresora detectada, usar sus datos; si no, tomar los campos manuales
+    final ip = _selectedPrinter?['ip'] as String? ?? _ipCtrl.text.trim();
+    final mac = _selectedPrinter?['mac'] as String? ?? _macCtrl.text.trim();
+
+    // Prefer the type from the selected printer (e.g. 'usb'), fallback to selected group ('network'/'bluetooth')
+    final type = _selectedPrinter?['type'] as String? ?? _selectedType;
+
+    final created = await widget.vmCtrl.createPrinter(
+      name: _nameCtrl.text,
+      ip: ip.isEmpty ? null : ip,
+      mac: mac.isEmpty ? null : mac,
+      type: type,
+    );
+    if (created && mounted) Navigator.pop(context);
   }
 
   @override
@@ -899,9 +922,9 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
             Expanded(
               child: _ConnectionOption(
                 iconPath: 'assets/images/impresion_wifi.png',
-                title: 'Por RED',
+                title: 'Por RED / USB',
                 subtitle:
-                    'Activa la red Wi-Fi de tu dispositivo para sincronizar',
+                    'Busca impresoras en tu red Wi-Fi o conectadas por USB',
                 selected: _selectedType == 'network',
                 onTap: () => setState(() => _selectedType = 'network'),
               ),
@@ -910,7 +933,7 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
             Expanded(
               child: _ConnectionOption(
                 iconPath: 'assets/images/impresion_bluetooth.png',
-                title: 'Por Bluetooth',
+                title: 'Por Bluetooth', // Keep Bluetooth as is
                 subtitle:
                     'Activa Bluetooth y mantén visible tu dispositivo para sincronizar',
                 selected: _selectedType == 'bluetooth',
@@ -1107,20 +1130,6 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
       ],
     );
   }
-
-  Future<void> _savePrinter() async {
-    // Si hay una impresora detectada, usar sus datos; si no, tomar los campos manuales
-    final ip = _selectedPrinter?['ip'] as String? ?? _ipCtrl.text.trim();
-    final mac = _selectedPrinter?['mac'] as String? ?? _macCtrl.text.trim();
-
-    final created = await widget.vmCtrl.createPrinter(
-      name: _nameCtrl.text,
-      ip: ip.isEmpty ? null : ip,
-      mac: mac.isEmpty ? null : mac,
-      type: _selectedType,
-    );
-    if (created && mounted) Navigator.pop(context);
-  }
 }
 
 class _StepIndicator extends StatelessWidget {
@@ -1315,6 +1324,9 @@ class _PrinterFoundCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final ip = printer['ip'] as String? ?? '—';
     final mac = printer['mac'] as String? ?? '—';
+    final type = printer['type'] as String? ?? 'network';
+    final name = printer['name'] as String? ?? 'Impresora';
+    final isUsb = type == 'usb';
 
     return InkWell(
       onTap: onTap,
@@ -1333,7 +1345,7 @@ class _PrinterFoundCard extends StatelessWidget {
         child: Row(
           children: [
             Icon(
-              Icons.print,
+              isUsb ? Icons.usb : Icons.print,
               color: selected
                   ? const Color(0xFF32AD40)
                   : const Color(0xFF6B7280),
@@ -1344,14 +1356,14 @@ class _PrinterFoundCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'IP: $ip',
+                    isUsb ? name : 'IP: $ip',
                     style: const TextStyle(
                       fontWeight: FontWeight.w600,
                       color: MangoColors.darkGray,
                     ),
                   ),
                   Text(
-                    'MAC: $mac',
+                    isUsb ? 'Conexión USB (Local)' : 'MAC: $mac',
                     style: const TextStyle(
                       fontSize: 12,
                       color: MangoColors.muted,
