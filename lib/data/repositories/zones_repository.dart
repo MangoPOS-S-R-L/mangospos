@@ -31,7 +31,7 @@ class ZonesRepository {
           'table_id,zone_id,code,session_id,orders_count,minutes_open,items_count,total,people_count',
         )
         .eq('zone_id', zoneId)
-        .order('code');
+        .order('code', ascending: true);
 
     return (rows as List)
         .map((e) => TableStatus.fromMap(e as Map<String, dynamic>))

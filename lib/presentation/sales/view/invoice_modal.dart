@@ -44,6 +44,8 @@ class InvoiceModal extends StatelessWidget {
     final total = filteredItems.fold<double>(0, (s, i) => s + i.total);
 
     return Dialog(
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.white,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Container(
         width: 500,
@@ -169,12 +171,7 @@ class InvoiceModal extends StatelessWidget {
                             : 0,
                       ),
                     const SizedBox(height: 8),
-                    _SummaryRow(
-                      'TOTAL',
-                      total,
-                      isBold: true,
-                      fontSize: 18,
-                    ),
+                    _SummaryRow('TOTAL', total, isBold: true, fontSize: 18),
 
                     const Divider(height: 32),
 
@@ -239,11 +236,11 @@ class InvoiceModal extends StatelessWidget {
             // Actions
             Padding(
               padding: const EdgeInsets.all(24),
-            child: Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: onPrint,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: onPrint,
                       icon: const Icon(Icons.print),
                       label: const Text('Imprimir'),
                       style: OutlinedButton.styleFrom(
@@ -251,38 +248,38 @@ class InvoiceModal extends StatelessWidget {
                         side: const BorderSide(color: Color(0xFFFB7116)),
                         foregroundColor: const Color(0xFFFB7116),
                       ),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: onNewSale,
-                    icon: const Icon(Icons.add_shopping_cart),
-                    label: const Text('Nueva Venta'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFFB7116),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
                     ),
                   ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: TextButton.icon(
-                    onPressed: () => Navigator.of(context).pop(false),
-                    icon: const Icon(Icons.arrow_back_ios_new),
-                    label: const Text('Volver a la cuenta'),
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      foregroundColor: Colors.black87,
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: onNewSale,
+                      icon: const Icon(Icons.add_shopping_cart),
+                      label: const Text('Nueva Venta'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFFB7116),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                      ),
                     ),
                   ),
-                )
-              ],
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: TextButton.icon(
+                      onPressed: () => Navigator.of(context).pop(false),
+                      icon: const Icon(Icons.arrow_back_ios_new),
+                      label: const Text('Volver a la cuenta'),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        foregroundColor: Colors.black87,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
-      ),
+          ],
+        ),
       ),
     );
   }

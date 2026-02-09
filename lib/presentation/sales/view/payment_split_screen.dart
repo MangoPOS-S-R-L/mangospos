@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:mangopos/data/models/sales_models.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../viewmodel/payment_split_viewmodel.dart';
 
 const _kPrimary = Color(0xFFF7941A);
 const _kSurface = Colors.white;
-const _kSelection = Color(0xFFFFF3E5);
 const _kPositive = Color(0xFF22C55E);
 const _kDanger = Color(0xFFE11D48);
 const _kBorder = Color(0xFFEEEEEE);
@@ -29,6 +30,42 @@ class PaymentSplitDialog extends ConsumerStatefulWidget {
 }
 
 class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
+  late FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focusNode.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  void _handleKeyEvent(KeyEvent event, PaymentSplitViewModel vm) {
+    if (event is KeyDownEvent) {
+      final logicalKey = event.logicalKey;
+
+      if (logicalKey == LogicalKeyboardKey.backspace) {
+        vm.backspace();
+      } else if (logicalKey == LogicalKeyboardKey.enter ||
+          logicalKey == LogicalKeyboardKey.numpadEnter) {
+        vm.addTransaction();
+      } else if (logicalKey == LogicalKeyboardKey.period ||
+          logicalKey == LogicalKeyboardKey.numpadDecimal) {
+        vm.appendInput('.');
+      } else if (event.character != null &&
+          RegExp(r'[0-9]').hasMatch(event.character!)) {
+        vm.appendInput(event.character!);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
@@ -42,68 +79,76 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
     final state = ref.watch(provider);
     final vm = ref.read(provider.notifier);
 
-    return Dialog(
-      insetPadding: EdgeInsets.symmetric(
-        horizontal: isMobile ? 12 : 36,
-        vertical: isMobile ? 16 : 36,
-      ),
-      backgroundColor: Colors.transparent,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: 1150,
-          maxHeight: isMobile ? double.infinity : 820,
+    return Focus(
+      focusNode: _focusNode,
+      autofocus: true,
+      onKeyEvent: (node, event) {
+        _handleKeyEvent(event, vm);
+        return KeyEventResult.handled;
+      },
+      child: Dialog(
+        insetPadding: EdgeInsets.symmetric(
+          horizontal: isMobile ? 12 : 36,
+          vertical: isMobile ? 16 : 36,
         ),
-        child: Container(
-          decoration: BoxDecoration(
-            color: _kSurface,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x22000000),
-                blurRadius: 20,
-                offset: Offset(0, 12),
-              ),
-            ],
+        backgroundColor: Colors.transparent,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: 1150,
+            maxHeight: isMobile ? double.infinity : 820,
           ),
-          child: Column(
-            children: [
-              _buildHeader(context),
-              const Divider(height: 1, color: _kBorder),
-              Expanded(
-                child: isMobile
-                    ? SingleChildScrollView(
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: _MobileLayout(state: state, vm: vm),
-                        ),
-                      )
-                    : Padding(
-                        padding: const EdgeInsets.all(28),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              flex: 3,
-                              child: _LeftPanel(state: state, vm: vm),
-                            ),
-                            Container(width: 1, color: _kBorder),
-                            Expanded(
-                              flex: 2,
-                              child: _RightPanel(
-                                state: state,
-                                vm: vm,
-                                onClose: () => Navigator.pop(context),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-              ),
-              if (state.validationError != null || state.error != null)
-                _ErrorBar(
-                  message: state.validationError ?? state.error!,
-                  isDanger: state.error != null,
+          child: Container(
+            decoration: BoxDecoration(
+              color: _kSurface,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x22000000),
+                  blurRadius: 20,
+                  offset: Offset(0, 12),
                 ),
-            ],
+              ],
+            ),
+            child: Column(
+              children: [
+                _buildHeader(context),
+                const Divider(height: 1, color: _kBorder),
+                Expanded(
+                  child: isMobile
+                      ? SingleChildScrollView(
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: _MobileLayout(state: state, vm: vm),
+                          ),
+                        )
+                      : Padding(
+                          padding: const EdgeInsets.all(28),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                flex: 3,
+                                child: _LeftPanel(state: state, vm: vm),
+                              ),
+                              Container(width: 1, color: _kBorder),
+                              Expanded(
+                                flex: 2,
+                                child: _RightPanel(
+                                  state: state,
+                                  vm: vm,
+                                  onClose: () => Navigator.pop(context),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                ),
+                if (state.validationError != null || state.error != null)
+                  _ErrorBar(
+                    message: state.validationError ?? state.error!,
+                    isDanger: state.error != null,
+                  ),
+              ],
+            ),
           ),
         ),
       ),
@@ -207,79 +252,54 @@ class _LeftPanel extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: 22),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            const Text(
-              'Montos rápidos',
-              style: TextStyle(
-                fontWeight: FontWeight.w700,
-                color: Colors.black87,
-              ),
-            ),
-            Text(
-              'Restante: RD\$ ${state.remaining.toStringAsFixed(2)}',
-              style: TextStyle(
-                fontWeight: FontWeight.w700,
-                color: state.remaining > 0 ? _kPrimary : Colors.green[700],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: [
-            for (final amount in const [100, 200, 500, 1000, 2000, 5000])
-              _QuickAmountChip(
-                label: 'RD\$ ${amount.toStringAsFixed(0)}',
-                onTap: () => vm.setQuickAmount(amount.toDouble()),
-              ),
-          ],
-        ),
-        const SizedBox(height: 14),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: state.remaining <= 0
-                    ? null
-                    : () => vm.setExactAmount(),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.black87,
-                  side: const BorderSide(color: _kBorder),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 12,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                icon: const Icon(Icons.bolt, color: _kPrimary),
-                label: Text(
-                  'Monto exacto (${state.remaining.toStringAsFixed(2)})',
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            IconButton(
-              onPressed: state.currentInput.isEmpty ? null : vm.clearInput,
-              icon: const Icon(Icons.clear_outlined),
-              tooltip: 'Limpiar monto',
-            ),
-          ],
-        ),
         const SizedBox(height: 16),
         _InputDisplay(state: state),
         const SizedBox(height: 16),
+        Center(
+          child: Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final amount in const [100, 200, 500, 1000, 2000, 5000])
+                _QuickAmountChip(
+                  label: 'RD\$ ${amount.toStringAsFixed(0)}',
+                  onTap: () => vm.setQuickAmount(amount.toDouble()),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (state.remaining > 0)
+          Center(
+            child: OutlinedButton.icon(
+              onPressed: () => vm.setExactAmount(),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: _kPrimary,
+                side: const BorderSide(color: _kBorder),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                ),
+              ),
+              icon: const Icon(Icons.bolt, size: 16),
+              label: Text(
+                'Monto exacto (RD\$ ${state.remaining.toStringAsFixed(2)})',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ),
+        const SizedBox(height: 12),
         compact
             ? Column(
                 children: [
-                  SizedBox(height: 300, child: _NumericKeypad(vm: vm)),
+                  SizedBox(height: 250, child: _NumericKeypad(vm: vm)),
                   const SizedBox(height: 12),
                   SizedBox(
                     width: double.infinity,
@@ -361,8 +381,12 @@ class _RightPanel extends StatelessWidget {
             child: ElevatedButton.icon(
               onPressed: canConfirm
                   ? () async {
-                      final ok = await vm.confirmPayment(context);
-                      if (ok && context.mounted) Navigator.pop(context, true);
+                      final List<Payment>? payments = await vm.confirmPayment(
+                        context,
+                      );
+                      if (payments != null && context.mounted) {
+                        Navigator.pop(context, payments);
+                      }
                     }
                   : null,
               style: ElevatedButton.styleFrom(
@@ -468,8 +492,12 @@ class _MobileLayout extends StatelessWidget {
           child: ElevatedButton.icon(
             onPressed: canConfirm
                 ? () async {
-                    final ok = await vm.confirmPayment(context);
-                    if (ok && context.mounted) Navigator.pop(context, true);
+                    final List<Payment>? payments = await vm.confirmPayment(
+                      context,
+                    );
+                    if (payments != null && context.mounted) {
+                      Navigator.pop(context, payments);
+                    }
                   }
                 : null,
             style: ElevatedButton.styleFrom(
@@ -549,35 +577,41 @@ class _InputDisplay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8F8F8),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _kBorder),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Text(
-            'Monto a ingresar',
-            style: TextStyle(
-              color: Colors.grey[700],
-              fontWeight: FontWeight.w600,
-            ),
+    return Column(
+      children: [
+        const Text(
+          'Monto a ingresar',
+          style: TextStyle(
+            color: Colors.grey,
+            fontWeight: FontWeight.w600,
+            fontSize: 14,
           ),
-          const SizedBox(height: 6),
-          Text(
+        ),
+        const SizedBox(height: 8),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
             'RD\$ ${state.currentInput.isEmpty ? "0" : state.currentInput}',
             style: const TextStyle(
-              fontSize: 32,
+              fontSize: 42,
               fontWeight: FontWeight.w800,
-              letterSpacing: -0.5,
+              color: Colors.black87,
+              letterSpacing: -1,
             ),
           ),
-        ],
-      ),
+        ),
+        if (state.validationError != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              state.validationError!,
+              style: const TextStyle(
+                color: _kDanger,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+      ],
     );
   }
 }
@@ -599,27 +633,31 @@ class _NumericKeypad extends StatelessWidget {
             crossAxisCount: 3,
             crossAxisSpacing: 10,
             mainAxisSpacing: 10,
-            childAspectRatio: 1.4,
+            childAspectRatio: 2.2,
           ),
           itemBuilder: (context, index) {
             final label = keys[index];
             final isBack = label == '⌫';
-            return OutlinedButton(
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: _kBorder),
-                backgroundColor: Colors.white,
+            return TextButton(
+              style: TextButton.styleFrom(
+                backgroundColor: Colors.transparent, // Ghost style
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
               ),
               onPressed: () => isBack ? vm.backspace() : vm.appendInput(label),
               child: isBack
-                  ? const Icon(Icons.backspace_outlined)
+                  ? Icon(
+                      Icons.backspace_outlined,
+                      color: Colors.grey[700],
+                      size: 24,
+                    )
                   : Text(
                       label,
                       style: const TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
+                        fontSize: 28,
+                        fontWeight: FontWeight.w400,
+                        color: Colors.black87,
                       ),
                     ),
             );
@@ -645,29 +683,35 @@ class _MethodCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final fgColor = isSelected ? _kPrimary : Colors.grey[600];
+    final bgColor = isSelected
+        ? const Color(0xFFFFF3E5)
+        : const Color(0xFFF3F4F6);
+
     return Expanded(
       child: GestureDetector(
         onTap: onTap,
         child: Container(
-          height: 84,
+          height: 42,
           decoration: BoxDecoration(
-            color: isSelected ? _kSelection : Colors.white,
-            borderRadius: BorderRadius.circular(14),
+            color: bgColor,
+            borderRadius: BorderRadius.circular(20),
             border: Border.all(
-              color: isSelected ? _kPrimary : _kBorder,
-              width: isSelected ? 2 : 1.5,
+              color: isSelected ? _kPrimary : Colors.transparent,
+              width: 1,
             ),
           ),
-          child: Column(
+          child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, color: isSelected ? _kPrimary : Colors.black87),
-              const SizedBox(height: 6),
+              Icon(icon, color: fgColor, size: 18),
+              const SizedBox(width: 8),
               Text(
                 label,
                 style: TextStyle(
+                  color: fgColor,
                   fontWeight: FontWeight.w700,
-                  color: isSelected ? _kPrimary : Colors.black87,
+                  fontSize: 14,
                 ),
               ),
             ],
@@ -685,14 +729,20 @@ class _QuickAmountChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return OutlinedButton(
-      onPressed: onTap,
-      style: OutlinedButton.styleFrom(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        side: const BorderSide(color: _kBorder),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.grey[300]!),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+        ),
       ),
-      child: Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
     );
   }
 }

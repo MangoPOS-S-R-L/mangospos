@@ -16,6 +16,7 @@ import 'package:mangopos/presentation/sales/widgets/printer_selection_dialog.dar
 import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
 
+import 'package:mangopos/presentation/sales/view/widgets/product_detail_modal.dart';
 import 'payment_split_screen.dart';
 
 const Color _salesSurface = Color(0xFFFFFFFF);
@@ -210,87 +211,79 @@ class _CartView extends ConsumerWidget {
         checkId: checkId,
       ),
     ).then((result) async {
-      if (result == true) {
+      if (result is List<Payment>) {
         if (!context.mounted) return;
 
-        // Mostrar Modal de Factura
-        // 1. Obtener datos actualizados de pagos
-        try {
-          final salesRepo = ref.read(salesRepositoryProvider);
-          final payments = await salesRepo.getOrderPayments(order.id);
-          final items = await salesRepo.getOrderItems(order.id);
+        // INSTANT LOAD: Use data from result + local state
+        final payments = result;
+        final items = ref.read(currentOrderProvider).items;
+        // Optional: Filter items if paying a specific check (though strictly we show all items on invoice or filter inside modal)
 
-          double totalChange = 0;
-          for (final p in payments) {
-            totalChange += p.changeAmount;
-          }
+        double totalChange = 0;
+        for (final p in payments) {
+          totalChange += p.changeAmount;
+        }
 
-          if (context.mounted) {
-            _showSmoothDialog(
-              context: context,
-              barrierDismissible: false,
-              builder: (ctx) => InvoiceModal(
-                order:
-                    order, // Nota: idealmente refrescar la orden para estado 'paid'
-                items: items,
-                payments: payments,
-                tableName: tableName,
-                checkId: checkId,
-                change: totalChange,
-                onNewSale: () {
-                  Navigator.of(ctx).pop();
-                  if (checkId == null) {
-                    context.go(AppRoutes.salesByZone);
-                  } else {
-                    // Si solo se pagó una subcuenta, refrescamos y nos quedamos
-                    ref.read(currentOrderProvider.notifier).refreshOrder();
-                  }
-                },
-                onPrint: () {
-                  final invoiceData = {
-                    'title': '*** FACTURA ***',
-                    'restaurantName': 'MANGO POS RESTAURANT',
-                    'rnc': '101-00000-1',
-                    'phone': '809-555-0101',
-                    'tableName': tableName,
-                    'waiterName': 'Juan Pérez',
-                    'items': items
-                        .map(
-                          (i) => {
-                            'quantity': i.quantity,
-                            'name': i.productName,
-                            'price': i.total,
-                          },
-                        )
-                        .toList(),
-                    'subtotal': order.subtotal,
-                    'tax': order.tax,
-                    'total': order.total,
-                  };
+        if (context.mounted) {
+          _showSmoothDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => InvoiceModal(
+              order:
+                  order, // Nota: idealmente refrescar la orden para estado 'paid'
+              items: items,
+              payments: payments,
+              tableName: tableName,
+              checkId: checkId,
+              change: totalChange,
+              onNewSale: () {
+                Navigator.of(ctx).pop();
+                if (checkId == null) {
+                  context.go(AppRoutes.salesByZone);
+                } else {
+                  // Si solo se pagó una subcuenta, refrescamos y nos quedamos
+                  ref.read(currentOrderProvider.notifier).refreshOrder();
+                }
+              },
+              onPrint: () {
+                final invoiceData = {
+                  'title': '*** FACTURA ***',
+                  'restaurantName': 'MANGO POS RESTAURANT',
+                  'rnc': '101-00000-1',
+                  'phone': '809-555-0101',
+                  'tableName': tableName,
+                  'waiterName': 'Juan Pérez',
+                  'items': items
+                      .map(
+                        (i) => {
+                          'quantity': i.quantity,
+                          'name': i.productName,
+                          'price': i.total,
+                        },
+                      )
+                      .toList(),
+                  'subtotal': order.subtotal,
+                  'tax': order.tax,
+                  'total': order.total,
+                };
 
-                  _handlePrintFlow(
-                    context,
-                    ref,
-                    'precheck', // Usamos el mismo formato de 'precheck' en el agente
-                    invoiceData,
-                    orderObj: order,
-                    orderItems: items,
-                    tableName: tableName,
-                    waiterName: 'Juan Pérez',
-                  );
-                },
-              ),
-            );
-          }
-        } catch (e) {
-          if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Error al cargar factura: $e')),
-            );
-          }
+                _handlePrintFlow(
+                  context,
+                  ref,
+                  'invoice',
+                  invoiceData,
+                  orderObj: order, // Use the order passed to the method
+                  orderItems: items,
+                  payments: payments,
+                  tableName: tableName,
+                  waiterName: 'Juan Pérez',
+                );
+              },
+            ),
+          );
         }
       }
-    });
+    }); // Close then and _showSmoothDialog
   }
 
   void _openSplitBillModal(BuildContext context, WidgetRef ref, Order order) {
@@ -301,6 +294,27 @@ class _CartView extends ConsumerWidget {
         onSplitApplied: () {
           // Refrescar la orden actual
           ref.read(currentOrderProvider.notifier).refreshOrder();
+        },
+      ),
+    );
+  }
+
+  void _openProductDetailModal(
+    BuildContext context,
+    WidgetRef ref,
+    OrderItem item,
+  ) {
+    showDialog(
+      context: context,
+      builder: (context) => ProductDetailModal(
+        item: item,
+        onSave: (updatedItem) {
+          ref
+              .read(currentOrderProvider.notifier)
+              .updateItem(item.id, updatedItem);
+        },
+        onDelete: () {
+          ref.read(currentOrderProvider.notifier).deleteItem(item.id);
         },
       ),
     );
@@ -372,10 +386,7 @@ class _CartView extends ConsumerWidget {
 
     if (selectedCheckId != null) {
       displayTotal = displayedItems.fold(0.0, (sum, i) => sum + i.total);
-      displaySubtotal = displayedItems.fold(
-        0.0,
-        (sum, i) => sum + i.subtotal,
-      );
+      displaySubtotal = displayedItems.fold(0.0, (sum, i) => sum + i.subtotal);
       displayTax = displayedItems.fold(0.0, (sum, i) => sum + i.tax);
     } else {
       // Global View (TODAS)
@@ -686,6 +697,8 @@ class _CartView extends ConsumerWidget {
                         (item) => _CartLineItem(
                           item: item,
                           isDraft: true,
+                          onTap: () =>
+                              _openProductDetailModal(context, ref, item),
                           onDelete: () {
                             ref
                                 .read(currentOrderProvider.notifier)
@@ -864,6 +877,7 @@ class _CartView extends ConsumerWidget {
     Map<String, dynamic> data, {
     Order? orderObj,
     List<OrderItem>? orderItems,
+    List<Payment>? payments,
     String? tableName,
     String? waiterName,
   }) async {
@@ -915,16 +929,35 @@ class _CartView extends ConsumerWidget {
       const fallbackPort = 9100;
 
       // Si es precuenta y tenemos los objetos, generamos los bytes en Flutter
-      if (type == 'precheck' && orderObj != null && orderItems != null) {
-        final ticket = PrintTicketService.generatePrecheck(
-          order: orderObj,
-          items: orderItems,
-          tableName: tableName ?? 'Mesa',
-          waiterName: waiterName,
-          businessName: data['restaurantName'] as String?,
-          businessAddress: data['address'] as String?,
-          businessPhone: data['phone'] as String?,
-        );
+      if ((type == 'precheck' || type == 'invoice') &&
+          orderObj != null &&
+          orderItems != null) {
+        final title =
+            data['title'] as String? ??
+            (type == 'invoice' ? 'FACTURA' : 'PRECUENTA');
+
+        final ticket = type == 'invoice'
+            ? PrintTicketService.generateInvoice(
+                order: orderObj,
+                items: orderItems,
+                payments: payments ?? [],
+                tableName: tableName ?? 'Mesa',
+                waiterName: waiterName,
+                businessName: data['restaurantName'] as String?,
+                businessAddress: data['address'] as String?,
+                businessPhone: data['phone'] as String?,
+                title: title,
+              )
+            : PrintTicketService.generatePrecheck(
+                order: orderObj,
+                items: orderItems,
+                tableName: tableName ?? 'Mesa',
+                waiterName: waiterName,
+                businessName: data['restaurantName'] as String?,
+                businessAddress: data['address'] as String?,
+                businessPhone: data['phone'] as String?,
+                title: title,
+              );
         if (kIsWeb) {
           final up = await printRepo.isAgentUp();
           if (!up) {
@@ -1321,12 +1354,14 @@ class _CartLineItem extends StatelessWidget {
   final bool isDraft;
   final VoidCallback? onDelete;
   final bool dense;
+  final VoidCallback? onTap;
 
   const _CartLineItem({
     required this.item,
     required this.isDraft,
     required this.onDelete,
     this.dense = false,
+    this.onTap,
   });
 
   @override
@@ -1335,77 +1370,87 @@ class _CartLineItem extends StatelessWidget {
     final qty = (item.quantity ?? 1).toStringAsFixed(1);
     final totalItem = (item.total ?? 0.0).toStringAsFixed(2);
 
-    return Padding(
-      padding: EdgeInsets.symmetric(vertical: dense ? 4 : 6),
-      child: Row(
-        children: [
-          if (isDraft && onDelete != null)
-            SizedBox(
-              width: 36,
-              child: IconButton(
-                onPressed: onDelete,
-                icon: const Icon(
-                  Icons.close,
-                  color: Color(0xFFEF4444),
-                  size: 18,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        hoverColor: Colors.black.withOpacity(0.04), // Subtle hover effect
+        child: Padding(
+          padding: EdgeInsets.symmetric(vertical: dense ? 4 : 6),
+          child: Row(
+            children: [
+              if (isDraft && onDelete != null)
+                SizedBox(
+                  width: 36,
+                  child: IconButton(
+                    onPressed: onDelete,
+                    icon: const Icon(
+                      Icons.close,
+                      color: Color(0xFFEF4444),
+                      size: 18,
+                    ),
+                    splashRadius: 16,
+                  ),
+                )
+              else
+                const SizedBox(width: 36),
+              Text(
+                qty,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: _salesTextPrimary,
                 ),
-                splashRadius: 16,
               ),
-            )
-          else
-            const SizedBox(width: 36),
-          Text(
-            qty,
-            style: const TextStyle(
-              fontWeight: FontWeight.w600,
-              color: _salesTextPrimary,
-            ),
-          ),
-          const SizedBox(width: 10),
-          if (!isDraft)
-            const Padding(
-              padding: EdgeInsets.only(right: 6),
-              child: Icon(
-                Icons.check_circle,
-                size: 16,
-                color: Color(0xFF22C55E),
+              const SizedBox(width: 10),
+              if (!isDraft)
+                const Padding(
+                  padding: EdgeInsets.only(right: 6),
+                  child: Icon(
+                    Icons.check_circle,
+                    size: 16,
+                    color: Color(0xFF22C55E),
+                  ),
+                ),
+              Container(
+                width: 22,
+                height: 22,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE6F0FF),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Text(
+                  'P',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF3B82F6),
+                  ),
+                ),
               ),
-            ),
-          Container(
-            width: 22,
-            height: 22,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: const Color(0xFFE6F0FF),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: const Text(
-              'P',
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF3B82F6),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    color: _salesTextPrimary,
+                  ),
+                ),
               ),
-            ),
+              Text(
+                'RD\$ $totalItem',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: _salesTotalColor,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 14, color: _salesTextPrimary),
-            ),
-          ),
-          Text(
-            'RD\$ $totalItem',
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: _salesTotalColor,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

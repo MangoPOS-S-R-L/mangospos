@@ -1,6 +1,7 @@
 // lib/data/repositories/sales_repository_improved.dart
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../datasources/queries/sales_queries.dart';
@@ -336,11 +337,14 @@ class SalesRepositoryImproved {
         },
       );
 
-      return Payment.fromMap(response as Map<String, dynamic>);
-    } catch (e) {
-      print(
-        '⚠️ Error en RPC processPayment: $e. Intentando Fallback Directo...',
-      );
+      debugPrint('Rpc Response Type: ${response.runtimeType}');
+      if (response is! Map) {
+        debugPrint('⚠️ Rpc Response is not a Map: $response');
+      }
+
+      return Payment.fromMap(Map<String, dynamic>.from(response as Map));
+    } catch (e, s) {
+      debugPrint('⚠️ Error en RPC processPayment: $e\nStack: $s');
       // Fallback a directo para evitar timeouts/errores del RPC si este falla
       try {
         return await _processPaymentDirect(

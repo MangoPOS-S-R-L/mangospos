@@ -87,6 +87,7 @@ class PrintTicketService {
     String? businessName,
     String? businessAddress,
     String? businessPhone,
+    String title = 'PRECUENTA',
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
 
@@ -119,7 +120,7 @@ class PrintTicketService {
     // ════════════════════════════════════════════
     gen.setTextSize(width: 2, height: 2);
     gen.setBold(true);
-    gen.textCentered('PRECUENTA');
+    gen.textCentered(title);
     gen.setBold(false);
     gen.setTextSize();
 
@@ -265,6 +266,173 @@ class PrintTicketService {
     gen.cut();
 
     return PrintTicket(type: 'precheck', escPosCommands: gen.getCommands());
+  }
+
+  /// ============================================================
+  /// FACTURA (RECIBO DE PAGO)
+  /// ============================================================
+  static PrintTicket generateInvoice({
+    required Order order,
+    required List<OrderItem> items,
+    required List<Payment> payments,
+    required String tableName,
+    String? waiterName,
+    String? businessName,
+    String? businessAddress,
+    String? businessPhone,
+    String title = 'FACTURA',
+  }) {
+    final gen = EscPosGenerator(paperWidth: 80);
+
+    gen.initialize();
+    gen.lineFeed(2);
+
+    // Header
+    if (businessName != null && businessName.isNotEmpty) {
+      gen.setBold(true);
+      gen.textCentered(businessName.toUpperCase());
+      gen.setBold(false);
+    }
+    if (businessAddress != null && businessAddress.isNotEmpty) {
+      gen.textCentered(businessAddress);
+    }
+    if (businessPhone != null && businessPhone.isNotEmpty) {
+      gen.textCentered('Tel: $businessPhone');
+    }
+
+    gen.lineFeed();
+    _thinSeparator(gen);
+    gen.lineFeed();
+
+    // Title
+    gen.setTextSize(width: 2, height: 2);
+    gen.setBold(true);
+    gen.textCentered(title);
+    gen.setBold(false);
+    gen.setTextSize();
+
+    gen.lineFeed();
+    _thickSeparator(gen);
+    gen.lineFeed();
+
+    // Order Info
+    gen.setBold(true);
+    gen.textRow('ORDEN:', order.id.substring(0, 8).toUpperCase());
+    gen.setBold(false);
+
+    if (tableName.isNotEmpty) {
+      gen.textRow('MESA:', tableName);
+    }
+
+    final dateStr = _formatDate(DateTime.now());
+    final timeStr = _formatTime(DateTime.now());
+    gen.textRow('FECHA:', dateStr);
+    gen.textRow('HORA:', timeStr);
+
+    if (waiterName != null && waiterName.isNotEmpty) {
+      gen.textRow('MESERO:', waiterName);
+    }
+
+    gen.lineFeed();
+    _thinSeparator(gen);
+
+    // Items
+    gen.setBold(true);
+    gen.textRow('DESCRIPCIÓN', 'TOTAL');
+    gen.setBold(false);
+    _thinSeparator(gen);
+    gen.lineFeed();
+
+    for (int i = 0; i < items.length; i++) {
+      final item = items[i];
+      final unitPrice = item.total / item.quantity;
+
+      gen.setBold(true);
+      gen.text(item.productName);
+      gen.setBold(false);
+
+      final leftPart =
+          '${item.quantity.toInt()} x RD\$ ${_formatMoney(unitPrice)}';
+      final rightPart = 'RD\$ ${_formatMoney(item.total)}';
+      gen.dotRow(leftPart, rightPart);
+      gen.lineFeed();
+
+      if (item.modifiers.isNotEmpty) {
+        for (final mod in item.modifiers) {
+          gen.text('  + ${mod.name}');
+        }
+        gen.lineFeed();
+      }
+    }
+
+    _thinSeparator(gen);
+    gen.lineFeed();
+
+    // Totals
+    gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(order.subtotal)}');
+    if (order.discounts > 0) {
+      gen.textRow('DESCUENTO:', '-RD\$ ${_formatMoney(order.discounts)}');
+    }
+    if (order.serviceFee > 0) {
+      final servicePct = ((order.serviceFee / order.subtotal) * 100)
+          .toStringAsFixed(0);
+      gen.textRow(
+        'SERVICIO ($servicePct%):',
+        'RD\$ ${_formatMoney(order.serviceFee)}',
+      );
+    }
+    gen.textRow('ITBIS (18%):', 'RD\$ ${_formatMoney(order.tax)}');
+
+    gen.lineFeed();
+    _thickSeparator(gen);
+    gen.lineFeed();
+
+    gen.setBold(true);
+    gen.setTextSize(width: 2, height: 2);
+    gen.textRow('TOTAL:', 'RD\$ ${_formatMoney(order.total)}');
+    gen.setTextSize();
+    gen.setBold(false);
+
+    gen.lineFeed();
+    _thickSeparator(gen);
+    gen.lineFeed();
+
+    // Payments
+    if (payments.isNotEmpty) {
+      gen.setBold(true);
+      gen.text('PAGOS REALIZADOS:');
+      gen.setBold(false);
+
+      double totalChange = 0;
+
+      for (final p in payments) {
+        final method = _getPaymentMethodName(p.paymentMethodId);
+        gen.textRow(method, 'RD\$ ${_formatMoney(p.amount)}');
+        totalChange += p.changeAmount;
+      }
+
+      if (totalChange > 0) {
+        gen.lineFeed();
+        gen.setBold(true);
+        gen.textRow('CAMBIO:', 'RD\$ ${_formatMoney(totalChange)}');
+        gen.setBold(false);
+      }
+    }
+
+    // Footer
+    gen.lineFeed(2);
+    gen.textCentered('GRACIAS POR SU PREFERENCIA');
+    gen.lineFeed(4);
+    gen.cut();
+
+    return PrintTicket(type: 'invoice', escPosCommands: gen.getCommands());
+  }
+
+  static String _getPaymentMethodName(String id) {
+    if (id.contains('cash')) return 'EFECTIVO';
+    if (id.contains('card')) return 'TARJETA';
+    if (id.contains('transfer')) return 'TRANSFERENCIA';
+    return 'OTRO';
   }
 
   /// ============================================================

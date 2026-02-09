@@ -284,6 +284,42 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     await _loadOrderDetail(orderId);
   }
 
+  Future<void> updateItem(String itemId, OrderItem updatedItem) async {
+    final orderId = state.order?.id;
+    if (orderId == null) return;
+
+    try {
+      final currentItem = state.items.firstWhere((i) => i.id == itemId);
+
+      // Chain updates - ideally this should be a single backend call or transaction
+      if (currentItem.quantity != updatedItem.quantity) {
+        await ref
+            .read(salesRepositoryProvider)
+            .updateItemQuantity(itemId: itemId, quantity: updatedItem.quantity);
+      }
+
+      if (currentItem.notes != updatedItem.notes) {
+        await ref
+            .read(salesRepositoryProvider)
+            .updateItemNotes(itemId: itemId, notes: updatedItem.notes ?? '');
+      }
+
+      if (currentItem.isTakeout != updatedItem.isTakeout) {
+        await ref
+            .read(salesRepositoryProvider)
+            .toggleItemTakeout(
+              itemId: itemId,
+              isTakeout: updatedItem.isTakeout,
+            );
+      }
+
+      // Refresh once at the end
+      await _loadOrderDetail(orderId);
+    } catch (e) {
+      state = state.copyWith(error: 'Error al actualizar item: $e');
+    }
+  }
+
   Future<void> moveItemToCheck(String itemId, int pos) async {
     await ref
         .read(salesRepositoryProvider)
