@@ -5,6 +5,8 @@ import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
+import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
+import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/data/models/table_status.dart';
 import 'package:mangopos/domain/models/ventas_table.dart' as ventas;
 import 'package:mangopos/presentation/sales/view/theme/sales_theme.dart';
@@ -505,11 +507,34 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
 
     byZone.setOpening(ts.tableId, true);
 
+    // Mesa ocupada por otro mesero: exigir PIN (excepto admin/supervisor)
+    final session = ref.read(sessionProvider);
+    final isOtherWaiterTable = ts.sessionId != null && !ts.isOwn;
+    final bypassPin =
+        session.activeRole == PosRole.administrador ||
+        session.activeRole == PosRole.supervisor;
+    if (isOtherWaiterTable && !bypassPin) {
+      final authorized = await showPinVerificationModal(
+        context,
+        ref,
+        level: PinAccessLevel.supervisor,
+        title: 'Mesa de otro mesero',
+        subtitle:
+            'Se requiere autorización de Supervisor o Administrador para abrir esta mesa.',
+      );
+      if (!authorized) {
+        byZone.setOpening(ts.tableId, false);
+        return;
+      }
+    }
+
     // Lanzamos apertura de mesa en background y navegamos de inmediato
-    unawaited(ref
-        .read(currentOrderProvider.notifier)
-        .openTable(ts.tableId)
-        .whenComplete(() => byZone.setOpening(ts.tableId, false)));
+    unawaited(
+      ref
+          .read(currentOrderProvider.notifier)
+          .openTable(ts.tableId)
+          .whenComplete(() => byZone.setOpening(ts.tableId, false)),
+    );
 
     if (!context.mounted) return;
     context.go(

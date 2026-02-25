@@ -15,6 +15,7 @@ import 'package:mangopos/presentation/sales/widgets/precheck/pre_check_dialog.da
 import 'package:mangopos/presentation/sales/widgets/printer_selection_dialog.dart';
 import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
+import 'package:mangopos/services/session/session_controller.dart';
 
 import 'package:mangopos/presentation/sales/view/widgets/product_detail_modal.dart';
 import 'payment_split_screen.dart';
@@ -352,6 +353,13 @@ class _CartView extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final orderState = ref.watch(currentOrderProvider); // RESTORED
+    final sessionCtrl = ref.read(sessionProvider.notifier);
+    final canCharge = sessionCtrl.hasAnyPermission([
+      'pagos.acceso',
+      'pagos.cobrar_efectivo',
+      'pagos.cobrar_tarjeta',
+      'pagos.cobrar_transferencia',
+    ]);
     final allItems = orderState.items; // RESTORED
     final openItems = allItems.where(_isOpenItem).toList();
 
@@ -759,7 +767,10 @@ class _CartView extends ConsumerWidget {
                   _ActionButton(
                     label: 'Pagar RD\$ ${currency.format(displayTotal)}',
                     background: _salesPayButton,
-                    onPressed: orderState.order == null || displayTotal <= 0
+                    onPressed:
+                        !canCharge ||
+                            orderState.order == null ||
+                            displayTotal <= 0
                         ? null
                         : () => _openPaymentModal(
                             context,
@@ -850,7 +861,10 @@ class _CartView extends ConsumerWidget {
                   _ActionButton(
                     label: 'Pagar RD\$ ${currency.format(displayTotal)}',
                     background: _salesPayButton,
-                    onPressed: orderState.order == null || displayTotal <= 0
+                    onPressed:
+                        !canCharge ||
+                            orderState.order == null ||
+                            displayTotal <= 0
                         ? null
                         : () => _openPaymentModal(
                             context,

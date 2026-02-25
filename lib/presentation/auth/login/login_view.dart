@@ -20,7 +20,10 @@ class LoginView extends ConsumerStatefulWidget {
 }
 
 class _LoginViewState extends ConsumerState<LoginView> {
-  final _formKey = GlobalKey<FormState>();
+  @override
+  void dispose() {
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -62,165 +65,128 @@ class _LoginViewState extends ConsumerState<LoginView> {
           ),
           child: Padding(
             padding: const EdgeInsets.all(24),
-            child: Form(
-              key: _formKey,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // Branding
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Container(
-                        width: 36,
-                        height: 36,
-                        decoration: BoxDecoration(
-                          color: _orange,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Center(
-                          child: Text(
-                            'M',
-                            style: TextStyle(
-                              color: _white,
-                              fontWeight: FontWeight.w800,
-                            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Branding
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: _orange,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Center(
+                        child: Text(
+                          'M',
+                          style: TextStyle(
+                            color: _white,
+                            fontWeight: FontWeight.w800,
                           ),
                         ),
                       ),
-                      const SizedBox(width: 10),
-                      const Text(
-                        'MangoPOS',
-                        style: TextStyle(
-                          color: _dark,
-                          fontSize: 22,
-                          fontWeight: FontWeight.w700,
-                        ),
+                    ),
+                    const SizedBox(width: 10),
+                    const Text(
+                      'MangoPOS',
+                      style: TextStyle(
+                        color: _dark,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w700,
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
 
-                  _label('Introduce tu correo electronico'),
-                  const SizedBox(height: 8),
-                  TextFormField(
-                    initialValue: data.email,
-                    style: const TextStyle(color: _dark),
-                    keyboardType: TextInputType.emailAddress,
-                    onChanged: vm.setEmail,
-                    validator: (v) => (v == null || !v.contains('@'))
-                        ? 'Correo invalido'
-                        : null,
-                    decoration: _inputDecoration('email@tuempresa.com'),
+                _label('Correo electrónico'),
+                const SizedBox(height: 8),
+                TextField(
+                  keyboardType: TextInputType.emailAddress,
+                  enabled: !isLoading,
+                  onChanged: vm.setEmail,
+                  decoration: _inputDecoration('tucorreo@ejemplo.com'),
+                  style: const TextStyle(
+                    color: _dark,
+                    fontWeight: FontWeight.w500,
                   ),
-                  const SizedBox(height: 16),
+                ),
+                const SizedBox(height: 16),
 
-                  _label('Contrasena'),
-                  const SizedBox(height: 8),
-                  _PasswordField(
-                    initial: data.password,
-                    onChanged: vm.setPassword,
-                  ),
-                  const SizedBox(height: 8),
+                _label('Contraseña'),
+                const SizedBox(height: 8),
+                _PasswordField(
+                  initial: data.password,
+                  onChanged: vm.setPassword,
+                ),
+                const SizedBox(height: 24),
 
-                  Row(
-                    children: [
-                      Checkbox(
-                        value: data.rememberMe,
-                        onChanged: (v) => vm.toggleRemember(v ?? false),
-                        activeColor: _orange,
-                        side: BorderSide(color: _dark.withOpacity(.35)),
+                SizedBox(
+                  height: 48,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _orange,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
                       ),
-                      const Text('Recuerdame', style: TextStyle(color: _dark)),
-                      const Spacer(),
-                      TextButton(
-                        onPressed: () {
-                          /* TODO: recuperar contrasena */
-                        },
-                        style: TextButton.styleFrom(
-                          foregroundColor: _dark.withOpacity(.8),
-                        ),
-                        child: const Text('Olvidaste tu contrasena?'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-
-                  SizedBox(
-                    height: 48,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _orange,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        elevation: 0,
-                      ),
-                      onPressed: isLoading
-                          ? null
-                          : () async {
-                              if (_formKey.currentState?.validate() ?? false) {
-                                await vm.submit();
-                                if (!mounted) return;
-                                final hasError =
-                                    ref.read(loginVmProvider).error != null;
-                                if (!hasError) context.go('/dashboard');
-                              }
-                            },
-                      child: isLoading
-                          ? const CircularProgressIndicator.adaptive(
-                              valueColor: AlwaysStoppedAnimation<Color>(_white),
-                            )
-                          : const Text(
-                              'Iniciar sesion',
-                              style: TextStyle(
-                                color: _white,
-                                fontWeight: FontWeight.w600,
-                              ),
+                      elevation: 0,
+                    ),
+                    onPressed: isLoading
+                        ? null
+                        : () async {
+                            await vm.submit();
+                            if (!mounted) return;
+                            final hasError =
+                                ref.read(loginVmProvider).error != null;
+                            if (!hasError) context.go('/dashboard');
+                          },
+                    child: isLoading
+                        ? const CircularProgressIndicator.adaptive(
+                            valueColor: AlwaysStoppedAnimation<Color>(_white),
+                          )
+                        : const Text(
+                            'Iniciar sesion',
+                            style: TextStyle(
+                              color: _white,
+                              fontWeight: FontWeight.w600,
                             ),
-                    ),
+                          ),
                   ),
+                ),
 
-                  if (state.error != null) ...[
-                    const SizedBox(height: 12),
-                    Text(
-                      state.error!,
-                      style: const TextStyle(color: Colors.redAccent),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-
-                  const SizedBox(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        'Eres nuevo aqui?',
-                        style: TextStyle(color: _dark.withOpacity(.8)),
-                      ),
-                      TextButton(
-                        onPressed: () => context.go('/register'),
-                        style: TextButton.styleFrom(foregroundColor: _orange),
-                        child: const Text('Crea una cuenta'),
-                      ),
-                    ],
+                if (state.error != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    state.error!,
+                    style: const TextStyle(color: Colors.redAccent),
+                    textAlign: TextAlign.center,
                   ),
-
-                  // DEBUG INFO
-                  if (kDebugMode || kIsWeb) ...[
-                    const SizedBox(height: 20),
-                    const Divider(),
-                    Center(
-                      child: Text(
-                        'WASM Build - Debug Mode\nRev: 1.0.1',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.grey, fontSize: 10),
-                      ),
-                    ),
-                  ],
                 ],
-              ),
+
+                const SizedBox(height: 8),
+                Text(
+                  'Si no tienes cuenta, contacta al administrador.',
+                  style: TextStyle(color: _dark.withOpacity(.65), fontSize: 11),
+                  textAlign: TextAlign.center,
+                ),
+
+                // DEBUG INFO
+                if (kDebugMode || kIsWeb) ...[
+                  const SizedBox(height: 20),
+                  const Divider(),
+                  Center(
+                    child: Text(
+                      'WASM Build - Debug Mode\nRev: 1.0.1',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.grey, fontSize: 10),
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
         ),

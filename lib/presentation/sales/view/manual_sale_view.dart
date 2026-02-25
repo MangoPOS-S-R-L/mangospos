@@ -1,9 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:intl/intl.dart';
-import 'package:mangopos/app/theme/mango_colors.dart';
-import 'package:mangopos/presentation/sales/state/sales_state.dart';
 import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/payments/widgets/payment_modal.dart';
@@ -23,7 +20,9 @@ const kShadowSoft = BoxShadow(
 );
 
 class ManualSaleView extends ConsumerStatefulWidget {
-  const ManualSaleView({super.key});
+  final bool quickMode;
+
+  const ManualSaleView({super.key, this.quickMode = false});
 
   @override
   ConsumerState<ManualSaleView> createState() => _ManualSaleViewState();
@@ -37,7 +36,11 @@ class _ManualSaleViewState extends ConsumerState<ManualSaleView> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(menuBrowserVmProvider.notifier).loadAll();
-      ref.read(currentOrderProvider.notifier).ensureManualOrder();
+      if (widget.quickMode) {
+        ref.read(currentOrderProvider.notifier).ensureQuickOrder();
+      } else {
+        ref.read(currentOrderProvider.notifier).ensureManualOrder();
+      }
     });
   }
 

@@ -3,6 +3,16 @@ class AppRoutes {
   static const register = '/register';
   static const registerStep2 = '/register/branch';
 
+  // Alias React (paridad 1:1)
+  static const homeReact = '/';
+  static const salesReact = '/ventas';
+  static const cashierReact = '/caja';
+  static const kitchenReact = '/cocina';
+  static const productsReact = '/productos';
+  static const customersReact = '/clientes';
+  static const reportsReact = '/reportes';
+  static const settingsReact = '/ajustes';
+
   // Shell autenticado
   static const dashboard = '/dashboard';
   static const sales = '/sales';

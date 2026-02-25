@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http; // ✅ check internet
@@ -8,19 +9,20 @@ import 'package:google_fonts/google_fonts.dart';
 
 import 'package:mangopos/utils/responsive_utils.dart';
 import 'package:mangopos/widgets/responsive/responsive_icon.dart';
+import 'package:mangopos/services/session/session_controller.dart';
 
 import '../../app/theme/mango_colors.dart';
 import '../../app/router/routes.dart';
 
-class MainShell extends StatefulWidget {
+class MainShell extends ConsumerStatefulWidget {
   final Widget child;
   const MainShell({super.key, required this.child});
 
   @override
-  State<MainShell> createState() => _MainShellState();
+  ConsumerState<MainShell> createState() => _MainShellState();
 }
 
-class _MainShellState extends State<MainShell> {
+class _MainShellState extends ConsumerState<MainShell> {
   late Timer _tick;
   DateTime _now = DateTime.now();
 
@@ -91,18 +93,21 @@ class _MainShellState extends State<MainShell> {
                               label: 'Ventas',
                               route: AppRoutes.sales,
                               asset: 'assets/icons/ventas_principal.svg',
+                              permissionCode: 'ventas.mesas.acceso',
                             ),
                             const SizedBox(width: navGap),
                             const _TopNavItem(
                               label: 'Caja',
                               route: AppRoutes.cashier,
                               asset: 'assets/icons/caja_principal.svg',
+                              permissionCode: 'caja.apertura',
                             ),
                             const SizedBox(width: navGap),
                             const _TopNavItem(
                               label: 'Cocina',
                               route: AppRoutes.kitchen,
                               asset: 'assets/icons/cocina_principal.svg',
+                              permissionCode: 'kds.acceso',
                             ),
                             const SizedBox(width: navGap),
 
@@ -110,18 +115,21 @@ class _MainShellState extends State<MainShell> {
                               label: 'Productos',
                               route: AppRoutes.products,
                               asset: 'assets/icons/productos_principal.svg',
+                              permissionCode: 'inventario.acceso',
                             ),
                             const SizedBox(width: navGap),
                             const _TopNavItem(
                               label: 'Reportes',
                               route: AppRoutes.reports,
                               asset: 'assets/icons/reportes_principal.svg',
+                              permissionCode: 'reportes.ventas',
                             ),
                             const SizedBox(width: navGap),
                             const _TopNavItem(
                               label: 'Más Ajustes',
                               route: AppRoutes.settings,
                               asset: 'assets/icons/masajustes.svg',
+                              permissionCode: 'settings.usuarios.acceso',
                             ),
                           ],
                         ),
@@ -179,27 +187,35 @@ class _MainShellState extends State<MainShell> {
 }
 
 // ===== ITEM DEL MENÚ (PILL SHAPE) =====
-class _TopNavItem extends StatefulWidget {
+class _TopNavItem extends ConsumerStatefulWidget {
   final String label;
   final String route;
   final String asset;
   final double iconSize;
+  final String? permissionCode;
   const _TopNavItem({
     required this.label,
     required this.route,
     required this.asset,
     this.iconSize = 22,
+    this.permissionCode,
   });
 
   @override
-  State<_TopNavItem> createState() => _TopNavItemState();
+  ConsumerState<_TopNavItem> createState() => _TopNavItemState();
 }
 
-class _TopNavItemState extends State<_TopNavItem> {
+class _TopNavItemState extends ConsumerState<_TopNavItem> {
   bool _isHovering = false;
 
   @override
   Widget build(BuildContext context) {
+    ref.watch(sessionProvider);
+    final hasAccess =
+        widget.permissionCode == null ||
+        ref
+            .read(sessionProvider.notifier)
+            .hasPermission(widget.permissionCode!);
     final loc = GoRouterState.of(context).uri.toString();
     final active =
         loc == widget.route ||
@@ -214,16 +230,18 @@ class _TopNavItemState extends State<_TopNavItem> {
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
-          onTap: () => context.go(widget.route),
+          onTap: hasAccess ? () => context.go(widget.route) : null,
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 200),
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             decoration: BoxDecoration(
-              color: active
-                  ? MangoColors.primaryOrange
-                  : (_isHovering
-                        ? const Color(0xFFF7F7F9)
-                        : Colors.transparent),
+              color: hasAccess
+                  ? (active
+                        ? MangoColors.primaryOrange
+                        : (_isHovering
+                              ? const Color(0xFFF7F7F9)
+                              : Colors.transparent))
+                  : const Color(0xFFF7F7F9),
               borderRadius: BorderRadius.circular(10),
             ),
             child: Row(
@@ -231,7 +249,9 @@ class _TopNavItemState extends State<_TopNavItem> {
               children: [
                 ColorFiltered(
                   colorFilter: ColorFilter.mode(
-                    active ? Colors.white : Colors.grey[600]!,
+                    hasAccess
+                        ? (active ? Colors.white : Colors.grey[600]!)
+                        : Colors.grey[500]!,
                     BlendMode.srcIn,
                   ),
                   child: SvgPicture.asset(
@@ -246,10 +266,18 @@ class _TopNavItemState extends State<_TopNavItem> {
                     widget.label,
                     style: GoogleFonts.plusJakartaSans(
                       fontSize: 15,
-                      fontWeight: active ? FontWeight.bold : FontWeight.w600,
-                      color: active ? Colors.white : Colors.grey[700]!,
+                      fontWeight: active && hasAccess
+                          ? FontWeight.bold
+                          : FontWeight.w600,
+                      color: hasAccess
+                          ? (active ? Colors.white : Colors.grey[700]!)
+                          : Colors.grey[500]!,
                     ),
                   ),
+                ],
+                if (!hasAccess) ...[
+                  const SizedBox(width: 6),
+                  const Icon(Icons.lock_outline, size: 14, color: Colors.grey),
                 ],
               ],
             ),
@@ -468,44 +496,70 @@ class _Logo extends StatelessWidget {
 }
 
 // ===== USER INFO =====
-class _UserInfo extends StatelessWidget {
+class _UserInfo extends ConsumerWidget {
   const _UserInfo();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final session = ref.watch(sessionProvider);
+    final ctrl = ref.read(sessionProvider.notifier);
+    final role = session.activeRole;
+    final roleLabel = role?.label ?? 'Sin rol';
+
     return Row(
       children: [
         Column(
           crossAxisAlignment: CrossAxisAlignment.end,
           mainAxisAlignment: MainAxisAlignment.center,
-          children: const [
+          children: [
             Text(
-              'Admin',
-              style: TextStyle(
+              session.userName ?? 'Usuario',
+              style: const TextStyle(
                 fontWeight: FontWeight.bold,
                 fontSize: 14,
                 color: Color(0xFF1F2937),
               ),
             ),
             Text(
-              'Caja #001',
-              style: TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
+              roleLabel,
+              style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
             ),
           ],
         ),
-        const SizedBox(width: 12),
-        Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: const LinearGradient(
-              colors: [Color(0xFFF7941A), Color(0xFFFFB74D)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
+        const SizedBox(width: 8),
+        PopupMenuButton<PosRole>(
+          tooltip: 'Cambiar rol',
+          onSelected: ctrl.switchRole,
+          itemBuilder: (_) => session.availableRoles
+              .map(
+                (r) => PopupMenuItem<PosRole>(
+                  value: r,
+                  child: Row(
+                    children: [
+                      if (r == role)
+                        const Padding(
+                          padding: EdgeInsets.only(right: 8),
+                          child: Icon(Icons.check, size: 14),
+                        ),
+                      Text(r.label),
+                    ],
+                  ),
+                ),
+              )
+              .toList(),
+          child: Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: const LinearGradient(
+                colors: [Color(0xFFF7941A), Color(0xFFFFB74D)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
             ),
+            child: const Icon(Icons.person, color: Colors.white, size: 20),
           ),
-          child: const Icon(Icons.person, color: Colors.white, size: 20),
         ),
       ],
     );

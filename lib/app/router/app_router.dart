@@ -54,7 +54,38 @@ class AppRouter {
   static GoRouter router = GoRouter(
     // cambia a login/dashboard según tu flujo
     initialLocation: AppRoutes.login,
+    errorBuilder: (_, state) => _NotFoundView(path: state.uri.toString()),
     routes: [
+      // ---------- Alias React (paridad de rutas 1:1) ----------
+      GoRoute(
+        path: AppRoutes.homeReact,
+        redirect: (_, __) => AppRoutes.dashboard,
+      ),
+      GoRoute(
+        path: AppRoutes.cashierReact,
+        redirect: (_, __) => AppRoutes.cashier,
+      ),
+      GoRoute(
+        path: AppRoutes.kitchenReact,
+        redirect: (_, __) => AppRoutes.kitchen,
+      ),
+      GoRoute(
+        path: AppRoutes.productsReact,
+        redirect: (_, __) => AppRoutes.products,
+      ),
+      GoRoute(
+        path: AppRoutes.customersReact,
+        redirect: (_, __) => AppRoutes.customers,
+      ),
+      GoRoute(
+        path: AppRoutes.reportsReact,
+        redirect: (_, __) => AppRoutes.reports,
+      ),
+      GoRoute(
+        path: AppRoutes.settingsReact,
+        redirect: (_, __) => AppRoutes.settings,
+      ),
+
       // ---------- Auth ----------
       GoRoute(path: AppRoutes.login, builder: (_, __) => const LoginView()),
       GoRoute(
@@ -83,10 +114,38 @@ class AppRouter {
           ShellRoute(
             builder: (_, __, child) => SalesShellView(child: child),
             routes: [
-              // /sales  -> redirect a /sales/by-zone
+              // /sales (legacy) -> /ventas
               GoRoute(
                 path: AppRoutes.sales,
-                redirect: (_, __) => AppRoutes.salesByZone,
+                redirect: (_, state) {
+                  final mode = state.uri.queryParameters['mode'];
+                  if (mode == null || mode.isEmpty) return AppRoutes.salesReact;
+                  return Uri(
+                    path: AppRoutes.salesReact,
+                    queryParameters: {'mode': mode},
+                  ).toString();
+                },
+              ),
+              // /ventas?mode=manual|rapida|delivery|selfservice
+              GoRoute(
+                path: AppRoutes.salesReact,
+                builder: (_, state) {
+                  final mode = state.uri.queryParameters['mode']
+                      ?.toLowerCase()
+                      .trim();
+                  switch (mode) {
+                    case 'manual':
+                      return const ManualSaleView();
+                    case 'rapida':
+                      return const SaleQuickView();
+                    case 'delivery':
+                      return const DeliveryExpressView();
+                    case 'selfservice':
+                      return const SelfServiceView();
+                    default:
+                      return const SalesByZoneView(businessId: 'auto');
+                  }
+                },
               ),
               GoRoute(
                 path: AppRoutes.salesByZone,
@@ -325,4 +384,38 @@ class _Placeholder extends StatelessWidget {
       ),
     ),
   );
+}
+
+class _NotFoundView extends StatelessWidget {
+  final String path;
+  const _NotFoundView({required this.path});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                '404',
+                style: TextStyle(fontSize: 52, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 8),
+              const Text('Ruta no encontrada'),
+              const SizedBox(height: 8),
+              Text(path, textAlign: TextAlign.center),
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: () => context.go(AppRoutes.dashboard),
+                child: const Text('Volver al inicio'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

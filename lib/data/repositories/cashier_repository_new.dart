@@ -91,16 +91,14 @@ class CashierRepository {
     String? notes,
   }) async {
     try {
-      await _client
-          .from('cash_register_sessions')
-          .update({
-            'closed_at': DateTime.now().toIso8601String(),
-            'end_amount': endAmount,
-            'difference': endAmount - 0, // Se calcula en el trigger
-            'status': 'closed',
-            'notes': notes,
-          })
-          .eq('id', sessionId);
+      await _client.rpc(
+        'fn_close_cash_session',
+        params: {
+          'p_session_id': sessionId,
+          'p_end_amount': endAmount,
+          'p_notes': notes,
+        },
+      );
     } catch (e) {
       throw Exception('Error al cerrar sesión de caja: $e');
     }

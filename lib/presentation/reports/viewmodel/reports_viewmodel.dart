@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../../../data/repositories/reports_repository.dart';
+import '../../../data/utils/business_id_resolver.dart';
 
 enum ReportCategory { sales, purchases, finances, inventory }
 
@@ -17,16 +21,87 @@ class ReportItem {
 
 class ReportsState {
   final ReportCategory? selectedCategory;
+  final bool loading;
+  final String? error;
+  final Map<String, dynamic>? salesSummary;
+  final Map<String, dynamic>? cashSummary;
 
-  const ReportsState({this.selectedCategory});
+  const ReportsState({
+    this.selectedCategory,
+    this.loading = false,
+    this.error,
+    this.salesSummary,
+    this.cashSummary,
+  });
 
-  ReportsState copyWith({ReportCategory? selectedCategory}) {
-    return ReportsState(selectedCategory: selectedCategory);
+  ReportsState copyWith({
+    ReportCategory? selectedCategory,
+    bool? loading,
+    String? error,
+    Map<String, dynamic>? salesSummary,
+    Map<String, dynamic>? cashSummary,
+    bool clearError = false,
+  }) {
+    return ReportsState(
+      selectedCategory: selectedCategory ?? this.selectedCategory,
+      loading: loading ?? this.loading,
+      error: clearError ? null : (error ?? this.error),
+      salesSummary: salesSummary ?? this.salesSummary,
+      cashSummary: cashSummary ?? this.cashSummary,
+    );
   }
 }
 
+final reportsRepositoryProvider = Provider<ReportsRepository>((ref) {
+  return ReportsRepository(Supabase.instance.client);
+});
+
 class ReportsViewModel extends StateNotifier<ReportsState> {
-  ReportsViewModel() : super(const ReportsState());
+  final ReportsRepository _repository;
+
+  ReportsViewModel(this._repository) : super(const ReportsState()) {
+    Future<void>.microtask(load);
+  }
+
+  Future<void> load() async {
+    state = state.copyWith(loading: true, clearError: true);
+
+    try {
+      final businessId = await resolveBusinessIdOrNull(
+        Supabase.instance.client,
+        'auto',
+      );
+
+      if (businessId == null) {
+        throw Exception('No se pudo resolver el negocio actual');
+      }
+
+      final now = DateTime.now();
+      final from = DateTime(
+        now.year,
+        now.month,
+        now.day,
+      ).subtract(const Duration(days: 7));
+      final to = now.add(const Duration(days: 1));
+
+      final results = await Future.wait([
+        _repository.getSalesSummary(businessId: businessId, from: from, to: to),
+        _repository.getCashSummary(businessId: businessId, from: from, to: to),
+      ]);
+
+      state = state.copyWith(
+        loading: false,
+        salesSummary: results[0],
+        cashSummary: results[1],
+        clearError: true,
+      );
+    } catch (e) {
+      state = state.copyWith(
+        loading: false,
+        error: 'Error cargando reportes: $e',
+      );
+    }
+  }
 
   void selectCategory(ReportCategory? category) {
     state = state.copyWith(selectedCategory: category);
@@ -35,57 +110,54 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
   List<ReportItem> getReportsForCategory(ReportCategory category) {
     switch (category) {
       case ReportCategory.sales:
+        final total =
+            (state.salesSummary?['total_sales'] as num?)?.toDouble() ?? 0;
+        final txCount = state.salesSummary?['payments_count'] ?? 0;
+        final itemsSold = state.salesSummary?['items_sold'] ?? 0;
         return [
-          const ReportItem(
-            title: 'Todas las ventas',
-            description: 'Lista completa de ventas realizadas',
+          ReportItem(
+            title: 'Ventas por rango',
+            description:
+                'Total: RD\$${total.toStringAsFixed(2)} | Transacciones: $txCount',
           ),
-          const ReportItem(
-            title: 'Ventas anuladas',
-            description: 'Registro de ventas canceladas',
-          ),
-          const ReportItem(
-            title: 'Ventas por productos',
-            description: 'Desglose de ventas por ítem',
-          ),
-          const ReportItem(
-            title: 'Ventas por mozo',
-            description: 'Rendimiento por personal',
+          ReportItem(
+            title: 'Items vendidos',
+            description: 'Items cobrados en el rango: $itemsSold',
           ),
         ];
       case ReportCategory.purchases:
-        return [
-          const ReportItem(
-            title: 'Todas las compras',
-            description: 'Historial de compras',
-          ),
-          const ReportItem(
-            title: 'Compras por proveedor',
-            description: 'Gastos por proveedor',
+        return const [
+          ReportItem(
+            title: 'Compras (pendiente)',
+            description: 'Módulo de compras se implementa en Sprint 3',
           ),
         ];
       case ReportCategory.finances:
+        final sessions = state.cashSummary?['sessions_count'] ?? 0;
+        final differences =
+            (state.cashSummary?['differences_total'] as num?)?.toDouble() ?? 0;
+        final inTotal =
+            (state.cashSummary?['manual_in_total'] as num?)?.toDouble() ?? 0;
+        final outTotal =
+            (state.cashSummary?['manual_out_total'] as num?)?.toDouble() ?? 0;
         return [
-          const ReportItem(
-            title: 'Cierre de caja',
-            description: 'Resumen de cierres diarios',
+          ReportItem(
+            title: 'Resumen de caja',
+            description:
+                'Sesiones: $sessions | Diferencia acumulada: RD\$${differences.toStringAsFixed(2)}',
           ),
-          const ReportItem(
-            title: 'Movimientos de caja',
-            description: 'Ingresos y egresos detallados',
+          ReportItem(
+            title: 'Movimientos manuales',
+            description:
+                'Entradas: RD\$${inTotal.toStringAsFixed(2)} | Salidas: RD\$${outTotal.toStringAsFixed(2)}',
           ),
         ];
       case ReportCategory.inventory:
-        return [
-          const ReportItem(
-            title: 'Stock actual',
-            description: 'Niveles de inventario en tiempo real',
+        return const [
+          ReportItem(
+            title: 'Inventario (pendiente)',
+            description: 'Módulo de inventario se implementa en Sprint 2',
           ),
-          const ReportItem(
-            title: 'Kardex',
-            description: 'Movimientos de inventario',
-          ),
-          const ReportItem(title: 'Merma', description: 'Registro de pérdidas'),
         ];
     }
   }
@@ -119,5 +191,5 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
 
 final reportsViewModelProvider =
     StateNotifierProvider<ReportsViewModel, ReportsState>((ref) {
-      return ReportsViewModel();
+      return ReportsViewModel(ref.read(reportsRepositoryProvider));
     });

@@ -6,6 +6,7 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/presentation/sales/state/sales_state.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/sales/view/theme/sales_theme.dart';
+import 'package:mangopos/services/session/session_controller.dart';
 
 enum SalesTab { byZone, manual, quick, delivery, selfService }
 
@@ -24,6 +25,7 @@ class SalesShellView extends ConsumerWidget {
     final selected = _selectedFromRoute(route);
     final orderState = ref.watch(currentOrderProvider);
     final guardNavigation = _shouldGuardNavigation(route, orderState);
+    final sessionCtrl = ref.read(sessionProvider.notifier);
 
     return Scaffold(
       backgroundColor: SalesTheme.background,
@@ -51,11 +53,14 @@ class SalesShellView extends ConsumerWidget {
                         icon: Icons.grid_view_rounded,
                         label: 'Por zona',
                         selected: selected == SalesTab.byZone,
+                        locked: !sessionCtrl.hasPermission(
+                          'ventas.mesas.acceso',
+                        ),
                         onTap: () => _handleNavTap(
                           context,
                           ref,
                           route,
-                          AppRoutes.salesByZone,
+                          AppRoutes.salesReact,
                           guardNavigation,
                         ),
                       ),
@@ -64,11 +69,17 @@ class SalesShellView extends ConsumerWidget {
                         icon: Icons.description_outlined, // FileText
                         label: 'Venta manual',
                         selected: selected == SalesTab.manual,
+                        locked: !sessionCtrl.hasPermission(
+                          'ventas.mesas.abrir',
+                        ),
                         onTap: () => _handleNavTap(
                           context,
                           ref,
                           route,
-                          AppRoutes.salesManual,
+                          Uri(
+                            path: AppRoutes.salesReact,
+                            queryParameters: const {'mode': 'manual'},
+                          ).toString(),
                           guardNavigation,
                         ),
                       ),
@@ -77,11 +88,17 @@ class SalesShellView extends ConsumerWidget {
                         icon: Icons.bolt_rounded, // Zap
                         label: 'Venta rápida',
                         selected: selected == SalesTab.quick,
+                        locked: !sessionCtrl.hasPermission(
+                          'ventas_rapida.acceso',
+                        ),
                         onTap: () => _handleNavTap(
                           context,
                           ref,
                           route,
-                          AppRoutes.salesQuick,
+                          Uri(
+                            path: AppRoutes.salesReact,
+                            queryParameters: const {'mode': 'rapida'},
+                          ).toString(),
                           guardNavigation,
                         ),
                       ),
@@ -90,11 +107,17 @@ class SalesShellView extends ConsumerWidget {
                         icon: Icons.local_shipping_outlined, // Truck
                         label: 'Delivery',
                         selected: selected == SalesTab.delivery,
+                        locked: !sessionCtrl.hasPermission(
+                          'delivery.crear_orden',
+                        ),
                         onTap: () => _handleNavTap(
                           context,
                           ref,
                           route,
-                          AppRoutes.salesDelivery,
+                          Uri(
+                            path: AppRoutes.salesReact,
+                            queryParameters: const {'mode': 'delivery'},
+                          ).toString(),
                           guardNavigation,
                         ),
                       ),
@@ -107,7 +130,10 @@ class SalesShellView extends ConsumerWidget {
                           context,
                           ref,
                           route,
-                          AppRoutes.salesSelfService,
+                          Uri(
+                            path: AppRoutes.salesReact,
+                            queryParameters: const {'mode': 'selfservice'},
+                          ).toString(),
                           guardNavigation,
                         ),
                         disabled: true,
@@ -129,6 +155,20 @@ class SalesShellView extends ConsumerWidget {
   }
 
   SalesTab _selectedFromRoute(String route) {
+    final uri = Uri.tryParse(route);
+    final mode = uri?.queryParameters['mode']?.toLowerCase().trim();
+    if (uri?.path == AppRoutes.salesReact || uri?.path == AppRoutes.sales) {
+      switch (mode) {
+        case 'manual':
+          return SalesTab.manual;
+        case 'rapida':
+          return SalesTab.quick;
+        case 'delivery':
+          return SalesTab.delivery;
+        case 'selfservice':
+          return SalesTab.selfService;
+      }
+    }
     if (route.contains(AppRoutes.salesManual)) return SalesTab.manual;
     if (route.contains(AppRoutes.salesQuick)) return SalesTab.quick;
     if (route.contains(AppRoutes.salesDelivery)) return SalesTab.delivery;
@@ -155,9 +195,13 @@ class SalesShellView extends ConsumerWidget {
 
   bool _shouldGuardNavigation(String route, CurrentOrderState orderState) {
     if (orderState.items.isEmpty) return false;
+    final uri = Uri.tryParse(route);
+    final mode = uri?.queryParameters['mode']?.toLowerCase().trim();
     final isManual = route.contains(AppRoutes.salesManual);
     final isQuick = route.contains(AppRoutes.salesQuick);
-    return isManual || isQuick;
+    final isManualByQuery = mode == 'manual';
+    final isQuickByQuery = mode == 'rapida';
+    return isManual || isQuick || isManualByQuery || isQuickByQuery;
   }
 
   Future<bool?> _showExitSaleDialog(BuildContext context) {
@@ -201,6 +245,7 @@ class _SalesNavItem extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
   final bool disabled;
+  final bool locked;
 
   const _SalesNavItem({
     required this.icon,
@@ -208,21 +253,25 @@ class _SalesNavItem extends StatelessWidget {
     required this.selected,
     required this.onTap,
     this.disabled = false,
+    this.locked = false,
   });
 
   @override
   Widget build(BuildContext context) {
+    final blocked = disabled || locked;
     final bg = selected ? SalesTheme.primary : Colors.transparent;
-    final fg = selected ? SalesTheme.primaryForeground : SalesTheme.foreground;
+    final fg = blocked
+        ? SalesTheme.mutedForeground
+        : (selected ? SalesTheme.primaryForeground : SalesTheme.foreground);
     // Opacidad para items deshabilitados
-    final double opacity = disabled ? 0.5 : 1.0;
+    final double opacity = blocked ? 0.55 : 1.0;
 
     return Opacity(
       opacity: opacity,
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: disabled ? null : onTap,
+          onTap: blocked ? null : onTap,
           borderRadius: BorderRadius.circular(8),
           hoverColor: SalesTheme.primary.withOpacity(0.05),
           child: AnimatedContainer(
@@ -244,6 +293,10 @@ class _SalesNavItem extends StatelessWidget {
                     fontSize: 14,
                   ),
                 ),
+                if (locked) ...[
+                  const Spacer(),
+                  Icon(Icons.lock_outline, size: 16, color: fg),
+                ],
               ],
             ),
           ),

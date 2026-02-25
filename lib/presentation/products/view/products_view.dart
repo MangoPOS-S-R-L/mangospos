@@ -228,8 +228,16 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                         final product = viewModel.products[index];
                         final categoryName =
                             product['categories']?['name'] ?? '-';
-                        // Assuming menus are linked differently or just placeholder for now
-                        const menuName = '-';
+                        final links =
+                            product['menu_item_links'] as List<dynamic>? ?? [];
+                        String? firstMenu;
+                        if (links.isNotEmpty) {
+                          final firstLink = links.first as Map<String, dynamic>;
+                          final menu =
+                              firstLink['menus'] as Map<String, dynamic>?;
+                          firstMenu = menu?['name']?.toString();
+                        }
+                        final menuName = firstMenu ?? '-';
                         final isActive = product['is_active'] == true;
 
                         return Padding(
@@ -296,27 +304,34 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                               ),
                               Expanded(
                                 flex: 1,
-                                child: const Text(
+                                child: Text(
                                   menuName,
-                                  style: TextStyle(color: Colors.black54),
+                                  style: const TextStyle(color: Colors.black54),
                                 ),
                               ),
                               Expanded(
                                 flex: 1,
                                 child: Center(
-                                  child: Container(
-                                    width: 20,
-                                    height: 20,
-                                    decoration: BoxDecoration(
-                                      color: isActive
-                                          ? const Color(0xFF10B981)
-                                          : Colors.grey,
-                                      borderRadius: BorderRadius.circular(4),
+                                  child: InkWell(
+                                    onTap: () => viewModel.toggleAvailability(
+                                      product['id'].toString(),
+                                      isActive,
                                     ),
-                                    child: const Icon(
-                                      Icons.check,
-                                      size: 14,
-                                      color: Colors.white,
+                                    borderRadius: BorderRadius.circular(4),
+                                    child: Container(
+                                      width: 20,
+                                      height: 20,
+                                      decoration: BoxDecoration(
+                                        color: isActive
+                                            ? const Color(0xFF10B981)
+                                            : Colors.grey,
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: const Icon(
+                                        Icons.check,
+                                        size: 14,
+                                        color: Colors.white,
+                                      ),
                                     ),
                                   ),
                                 ),

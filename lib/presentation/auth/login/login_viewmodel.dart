@@ -9,53 +9,87 @@ class LoginViewModel extends Notifier<LoginState> {
   @override
   LoginState build() => const LoginState();
 
-  void setEmail(String v) {
-    state = state.copyWith(email: v, error: null);
+  void setEmail(String email) {
+    state = state.copyWith(email: email, error: null);
   }
 
-  void setPassword(String v) {
-    state = state.copyWith(password: v, error: null);
-  }
-
-  void toggleRemember(bool v) {
-    state = state.copyWith(rememberMe: v, error: null);
+  void setPassword(String password) {
+    state = state.copyWith(password: password, error: null);
   }
 
   Future<void> submit() async {
-    if (state.email.trim().isEmpty || !state.email.contains('@')) {
-      state = state.copyWith(error: 'Correo inválido');
+    if (state.email.isEmpty || state.password.isEmpty) {
+      state = state.copyWith(error: 'Ingresa correo y contraseña');
       return;
     }
-    if (state.password.length < 6) {
-      state = state.copyWith(
-        error: 'La contraseña debe tener al menos 6 caracteres',
-      );
-      return;
-    }
-
     state = state.copyWith(isLoading: true, error: null);
 
     try {
-      final supa = Supabase.instance.client;
+      final supabase = Supabase.instance.client;
+      final response = await supabase.auth.signInWithPassword(
+        email: state.email,
+        password: state.password,
+      );
 
-      final response = await supa.auth
-          .signInWithPassword(
-            email: state.email.trim(),
-            password: state.password,
-          )
-          .timeout(const Duration(seconds: 15));
-
-      final user = response.user ?? supa.auth.currentUser;
+      final user = response.user;
       if (user == null) {
-        throw const AuthException(
-          'No se pudo iniciar sesión. Inténtalo de nuevo.',
+        state = state.copyWith(
+          isLoading: false,
+          error: 'Credenciales inválidas o usuario no encontrado',
         );
+        return;
       }
 
-      // Actualiza la sesión global
-      ref.read(sessionProvider.notifier).setAuthenticated(user.id);
+      // Obtener perfile
+      final profileResp = await supabase
+          .from('profiles')
+          .select('full_name')
+          .eq('id', user.id)
+          .maybeSingle();
+      final fullName = profileResp?['full_name'] as String? ?? 'Usuario';
 
-      state = state.copyWith(isLoading: false, error: null);
+      // Obtener rol y negocio activo
+      final userBizResp = await supabase
+          .from('user_businesses')
+          .select('business_id, role')
+          .eq('user_id', user.id)
+          .maybeSingle();
+
+      if (userBizResp == null) {
+        await supabase.auth.signOut();
+        state = state.copyWith(
+          isLoading: false,
+          error:
+              'Tu usuario no tiene negocio/rol asignado. Contacta al administrador.',
+        );
+        return;
+      }
+
+      final businessId = userBizResp['business_id'] as String?;
+      final roleStr = userBizResp['role']?.toString();
+      final posRole = _mapRole(roleStr);
+
+      if (businessId == null || businessId.isEmpty || posRole == null) {
+        await supabase.auth.signOut();
+        state = state.copyWith(
+          isLoading: false,
+          error:
+              'Tu acceso no está configurado correctamente (negocio/rol inválido).',
+        );
+        return;
+      }
+
+      ref
+          .read(sessionProvider.notifier)
+          .setAuthenticated(
+            user.id,
+            businessId: businessId,
+            userName: fullName,
+            activeRole: posRole,
+            availableRoles: [posRole],
+          );
+
+      state = const LoginState();
     } on AuthException catch (e) {
       state = state.copyWith(isLoading: false, error: e.message);
     } on TimeoutException {
@@ -65,6 +99,28 @@ class LoginViewModel extends Notifier<LoginState> {
       );
     } catch (e) {
       state = state.copyWith(isLoading: false, error: 'Ocurrió un error: $e');
+    }
+  }
+
+  PosRole? _mapRole(String? role) {
+    switch (role) {
+      case 'owner':
+      case 'admin':
+        return PosRole.administrador;
+      case 'manager':
+        return PosRole.supervisor;
+      case 'cashier':
+        return PosRole.cajero;
+      case 'waiter':
+        return PosRole.mesero;
+      case 'kitchen':
+      case 'cook':
+      case 'chef':
+        return PosRole.cocina;
+      case 'delivery':
+        return PosRole.delivery;
+      default:
+        return null;
     }
   }
 }

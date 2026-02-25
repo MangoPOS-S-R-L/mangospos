@@ -54,6 +54,12 @@ class ReportsView extends ConsumerWidget {
                             color: MangoColors.darkGray,
                           ),
                         ),
+                        const Spacer(),
+                        IconButton(
+                          tooltip: 'Actualizar',
+                          onPressed: state.loading ? null : viewModel.load,
+                          icon: const Icon(Icons.refresh),
+                        ),
                       ],
                     ),
                     if (state.selectedCategory == null) ...[
@@ -70,20 +76,39 @@ class ReportsView extends ConsumerWidget {
                 ),
               ),
 
-              Expanded(
-                child: state.selectedCategory == null
-                    ? _buildGrid(context, viewModel)
-                    : _buildReportList(
-                        context,
-                        viewModel,
-                        state.selectedCategory!,
-                      ),
-              ),
+              Expanded(child: _buildContent(context, state, viewModel)),
             ],
           ),
         ),
       ),
     );
+  }
+
+  Widget _buildContent(
+    BuildContext context,
+    ReportsState state,
+    ReportsViewModel viewModel,
+  ) {
+    if (state.loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (state.error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Text(
+            state.error!,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.redAccent),
+          ),
+        ),
+      );
+    }
+
+    return state.selectedCategory == null
+        ? _buildGrid(context, viewModel)
+        : _buildReportList(context, viewModel, state.selectedCategory!);
   }
 
   Widget _buildGrid(BuildContext context, ReportsViewModel viewModel) {

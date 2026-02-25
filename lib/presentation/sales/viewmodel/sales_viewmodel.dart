@@ -77,6 +77,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     await openManual(forceRestart: true);
   }
 
+  Future<void> ensureQuickOrder() async {
+    if (state.origin == 'quick' && state.order != null) return;
+    await openQuick(forceRestart: true);
+  }
+
   Future<void> _openManualOrQuick(
     String origin, {
     bool forceReset = false,
