@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
+import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/presentation/sales/state/sales_state.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/sales/view/theme/sales_theme.dart';
@@ -10,12 +11,30 @@ import 'package:mangopos/services/session/session_controller.dart';
 
 enum SalesTab { byZone, manual, quick, delivery, selfService }
 
-class SalesShellView extends ConsumerWidget {
+class SalesShellView extends ConsumerStatefulWidget {
   final Widget child;
   const SalesShellView({super.key, required this.child});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<SalesShellView> createState() => _SalesShellViewState();
+}
+
+class _SalesShellViewState extends ConsumerState<SalesShellView> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final cashierVm = ref.read(cashierViewModelProvider);
+      if (cashierVm.currentRegisterId == null || cashierVm.businessId == null) {
+        await cashierVm.init();
+      } else {
+        await cashierVm.refreshSilently();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     String route;
     try {
       route = GoRouterState.of(context).uri.toString();
@@ -24,6 +43,8 @@ class SalesShellView extends ConsumerWidget {
     }
     final selected = _selectedFromRoute(route);
     final orderState = ref.watch(currentOrderProvider);
+    final cashierVm = ref.watch(cashierViewModelProvider);
+    final isCashOpen = cashierVm.lastSession?['status'] == 'open';
     final guardNavigation = _shouldGuardNavigation(route, orderState);
     final sessionCtrl = ref.read(sessionProvider.notifier);
 
@@ -44,6 +65,32 @@ class SalesShellView extends ConsumerWidget {
               children: [
                 // Espacio superior o Header
                 const SizedBox(height: 24),
+                if (!isCashOpen)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.red.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: Colors.red.withValues(alpha: 0.25),
+                        ),
+                      ),
+                      child: const Text(
+                        'Caja cerrada: no se pueden abrir ventas',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.red,
+                        ),
+                      ),
+                    ),
+                  ),
 
                 Expanded(
                   child: ListView(
@@ -72,6 +119,7 @@ class SalesShellView extends ConsumerWidget {
                         locked: !sessionCtrl.hasPermission(
                           'ventas.mesas.abrir',
                         ),
+                        disabled: !isCashOpen,
                         onTap: () => _handleNavTap(
                           context,
                           ref,
@@ -91,6 +139,7 @@ class SalesShellView extends ConsumerWidget {
                         locked: !sessionCtrl.hasPermission(
                           'ventas_rapida.acceso',
                         ),
+                        disabled: !isCashOpen,
                         onTap: () => _handleNavTap(
                           context,
                           ref,
@@ -110,6 +159,7 @@ class SalesShellView extends ConsumerWidget {
                         locked: !sessionCtrl.hasPermission(
                           'delivery.crear_orden',
                         ),
+                        disabled: true,
                         onTap: () => _handleNavTap(
                           context,
                           ref,
@@ -147,7 +197,7 @@ class SalesShellView extends ConsumerWidget {
 
           // ======= CONTENIDO PRINCIPAL =======
           Expanded(
-            child: Container(color: SalesTheme.background, child: child),
+            child: Container(color: SalesTheme.background, child: widget.child),
           ),
         ],
       ),
@@ -273,7 +323,7 @@ class _SalesNavItem extends StatelessWidget {
         child: InkWell(
           onTap: blocked ? null : onTap,
           borderRadius: BorderRadius.circular(8),
-          hoverColor: SalesTheme.primary.withOpacity(0.05),
+          hoverColor: SalesTheme.primary.withValues(alpha: 0.05),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 200),
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),

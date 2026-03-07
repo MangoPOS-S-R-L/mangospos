@@ -196,7 +196,7 @@ class _WelcomeCard extends StatelessWidget {
                     runSpacing: 8,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      _metaItem(Colors.green, viewModel.businessName),
+                      _metaItem(const Color(0xFF22C55E), viewModel.businessName),
                       _metaDot(),
                       _metaText('Usuario: Admin'),
                       _metaDot(),
@@ -614,11 +614,13 @@ class _QuickActionsSection extends StatelessWidget {
   Widget _largeButton(BuildContext context, bool isPrimary) {
     // Spec 3.2.2: Nueva Venta (gradient)
     // Spec 3.2.3: Delivery (white card with badge)
+    final deliveryAvailable = false;
     return HoverableCard(
       onTap: () {
         if (isPrimary) {
           context.go('/sales'); // Go to Sales shell
         } else {
+          if (!deliveryAvailable) return;
           context.go('/sales/delivery'); // Go to Delivery
         }
       },
@@ -665,7 +667,7 @@ class _QuickActionsSection extends StatelessWidget {
                   children: [
                     // Title - 18px semibold per spec
                     Text(
-                      isPrimary ? 'Nueva Venta' : 'Delivery',
+                  isPrimary ? 'Nueva Venta' : 'Delivery',
                       style: TextStyle(
                         fontWeight: FontWeight.w600, // semibold
                         fontSize: 18, // text-lg per spec
@@ -676,7 +678,11 @@ class _QuickActionsSection extends StatelessWidget {
                     const SizedBox(height: 4),
                     // Subtitle - 14px per spec
                     Text(
-                      isPrimary ? 'Iniciar orden' : 'Gestionar entregas',
+                  isPrimary
+                      ? 'Iniciar orden'
+                      : (deliveryAvailable
+                            ? 'Gestionar entregas'
+                            : 'No disponible'),
                       style: TextStyle(
                         fontSize: 14, // text-sm per spec
                         color: isPrimary
@@ -703,16 +709,24 @@ class _QuickActionsSection extends StatelessWidget {
                     vertical: 4,
                   ),
                   decoration: BoxDecoration(
-                    color: AppColors.info.withOpacity(0.1),
-                    border: Border.all(color: AppColors.info.withOpacity(0.2)),
+                    color: deliveryAvailable
+                        ? AppColors.info.withOpacity(0.1)
+                        : Colors.grey.withOpacity(0.15),
+                    border: Border.all(
+                      color: deliveryAvailable
+                          ? AppColors.info.withOpacity(0.2)
+                          : Colors.grey.withOpacity(0.25),
+                    ),
                     borderRadius: BorderRadius.circular(AppRadius.full),
                   ),
-                  child: const Text(
-                    '4 en ruta',
+                  child: Text(
+                    deliveryAvailable ? '4 en ruta' : 'No disponible',
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.bold,
-                      color: AppColors.info,
+                      color: deliveryAvailable
+                          ? AppColors.info
+                          : Colors.grey.shade700,
                     ),
                   ),
                 ),

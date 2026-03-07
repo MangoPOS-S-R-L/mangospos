@@ -10,6 +10,8 @@ class CurrentOrderState extends Equatable {
   final bool takeout; // ¿para llevar? a nivel orden (UI toggle)
   final String? origin; // 'table' | 'manual' | 'quick'
   final String? selectedCheckId;
+  final String? customerId;
+  final String? customerName;
 
   const CurrentOrderState({
     this.loading = false,
@@ -20,6 +22,8 @@ class CurrentOrderState extends Equatable {
     this.takeout = false,
     this.origin,
     this.selectedCheckId,
+    this.customerId,
+    this.customerName,
   });
 
   CurrentOrderState copyWith({
@@ -33,6 +37,9 @@ class CurrentOrderState extends Equatable {
     bool clearOrigin = false,
     String? selectedCheckId,
     bool clearSelectedCheck = false,
+    String? customerId,
+    String? customerName,
+    bool clearCustomer = false,
   }) {
     return CurrentOrderState(
       loading: loading ?? this.loading,
@@ -45,6 +52,8 @@ class CurrentOrderState extends Equatable {
       selectedCheckId: clearSelectedCheck
           ? null
           : (selectedCheckId ?? this.selectedCheckId),
+      customerId: clearCustomer ? null : (customerId ?? this.customerId),
+      customerName: clearCustomer ? null : (customerName ?? this.customerName),
     );
   }
 
@@ -58,5 +67,7 @@ class CurrentOrderState extends Equatable {
     takeout,
     origin,
     selectedCheckId,
+    customerId,
+    customerName,
   ];
 }

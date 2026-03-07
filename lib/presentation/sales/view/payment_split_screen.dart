@@ -5,7 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../viewmodel/payment_split_viewmodel.dart';
 
-const _kPrimary = Color(0xFFF7941A);
+const _kPrimary = Color(0xFFF97316);
 const _kSurface = Colors.white;
 const _kPositive = Color(0xFF22C55E);
 const _kDanger = Color(0xFFE11D48);
@@ -16,6 +16,8 @@ class PaymentSplitDialog extends ConsumerStatefulWidget {
   final double totalAmount;
   final String tableName;
   final String? checkId;
+  final String? customerId;
+  final String? customerName;
 
   const PaymentSplitDialog({
     super.key,
@@ -23,6 +25,8 @@ class PaymentSplitDialog extends ConsumerStatefulWidget {
     required this.totalAmount,
     required this.tableName,
     this.checkId,
+    this.customerId,
+    this.customerName,
   });
 
   @override
@@ -75,6 +79,7 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
       widget.orderId,
       widget.totalAmount,
       widget.checkId,
+      widget.customerId,
     ));
     final state = ref.watch(provider);
     final vm = ref.read(provider.notifier);
@@ -173,7 +178,9 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Pago - Mesa ${widget.tableName}',
+                widget.customerName?.trim().isNotEmpty == true
+                    ? 'Pago - ${widget.customerName}'
+                    : 'Pago - Mesa ${widget.tableName}',
                 style: const TextStyle(
                   fontSize: 19,
                   fontWeight: FontWeight.w700,
@@ -777,7 +784,7 @@ class _TotalsCard extends StatelessWidget {
           _SummaryRow(
             'Pagado',
             state.totalPaid,
-            color: Colors.green[700],
+            color: const Color(0xFF22C55E),
             isBold: true,
           ),
           const SizedBox(height: 8),
@@ -801,7 +808,7 @@ class _TotalsCard extends StatelessWidget {
                 children: [
                   Icon(
                     Icons.warning_amber_rounded,
-                    color: Colors.orange[800],
+                    color: const Color(0xFFF97316),
                     size: 20,
                   ),
                   const SizedBox(width: 8),
@@ -810,7 +817,7 @@ class _TotalsCard extends StatelessWidget {
                       'Este es un pago parcial. El restante deberá cobrarse con otro método.',
                       style: TextStyle(
                         fontSize: 12,
-                        color: Colors.orange[900],
+                        color: const Color(0xFFF97316),
                         fontWeight: FontWeight.w500,
                       ),
                     ),
@@ -1017,7 +1024,7 @@ class _InfoCard extends StatelessWidget {
             'Restante: RD\$ ${state.remaining.toStringAsFixed(2)}',
             style: TextStyle(
               fontWeight: FontWeight.w700,
-              color: state.remaining > 0 ? _kPrimary : Colors.green[700],
+              color: state.remaining > 0 ? _kPrimary : const Color(0xFF22C55E),
             ),
           ),
           if (state.change > 0)

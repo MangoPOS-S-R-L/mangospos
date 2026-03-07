@@ -1,16 +1,18 @@
 import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
-import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/viewmodel/taxes_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/state/taxes_state.dart';
+import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/viewmodel/taxes_viewmodel.dart';
 
 class AddEditProductDialog extends ConsumerStatefulWidget {
   final Map<String, dynamic>? product;
   final List<Map<String, dynamic>> categories;
   final List<Map<String, dynamic>> menus;
+  final Future<Map<String, dynamic>> Function(String name)? onCreateCategory;
   final Function({
     required String name,
     required double price,
@@ -53,6 +55,7 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     this.product,
     required this.categories,
     required this.menus,
+    this.onCreateCategory,
     required this.onAdd,
     required this.onUpdate,
   });
@@ -77,17 +80,17 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
   bool _isActive = true;
   bool _hasVariants = false;
 
-  // Image
   File? _pickedImageFile;
   Uint8List? _pickedImageBytes;
-
-  // Taxes
   final Set<String> _selectedTaxIds = <String>{};
+  late List<Map<String, dynamic>> _categories;
+  bool _isCreatingCategory = false;
 
   @override
   void initState() {
     super.initState();
     final p = widget.product;
+    _categories = List<Map<String, dynamic>>.from(widget.categories);
     _nameController = TextEditingController(text: p?['name'] ?? '');
     _descController = TextEditingController(text: p?['description'] ?? '');
     _priceController = TextEditingController(
@@ -99,14 +102,29 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
 
     _selectedCategoryId = p?['category_id']?.toString();
     _selectedMenuId = p?['menu_id']?.toString();
-    _selectedProductType = p?['product_type'];
+    _selectedProductType = p?['product_type']?.toString();
     _isActive = p?['is_active'] ?? true;
     _hasVariants = p?['has_variants'] ?? false;
 
-    // Initialize taxes if editing (assuming we have tax_ids in product)
-    // if (p != null && p['tax_ids'] != null) {
-    //   _selectedTaxIds.addAll((p['tax_ids'] as List).map((e) => e.toString()));
-    // }
+    Future.microtask(() async {
+      try {
+        await ref.read(taxesVmProvider.notifier).load(businessId: 'auto');
+      } catch (_) {}
+    });
+
+    if (p != null) {
+      final taxLinks = p['menu_item_taxes'];
+      if (taxLinks is List) {
+        for (final link in taxLinks) {
+          if (link is Map<String, dynamic>) {
+            final taxId = link['tax_id']?.toString();
+            if (taxId != null && taxId.isNotEmpty) {
+              _selectedTaxIds.add(taxId);
+            }
+          }
+        }
+      }
+    }
   }
 
   @override
@@ -121,330 +139,419 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
   }
 
   @override
+  void didUpdateWidget(covariant AddEditProductDialog oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.categories != widget.categories) {
+      _categories = List<Map<String, dynamic>>.from(widget.categories);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final isEdit = widget.product != null;
     final taxesState = ref.watch(taxesVmProvider);
+    final size = MediaQuery.of(context).size;
 
     return Dialog(
       backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 40, vertical: 40),
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 700),
-        decoration: BoxDecoration(
-          color: MangoColors.white,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x33000000),
-              blurRadius: 24,
-              offset: Offset(0, 8),
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: size.width > 900 ? 20 : 8,
+        vertical: size.height > 700 ? 14 : 8,
+      ),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: 1040,
+          maxHeight: size.height * 0.9,
+        ),
+        child: Container(
+          decoration: BoxDecoration(
+            color: MangoColors.white,
+            borderRadius: BorderRadius.circular(18),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x2A000000),
+                blurRadius: 30,
+                offset: Offset(0, 12),
+              ),
+            ],
+          ),
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 12, 10),
+                child: Row(
+                  children: [
+                    Text(
+                      isEdit
+                          ? 'Editar Elemento de Menú'
+                          : 'Agregar Elemento de Menú',
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF282524),
+                      ),
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.close, size: 24),
+                      color: const Color(0xFF716C69),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1, color: Color(0xFFEAE6E2)),
+              Expanded(
+                child: Form(
+                  key: _formKey,
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final isWide = constraints.maxWidth >= 900;
+                        if (isWide) {
+                          return Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(child: _buildLeftColumn()),
+                              const SizedBox(width: 20),
+                              Expanded(child: _buildRightColumn(taxesState)),
+                            ],
+                          );
+                        }
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _buildLeftColumn(),
+                            const SizedBox(height: 18),
+                            _buildRightColumn(taxesState),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ),
+              const Divider(height: 1, color: Color(0xFFEAE6E2)),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    OutlinedButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Color(0xFFE0DBD5)),
+                        foregroundColor: const Color(0xFF2B2928),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 14,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        textStyle: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      child: const Text('Cancelar'),
+                    ),
+                    const SizedBox(width: 14),
+                    ElevatedButton(
+                      onPressed: _submit,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: MangoColors.primaryOrange,
+                        foregroundColor: MangoColors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 14,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        textStyle: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      child: Text(
+                        isEdit ? 'Actualizar Producto' : 'Agregar Producto',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLeftColumn() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _fieldLabel('Nombre del Artículo', required: true),
+        _buildTextField(
+          controller: _nameController,
+          hintText: 'Ej: Pollo al Horno',
+          validator: (v) =>
+              v?.trim().isEmpty == true ? 'Campo requerido' : null,
+        ),
+        const SizedBox(height: 14),
+        _fieldLabel('Descripción'),
+        _buildTextField(
+          controller: _descController,
+          hintText: 'Descripción del producto...',
+          minLines: 4,
+          maxLines: 4,
+        ),
+        const SizedBox(height: 14),
+        _fieldLabel('Tipo de Producto', required: true),
+        _buildDropdown<String?>(
+          value: _selectedProductType,
+          hint: 'Seleccionar tipo',
+          items: const [
+            DropdownMenuItem(value: 'Plato', child: Text('Plato')),
+            DropdownMenuItem(value: 'Comida', child: Text('Comida')),
+            DropdownMenuItem(value: 'Bebida', child: Text('Bebida')),
+            DropdownMenuItem(value: 'Combo', child: Text('Combo')),
+            DropdownMenuItem(value: 'Postre', child: Text('Postre')),
+          ],
+          onChanged: (v) => setState(() => _selectedProductType = v),
+        ),
+        const SizedBox(height: 14),
+        _fieldLabel('Menú', required: true),
+        _buildDropdown<String?>(
+          value: _selectedMenuId,
+          hint: 'Seleccionar menú',
+          items: widget.menus
+              .map(
+                (m) => DropdownMenuItem<String?>(
+                  value: m['id'].toString(),
+                  child: Text(m['name']?.toString() ?? ''),
+                ),
+              )
+              .toList(),
+          onChanged: (v) => setState(() => _selectedMenuId = v),
+        ),
+        const SizedBox(height: 14),
+        _fieldLabel('Categoría', required: true),
+        Row(
+          children: [
+            Expanded(
+              child: _buildDropdown<String?>(
+                value: _selectedCategoryId,
+                hint: 'Seleccionar categoría',
+                items: _categories
+                    .map(
+                      (c) => DropdownMenuItem<String?>(
+                        value: c['id'].toString(),
+                        child: Text(c['name']?.toString() ?? ''),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (v) => setState(() => _selectedCategoryId = v),
+              ),
+            ),
+            const SizedBox(width: 12),
+            SizedBox(
+              width: 58,
+              height: 58,
+              child: OutlinedButton(
+                onPressed: _isCreatingCategory ? null : _createCategoryInline,
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Color(0xFFD9D3CD)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  foregroundColor: const Color(0xFF282524),
+                ),
+                child: _isCreatingCategory
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.add, size: 24),
+              ),
             ),
           ],
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+      ],
+    );
+  }
+
+  Widget _buildRightColumn(TaxesState taxesState) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
           children: [
-            // Header
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: const BoxDecoration(
-                color: MangoColors.white,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-              ),
-              child: Row(
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    isEdit ? 'Editar artículo' : 'Nuevo artículo',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w900,
-                      fontSize: 20,
-                      color: MangoColors.darkGray,
+                  _fieldLabel('Precio', required: true),
+                  _buildTextField(
+                    controller: _priceController,
+                    hintText: '0',
+                    enabled: !_hasVariants,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
                     ),
-                  ),
-                  const Spacer(),
-                  IconButton(
-                    onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close),
-                    color: MangoColors.darkGray,
+                    validator: (v) {
+                      if (_hasVariants) return null;
+                      if (v == null || v.trim().isEmpty) {
+                        return 'Campo requerido';
+                      }
+                      return null;
+                    },
                   ),
                 ],
               ),
             ),
-            const Divider(height: 1, color: MangoColors.cardBorder),
-
-            // Content
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(20),
-                child: Form(
-                  key: _formKey,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildTextField(
-                        controller: _nameController,
-                        label: 'Nombre del artículo',
-                        validator: (v) =>
-                            v?.isEmpty == true ? 'Requerido' : null,
-                      ),
-                      const SizedBox(height: 12),
-
-                      _buildTextField(
-                        controller: _descController,
-                        label: 'Descripción (opcional)',
-                        minLines: 2,
-                        maxLines: 3,
-                      ),
-                      const SizedBox(height: 12),
-
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _Dropdown<String?>(
-                              label: 'Tipo de Producto',
-                              value: _selectedProductType,
-                              items: const [
-                                DropdownMenuItem(
-                                  value: null,
-                                  child: Text('-- Seleccionar --'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'Comida',
-                                  child: Text('Comida'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'Bebida',
-                                  child: Text('Bebida'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'Combo',
-                                  child: Text('Combo'),
-                                ),
-                              ],
-                              onChanged: (v) =>
-                                  setState(() => _selectedProductType = v),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _Dropdown<String?>(
-                              label: 'Elegir menú',
-                              value: _selectedMenuId,
-                              items: [
-                                const DropdownMenuItem(
-                                  value: null,
-                                  child: Text('--'),
-                                ),
-                                ...widget.menus.map(
-                                  (m) => DropdownMenuItem(
-                                    value: m['id'].toString(),
-                                    child: Text(m['name'] ?? ''),
-                                  ),
-                                ),
-                              ],
-                              onChanged: (v) =>
-                                  setState(() => _selectedMenuId = v),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _Dropdown<String?>(
-                              label: 'Categoría',
-                              value: _selectedCategoryId,
-                              items: [
-                                const DropdownMenuItem(
-                                  value: null,
-                                  child: Text('--'),
-                                ),
-                                ...widget.categories.map(
-                                  (c) => DropdownMenuItem(
-                                    value: c['id'].toString(),
-                                    child: Text(c['name'] ?? ''),
-                                  ),
-                                ),
-                              ],
-                              onChanged: (v) =>
-                                  setState(() => _selectedCategoryId = v),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _buildTextField(
-                              controller: _priceController,
-                              label: 'Precio',
-                              prefixText: '\$ ',
-                              enabled: !_hasVariants,
-                              keyboardType:
-                                  const TextInputType.numberWithOptions(
-                                    decimal: true,
-                                  ),
-                              validator: (v) {
-                                if (!_hasVariants && (v == null || v.isEmpty)) {
-                                  return 'Requerido';
-                                }
-                                return null;
-                              },
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _buildTextField(
-                              controller: _costController,
-                              label: 'Costo (opcional)',
-                              prefixText: '\$ ',
-                              keyboardType:
-                                  const TextInputType.numberWithOptions(
-                                    decimal: true,
-                                  ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _buildTextField(
-                              controller: _skuController,
-                              label: 'Referencia (SKU) (opcional)',
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _buildTextField(
-                              controller: _barcodeController,
-                              label: 'Código de barras (opcional)',
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-
-                      SwitchListTile(
-                        value: _hasVariants,
-                        onChanged: (v) {
-                          setState(() {
-                            _hasVariants = v;
-                            if (v) _priceController.clear();
-                          });
-                        },
-                        title: const Text('Tiene variaciones'),
-                        contentPadding: EdgeInsets.zero,
-                        activeThumbColor: MangoColors.successGreen,
-                      ),
-
-                      SwitchListTile(
-                        value: _isActive,
-                        onChanged: (v) => setState(() => _isActive = v),
-                        title: const Text('Disponible'),
-                        contentPadding: EdgeInsets.zero,
-                        activeThumbColor: MangoColors.successGreen,
-                      ),
-                      const SizedBox(height: 12),
-
-                      Row(
-                        children: [
-                          ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: MangoColors.white,
-                              foregroundColor: MangoColors.darkGray,
-                              side: const BorderSide(
-                                color: MangoColors.cardBorder,
-                              ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                            onPressed: _pickImage,
-                            icon: const Icon(Icons.image),
-                            label: const Text('Elegir imagen'),
-                          ),
-                          const SizedBox(width: 12),
-                          _ImagePreview(
-                            bytes: _pickedImageBytes,
-                            file: _pickedImageFile,
-                            existingUrl: widget.product?['image_url'],
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-
-                      _TaxesBlock(
-                        state: taxesState,
-                        initiallySelected: _selectedTaxIds,
-                        onToggle: (taxId, enabled) {
-                          setState(() {
-                            if (enabled) {
-                              _selectedTaxIds.add(taxId);
-                            } else {
-                              _selectedTaxIds.remove(taxId);
-                            }
-                          });
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-
-            // Footer
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: const BoxDecoration(
-                color: MangoColors.white,
-                borderRadius: BorderRadius.vertical(
-                  bottom: Radius.circular(16),
-                ),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  TextButton(
-                    style: TextButton.styleFrom(
-                      foregroundColor: MangoColors.darkGray,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 12,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
+                  _fieldLabel('Costo'),
+                  _buildTextField(
+                    controller: _costController,
+                    hintText: '0',
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
                     ),
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Cancelar'),
-                  ),
-                  const SizedBox(width: 12),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: MangoColors.primaryOrange,
-                      foregroundColor: MangoColors.white,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 12,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    onPressed: _submit,
-                    child: Text(isEdit ? 'Actualizar' : 'Guardar'),
                   ),
                 ],
               ),
             ),
           ],
+        ),
+        const SizedBox(height: 14),
+        Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _fieldLabel('Referencia/SKU'),
+                  _buildTextField(
+                    controller: _skuController,
+                    hintText: 'SKU-001',
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _fieldLabel('Código de Barras'),
+                  _buildTextField(
+                    controller: _barcodeController,
+                    hintText: '123456789',
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        _fieldLabel('Imagen del Producto'),
+        _ImagePickerArea(
+          bytes: _pickedImageBytes,
+          file: _pickedImageFile,
+          existingUrl: widget.product?['image_url']?.toString(),
+          onTap: _pickImage,
+        ),
+        const SizedBox(height: 14),
+        _switchRow(
+          title: 'Tiene Variaciones',
+          value: _hasVariants,
+          onChanged: (v) {
+            setState(() {
+              _hasVariants = v;
+              if (v) _priceController.clear();
+            });
+          },
+        ),
+        const SizedBox(height: 8),
+        _switchRow(
+          title: 'Disponible',
+          value: _isActive,
+          onChanged: (v) => setState(() => _isActive = v),
+        ),
+        const SizedBox(height: 8),
+        _switchRow(
+          title: 'Impuestos',
+          value: _selectedTaxIds.isNotEmpty,
+          onChanged: (v) {
+            setState(() {
+              if (!v) {
+                _selectedTaxIds.clear();
+              }
+            });
+          },
+        ),
+        if (taxesState.data.isLoading)
+          const Padding(
+            padding: EdgeInsets.only(top: 8),
+            child: LinearProgressIndicator(color: MangoColors.primaryOrange),
+          ),
+        if (taxesState.data.hasError)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              'Error al cargar impuestos',
+              style: TextStyle(color: Colors.red.shade700),
+            ),
+          ),
+        if (!taxesState.data.isLoading && taxesState.list.isNotEmpty)
+          Container(
+            margin: const EdgeInsets.only(top: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8F5F2),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFFE1DBD6)),
+            ),
+            child: Column(
+              children: taxesState.list.map((tax) {
+                final selected = _selectedTaxIds.contains(tax.id);
+                return _taxSwitchRow(
+                  title: '${tax.name} (${tax.rate.toStringAsFixed(0)}%)',
+                  value: selected,
+                  onChanged: (v) {
+                    setState(() {
+                      if (v) {
+                        _selectedTaxIds.add(tax.id);
+                      } else {
+                        _selectedTaxIds.remove(tax.id);
+                      }
+                    });
+                  },
+                );
+              }).toList(),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _fieldLabel(String text, {bool required = false}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Text(
+        required ? '$text *' : text,
+        style: const TextStyle(
+          fontSize: 15,
+          fontWeight: FontWeight.w700,
+          color: Color(0xFF2D2A29),
         ),
       ),
     );
@@ -452,8 +559,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
 
   Widget _buildTextField({
     required TextEditingController controller,
-    required String label,
-    String? prefixText,
+    required String hintText,
     int? minLines,
     int? maxLines = 1,
     TextInputType? keyboardType,
@@ -467,15 +573,127 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
       maxLines: maxLines,
       keyboardType: keyboardType,
       validator: validator,
+      style: const TextStyle(fontSize: 15, color: Color(0xFF3A3431)),
       decoration: InputDecoration(
-        labelText: label,
-        prefixText: prefixText,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        hintText: hintText,
+        hintStyle: const TextStyle(color: Color(0xFF8A8078), fontSize: 15),
+        filled: true,
+        fillColor: enabled ? Colors.white : const Color(0xFFF1EEEB),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: Color(0xFFD9D3CD)),
+        ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: MangoColors.cardBorder),
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: Color(0xFFD9D3CD)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(
+            color: MangoColors.primaryOrange,
+            width: 2,
+          ),
+        ),
+        disabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: Color(0xFFE2DDD8)),
+        ),
+        contentPadding: EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: maxLines != null && maxLines > 1 ? 12 : 14,
         ),
       ),
+    );
+  }
+
+  Widget _buildDropdown<T>({
+    required T? value,
+    required String hint,
+    required List<DropdownMenuItem<T>> items,
+    required ValueChanged<T?> onChanged,
+  }) {
+    return Container(
+      height: 58,
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFD9D3CD)),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<T>(
+          value: value,
+          isExpanded: true,
+          hint: Text(
+            hint,
+            style: const TextStyle(color: Color(0xFF8A8078), fontSize: 14),
+          ),
+          icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 24),
+          items: items,
+          onChanged: onChanged,
+          style: const TextStyle(
+            color: Color(0xFF2D2A29),
+            fontSize: 15,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _switchRow({
+    required String title,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return Row(
+      children: [
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF2D2A29),
+          ),
+        ),
+        const Spacer(),
+        Switch(
+          value: value,
+          onChanged: onChanged,
+          activeThumbColor: MangoColors.white,
+          activeTrackColor: MangoColors.primaryOrange,
+          inactiveThumbColor: Colors.white,
+          inactiveTrackColor: const Color(0xFFDFDAD5),
+        ),
+      ],
+    );
+  }
+
+  Widget _taxSwitchRow({
+    required String title,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            title,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+              color: Color(0xFF2D2A29),
+            ),
+          ),
+        ),
+        Switch(
+          value: value,
+          onChanged: onChanged,
+          activeThumbColor: MangoColors.white,
+          activeTrackColor: MangoColors.primaryOrange,
+          inactiveThumbColor: Colors.white,
+          inactiveTrackColor: const Color(0xFFDFDAD5),
+        ),
+      ],
     );
   }
 
@@ -512,8 +730,27 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     }
   }
 
+  void _showValidationMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+    );
+  }
+
   void _submit() {
     if (_formKey.currentState?.validate() != true) return;
+
+    if (_selectedProductType == null || _selectedProductType!.isEmpty) {
+      _showValidationMessage('Selecciona el tipo de producto.');
+      return;
+    }
+    if (_selectedMenuId == null || _selectedMenuId!.isEmpty) {
+      _showValidationMessage('Selecciona el menú.');
+      return;
+    }
+    if (_selectedCategoryId == null || _selectedCategoryId!.isEmpty) {
+      _showValidationMessage('Selecciona la categoría.');
+      return;
+    }
 
     final name = _nameController.text.trim();
     final price = double.tryParse(_priceController.text.trim()) ?? 0;
@@ -566,172 +803,167 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     }
     Navigator.pop(context);
   }
-}
 
-class _Dropdown<T> extends StatelessWidget {
-  final String label;
-  final T? value;
-  final List<DropdownMenuItem<T>> items;
-  final ValueChanged<T?> onChanged;
+  Future<void> _createCategoryInline() async {
+    if (widget.onCreateCategory == null) {
+      _showValidationMessage(
+        'Crea nuevas categorías desde Ajustes > Menús > Categorías.',
+      );
+      return;
+    }
 
-  const _Dropdown({
-    required this.label,
-    required this.value,
-    required this.items,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return InputDecorator(
-      decoration: InputDecoration(
-        labelText: label,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: MangoColors.cardBorder),
-        ),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<T>(
-          value: value,
-          isExpanded: true,
-          items: items,
-          onChanged: onChanged,
-        ),
-      ),
+    final controller = TextEditingController();
+    final categoryName = await showDialog<String>(
+      context: context,
+      builder: (dialogCtx) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: const Text(
+            'Nueva categoría',
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF2D2A29),
+            ),
+          ),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: InputDecoration(
+              hintText: 'Ej: Bebidas frías',
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Color(0xFFD9D3CD)),
+              ),
+            ),
+            onSubmitted: (value) => Navigator.pop(dialogCtx, value.trim()),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogCtx),
+              child: const Text('Cancelar'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: MangoColors.primaryOrange,
+                foregroundColor: MangoColors.white,
+              ),
+              onPressed: () =>
+                  Navigator.pop(dialogCtx, controller.text.trim()),
+              child: const Text('Crear'),
+            ),
+          ],
+        );
+      },
     );
+
+    if (!mounted || categoryName == null) return;
+    if (categoryName.isEmpty) {
+      _showValidationMessage('Escribe un nombre para la categoría.');
+      return;
+    }
+
+    setState(() => _isCreatingCategory = true);
+    try {
+      final created = await widget.onCreateCategory!(categoryName);
+      if (!mounted) return;
+
+      final createdId = created['id']?.toString();
+      if (createdId == null || createdId.isEmpty) {
+        throw Exception('Respuesta inválida al crear categoría');
+      }
+
+      final alreadyExists = _categories.any(
+        (c) => c['id']?.toString() == createdId,
+      );
+      if (!alreadyExists) {
+        _categories = [..._categories, created];
+        _categories.sort((a, b) {
+          final aName = a['name']?.toString().toLowerCase() ?? '';
+          final bName = b['name']?.toString().toLowerCase() ?? '';
+          return aName.compareTo(bName);
+        });
+      }
+
+      setState(() => _selectedCategoryId = createdId);
+      _showValidationMessage('Categoría creada correctamente.');
+    } catch (e) {
+      if (!mounted) return;
+      _showValidationMessage('No se pudo crear la categoría: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isCreatingCategory = false);
+      }
+    }
   }
 }
 
-class _ImagePreview extends StatelessWidget {
+class _ImagePickerArea extends StatelessWidget {
   final Uint8List? bytes;
   final File? file;
   final String? existingUrl;
+  final VoidCallback onTap;
 
-  const _ImagePreview({this.bytes, this.file, this.existingUrl});
-
-  @override
-  Widget build(BuildContext context) {
-    const size = 56.0;
-    Widget child;
-
-    if (bytes != null) {
-      child = Image.memory(bytes!, fit: BoxFit.cover);
-    } else if (file != null) {
-      child = Image.file(file!, fit: BoxFit.cover);
-    } else if (existingUrl != null && existingUrl!.isNotEmpty) {
-      child = Image.network(
-        existingUrl!,
-        fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) =>
-            const Icon(Icons.broken_image, color: MangoColors.muted),
-      );
-    } else {
-      child = const Icon(Icons.image, color: MangoColors.muted);
-    }
-
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
-      child: Container(
-        width: size,
-        height: size,
-        color: MangoColors.bgLight,
-        child: child,
-      ),
-    );
-  }
-}
-
-class _TaxesBlock extends StatelessWidget {
-  final TaxesState state;
-  final Set<String> initiallySelected;
-  final void Function(String taxId, bool enabled) onToggle;
-
-  const _TaxesBlock({
-    required this.state,
-    required this.initiallySelected,
-    required this.onToggle,
+  const _ImagePickerArea({
+    required this.bytes,
+    required this.file,
+    required this.existingUrl,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final taxes = state.list;
-
-    return Container(
-      decoration: BoxDecoration(
-        border: Border.all(color: MangoColors.cardBorder),
-        borderRadius: BorderRadius.circular(12),
-        color: MangoColors.white,
-      ),
-      child: Column(
-        children: [
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: const BoxDecoration(
-              color: MangoColors.white,
-              border: Border(bottom: BorderSide(color: MangoColors.cardBorder)),
-              borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
-            ),
-            child: const Text(
-              'Impuestos',
-              style: TextStyle(
-                fontWeight: FontWeight.w800,
-                color: MangoColors.darkGray,
-              ),
+    Widget content;
+    if (bytes != null) {
+      content = Image.memory(bytes!, fit: BoxFit.cover);
+    } else if (file != null) {
+      content = Image.file(file!, fit: BoxFit.cover);
+    } else if (existingUrl != null && existingUrl!.isNotEmpty) {
+      content = Image.network(
+        existingUrl!,
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) =>
+            const Icon(Icons.broken_image, size: 50, color: Color(0xFF968C84)),
+      );
+    } else {
+      content = Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: const [
+          Icon(
+            Icons.add_photo_alternate_outlined,
+            size: 64,
+            color: Color(0xFF8F847C),
+          ),
+          SizedBox(height: 14),
+          Text(
+            'Click para subir imagen',
+            style: TextStyle(
+              color: Color(0xFF7F746D),
+              fontSize: 20 / 1.2,
+              fontWeight: FontWeight.w500,
             ),
           ),
-          if (state.data.isLoading)
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: LinearProgressIndicator(
-                minHeight: 2,
-                color: MangoColors.primaryOrange,
-              ),
-            )
-          else if (state.data.hasError)
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(
-                'Error al cargar impuestos: ${state.data.error}',
-                style: const TextStyle(color: Colors.red),
-              ),
-            )
-          else if (taxes.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text(
-                'No hay impuestos configurados',
-                style: TextStyle(color: MangoColors.muted),
-              ),
-            )
-          else
-            ...taxes.map((t) {
-              final enabled = initiallySelected.contains(t.id);
-              return Container(
-                decoration: BoxDecoration(
-                  border: Border(
-                    bottom: t != taxes.last
-                        ? BorderSide(
-                            color: MangoColors.cardBorder.withOpacity(0.5),
-                          )
-                        : BorderSide.none,
-                  ),
-                ),
-                child: SwitchListTile(
-                  value: enabled,
-                  onChanged: (v) => onToggle(t.id, v),
-                  title: Text('${t.name}, ${t.rate.toStringAsFixed(0)}%'),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 4,
-                  ),
-                  activeThumbColor: MangoColors.successGreen,
-                ),
-              );
-            }),
         ],
+      );
+    }
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        width: double.infinity,
+        height: 180,
+        decoration: BoxDecoration(
+          color: const Color(0xFFF8F5F2),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFFE1DBD6), width: 1.4),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: content,
       ),
     );
   }

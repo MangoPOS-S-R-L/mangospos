@@ -3,7 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 class SalesTheme {
   // 🎨 Paleta de Colores (segun especificaciones)
-  static const Color primary = Color(0xFFFB7116);
+  static const Color primary = Color(0xFFF97316);
   static const Color primaryForeground = Colors.white;
 
   static const Color background = Color(0xFFFAF9F7);
@@ -31,13 +31,13 @@ class SalesTheme {
 
   // 🧱 Sombras (sm / md)
   static BoxShadow get shadowSm => BoxShadow(
-    color: Colors.black.withOpacity(0.05),
+    color: Colors.black.withValues(alpha: 0.05),
     blurRadius: 3,
     offset: const Offset(0, 1),
   );
 
   static BoxShadow get shadowMd => BoxShadow(
-    color: Colors.black.withOpacity(0.08),
+    color: Colors.black.withValues(alpha: 0.08),
     blurRadius: 12,
     offset: const Offset(0, 4),
   );
@@ -45,7 +45,7 @@ class SalesTheme {
   // Compatibilidad con usos existentes
   static BoxShadow get shadowCard => shadowSm;
   static BoxShadow get shadowElevated => BoxShadow(
-    color: Colors.black.withOpacity(0.15),
+    color: Colors.black.withValues(alpha: 0.15),
     blurRadius: 24,
     offset: const Offset(0, 8),
   );

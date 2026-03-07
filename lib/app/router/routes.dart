@@ -17,6 +17,9 @@ class AppRoutes {
   static const dashboard = '/dashboard';
   static const sales = '/sales';
   static const cashier = '/cashier';
+  static const cashierHistory = '$cashier/history';
+  static const cashierClosures = '$cashier/closures';
+  static const cashierIncomeExpense = '$cashier/income-expense';
   static const kitchen = '/kitchen';
   static const reservations = '/reservations';
   static const customers = '/customers';

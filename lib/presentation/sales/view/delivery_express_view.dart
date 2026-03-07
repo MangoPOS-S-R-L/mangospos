@@ -8,7 +8,7 @@ class DeliveryExpressView extends StatelessWidget {
     return const Scaffold(
       body: Center(
         child: Text(
-          'Delivery Express',
+          'Delivery no disponible',
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
         ),
       ),

@@ -6,7 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../data/models/payment_models.dart';
 import '../../../data/models/sales_models.dart';
-import '../../../data/repositories/cashier_repository_new.dart';
+import '../../../data/repositories/cashier_repository.dart';
 import '../../../data/repositories/sales_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 import '../../sales/viewmodel/sales_viewmodel.dart'; // Import para usar salesRepositoryProvider

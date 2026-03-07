@@ -37,6 +37,8 @@ class MenuProduct {
   );
 }
 
+enum MenuProductsMode { none, category, all, search, favorites }
+
 @immutable
 class MenuBrowserState {
   final bool loading;
@@ -44,6 +46,8 @@ class MenuBrowserState {
   final List<MenuCategory> categories;
   final String? selectedCategoryId;
   final List<MenuProduct> products;
+  final MenuProductsMode productsMode;
+  final String? loadedCategoryId;
   final String search;
   final MenuProduct? selectedProduct;
 
@@ -53,6 +57,8 @@ class MenuBrowserState {
     this.categories = const [],
     this.selectedCategoryId,
     this.products = const [],
+    this.productsMode = MenuProductsMode.none,
+    this.loadedCategoryId,
     this.search = '',
     this.selectedProduct,
   });
@@ -63,6 +69,9 @@ class MenuBrowserState {
     List<MenuCategory>? categories,
     String? selectedCategoryId,
     List<MenuProduct>? products,
+    MenuProductsMode? productsMode,
+    String? loadedCategoryId,
+    bool clearLoadedCategoryId = false,
     String? search,
     MenuProduct? selectedProduct,
   }) {
@@ -72,6 +81,10 @@ class MenuBrowserState {
       categories: categories ?? this.categories,
       selectedCategoryId: selectedCategoryId ?? this.selectedCategoryId,
       products: products ?? this.products,
+      productsMode: productsMode ?? this.productsMode,
+      loadedCategoryId: clearLoadedCategoryId
+          ? null
+          : (loadedCategoryId ?? this.loadedCategoryId),
       search: search ?? this.search,
       selectedProduct: selectedProduct ?? this.selectedProduct,
     );
@@ -96,11 +109,12 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
 
       final cats = await _client
           .from('categories')
-          .select('id,name')
+          .select('id,name,business_id')
           .eq('is_active', true)
           .order('position', ascending: true);
 
-      final categories = (cats as List<dynamic>)
+      final rawCategories = cats as List<dynamic>;
+      final categories = rawCategories
           .map((e) => MenuCategory.fromMap(e as Map<String, dynamic>))
           .toList();
 
@@ -119,12 +133,113 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
       if (selected != null) {
         await loadProductsByCategory(selected);
       } else {
-        state = state.copyWith(products: const []);
+        state = state.copyWith(
+          products: const [],
+          productsMode: MenuProductsMode.none,
+          clearLoadedCategoryId: true,
+        );
       }
     } catch (e) {
       state = state.copyWith(
         loading: false,
         error: 'No se pudieron cargar categorías: $e',
+      );
+    }
+  }
+
+  Future<void> loadAllProducts() async {
+    try {
+      state = state.copyWith(loading: true, error: null, selectedProduct: null);
+
+      final rows = await _client
+          .from('menu_items')
+          .select('id,name,price,image_url,category_id,is_active,position')
+          .eq('is_active', true)
+          .order('position', ascending: true)
+          .order('name', ascending: true);
+
+      final products = (rows as List<dynamic>)
+          .map((e) => MenuProduct.fromMap(e as Map<String, dynamic>))
+          .toList();
+
+      state = state.copyWith(
+        loading: false,
+        products: products,
+        productsMode: MenuProductsMode.all,
+        clearLoadedCategoryId: true,
+        selectedProduct: null,
+      );
+    } catch (e) {
+      state = state.copyWith(
+        loading: false,
+        error: 'No se pudo cargar el menú: $e',
+      );
+    }
+  }
+
+  Future<void> loadFavoriteProducts() async {
+    try {
+      state = state.copyWith(loading: true, error: null, selectedProduct: null);
+
+      final rows = await _client
+          .from('menu_items')
+          .select('id,name,price,image_url,category_id,is_active,position')
+          .eq('is_active', true)
+          .order('position', ascending: true)
+          .order('name', ascending: true);
+
+      final allProducts = (rows as List<dynamic>)
+          .map((e) => MenuProduct.fromMap(e as Map<String, dynamic>))
+          .toList();
+
+      if (allProducts.isEmpty) {
+        state = state.copyWith(
+          loading: false,
+          products: const [],
+          productsMode: MenuProductsMode.favorites,
+          clearLoadedCategoryId: true,
+        );
+        return;
+      }
+
+      final productIds = allProducts.map((p) => p.id).toList();
+      final orderRows = await _client
+          .from('order_items')
+          .select('product_id, qty, created_at')
+          .inFilter('product_id', productIds)
+          .order('created_at', ascending: false)
+          .limit(500);
+
+      final scoreByProduct = <String, double>{};
+      for (final row in (orderRows as List<dynamic>)) {
+        final map = row as Map<String, dynamic>;
+        final productId = map['product_id'] as String?;
+        if (productId == null || productId.isEmpty) continue;
+        final qty = (map['qty'] is num) ? (map['qty'] as num).toDouble() : 1.0;
+        scoreByProduct[productId] = (scoreByProduct[productId] ?? 0) + qty;
+      }
+
+      final favorites =
+          allProducts
+              .where((product) => scoreByProduct.containsKey(product.id))
+              .toList()
+            ..sort(
+              (a, b) => (scoreByProduct[b.id] ?? 0).compareTo(
+                scoreByProduct[a.id] ?? 0,
+              ),
+            );
+
+      state = state.copyWith(
+        loading: false,
+        products: favorites,
+        productsMode: MenuProductsMode.favorites,
+        clearLoadedCategoryId: true,
+        selectedProduct: null,
+      );
+    } catch (e) {
+      state = state.copyWith(
+        loading: false,
+        error: 'No se pudieron cargar los favoritos: $e',
       );
     }
   }
@@ -152,6 +267,8 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
       state = state.copyWith(
         loading: false,
         products: products,
+        productsMode: MenuProductsMode.category,
+        loadedCategoryId: categoryId,
         selectedProduct: null,
       );
     } catch (e) {
@@ -191,6 +308,8 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
       state = state.copyWith(
         loading: false,
         products: products,
+        productsMode: MenuProductsMode.search,
+        clearLoadedCategoryId: true,
         selectedProduct: null,
       );
     } catch (e) {

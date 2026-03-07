@@ -278,7 +278,7 @@ class _KpiRow extends StatelessWidget {
             title: 'Activos',
             value: '$active',
             icon: Icons.verified_user,
-            accent: Colors.green,
+            accent: const Color(0xFF22C55E),
           ),
         ),
         const SizedBox(width: 10),
@@ -812,7 +812,7 @@ class _UserRow extends StatelessWidget {
             child: const Text('Cancelar'),
           ),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFF97316)),
             onPressed: () {
               // TODO: Implementar desactivación
               Navigator.pop(context);

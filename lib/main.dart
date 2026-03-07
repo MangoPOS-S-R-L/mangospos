@@ -13,6 +13,7 @@ import 'env/env.dart';
 import 'app/router/app_router.dart';
 import 'core/network/supabase_config.dart';
 import 'core/cache/cache_manager.dart';
+import 'core/utils/logger.dart';
 
 /// === CONFIG DEL AGENTE ===
 /// Cambia estas rutas/puerto segun tu instalacion.
@@ -143,29 +144,46 @@ Future<void> _lockLandscapeIfMobile() async {
 }
 
 void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+  try {
+    WidgetsFlutterBinding.ensureInitialized();
+    AppLogger.i('Arrancando MangoPOS...');
 
-  // Inicializar datos de localización para español
-  await initializeDateFormatting('es', null);
+    // Inicializar datos de localización para español
+    await initializeDateFormatting('es', null);
+    AppLogger.d('Localización (es) inicializada');
 
-  // Inicializar Supabase con configuración personalizada (timeouts, reintentos, etc.)
-  await SupabaseConfig.initialize(
-    url: Env.supabaseUrl,
-    anonKey: Env.supabaseAnonKey,
-  );
+    // Inicializar Supabase con configuración personalizada
+    await SupabaseConfig.initialize(
+      url: Env.supabaseUrl,
+      anonKey: Env.supabaseAnonKey,
+    );
+    AppLogger.i(
+      'Supabase inicializado correctamente conectando a: ${Env.supabaseUrl}',
+    );
 
-  MediaKit.ensureInitialized();
+    MediaKit.ensureInitialized();
+    AppLogger.d('MediaKit inicializado');
 
-  // Bloquear orientacion a horizontal (Android/iOS)
-  await _lockLandscapeIfMobile();
+    // Bloquear orientacion a horizontal (Android/iOS)
+    await _lockLandscapeIfMobile();
 
-  // Arranca o "precalienta" el agente ANTES de montar el arbol de widgets
-  await _ensurePrinterAgentStarted();
+    // Arranca o "precalienta" el agente ANTES de montar el arbol de widgets
+    await _ensurePrinterAgentStarted();
 
-  // Inicializar CacheManager
-  await CacheManager.initialize();
+    // Inicializar CacheManager
+    await CacheManager.initialize();
+    AppLogger.d('CacheManager inicializado');
 
-  runApp(const ProviderScope(child: MyApp()));
+    AppLogger.i('MangoPOS inicialización completa. Montando UI.');
+    runApp(const ProviderScope(child: MyApp()));
+  } catch (e, st) {
+    AppLogger.f(
+      'Error FATAL durante la inicialización de la app',
+      error: e,
+      stackTrace: st,
+    );
+    rethrow;
+  }
 }
 
 class MyApp extends ConsumerWidget {
@@ -177,7 +195,7 @@ class MyApp extends ConsumerWidget {
       title: 'MangoPOS',
       debugShowCheckedModeBanner: false,
       routerConfig: AppRouter.router,
-      theme: ThemeData(primaryColor: const Color(0xFFF7941A)),
+      theme: ThemeData(primaryColor: const Color(0xFFF97316)),
     );
   }
 }

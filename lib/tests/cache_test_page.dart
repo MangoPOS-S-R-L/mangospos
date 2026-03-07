@@ -332,7 +332,7 @@ class _CacheTestPageState extends State<CacheTestPage> {
         switch (state.status) {
           case CacheStatus.synced:
             icon = Icons.cloud_done;
-            color = Colors.green;
+            color = const Color(0xFF22C55E);
             break;
           case CacheStatus.syncing:
             icon = Icons.sync;
@@ -340,7 +340,7 @@ class _CacheTestPageState extends State<CacheTestPage> {
             break;
           case CacheStatus.cached:
             icon = Icons.storage;
-            color = Colors.orange;
+            color = const Color(0xFFF97316);
             break;
           case CacheStatus.offline:
             icon = Icons.cloud_off;

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../data/models/sales_models.dart';
@@ -14,6 +15,7 @@ final splitBillViewModelProvider =
 /// 📄 ViewModel para división de cuenta
 class SplitBillViewModel extends StateNotifier<SplitBillState> {
   final SalesRepository _salesRepo;
+  Map<String, String?> _initialCheckIdByItemId = const {};
 
   SplitBillViewModel(this._salesRepo) : super(const SplitBillState());
 
@@ -26,16 +28,12 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
     state = state.copyWith(loading: true, error: null);
 
     try {
-      // Obtener items de la orden
-      final items = await _salesRepo.getOrderItems(
-        order.id,
-        onlyOpen: true,
-      );
+      // Carga compacta en una sola llamada RPC: order + checks + items abiertos.
+      final bundle = await _salesRepo.getOrderBundle(order.id);
       if (!mounted) return;
-
-      // Obtener checks existentes (si ya se dividió antes)
-      final existingChecks = await _salesRepo.getOrderChecks(order.id);
-      if (!mounted) return;
+      final items = bundle.items;
+      final existingChecks = List<OrderCheck>.from(bundle.checks);
+      final effectiveOrder = bundle.order ?? order;
 
       // 1. Identificar Checks Reales (Subcuentas Creadas)
       // Si tenemos C1, C2, C3. Ordenados por posicion.
@@ -68,10 +66,12 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
 
       state = state.copyWith(
         loading: false,
-        order: order,
+        order: effectiveOrder,
         allItems: visibleItems,
         checks: visibleChecks,
+        pendingDeletedCheckIds: <String>{},
       );
+      _snapshotItemAssignments(visibleItems);
     } catch (e) {
       if (!mounted) return;
       state = state.copyWith(
@@ -135,12 +135,15 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
 
     // c) Remover el check de la lista local
     final updatedChecks = state.checks.where((c) => c.id != checkId).toList();
+    final updatedPendingDeletes = Set<String>.from(state.pendingDeletedCheckIds)
+      ..remove(checkId);
 
     // Actualizar estado para reflejar cambios en UI YA
     state = state.copyWith(
       checks: updatedChecks,
       allItems: updatedItems,
       selectedItemIds: {}, // limpiar selección
+      pendingDeletedCheckIds: updatedPendingDeletes,
       error: null,
     );
 
@@ -149,14 +152,15 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
       // Ejecutar en segundo plano sin await para no bloquear UI
       Future(() async {
         try {
-          final itemsToMove = previousItems
+          final itemIdsToMove = previousItems
               .where((i) => i.checkId == checkId)
-              .toList();
+              .map((i) => i.id)
+              .toList(growable: false);
 
-          // Mover items en DB al pool principal
-          for (final item in itemsToMove) {
-            await _salesRepo.moveItemToCheck(
-              itemId: item.id,
+          // Mover items en DB al pool principal en un solo batch.
+          if (itemIdsToMove.isNotEmpty) {
+            await _salesRepo.moveItemsToCheckBatch(
+              itemIds: itemIdsToMove,
               checkPosition: 1, // 1 = Main/Unassigned
             );
           }
@@ -168,7 +172,7 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
           // Por ahora, solo log en consola o update de error si aún montado
           if (mounted) {
             // No revertimos drásticamente para no romper flujo usuario, pero avisamos
-            print('Error sync deleteCheck: $e');
+            debugPrint('Error sync deleteCheck: $e');
             // Podríamos poner un mensajito en error state
             state = state.copyWith(
               error:
@@ -185,6 +189,109 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
       r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
     );
     return regex.hasMatch(value);
+  }
+
+  /// Unir una subcuenta origen dentro de una subcuenta destino.
+  Future<void> mergeChecks({
+    required String sourceCheckId,
+    required String targetCheckId,
+  }) async {
+    if (sourceCheckId == targetCheckId) return;
+
+    final sourceCheck = state.checks.firstWhere(
+      (c) => c.id == sourceCheckId,
+      orElse: () => OrderCheck(
+        id: '',
+        orderId: '',
+        label: '',
+        position: -1,
+        isClosed: false,
+        subtotal: 0,
+        discounts: 0,
+        tax: 0,
+        total: 0,
+      ),
+    );
+    final targetCheck = state.checks.firstWhere(
+      (c) => c.id == targetCheckId,
+      orElse: () => OrderCheck(
+        id: '',
+        orderId: '',
+        label: '',
+        position: -1,
+        isClosed: false,
+        subtotal: 0,
+        discounts: 0,
+        tax: 0,
+        total: 0,
+      ),
+    );
+    if (sourceCheck.position <= 0 || targetCheck.position <= 0) {
+      state = state.copyWith(error: 'No se pudo unir cuentas seleccionadas.');
+      return;
+    }
+
+    final sourceItems = state.allItems
+        .where((i) => i.checkId == sourceCheckId)
+        .toList();
+    final movedItems = state.allItems.map((item) {
+      if (item.checkId == sourceCheckId) {
+        return item.copyWith(checkId: targetCheckId, forceCheckIdNull: false);
+      }
+      return item;
+    }).toList();
+    final updatedItems = _consolidateCheckItemsLocally(
+      items: movedItems,
+      checkId: targetCheckId,
+    );
+
+    final updatedChecks = state.checks
+        .where((c) => c.id != sourceCheckId)
+        .toList();
+    final updatedPendingDeletes = Set<String>.from(
+      state.pendingDeletedCheckIds,
+    );
+    if (_isUuid(sourceCheckId)) {
+      updatedPendingDeletes.add(sourceCheckId);
+    }
+
+    state = state.copyWith(
+      allItems: updatedItems,
+      checks: _recalculateChecksTotals(updatedChecks, updatedItems),
+      selectedItemIds: {},
+      pendingDeletedCheckIds: updatedPendingDeletes,
+      error: null,
+    );
+
+    // Si ambas cuentas existen en DB, sincronizamos de una vez.
+    if (_isUuid(sourceCheckId) && _isUuid(targetCheckId)) {
+      try {
+        if (sourceItems.isNotEmpty) {
+          await _salesRepo.moveItemsToCheckBatch(
+            itemIds: sourceItems.map((i) => i.id).toList(),
+            checkPosition: targetCheck.position,
+          );
+        }
+        await _salesRepo.deleteCheck(sourceCheckId);
+        await _salesRepo.consolidateCheckItems(checkId: targetCheckId);
+        if (!mounted) return;
+        final order = state.order;
+        if (order != null) {
+          await initialize(order);
+        } else {
+          state = state.copyWith(
+            pendingDeletedCheckIds: Set<String>.from(
+              state.pendingDeletedCheckIds,
+            )..remove(sourceCheckId),
+          );
+        }
+      } catch (e) {
+        if (!mounted) return;
+        state = state.copyWith(
+          error: 'La unión quedó local. Aplica división para sincronizar ($e)',
+        );
+      }
+    }
   }
 
   // ============================================================
@@ -248,23 +355,69 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
     List<OrderCheck> checks,
     List<OrderItem> items,
   ) {
-    return checks.map((c) {
-      final checkItems = items.where((i) => i.checkId == c.id).toList();
-      final total = checkItems.fold(0.0, (sum, i) => sum + i.total);
+    final itemsByCheckId = <String, List<OrderItem>>{};
+    final totalsByCheckId = <String, double>{};
 
-      return OrderCheck(
-        id: c.id,
-        orderId: c.orderId,
-        label: c.label,
-        position: c.position,
-        isClosed: c.isClosed,
-        subtotal: total / 1.18, // Rough est
-        discounts: 0,
-        tax: total - (total / 1.18),
-        total: total,
-        items: checkItems,
-      );
-    }).toList();
+    for (final item in items) {
+      final checkId = item.checkId;
+      if (checkId == null) continue;
+      itemsByCheckId.putIfAbsent(checkId, () => <OrderItem>[]).add(item);
+      totalsByCheckId[checkId] = (totalsByCheckId[checkId] ?? 0) + item.total;
+    }
+
+    return checks
+        .map((c) {
+          final checkItems = itemsByCheckId[c.id] ?? const <OrderItem>[];
+          final total = totalsByCheckId[c.id] ?? 0.0;
+
+          return OrderCheck(
+            id: c.id,
+            orderId: c.orderId,
+            label: c.label,
+            position: c.position,
+            isClosed: c.isClosed,
+            subtotal: total / 1.18, // Rough est
+            discounts: 0,
+            tax: total - (total / 1.18),
+            total: total,
+            items: checkItems,
+          );
+        })
+        .toList(growable: false);
+  }
+
+  List<OrderItem> _consolidateCheckItemsLocally({
+    required List<OrderItem> items,
+    required String checkId,
+  }) {
+    final consolidatedByKey = <String, OrderItem>{};
+    final otherItems = <OrderItem>[];
+
+    for (final item in items) {
+      if (item.checkId != checkId) {
+        otherItems.add(item);
+        continue;
+      }
+
+      final key =
+          '${item.productId ?? ''}|${item.productName}|${item.sku ?? ''}|'
+          '${item.unitPrice}|${item.isTakeout}|${item.status}|${item.notes ?? ''}';
+
+      final existing = consolidatedByKey[key];
+      if (existing == null) {
+        consolidatedByKey[key] = item;
+      } else {
+        consolidatedByKey[key] = existing.copyWith(
+          quantity: existing.quantity + item.quantity,
+          subtotal: existing.subtotal + item.subtotal,
+          discounts: existing.discounts + item.discounts,
+          tax: existing.tax + item.tax,
+          total: existing.total + item.total,
+        );
+      }
+    }
+
+    return [...otherItems, ...consolidatedByKey.values];
   }
 
   /// Retornar item a 'Sin Asignar' (Check position 0)
@@ -298,67 +451,29 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
     state = state.copyWith(equalSplitPeople: people);
   }
 
-  /// Aplicar división igualitaria (LOCAL)
+  /// Aplicar división igualitaria en backend y refrescar estado local.
   Future<void> applyEqualSplit() async {
     if (state.order == null) return;
     if (state.equalSplitPeople < 2) return;
 
     try {
-      // 1. Crear checks temporales
-      final newLocalChecks = state.checks.toList();
-      final newTempChecks = <OrderCheck>[];
+      state = state.copyWith(loading: true, error: null);
 
-      for (int i = 0; i < state.equalSplitPeople; i++) {
-        final pos = _getNextPosition() + i;
-        final newCheck = OrderCheck(
-          id: 'temp_eq_${DateTime.now().millisecondsSinceEpoch}_$i',
-          orderId: state.order?.id ?? '',
-          label: 'C$pos',
-          position: pos,
-          isClosed: false,
-          subtotal: 0,
-          discounts: 0,
-          tax: 0,
-          total: 0,
-        );
-        newLocalChecks.add(newCheck);
-        newTempChecks.add(newCheck);
-      }
-
-      // 2. Distribuir items NO ASIGNADOS entre los NUEVOS checks
-      final targets = newTempChecks;
-      if (targets.isEmpty) return;
-
-      List<OrderItem> currentUnassigned = List.from(state.unassignedItems);
-      List<OrderItem> finalItems = List.from(state.allItems);
-
-      int targetIdx = 0;
-      for (final item in currentUnassigned) {
-        final targetCheck = targets[targetIdx % targets.length];
-        final updatedItem = item.copyWith(
-          checkId: targetCheck.id,
-          forceCheckIdNull: false,
-        );
-
-        final mainIndex = finalItems.indexWhere((i) => i.id == item.id);
-        if (mainIndex != -1) finalItems[mainIndex] = updatedItem;
-
-        targetIdx++;
-      }
-
-      // 3. Recalcular totales
-      final updatedChecks = _recalculateChecksTotals(
-        newLocalChecks,
-        finalItems,
+      await _salesRepo.splitItemsEqually(
+        orderId: state.order!.id,
+        people: state.equalSplitPeople,
       );
 
+      // Refrescar snapshot local desde backend para mostrar cantidades fraccionadas reales.
+      await initialize(state.order!);
+      if (!mounted) return;
       state = state.copyWith(
-        loading: false,
-        allItems: finalItems,
-        checks: updatedChecks,
         showEqualSplit: false,
+        error: null,
+        selectedItemIds: {},
       );
     } catch (e) {
+      if (!mounted) return;
       state = state.copyWith(
         loading: false,
         error: 'Error al dividir en partes iguales: $e',
@@ -373,125 +488,88 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
   /// Aplicar y confirmar la división
   Future<void> applySplit() async {
     if (!state.canApplySplit) {
-      // Opcional: Permitir aplicar incluso si no todo está asignado (dejando cosas en Principal)
-      // Pero el usuario pidió validación estricta en el prompt inicial.
-      // Sin embargo, si cambió de opinión... mantengamos la regla.
-      state = state.copyWith(
-        error: 'Debes asignar todos los items a checks antes de aplicar',
-      );
+      state = state.copyWith(error: 'No hay cambios para aplicar.');
       return;
     }
 
     state = state.copyWith(loading: true, error: null);
 
     try {
-      // 1. Sincronizar Cambios con Backend
-      // a) Crear checks que sean nuevos (IDs temporales)
-      // b) Mover items a los checks correspondientes (DB needs check_id)
+      final orderId = state.order!.id;
+      final checkPositionById = <String, int>{
+        for (final check in state.checks) check.id: check.position,
+      };
 
-      // Dado que el backend actual de createSplitBill crea checks reales inmediatamente,
-      // y moveItemToCheck mueve items inmediatamente...
-      // La "Local State" es compleja si el backend espera UUIDs para mover items.
-
-      // ESTRATEGIA:
-      // Si tenemos Checks Temporales ('temp_...'), debemos crearlos ahora.
-      // PERO createSplitBill crea N checks nuevos. No uno especifico.
-      // Si usamos createSplitBill para crear los faltantes:
-
-      // Cuantos checks reales existen?
-      // Cuantos checks locales tenemos?
-
-      // SIMPLIFICACION:
-      // Vamos a iterar sobre las operaciones necesarias.
-
-      // 1. Crear checks faltantes en DB
-      // Contar cuantos checks temporales tenemos
-      final tempChecksCount = state.checks
-          .where((c) => c.id.startsWith('temp_'))
-          .length;
-      List<OrderCheck> finalChecks = [];
-
-      // Obtener checks actuales de DB para referencia
-      final dbChecks = await _salesRepo.getOrderChecks(state.order!.id);
-      finalChecks.addAll(dbChecks); // Start with existing
-
-      if (tempChecksCount > 0) {
-        final newDbChecks = await _salesRepo.createSplitBill(
-          orderId: state.order!.id,
-          numberOfChecks: tempChecksCount,
-        );
-        // createSplitBill returns ALL checks including old ones.
-        // We just need to know which ones are the 'new' ones to map our temp IDs if we wanted to be precise,
-        // but actually we just need target IDs for items.
-        finalChecks = newDbChecks;
-      }
-
-      // Ordenar finalChecks para mapear Posiciones
-      finalChecks.sort((a, b) => a.position.compareTo(b.position));
-
-      // 2. Mover items
-      // La logica local asigna items a checkIds (temp o reales).
-      // Debemos mapear los checkIds locales a los checkIds finales de DB.
-      // Asumimos que la "Posición" es la clave.
-      // Local Checks tienen una posición asignada.
-      // DB Checks tienen una posición.
-
-      // Mapeo: Local Check ID -> DB Check ID
-
-      // El "Pool" (Izquierda) es Main Check (Pos 1).
-      // En local state, items unassigned tienen checkId: null.
-      // En DB, deben ir a check position 1.
-
-      // Los Checks Visibles (Derecha) empiezan desde Pos 2 en adelante?
-      // Revisemos como generamos local checks.
-
-      // Si initialize detectó:
-      // [C1 (Pos1)], [C2 (Pos2)]
-      // Visible: C2.
-      // Local Checks: [C2].
-
-      // Si creo nuevo check local C3. Pos ?.
-      // Debemos asignar posiciones a los checks locales para poder sincronizar.
-
-      // Vamos a recorrer todos los items locales y moverlos.
+      // Mover solo los items cuyo destino cambió en esta sesión.
+      final itemsByTargetPosition = <int, List<String>>{};
+      final affectedPositions = <int>{};
       for (final item in state.allItems) {
-        int targetPosition = 1; // Default to Main Check (Unassigned)
-
+        var targetPosition = 1; // Main Check (unassigned)
         if (item.checkId != null) {
-          // Buscar el check local correspondiente
-          final localCheck = state.checks.firstWhere(
-            (c) => c.id == item.checkId,
-            orElse: () => OrderCheck(
-              id: 'nf',
-              orderId: '',
-              label: '',
-              position: -1,
-              isClosed: false,
-              subtotal: 0,
-              discounts: 0,
-              tax: 0,
-              total: 0,
-            ),
-          );
-
-          if (localCheck.position != -1) {
-            targetPosition = localCheck.position;
-            // Wait, si el check es temp, su position es asignada localmente.
-            // Debemos asegurar que esa posicion exista en DB.
-            // Si creamos tempChecksCount nuevos checks, el backend asignó posiciones continuas.
-            // Asumimos que la secuencia de posiciones locales coincide con la secuencia de DB.
-            // RIESGO: Si borramos checks intermedios.
-            // POR AHORA: Confiamos en que createSplitBill añade al final.
+          final position = checkPositionById[item.checkId];
+          if (position != null && position > 0) {
+            targetPosition = position;
           }
         }
 
-        await _salesRepo.moveItemToCheck(
-          itemId: item.id,
-          checkPosition: targetPosition,
+        final initialCheckId = _initialCheckIdByItemId[item.id];
+        if (initialCheckId == item.checkId) {
+          continue;
+        }
+
+        itemsByTargetPosition
+            .putIfAbsent(targetPosition, () => <String>[])
+            .add(item.id);
+        affectedPositions.add(targetPosition);
+      }
+
+      if (itemsByTargetPosition.isNotEmpty) {
+        await Future.wait(
+          itemsByTargetPosition.entries.map((entry) {
+            return _salesRepo.moveItemsToCheckBatch(
+              itemIds: entry.value,
+              checkPosition: entry.key,
+            );
+          }),
         );
       }
 
-      state = state.copyWith(loading: false, splitApplied: true);
+      final pendingDeletes = state.pendingDeletedCheckIds
+          .where(_isUuid)
+          .toList(growable: false);
+
+      if (itemsByTargetPosition.isEmpty && pendingDeletes.isEmpty) {
+        state = state.copyWith(loading: false, splitApplied: true);
+        return;
+      }
+
+      if (pendingDeletes.isNotEmpty) {
+        await Future.wait(
+          pendingDeletes.map((checkId) => _salesRepo.deleteCheck(checkId)),
+        );
+      }
+
+      if (affectedPositions.isNotEmpty) {
+        final consolidatedChecks = await _salesRepo.getOrderChecks(orderId);
+        final affectedCheckIds = consolidatedChecks
+            .where((c) => !c.isClosed && affectedPositions.contains(c.position))
+            .map((c) => c.id)
+            .toList(growable: false);
+        if (affectedCheckIds.isNotEmpty) {
+          await Future.wait(
+            affectedCheckIds.map((checkId) {
+              return _salesRepo.consolidateCheckItems(checkId: checkId);
+            }),
+          );
+        }
+      }
+
+      state = state.copyWith(
+        loading: false,
+        splitApplied: true,
+        pendingDeletedCheckIds: <String>{},
+      );
+      _snapshotItemAssignments(state.allItems);
     } catch (e) {
       state = state.copyWith(
         loading: false,
@@ -500,11 +578,16 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
     }
   }
 
+  void _snapshotItemAssignments(List<OrderItem> items) {
+    _initialCheckIdByItemId = {for (final item in items) item.id: item.checkId};
+  }
+
   // ============================================================
   // 🔄 RESET
   // ============================================================
 
   void reset() {
+    _initialCheckIdByItemId = const {};
     state = const SplitBillState();
   }
 }

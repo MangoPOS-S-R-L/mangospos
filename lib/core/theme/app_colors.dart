@@ -44,7 +44,7 @@ class AppColors {
   // ============================================================================
 
   /// Primary - hsl(25, 95%, 53%) - Naranja Mango
-  static const Color primary = Color(0xFFFB7116);
+  static const Color primary = Color(0xFFF97316);
 
   /// Primary Gradient End - hsl(35, 95%, 55%) - Ámbar brillante (spec exacto)
   static const Color primaryGradientEnd = Color(0xFFFBAA16);

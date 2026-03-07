@@ -23,13 +23,39 @@ class _MenuBrowserSheetState extends ConsumerState<MenuBrowserSheet>
       length: 4,
       vsync: this,
     ); // Categoría | Menú | Búsqueda | Favoritos
+    _tab.addListener(_handleTabChange);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(menuBrowserVmProvider.notifier).loadAll();
     });
   }
 
+  void _handleTabChange() {
+    if (_tab.indexIsChanging) return;
+
+    final notifier = ref.read(menuBrowserVmProvider.notifier);
+    switch (_tab.index) {
+      case 0:
+        notifier.loadProductsByCategory(
+          ref.read(menuBrowserVmProvider).selectedCategoryId ?? '',
+        );
+        break;
+      case 1:
+        notifier.loadAllProducts();
+        break;
+      case 2:
+        if (_searchCtrl.text.trim().isNotEmpty) {
+          notifier.searchProducts(_searchCtrl.text);
+        }
+        break;
+      case 3:
+        notifier.loadFavoriteProducts();
+        break;
+    }
+  }
+
   @override
   void dispose() {
+    _tab.removeListener(_handleTabChange);
     _tab.dispose();
     _searchCtrl.dispose();
     super.dispose();
@@ -89,7 +115,7 @@ class _MenuBrowserSheetState extends ConsumerState<MenuBrowserSheet>
               _CategoriesTab(),
               _ProductsGridTab(),
               _SearchTab(controller: _searchCtrl),
-              _FavoritesTab(), // placeholder básico
+              _FavoritesTab(),
             ],
           ),
           if (vm.loading)
@@ -136,7 +162,9 @@ class _CategoriesTab extends ConsumerWidget {
               .map(
                 (c) => ChoiceChip(
                   label: Text(c.name),
-                  selectedColor: MangoColors.primaryOrange.withOpacity(.12),
+                  selectedColor: MangoColors.primaryOrange.withValues(
+                    alpha: .12,
+                  ),
                   selected: vm.selectedCategoryId == c.id,
                   onSelected: (_) => notifier.loadProductsByCategory(c.id),
                   labelStyle: TextStyle(
@@ -253,13 +281,40 @@ class _SearchTab extends ConsumerWidget {
 }
 
 class _FavoritesTab extends StatelessWidget {
+  const _FavoritesTab();
+
   @override
   Widget build(BuildContext context) {
-    // Placeholder — puedes conectar tu tabla de favoritos cuando la tengas
-    return const _EmptyBox(
-      icon: Icons.star_border,
-      text: 'Aún no tienes favoritos',
-    );
+    return _FavoritesProductsGrid();
+  }
+}
+
+class _FavoritesProductsGrid extends ConsumerWidget {
+  const _FavoritesProductsGrid();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final vm = ref.watch(menuBrowserVmProvider);
+
+    if (vm.error != null && !vm.loading) {
+      return _ErrorBox(
+        message: vm.error!,
+        onRetry: () => ref.read(menuBrowserVmProvider.notifier).loadFavoriteProducts(),
+      );
+    }
+
+    if (vm.products.isEmpty && vm.loading) {
+      return const _CenteredSpinner(label: 'Cargando favoritos...');
+    }
+
+    if (vm.products.isEmpty) {
+      return const _EmptyBox(
+        icon: Icons.star_border,
+        text: 'Todavía no hay productos frecuentes',
+      );
+    }
+
+    return _ProductsGridTab();
   }
 }
 
@@ -303,7 +358,7 @@ class _ProductCard extends ConsumerWidget {
             BoxShadow(
               blurRadius: 10,
               offset: const Offset(0, 4),
-              color: Colors.black.withOpacity(.06),
+              color: Colors.black.withValues(alpha: .06),
             ),
           ],
         ),

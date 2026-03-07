@@ -49,7 +49,7 @@ class _TimerWidgetState extends State<TimerWidget> {
         color: isUrgent
             ? Colors.red
             : isWarning
-            ? Colors.orange
+            ? const Color(0xFFF97316)
             : Colors.grey[700],
         borderRadius: BorderRadius.circular(8),
       ),

@@ -21,6 +21,9 @@ import '../../presentation/auth/register/register_step2_view.dart';
 import '../../presentation/dashboard/dashboard_view.dart';
 import '../../presentation/shell/main_shell.dart';
 import '../../presentation/cashier/view/cashier_view.dart';
+import '../../presentation/cashier/view/cash_closures_view.dart';
+import '../../presentation/cashier/view/income_expense_view.dart';
+import '../../presentation/cashier/view/sales_history_view.dart';
 import '../../presentation/kitchen/view/kitchen_view.dart';
 import '../../presentation/customers/view/customers_view.dart';
 import '../../presentation/customers/view/customer_detail_view.dart';
@@ -30,8 +33,6 @@ import 'routes.dart';
 // Sales module
 import '../../presentation/sales/view/sales_shell_view.dart';
 import '../../presentation/sales/view/sales_by_zone_view.dart';
-import '../../presentation/sales/view/manual_sale_view.dart';
-import '../../presentation/sales/view/sale_quick_view.dart';
 import '../../presentation/sales/view/delivery_express_view.dart';
 import '../../presentation/sales/view/self_service_view.dart';
 import '../../presentation/sales/view/table_order_screen.dart';
@@ -59,65 +60,68 @@ class AppRouter {
       // ---------- Alias React (paridad de rutas 1:1) ----------
       GoRoute(
         path: AppRoutes.homeReact,
-        redirect: (_, __) => AppRoutes.dashboard,
+        redirect: (context, state) => AppRoutes.dashboard,
       ),
       GoRoute(
         path: AppRoutes.cashierReact,
-        redirect: (_, __) => AppRoutes.cashier,
+        redirect: (context, state) => AppRoutes.cashier,
       ),
       GoRoute(
         path: AppRoutes.kitchenReact,
-        redirect: (_, __) => AppRoutes.kitchen,
+        redirect: (context, state) => AppRoutes.kitchen,
       ),
       GoRoute(
         path: AppRoutes.productsReact,
-        redirect: (_, __) => AppRoutes.products,
+        redirect: (context, state) => AppRoutes.products,
       ),
       GoRoute(
         path: AppRoutes.customersReact,
-        redirect: (_, __) => AppRoutes.customers,
+        redirect: (context, state) => AppRoutes.customers,
       ),
       GoRoute(
         path: AppRoutes.reportsReact,
-        redirect: (_, __) => AppRoutes.reports,
+        redirect: (context, state) => AppRoutes.reports,
       ),
       GoRoute(
         path: AppRoutes.settingsReact,
-        redirect: (_, __) => AppRoutes.settings,
+        redirect: (context, state) => AppRoutes.settings,
       ),
 
       // ---------- Auth ----------
-      GoRoute(path: AppRoutes.login, builder: (_, __) => const LoginView()),
+      GoRoute(
+        path: AppRoutes.login,
+        builder: (context, state) => const LoginView(),
+      ),
       GoRoute(
         path: AppRoutes.cacheTest,
-        builder: (_, __) => const CacheTestPage(),
+        builder: (context, state) => const CacheTestPage(),
       ),
       GoRoute(
         path: AppRoutes.register,
-        builder: (_, __) => const RegisterStep1View(),
+        builder: (context, state) => const RegisterStep1View(),
       ),
       GoRoute(
         path: AppRoutes.registerStep2,
-        builder: (_, __) => const RegisterStep2View(),
+        builder: (context, state) => const RegisterStep2View(),
       ),
 
       // ---------- Shell principal (app autenticada) ----------
       ShellRoute(
-        builder: (_, __, child) => MainShell(child: child),
+        builder: (context, state, child) => MainShell(child: child),
         routes: [
           GoRoute(
             path: AppRoutes.dashboard,
-            builder: (_, __) => const DashboardView(),
+            builder: (context, state) => const DashboardView(),
           ),
 
           // ---------- Shell anidado: Ventas ----------
           ShellRoute(
-            builder: (_, __, child) => SalesShellView(child: child),
+            builder: (context, state, child) => SalesShellView(child: child),
             routes: [
               // /sales (legacy) -> /ventas
               GoRoute(
                 path: AppRoutes.sales,
-                redirect: (_, state) {
+                redirect: (context, state) {
                   final mode = state.uri.queryParameters['mode'];
                   if (mode == null || mode.isEmpty) return AppRoutes.salesReact;
                   return Uri(
@@ -129,15 +133,24 @@ class AppRouter {
               // /ventas?mode=manual|rapida|delivery|selfservice
               GoRoute(
                 path: AppRoutes.salesReact,
-                builder: (_, state) {
+                redirect: (context, state) {
+                  final mode = state.uri.queryParameters['mode']
+                      ?.toLowerCase()
+                      .trim();
+                  if (mode == 'delivery' || mode == 'selfservice') {
+                    return AppRoutes.salesReact;
+                  }
+                  return null;
+                },
+                builder: (context, state) {
                   final mode = state.uri.queryParameters['mode']
                       ?.toLowerCase()
                       .trim();
                   switch (mode) {
                     case 'manual':
-                      return const ManualSaleView();
+                      return const OrderScreen(origin: OrderOrigin.manual);
                     case 'rapida':
-                      return const SaleQuickView();
+                      return const OrderScreen(origin: OrderOrigin.quick);
                     case 'delivery':
                       return const DeliveryExpressView();
                     case 'selfservice':
@@ -149,23 +162,28 @@ class AppRouter {
               ),
               GoRoute(
                 path: AppRoutes.salesByZone,
-                builder: (_, __) => const SalesByZoneView(businessId: 'auto'),
+                builder: (context, state) =>
+                    const SalesByZoneView(businessId: 'auto'),
               ),
               GoRoute(
                 path: AppRoutes.salesManual,
-                builder: (_, __) => const ManualSaleView(),
+                builder: (context, state) =>
+                    const OrderScreen(origin: OrderOrigin.manual),
               ),
               GoRoute(
                 path: AppRoutes.salesQuick,
-                builder: (_, __) => const SaleQuickView(),
+                builder: (context, state) =>
+                    const OrderScreen(origin: OrderOrigin.quick),
               ),
               GoRoute(
                 path: AppRoutes.salesDelivery,
-                builder: (_, __) => const DeliveryExpressView(),
+                redirect: (context, state) => AppRoutes.salesReact,
+                builder: (context, state) => const DeliveryExpressView(),
               ),
               GoRoute(
                 path: AppRoutes.salesSelfService,
-                builder: (_, __) => const SelfServiceView(),
+                redirect: (context, state) => AppRoutes.salesReact,
+                builder: (context, state) => const SelfServiceView(),
               ),
             ],
           ),
@@ -173,11 +191,12 @@ class AppRouter {
           // ---------- Ruta de mesa (fuera del shell para pantalla completa) ----------
           GoRoute(
             path: '${AppRoutes.sales}/table/:tableId',
-            builder: (_, state) {
+            builder: (context, state) {
               final tableId = state.pathParameters['tableId']!;
               final tableCode = state.uri.queryParameters['code'] ?? 'Mesa';
               final zoneId = state.uri.queryParameters['zone'] ?? '';
-              return TableOrderScreen(
+              return OrderScreen(
+                origin: OrderOrigin.table,
                 tableId: tableId,
                 tableCode: tableCode,
                 zoneId: zoneId,
@@ -188,24 +207,36 @@ class AppRouter {
           // ---------- Otros módulos (placeholder por ahora) ----------
           GoRoute(
             path: AppRoutes.cashier,
-            builder: (_, __) => const CashierView(),
+            builder: (context, state) => const CashierView(),
+          ),
+          GoRoute(
+            path: AppRoutes.cashierHistory,
+            builder: (context, state) => const SalesHistoryView(),
+          ),
+          GoRoute(
+            path: AppRoutes.cashierClosures,
+            builder: (context, state) => const CashClosuresView(),
+          ),
+          GoRoute(
+            path: AppRoutes.cashierIncomeExpense,
+            builder: (context, state) => const IncomeExpenseView(),
           ),
           GoRoute(
             path: AppRoutes.kitchen,
-            builder: (_, __) => const KitchenView(),
+            builder: (context, state) => const KitchenView(),
           ),
           GoRoute(
             path: AppRoutes.reservations,
-            builder: (_, __) => const _Placeholder('Tables/Reservations'),
+            builder: (context, state) =>
+                const _Placeholder('Tables/Reservations'),
           ),
           GoRoute(
             path: AppRoutes.customers,
-            builder: (_, __) => const CustomersView(),
+            builder: (context, state) => const CustomersView(),
             routes: [
               GoRoute(
                 path: ':id',
-                builder: (_, state) {
-                  final id = state.pathParameters['id']!;
+                builder: (context, state) {
                   final name = state.uri.queryParameters['name'] ?? 'Cliente';
                   final orders =
                       int.tryParse(
@@ -222,74 +253,80 @@ class AppRouter {
           ),
           GoRoute(
             path: AppRoutes.products,
-            builder: (_, __) => const ProductsView(),
+            builder: (context, state) => const ProductsView(),
           ),
           GoRoute(
             path: AppRoutes.reports,
-            builder: (_, __) => const ReportsView(),
+            builder: (context, state) => const ReportsView(),
           ),
 
           // ✅ Ajustes (vista principal)
           GoRoute(
             path: AppRoutes.settings,
-            builder: (_, __) => const SettingsView(),
+            builder: (context, state) => const SettingsView(),
           ),
           GoRoute(
             path: AppRoutes.settingsUsers,
-            builder: (_, __) => const SettingsUsersView(businessId: 'auto'),
+            builder: (context, state) =>
+                const SettingsUsersView(businessId: 'auto'),
           ),
           GoRoute(
             path: AppRoutes.settingsRoles,
-            builder: (_, __) => const SettingsRolesView(businessId: 'auto'),
+            builder: (context, state) =>
+                const SettingsRolesView(businessId: 'auto'),
           ),
           GoRoute(
             path: AppRoutes.settingsZonesTables,
-            builder: (_, __) => const ZonesTablesView(businessId: 'auto'),
+            builder: (context, state) =>
+                const ZonesTablesView(businessId: 'auto'),
           ),
           GoRoute(
             path: AppRoutes.settingsTaxes,
-            builder: (_, __) => const TaxesView(businessId: 'auto'),
+            builder: (context, state) => const TaxesView(businessId: 'auto'),
           ),
 
           // ===================== GESTIÓN DE PRODUCTOS (MENÚ) =====================
           ShellRoute(
-            builder: (_, __, child) => MenuShellView(child: child),
+            builder: (context, state, child) => MenuShellView(child: child),
             routes: [
               // /menu -> redirige a /menu/menus
               GoRoute(
                 path: AppRoutes.menu,
-                redirect: (_, __) => AppRoutes.menuMenus,
+                redirect: (context, state) => AppRoutes.menuMenus,
               ),
 
               // /menu/menus
               GoRoute(
                 path: AppRoutes.menuMenus,
-                builder: (_, __) => const MenusView(businessId: 'auto'),
+                builder: (context, state) =>
+                    const MenusView(businessId: 'auto'),
               ),
 
               // /menu/items
               GoRoute(
                 path: AppRoutes.menuItems,
-                builder: (_, __) => const MenuItemsView(businessId: 'auto'),
+                builder: (context, state) =>
+                    const MenuItemsView(businessId: 'auto'),
               ),
 
               // /menu/categories
               GoRoute(
                 path: AppRoutes.menuCategories,
-                builder: (_, __) => const CategoriesView(businessId: 'auto'),
+                builder: (context, state) =>
+                    const CategoriesView(businessId: 'auto'),
               ),
 
               // /menu/modifier-groups
               GoRoute(
                 path: AppRoutes.menuModifierGroups,
-                builder: (_, __) =>
+                builder: (context, state) =>
                     const _Placeholder('Grupos de modificadores'),
               ),
 
               // /menu/modifiers
               GoRoute(
                 path: AppRoutes.menuModifiers,
-                builder: (_, __) =>
+                builder: (context, state) =>
                     const _Placeholder('Modificadores de artículo'),
               ),
             ],
@@ -298,40 +335,42 @@ class AppRouter {
 
           // ===================== GESTIÓN DE IMPRESIÓN =====================
           ShellRoute(
-            builder: (_, __, child) => PrintingShellView(child: child),
+            builder: (context, state, child) => PrintingShellView(child: child),
             routes: [
               // /settings/printing
               GoRoute(
                 path: AppRoutes.printingBase,
-                builder: (_, __) => const PrintingHomeView(businessId: 'auto'),
+                builder: (context, state) =>
+                    const PrintingHomeView(businessId: 'auto'),
               ),
               // /settings/printing/printers
               GoRoute(
                 path: AppRoutes.printingPrinters,
-                builder: (_, __) =>
+                builder: (context, state) =>
                     const PrintingPrintersView(businessId: 'auto'),
               ),
               // /settings/printing/areas
               GoRoute(
                 path: AppRoutes.printingAreas,
-                builder: (_, __) => const PrintingAreasView(businessId: 'auto'),
+                builder: (context, state) =>
+                    const PrintingAreasView(businessId: 'auto'),
               ),
               // /settings/printing/products
               GoRoute(
                 path: AppRoutes.printingProducts,
-                builder: (_, __) =>
+                builder: (context, state) =>
                     const PrintingProductsView(businessId: 'auto'),
               ),
               // /settings/printing/receipts
               GoRoute(
                 path: AppRoutes.printingReceipts,
-                builder: (_, __) =>
+                builder: (context, state) =>
                     const PrintingReceiptsView(businessId: 'auto'),
               ),
               // /settings/printing/orders
               GoRoute(
                 path: AppRoutes.printingOrders,
-                builder: (_, __) =>
+                builder: (context, state) =>
                     const PrintingOrdersView(businessId: 'auto'),
               ),
             ],
@@ -349,10 +388,7 @@ class MenuShellView extends StatelessWidget {
   const MenuShellView({super.key, required this.child});
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Gestión de productos')),
-      body: child,
-    );
+    return ColoredBox(color: const Color(0xFFFBFAF9), child: child);
   }
 }
 

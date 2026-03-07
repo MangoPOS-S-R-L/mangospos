@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../services/session/session_controller.dart';
+import '../../../core/utils/logger.dart';
 import 'login_state.dart';
 
 class LoginViewModel extends Notifier<LoginState> {
@@ -33,6 +34,9 @@ class LoginViewModel extends Notifier<LoginState> {
 
       final user = response.user;
       if (user == null) {
+        AppLogger.w(
+          'Login exitoso pero usuario es null en la respuesta de Supabase',
+        );
         state = state.copyWith(
           isLoading: false,
           error: 'Credenciales inválidas o usuario no encontrado',
@@ -56,6 +60,9 @@ class LoginViewModel extends Notifier<LoginState> {
           .maybeSingle();
 
       if (userBizResp == null) {
+        AppLogger.w(
+          'Usuario sin perfil de negocio asignado (user_businesses está vacía)',
+        );
         await supabase.auth.signOut();
         state = state.copyWith(
           isLoading: false,
@@ -70,6 +77,9 @@ class LoginViewModel extends Notifier<LoginState> {
       final posRole = _mapRole(roleStr);
 
       if (businessId == null || businessId.isEmpty || posRole == null) {
+        AppLogger.e(
+          'Atributos críticos faltantes en Login -> businessId: $businessId | Role: $posRole',
+        );
         await supabase.auth.signOut();
         state = state.copyWith(
           isLoading: false,
@@ -89,16 +99,23 @@ class LoginViewModel extends Notifier<LoginState> {
             availableRoles: [posRole],
           );
 
+      AppLogger.i('[$businessId] Login exitoso para $fullName ($roleStr)');
       state = const LoginState();
-    } on AuthException catch (e) {
+    } on AuthException catch (e, st) {
+      AppLogger.w('AuthException durante login', error: e, stackTrace: st);
       state = state.copyWith(isLoading: false, error: e.message);
-    } on TimeoutException {
+    } on TimeoutException catch (e, st) {
+      AppLogger.w('Timeout en auth', error: e, stackTrace: st);
       state = state.copyWith(
         isLoading: false,
         error: 'Tiempo de espera agotado. Revisa tu conexión de red.',
       );
-    } catch (e) {
-      state = state.copyWith(isLoading: false, error: 'Ocurrió un error: $e');
+    } catch (e, st) {
+      AppLogger.e('Error no controlado en login', error: e, stackTrace: st);
+      state = state.copyWith(
+        isLoading: false,
+        error: 'Ocurrió un error inesperado',
+      );
     }
   }
 

@@ -137,12 +137,17 @@ class SalesQueries {
 
   /// Actualizar notas de item
   static const String rpcUpdateItemNotes = 'fn_update_item_notes';
+  static const String rpcUpdateItemDetails = 'fn_update_item_details';
+  static const String rpcUpdateItemDiscount = 'fn_update_item_discount';
+  static const String rpcUpdateItemDiscountAndNotes =
+      'fn_update_item_discount_and_notes';
 
   /// Eliminar item
   static const String rpcDeleteItem = 'fn_delete_item';
 
   /// Mover item a otro check
   static const String rpcMoveItemToCheck = 'fn_move_item_to_check';
+  static const String rpcMoveItemsToCheckBatch = 'fn_move_items_to_check_batch';
 
   /// Toggle takeout de item
   static const String rpcToggleItemTakeout = 'fn_toggle_item_takeout';
@@ -155,9 +160,13 @@ class SalesQueries {
 
   /// Crear split bill
   static const String rpcCreateSplitBill = 'fn_create_split_bill';
+  static const String rpcSplitItemsEqually = 'fn_split_items_equally';
+
+  /// Obtener bundle completo de orden (order + items + checks + customer)
+  static const String rpcGetOrderBundle = 'fn_get_order_bundle';
 
   /// Procesar pago
-  static const String rpcProcessPayment = 'fn_process_payment_v2';
+  static const String rpcProcessPayment = 'fn_process_payment_v3';
 
   /// Generar NCF
   static const String rpcGenerateNCF = 'generate_ncf';

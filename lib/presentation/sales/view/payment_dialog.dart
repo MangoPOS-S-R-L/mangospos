@@ -35,7 +35,7 @@ Future<Map<String, dynamic>?> showPaymentDialog(
                 style: OutlinedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   backgroundColor: selected
-                      ? MangoColors.primaryOrange.withOpacity(0.1)
+                      ? MangoColors.primaryOrange.withValues(alpha: 0.1)
                       : Colors.white,
                   side: BorderSide(
                     color: selected
@@ -271,10 +271,10 @@ Future<Map<String, dynamic>?> showPaymentDialog(
                               width: double.infinity,
                               padding: const EdgeInsets.all(14),
                               decoration: BoxDecoration(
-                                color: Colors.green.shade50,
+                                color: const Color(0xFF22C55E),
                                 borderRadius: BorderRadius.circular(12),
                                 border: Border.all(
-                                  color: Colors.green.shade200,
+                                  color: const Color(0xFF22C55E),
                                 ),
                               ),
                               child: Row(
@@ -291,7 +291,7 @@ Future<Map<String, dynamic>?> showPaymentDialog(
                                   Text(
                                     'RD\$${change.toStringAsFixed(2)}',
                                     style: TextStyle(
-                                      color: Colors.green.shade700,
+                                      color: const Color(0xFF22C55E),
                                       fontWeight: FontWeight.w900,
                                       fontSize: 16,
                                     ),

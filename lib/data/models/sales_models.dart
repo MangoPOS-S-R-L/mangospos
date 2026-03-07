@@ -221,18 +221,49 @@ class OrderItem extends Equatable {
   });
 
   factory OrderItem.fromMap(Map<String, dynamic> map) {
+    final rawQty = map['qty'];
+    final rawQuantity = map['quantity'];
+    final qtyValue = (rawQty is num)
+        ? rawQty.toDouble()
+        : double.tryParse(rawQty?.toString() ?? '');
+    final quantityValue = (rawQuantity is num)
+        ? rawQuantity.toDouble()
+        : double.tryParse(rawQuantity?.toString() ?? '');
+
+    // En algunas instalaciones quantity sigue siendo integer y puede quedar en 0
+    // cuando trabajamos con fracciones; priorizamos qty si viene disponible.
+    final effectiveQty = (qtyValue != null && qtyValue > 0)
+        ? qtyValue
+        : (quantityValue != null && quantityValue > 0)
+        ? quantityValue
+        : 1.0;
+
+    final subtotal = (map['subtotal'] ?? 0).toDouble();
+    final discounts = (map['discounts'] ?? 0).toDouble();
+    final tax = (map['tax'] ?? 0).toDouble();
+    final rawTotal = (map['total'] ?? 0).toDouble();
+    final derivedTotal = subtotal + tax - discounts;
+    final totalsDiffer = (rawTotal - derivedTotal).abs() > 0.01;
+    final hasBreakdown =
+        subtotal.abs() > 0.0001 ||
+        tax.abs() > 0.0001 ||
+        discounts.abs() > 0.0001;
+    final effectiveTotal = (hasBreakdown && totalsDiffer)
+        ? derivedTotal
+        : (hasBreakdown ? derivedTotal : rawTotal);
+
     return OrderItem(
       id: map['id'] ?? '',
       orderId: map['order_id'] ?? '',
       productId: map['product_id'],
       productName: map['product_name'] ?? '',
       sku: map['sku'],
-      quantity: (map['quantity'] ?? map['qty'] ?? 1).toDouble(),
+      quantity: effectiveQty,
       unitPrice: (map['unit_price'] ?? 0).toDouble(),
-      subtotal: (map['subtotal'] ?? 0).toDouble(),
-      discounts: (map['discounts'] ?? 0).toDouble(),
-      tax: (map['tax'] ?? 0).toDouble(),
-      total: (map['total'] ?? 0).toDouble(),
+      subtotal: subtotal,
+      discounts: discounts,
+      tax: tax,
+      total: effectiveTotal,
       checkId: map['check_id'],
       isTakeout: map['is_takeout'] ?? false,
       status: map['status'] ?? 'draft',

@@ -791,7 +791,7 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
                     style: TextStyle(
                       fontSize: 24,
                       fontWeight: FontWeight.w600,
-                      color: Color(0xFF32AD40),
+                      color: Color(0xFF22C55E),
                     ),
                   ),
                 ),
@@ -818,7 +818,7 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
                   width: 80,
                   height: 2,
                   color: _step > 1
-                      ? const Color(0xFF32AD40)
+                      ? const Color(0xFF22C55E)
                       : const Color(0xFFE5E7EB),
                 ),
                 _StepIndicator(
@@ -830,7 +830,7 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
                   width: 80,
                   height: 2,
                   color: _step > 2
-                      ? const Color(0xFF32AD40)
+                      ? const Color(0xFF22C55E)
                       : const Color(0xFFE5E7EB),
                 ),
                 _StepIndicator(number: 3, active: _step == 3, completed: false),
@@ -856,7 +856,7 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
                 const SizedBox(width: 12),
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF32AD40),
+                    backgroundColor: const Color(0xFF22C55E),
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 32,
@@ -964,7 +964,7 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
             width: 80,
             height: 80,
             child: CircularProgressIndicator(
-              color: Color(0xFF32AD40),
+              color: Color(0xFF22C55E),
               strokeWidth: 6,
             ),
           ),
@@ -974,7 +974,7 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w600,
-              color: Color(0xFF32AD40),
+              color: Color(0xFF22C55E),
             ),
           ),
         ] else if (_foundPrinters.isEmpty) ...[
@@ -987,8 +987,8 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
           const SizedBox(height: 16),
           OutlinedButton(
             style: OutlinedButton.styleFrom(
-              foregroundColor: const Color(0xFF32AD40),
-              side: const BorderSide(color: Color(0xFF32AD40)),
+              foregroundColor: const Color(0xFF22C55E),
+              side: const BorderSide(color: Color(0xFF22C55E)),
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -1046,21 +1046,21 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
             decoration: BoxDecoration(
               color: const Color(0xFFE8F5E9),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFF32AD40)),
+              border: Border.all(color: const Color(0xFF22C55E)),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Row(
                   children: [
-                    Icon(Icons.check_circle, color: Color(0xFF32AD40)),
+                    Icon(Icons.check_circle, color: Color(0xFF22C55E)),
                     SizedBox(width: 8),
                     Text(
                       'Impresora detectada',
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFF32AD40),
+                        color: Color(0xFF22C55E),
                       ),
                     ),
                   ],
@@ -1082,7 +1082,7 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: Color(0xFF32AD40), width: 2),
+              borderSide: const BorderSide(color: Color(0xFF22C55E), width: 2),
             ),
           ),
         ),
@@ -1099,7 +1099,7 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
                 borderSide: const BorderSide(
-                  color: Color(0xFF32AD40),
+                  color: Color(0xFF22C55E),
                   width: 2,
                 ),
               ),
@@ -1120,7 +1120,7 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
                 borderSide: const BorderSide(
-                  color: Color(0xFF32AD40),
+                  color: Color(0xFF22C55E),
                   width: 2,
                 ),
               ),
@@ -1151,7 +1151,7 @@ class _StepIndicator extends StatelessWidget {
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         color: active || completed
-            ? const Color(0xFF32AD40)
+            ? const Color(0xFF22C55E)
             : const Color(0xFFE5E7EB),
       ),
       child: Center(
@@ -1192,7 +1192,7 @@ class _ConnectionOption extends StatelessWidget {
         decoration: BoxDecoration(
           color: selected ? const Color(0xFFE8F5E9) : const Color(0xFFF9FAFB),
           border: Border.all(
-            color: selected ? const Color(0xFF32AD40) : const Color(0xFFE5E7EB),
+            color: selected ? const Color(0xFF22C55E) : const Color(0xFFE5E7EB),
             width: 2,
           ),
           borderRadius: BorderRadius.circular(12),
@@ -1212,7 +1212,7 @@ class _ConnectionOption extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               subtitle,
-              style: const TextStyle(fontSize: 12, color: Color(0xFF32AD40)),
+              style: const TextStyle(fontSize: 12, color: Color(0xFF22C55E)),
               textAlign: TextAlign.center,
             ),
           ],
@@ -1337,7 +1337,7 @@ class _PrinterFoundCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: selected ? const Color(0xFFE8F5E9) : const Color(0xFFF9FAFB),
           border: Border.all(
-            color: selected ? const Color(0xFF32AD40) : const Color(0xFFE5E7EB),
+            color: selected ? const Color(0xFF22C55E) : const Color(0xFFE5E7EB),
             width: 2,
           ),
           borderRadius: BorderRadius.circular(12),
@@ -1347,7 +1347,7 @@ class _PrinterFoundCard extends StatelessWidget {
             Icon(
               isUsb ? Icons.usb : Icons.print,
               color: selected
-                  ? const Color(0xFF32AD40)
+                  ? const Color(0xFF22C55E)
                   : const Color(0xFF6B7280),
             ),
             const SizedBox(width: 12),
@@ -1373,7 +1373,7 @@ class _PrinterFoundCard extends StatelessWidget {
               ),
             ),
             if (selected)
-              const Icon(Icons.check_circle, color: Color(0xFF32AD40)),
+              const Icon(Icons.check_circle, color: Color(0xFF22C55E)),
           ],
         ),
       ),

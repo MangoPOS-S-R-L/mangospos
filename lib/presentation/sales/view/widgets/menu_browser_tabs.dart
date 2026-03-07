@@ -20,6 +20,7 @@ class MenuBrowserTabs extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final menuState = ref.watch(menuBrowserVmProvider);
+    final notifier = ref.read(menuBrowserVmProvider.notifier);
     return Column(
       children: [
         Padding(
@@ -30,6 +31,26 @@ class MenuBrowserTabs extends ConsumerWidget {
             labelColor: MangoColors.darkGray,
             unselectedLabelColor: MangoColors.muted,
             indicatorColor: MangoColors.primaryOrange,
+            onTap: (index) {
+              switch (index) {
+                case 0:
+                  notifier.loadProductsByCategory(
+                    ref.read(menuBrowserVmProvider).selectedCategoryId ?? '',
+                  );
+                  break;
+                case 1:
+                  notifier.loadAllProducts();
+                  break;
+                case 2:
+                  if (searchController.text.trim().isNotEmpty) {
+                    notifier.searchProducts(searchController.text);
+                  }
+                  break;
+                case 3:
+                  notifier.loadFavoriteProducts();
+                  break;
+              }
+            },
             tabs: const [
               Tab(text: 'Categoría'),
               Tab(text: 'Menú'),
@@ -52,7 +73,7 @@ class MenuBrowserTabs extends ConsumerWidget {
                     controller: searchController,
                     onAddProduct: onAddProduct,
                   ),
-                  const _FavoritesPlaceholder(),
+                  _FavoritesProductsTab(onAddProduct: onAddProduct),
                 ],
               ),
               if (menuState.loading)
@@ -104,7 +125,9 @@ class _CategoriesTab extends ConsumerWidget {
                 .map(
                   (c) => ChoiceChip(
                     label: Text(c.name),
-                    selectedColor: MangoColors.primaryOrange.withOpacity(.12),
+                    selectedColor: MangoColors.primaryOrange.withValues(
+                      alpha: .12,
+                    ),
                     selected: vm.selectedCategoryId == c.id,
                     onSelected: (_) => notifier.loadProductsByCategory(c.id),
                     labelStyle: TextStyle(
@@ -221,7 +244,7 @@ class _ProductCard extends ConsumerWidget {
             BoxShadow(
               blurRadius: 10,
               offset: const Offset(0, 4),
-              color: Colors.black.withOpacity(.06),
+              color: Colors.black.withValues(alpha: .06),
             ),
           ],
         ),
@@ -315,14 +338,30 @@ class _SearchTab extends ConsumerWidget {
   }
 }
 
-class _FavoritesPlaceholder extends StatelessWidget {
-  const _FavoritesPlaceholder();
+class _FavoritesProductsTab extends ConsumerWidget {
+  final VoidCallback onAddProduct;
+  const _FavoritesProductsTab({required this.onAddProduct});
+
   @override
-  Widget build(BuildContext context) {
-    return const _EmptyBox(
-      icon: Icons.star_border,
-      text: 'Aún no tienes favoritos',
-    );
+  Widget build(BuildContext context, WidgetRef ref) {
+    final vm = ref.watch(menuBrowserVmProvider);
+
+    if (vm.error != null && !vm.loading) {
+      return _ErrorBox(
+        message: vm.error!,
+        onRetry: () => ref.read(menuBrowserVmProvider.notifier).loadFavoriteProducts(),
+      );
+    }
+    if (vm.products.isEmpty && vm.loading) {
+      return const _CenteredSpinner(label: 'Cargando favoritos...');
+    }
+    if (vm.products.isEmpty) {
+      return const _EmptyBox(
+        icon: Icons.star_border,
+        text: 'Todavía no hay productos frecuentes',
+      );
+    }
+    return _ProductsGridTab(onAddProduct: onAddProduct);
   }
 }
 

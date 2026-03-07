@@ -6,10 +6,12 @@ import 'package:go_router/go_router.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
+import 'package:mangopos/app/router/routes.dart';
+import 'package:mangopos/services/session/session_controller.dart';
 import 'login_viewmodel.dart';
 
 // --- Colores MangoPOS ---
-const _orange = Color(0xFFF7941A);
+const _orange = Color(0xFFF97316);
 const _white = Color(0xFFFFFFFF);
 const _dark = Color(0xFF32363F);
 
@@ -27,6 +29,12 @@ class _LoginViewState extends ConsumerState<LoginView> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<SessionState>(sessionProvider, (prev, next) {
+      if (next.status == AuthStatus.authenticated && context.mounted) {
+        context.go(AppRoutes.dashboard);
+      }
+    });
+
     // Listen for errors to show SnackBar
     ref.listen(loginVmProvider, (prev, next) {
       if (prev?.isLoading == true &&
@@ -135,15 +143,7 @@ class _LoginViewState extends ConsumerState<LoginView> {
                       ),
                       elevation: 0,
                     ),
-                    onPressed: isLoading
-                        ? null
-                        : () async {
-                            await vm.submit();
-                            if (!mounted) return;
-                            final hasError =
-                                ref.read(loginVmProvider).error != null;
-                            if (!hasError) context.go('/dashboard');
-                          },
+                    onPressed: isLoading ? null : () async => vm.submit(),
                     child: isLoading
                         ? const CircularProgressIndicator.adaptive(
                             valueColor: AlwaysStoppedAnimation<Color>(_white),

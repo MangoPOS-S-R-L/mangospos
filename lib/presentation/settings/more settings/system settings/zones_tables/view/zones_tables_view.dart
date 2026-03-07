@@ -68,7 +68,7 @@ class _ZonesTablesViewState extends ConsumerState<ZonesTablesView> {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
                         content: Text('Zona creada'),
-                        backgroundColor: Colors.green,
+                        backgroundColor: const Color(0xFF22C55E),
                       ),
                     );
                   } catch (e) {
@@ -182,7 +182,7 @@ class _ZonesTablesViewState extends ConsumerState<ZonesTablesView> {
                                       ).showSnackBar(
                                         const SnackBar(
                                           content: Text('Mesa creada'),
-                                          backgroundColor: Colors.green,
+                                          backgroundColor: const Color(0xFF22C55E),
                                         ),
                                       );
                                     } catch (e) {
@@ -204,7 +204,7 @@ class _ZonesTablesViewState extends ConsumerState<ZonesTablesView> {
                                 ),
                                 label: const Text('Agregar mesa'),
                                 style: TextButton.styleFrom(
-                                  foregroundColor: Colors.green[700],
+                                  foregroundColor: const Color(0xFF22C55E),
                                   textStyle: const TextStyle(
                                     fontWeight: FontWeight.w600,
                                   ),
@@ -394,7 +394,7 @@ class _ZonesTablesViewState extends ConsumerState<ZonesTablesView> {
           ElevatedButton(
             onPressed: () => Navigator.pop(dialogCtx, c.text),
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.green[600],
+              backgroundColor: const Color(0xFF22C55E),
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(8),

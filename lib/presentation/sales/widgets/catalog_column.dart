@@ -25,6 +25,14 @@ class _CatalogColumnState extends ConsumerState<CatalogColumn> {
   String? _selectedCategoryId;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(menuBrowserVmProvider.notifier).loadAll();
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Column(
       children: [
@@ -123,8 +131,8 @@ class _CatalogColumnState extends ConsumerState<CatalogColumn> {
                 child: Container(
                   height: 44, // h-11
                   decoration: BoxDecoration(
-                    color: SalesTheme.secondary.withOpacity(
-                      0.5,
+                    color: SalesTheme.secondary.withValues(
+                      alpha: 0.5,
                     ), // bg-secondary/20 approximation
                     border: Border.all(color: SalesTheme.border),
                     borderRadius: BorderRadius.circular(8),
@@ -177,13 +185,21 @@ class _CatalogColumnState extends ConsumerState<CatalogColumn> {
                     _TabButton(
                       label: 'Menú',
                       isActive: _selectedTab == 1,
-                      onTap: () => setState(() => _selectedTab = 1),
+                      onTap: () {
+                        setState(() => _selectedTab = 1);
+                        ref.read(menuBrowserVmProvider.notifier).loadAllProducts();
+                      },
                     ),
                     const SizedBox(width: 24),
                     _TabButton(
                       label: 'Favoritos',
                       isActive: _selectedTab == 2,
-                      onTap: () => setState(() => _selectedTab = 2),
+                      onTap: () {
+                        setState(() => _selectedTab = 2);
+                        ref
+                            .read(menuBrowserVmProvider.notifier)
+                            .loadFavoriteProducts();
+                      },
                     ),
                   ],
                 ),
@@ -195,7 +211,7 @@ class _CatalogColumnState extends ConsumerState<CatalogColumn> {
         // C. CONTENT
         Expanded(
           child: Container(
-            color: SalesTheme.secondary.withOpacity(0.3),
+            color: SalesTheme.secondary.withValues(alpha: 0.3),
             padding: const EdgeInsets.all(24),
             child: _buildContent(),
           ),
@@ -212,10 +228,9 @@ class _CatalogColumnState extends ConsumerState<CatalogColumn> {
         onProductTap: widget.onProductTap,
       );
     } else if (_selectedTab == 1) {
-      // Just reuse Categories view or implement flat list
-      return const Center(child: Text('Vista Menú - Pendiente'));
+      return _AllProductsView(onProductTap: widget.onProductTap);
     } else {
-      return const Center(child: Text('Favoritos - Pendiente'));
+      return _FavoritesView(onProductTap: widget.onProductTap);
     }
   }
 }
@@ -411,6 +426,123 @@ class _CategoriesView extends ConsumerWidget {
   }
 }
 
+class _AllProductsView extends ConsumerWidget {
+  final Function(MenuProduct) onProductTap;
+
+  const _AllProductsView({required this.onProductTap});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(menuBrowserVmProvider);
+
+    if (state.error != null && !state.loading) {
+      return _CenteredMessage(
+        icon: Icons.error_outline,
+        text: state.error!,
+      );
+    }
+
+    if (state.products.isEmpty && state.loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (state.products.isEmpty) {
+      return const _CenteredMessage(
+        icon: Icons.fastfood_outlined,
+        text: 'No hay productos activos en el menú',
+      );
+    }
+
+    return _ProductsGrid(products: state.products, onProductTap: onProductTap);
+  }
+}
+
+class _FavoritesView extends ConsumerWidget {
+  final Function(MenuProduct) onProductTap;
+
+  const _FavoritesView({required this.onProductTap});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(menuBrowserVmProvider);
+
+    if (state.error != null && !state.loading) {
+      return _CenteredMessage(
+        icon: Icons.error_outline,
+        text: state.error!,
+      );
+    }
+
+    if (state.products.isEmpty && state.loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (state.products.isEmpty) {
+      return const _CenteredMessage(
+        icon: Icons.star_border,
+        text: 'Todavía no hay productos frecuentes',
+      );
+    }
+
+    return _ProductsGrid(products: state.products, onProductTap: onProductTap);
+  }
+}
+
+class _ProductsGrid extends StatelessWidget {
+  final List<MenuProduct> products;
+  final Function(MenuProduct) onProductTap;
+
+  const _ProductsGrid({required this.products, required this.onProductTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GridView.builder(
+      padding: const EdgeInsets.only(bottom: 80),
+      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: 250,
+        childAspectRatio: 4 / 3,
+        crossAxisSpacing: 16,
+        mainAxisSpacing: 16,
+      ),
+      itemCount: products.length,
+      itemBuilder: (context, index) {
+        return _ProductCard(
+          product: products[index],
+          onTap: () => onProductTap(products[index]),
+        );
+      },
+    );
+  }
+}
+
+class _CenteredMessage extends StatelessWidget {
+  final IconData icon;
+  final String text;
+
+  const _CenteredMessage({required this.icon, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 48, color: SalesTheme.mutedForeground),
+          const SizedBox(height: 12),
+          Text(
+            text,
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: SalesTheme.mutedForeground,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ProductCard extends StatefulWidget {
   final MenuProduct product;
   final VoidCallback onTap;
@@ -435,15 +567,15 @@ class _ProductCardState extends State<_ProductCard> {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 300),
           transform: _isHovered
-              ? (Matrix4.identity()..translate(0.0, -4.0))
+              ? (Matrix4.identity()..translateByDouble(0.0, -4.0, 0.0, 1.0))
               : Matrix4.identity(),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(16), // rounded-2xl
             border: Border.all(
               color: _isHovered
-                  ? SalesTheme.primary.withOpacity(0.4)
-                  : SalesTheme.border.withOpacity(0.6),
+                  ? SalesTheme.primary.withValues(alpha: 0.4)
+                  : SalesTheme.border.withValues(alpha: 0.6),
             ),
             boxShadow: [
               if (_isHovered)

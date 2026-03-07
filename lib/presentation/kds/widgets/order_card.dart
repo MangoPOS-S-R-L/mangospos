@@ -29,7 +29,7 @@ class OrderCard extends StatelessWidget {
           color: isUrgent
               ? Colors.red
               : isWarning
-              ? Colors.orange
+              ? const Color(0xFFF97316)
               : Colors.grey[700]!,
           width: isUrgent ? 3 : 2,
         ),
@@ -51,7 +51,7 @@ class OrderCard extends StatelessWidget {
               color: isUrgent
                   ? Colors.red[900]
                   : isWarning
-                  ? Colors.orange[900]
+                  ? const Color(0xFFF97316)
                   : Colors.grey[800],
               borderRadius: const BorderRadius.only(
                 topLeft: Radius.circular(16),
@@ -71,7 +71,7 @@ class OrderCard extends StatelessWidget {
                         vertical: 6,
                       ),
                       decoration: BoxDecoration(
-                        color: Colors.orange,
+                        color: const Color(0xFFF97316),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
@@ -150,7 +150,7 @@ class OrderCard extends StatelessWidget {
                   icon: const Icon(Icons.check_circle),
                   label: const Text('Marcar Todo Listo'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
+                    backgroundColor: const Color(0xFF22C55E),
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
@@ -192,7 +192,7 @@ class _ItemCard extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: Colors.orange,
+                  color: const Color(0xFFF97316),
                   borderRadius: BorderRadius.circular(4),
                 ),
                 child: Text(
@@ -277,7 +277,7 @@ class _ItemCard extends StatelessWidget {
                   child: ElevatedButton(
                     onPressed: () => onStatusChange('preparing'),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.orange,
+                      backgroundColor: const Color(0xFFF97316),
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 8),
                     ),
@@ -289,7 +289,7 @@ class _ItemCard extends StatelessWidget {
                   child: ElevatedButton(
                     onPressed: () => onStatusChange('ready'),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
+                      backgroundColor: const Color(0xFF22C55E),
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 8),
                     ),
@@ -321,9 +321,9 @@ class _ItemCard extends StatelessWidget {
       case 'pending':
         return Colors.red[900]!.withOpacity(0.2);
       case 'preparing':
-        return Colors.orange[900]!.withOpacity(0.2);
+        return const Color(0xFFF97316).withOpacity(0.2);
       case 'ready':
-        return Colors.green[900]!.withOpacity(0.2);
+        return const Color(0xFF22C55E).withOpacity(0.2);
       default:
         return Colors.grey[800]!;
     }
@@ -334,9 +334,9 @@ class _ItemCard extends StatelessWidget {
       case 'pending':
         return Colors.red[700]!;
       case 'preparing':
-        return Colors.orange[700]!;
+        return const Color(0xFFF97316);
       case 'ready':
-        return Colors.green[700]!;
+        return const Color(0xFF22C55E);
       default:
         return Colors.grey[700]!;
     }
@@ -376,9 +376,9 @@ class _StatusBadge extends StatelessWidget {
       case 'pending':
         return Colors.red;
       case 'preparing':
-        return Colors.orange;
+        return const Color(0xFFF97316);
       case 'ready':
-        return Colors.green;
+        return const Color(0xFF22C55E);
       case 'served':
         return Colors.blue;
       default:

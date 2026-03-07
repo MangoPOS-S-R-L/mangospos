@@ -46,3 +46,22 @@ Objetivo: Verificación rápida de flujos críticos antes de liberar
 |---|---|---|---|---|---|
 | YYYY-MM-DD | staging/prod-pre | nombre | 0 | 0 | completar |
 
+## Smoke SQL (Migración 0005)
+
+Archivo:
+- `docs/04_testing/sql/20260227_0005_smoke_checks.sql`
+
+Objetivo:
+- Verificar que la migración `20260227_0005_sales_cash_products_hardening.sql` quedó aplicada y consistente.
+
+Qué valida:
+- Existencia de RPCs críticas de ventas/caja.
+- Índices únicos de consistencia (`payment_methods`, sesiones de caja abiertas).
+- Backfill mínimo de `business_settings`, `menus`, `categories`, métodos de pago.
+- Presencia de guardas de caja abierta y bloqueo de origen inválido en funciones.
+
+Ejecución:
+1. Ejecutar primero la migración `0005` en Supabase.
+2. Ejecutar el archivo de smoke SQL.
+3. Confirmar que todas las filas salen en `OK`.
+4. Si hay `FAIL`, corregir antes de pruebas funcionales en app.

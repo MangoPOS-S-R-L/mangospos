@@ -110,6 +110,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
 
   final String _orderId;
   final String? _checkId;
+  final String? _customerId;
   final String? _cashierSessionId;
   final Ref _ref;
 
@@ -118,13 +119,34 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     this._orderId,
     double total, {
     String? checkId,
+    String? customerId,
     String? cashierSessionId,
     required Ref ref,
   }) : _checkId = checkId,
+       _customerId = customerId,
        _cashierSessionId = cashierSessionId,
        _ref = ref,
        super(PaymentSplitState(totalAmount: total)) {
     _loadOrderForReceipt();
+  }
+
+  Future<String?> _resolveCashierSessionId() async {
+    if (_cashierSessionId != null && _cashierSessionId.isNotEmpty) {
+      return _cashierSessionId;
+    }
+
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    if (userId == null) return null;
+
+    final data = await Supabase.instance.client
+        .from('cash_register_sessions')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('status', 'open')
+        .isFilter('closed_at', null)
+        .maybeSingle();
+
+    return data?['id'] as String?;
   }
 
   Future<void> _loadOrderForReceipt() async {
@@ -269,6 +291,15 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     final List<Payment> createdPayments = [];
 
     try {
+      final cashierSessionId = await _resolveCashierSessionId();
+      if (cashierSessionId == null || cashierSessionId.isEmpty) {
+        state = state.copyWith(
+          isProcessing: false,
+          validationError: 'No hay una caja abierta para procesar el cobro.',
+        );
+        return null;
+      }
+
       debugPrint(
         '💰 Confirming Payment: ${state.transactions.length} transactions',
       );
@@ -306,27 +337,11 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
               amount: tx.amount,
               changeAmount: isLast ? state.change : 0,
               closeOrder: isLast && _checkId == null,
-              cashierSessionId: _cashierSessionId,
+              customerId: _customerId,
+              cashierSessionId: cashierSessionId,
             )
-            .catchError((e) async {
+            .catchError((e) {
               debugPrint('❌ Error in processPayment: $e');
-              // 🛡️ FALL BACK: If session ID is invalid (FK error), try without it
-              final msg = e.toString().toLowerCase();
-              if (msg.contains('payments_session_id_fkey') ||
-                  msg.contains('foreign key constraint')) {
-                debugPrint(
-                  '⚠️ Cashier Session Invalid. Retrying payment without session link...',
-                );
-                return await _salesRepo.processPayment(
-                  orderId: _orderId,
-                  checkId: _checkId,
-                  paymentMethodId: methodId,
-                  amount: tx.amount,
-                  changeAmount: isLast ? state.change : 0,
-                  closeOrder: isLast && _checkId == null,
-                  cashierSessionId: null, // explicit null
-                );
-              }
               throw e;
             });
 
@@ -372,7 +387,7 @@ final paymentSplitProvider =
     StateNotifierProvider.family<
       PaymentSplitViewModel,
       PaymentSplitState,
-      (String, double, String?)
+      (String, double, String?, String?)
     >((ref, params) {
       final salesRepo = SalesRepositoryImproved(Supabase.instance.client);
 
@@ -384,6 +399,7 @@ final paymentSplitProvider =
         params.$1, // orderId
         params.$2, // amount
         checkId: params.$3, // checkId
+        customerId: params.$4, // customerId
         cashierSessionId: sessionId,
         ref: ref,
       );

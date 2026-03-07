@@ -23,12 +23,43 @@ class SplitBillModal extends ConsumerStatefulWidget {
 class _SplitBillModalState extends ConsumerState<SplitBillModal>
     with SingleTickerProviderStateMixin {
   // Colores Mango POS
-  static const Color _primary = Color(0xFFFB7116);
+  static const Color _primary = Color(0xFFF97316);
   static final Color _primaryLight = _primary.withOpacity(0.1);
   static const Color _textPrimary = Color(0xFF2C2C2C);
   static const Color _textSecondary = Color(0xFF7A7A7A);
   static const Color _border = Color(0xFFE5E7EB);
   static const Color _bgSurface = Colors.white;
+  bool _showMergeTools = false;
+  bool _showDeleteTools = false;
+  String? _mergeSourceCheckId;
+  String? _mergeTargetCheckId;
+  String? _deleteCheckId;
+
+  String _formatQty(double quantity) {
+    final normalized = double.parse(quantity.toStringAsFixed(2));
+    if ((normalized - normalized.roundToDouble()).abs() < 0.001) {
+      return normalized.toStringAsFixed(0);
+    }
+    return normalized.toStringAsFixed(2);
+  }
+
+  double _linePrice(OrderItem item) {
+    final expectedSubtotal = item.unitPrice * item.quantity;
+    final dbSubtotal = item.subtotal;
+    final isFractionalQty =
+        (item.quantity - item.quantity.roundToDouble()).abs() > 0.001;
+    final preferExpectedSubtotal =
+        isFractionalQty &&
+        dbSubtotal > 0 &&
+        (dbSubtotal - expectedSubtotal).abs() > 0.01;
+
+    final baseSubtotal = preferExpectedSubtotal
+        ? expectedSubtotal
+        : (dbSubtotal > 0 ? dbSubtotal : expectedSubtotal);
+
+    final net = baseSubtotal - item.discounts;
+    return net < 0 ? 0 : net;
+  }
 
   @override
   void initState() {
@@ -56,7 +87,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('División aplicada exitosamente'),
-            backgroundColor: Colors.green,
+            backgroundColor: const Color(0xFF22C55E),
           ),
         );
       }
@@ -216,6 +247,14 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
 
   // --- LEFT PANEL: PRODUCTOS ---
   Widget _buildLeftPanel(SplitBillState state, SplitBillViewModel viewModel) {
+    final unassignedItems = state.unassignedItems;
+    final itemsCountByCheckId = <String, int>{};
+    for (final item in state.allItems) {
+      final checkId = item.checkId;
+      if (checkId == null) continue;
+      itemsCountByCheckId[checkId] = (itemsCountByCheckId[checkId] ?? 0) + 1;
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -282,7 +321,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                 // "TODAS" Tab (Active by default for Unassigned/All view)
                 _buildFilterTab(
                   label: 'TODAS',
-                  count: state.unassignedItems.length,
+                  count: unassignedItems.length,
                   isActive: true,
                   onTap: () {},
                 ),
@@ -293,7 +332,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                     padding: const EdgeInsets.only(right: 12),
                     child: _buildFilterTab(
                       label: _formatCheckLabel(check.label),
-                      count: state.itemsForCheck(check.id).length,
+                      count: itemsCountByCheckId[check.id] ?? 0,
                       isActive: false,
                       onTap: () {}, // Future: Filter view by check
                     ),
@@ -340,14 +379,14 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
 
         // 5. Items List
         Expanded(
-          child: state.unassignedItems.isEmpty
+          child: unassignedItems.isEmpty
               ? _buildEmptyItemsState()
               : ListView.separated(
                   padding: EdgeInsets.zero,
-                  itemCount: state.unassignedItems.length,
+                  itemCount: unassignedItems.length,
                   separatorBuilder: (_, __) => const Divider(height: 1),
                   itemBuilder: (context, index) {
-                    final item = state.unassignedItems[index];
+                    final item = unassignedItems[index];
                     final isSelected = state.selectedItemIds.contains(item.id);
                     return InkWell(
                       onTap: () => viewModel.toggleItemSelection(item.id),
@@ -364,7 +403,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                             SizedBox(
                               width: 40,
                               child: Text(
-                                '${item.quantity.toInt()}',
+                                _formatQty(item.quantity),
                                 style: const TextStyle(
                                   fontWeight: FontWeight.bold,
                                   fontSize: 15,
@@ -381,9 +420,9 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                                       vertical: 2,
                                     ),
                                     decoration: BoxDecoration(
-                                      color: Colors.orange[50],
+                                      color: const Color(0xFFF97316),
                                       border: Border.all(
-                                        color: Colors.orange[200]!,
+                                        color: const Color(0xFFF97316),
                                       ),
                                       borderRadius: BorderRadius.circular(4),
                                     ),
@@ -392,7 +431,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                                       style: TextStyle(
                                         fontSize: 10,
                                         fontWeight: FontWeight.bold,
-                                        color: Colors.orange,
+                                        color: const Color(0xFFF97316),
                                       ),
                                     ),
                                   ),
@@ -408,7 +447,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                               ),
                             ),
                             Text(
-                              'RD\$${item.total.toStringAsFixed(2)}',
+                              'RD\$${_linePrice(item).toStringAsFixed(2)}',
                               style: const TextStyle(
                                 color: _primary,
                                 fontWeight: FontWeight.bold,
@@ -564,7 +603,11 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: const [
-          Icon(Icons.check_circle_outline, size: 64, color: Colors.green),
+          Icon(
+            Icons.check_circle_outline,
+            size: 64,
+            color: const Color(0xFF22C55E),
+          ),
           SizedBox(height: 16),
           Text(
             'Todos los items asignados',
@@ -572,7 +615,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w500,
-              color: Colors.green,
+              color: const Color(0xFF22C55E),
             ),
           ),
         ],
@@ -582,103 +625,153 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
 
   // --- RIGHT PANEL: SUBCUENTAS ---
   Widget _buildRightPanel(SplitBillState state, SplitBillViewModel viewModel) {
-    return Padding(
-      padding: const EdgeInsets.all(24.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Top Actions Row
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    final itemsByCheckId = <String, List<OrderItem>>{};
+    for (final item in state.allItems) {
+      final checkId = item.checkId;
+      if (checkId == null) continue;
+      itemsByCheckId.putIfAbsent(checkId, () => <OrderItem>[]).add(item);
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableHeight = constraints.maxHeight.isFinite
+            ? constraints.maxHeight
+            : MediaQuery.sizeOf(context).height * 0.65;
+        final maxToolsHeight = availableHeight * 0.42;
+        return Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 8.0),
-                  child: Text(
-                    'Crea varias subcuentas o\ndivide tu cuenta en\npartes iguales.',
-                    style: TextStyle(
-                      color: _textSecondary,
-                      fontSize: 14,
-                      height: 1.4,
-                    ),
+              ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: maxToolsHeight),
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Top Actions
+                      Text(
+                        'Crea varias subcuentas, une cuentas o divide en partes iguales.',
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: _textSecondary,
+                          fontSize: 14,
+                          height: 1.4,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 12,
+                        runSpacing: 12,
+                        children: [
+                          ElevatedButton.icon(
+                            onPressed: viewModel.createNewCheck,
+                            icon: const Icon(Icons.add, size: 18),
+                            label: const Text('Nueva subcuenta'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _primary,
+                              foregroundColor: Colors.white,
+                              elevation: 0,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 20,
+                                vertical: 14,
+                              ),
+                            ),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: viewModel.toggleEqualSplit,
+                            icon: const Icon(Icons.safety_divider, size: 18),
+                            label: const Text('Dividir en partes iguales'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: _primary,
+                              side: const BorderSide(color: _primary),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 20,
+                                vertical: 14,
+                              ),
+                            ),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: state.checks.length < 2
+                                ? null
+                                : () {
+                                    setState(() {
+                                      _showMergeTools = !_showMergeTools;
+                                    });
+                                  },
+                            icon: const Icon(Icons.merge_type, size: 18),
+                            label: const Text('Unir cuentas'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: _primary,
+                              side: const BorderSide(color: _primary),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 20,
+                                vertical: 14,
+                              ),
+                            ),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: state.checks.isEmpty
+                                ? null
+                                : () {
+                                    setState(() {
+                                      _showDeleteTools = !_showDeleteTools;
+                                    });
+                                  },
+                            icon: const Icon(Icons.delete_outline, size: 18),
+                            label: const Text('Eliminar subcuenta'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.red,
+                              side: const BorderSide(color: Colors.red),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 20,
+                                vertical: 14,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      if (state.showEqualSplit)
+                        _buildEqualSplitTools(state, viewModel),
+                      if (_showMergeTools && state.checks.length > 1)
+                        _buildMergeChecksTools(state, viewModel),
+                      if (_showDeleteTools && state.checks.isNotEmpty)
+                        _buildDeleteCheckTools(state, viewModel),
+                    ],
                   ),
                 ),
               ),
-              Row(
-                children: [
-                  ElevatedButton.icon(
-                    onPressed: viewModel.createNewCheck,
-                    icon: const Icon(Icons.add, size: 18),
-                    label: const Text('Nueva subcuenta'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _primary,
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 20,
-                        vertical: 16,
+              const SizedBox(height: 12),
+              Expanded(
+                child: state.checks.isEmpty
+                    ? _buildEmptyChecksState()
+                    : ListView.separated(
+                        itemCount: state.checks.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 16),
+                        itemBuilder: (context, index) {
+                          final check = state.checks[index];
+                          final items =
+                              itemsByCheckId[check.id] ?? const <OrderItem>[];
+                          return _CheckCard(
+                            check: check,
+                            items: items,
+                            selectedItemIds:
+                                state.selectedItemIds, // Pass selection
+                            onToggleSelection: viewModel
+                                .toggleItemSelection, // Pass toggle callback
+                            onDelete: () => viewModel.deleteCheck(check.id),
+                            onRemoveItem: viewModel.unassignItem,
+                            primaryColor: _primary,
+                          );
+                        },
                       ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  OutlinedButton.icon(
-                    onPressed: viewModel.toggleEqualSplit,
-                    icon: const Icon(
-                      Icons.safety_divider,
-                      size: 18,
-                    ), // Divide icon
-                    label: const Text('Dividir en partes iguales'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: _primary,
-                      side: const BorderSide(color: _primary),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 20,
-                        vertical: 16,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                  ),
-                ],
               ),
             ],
           ),
-
-          const SizedBox(height: 24),
-
-          // Equal Split Panel (Conditional)
-          if (state.showEqualSplit) _buildEqualSplitTools(state, viewModel),
-
-          // Content
-          Expanded(
-            child: state.checks.isEmpty
-                ? _buildEmptyChecksState()
-                : ListView.separated(
-                    itemCount: state.checks.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 16),
-                    itemBuilder: (context, index) {
-                      final check = state.checks[index];
-                      final items = state.itemsForCheck(check.id);
-                      return _CheckCard(
-                        check: check,
-                        items: items,
-                        selectedItemIds:
-                            state.selectedItemIds, // Pass selection
-                        onToggleSelection: viewModel
-                            .toggleItemSelection, // Pass toggle callback
-                        onDelete: () => viewModel.deleteCheck(check.id),
-                        onRemoveItem: viewModel.unassignItem,
-                        primaryColor: _primary,
-                      );
-                    },
-                  ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -714,16 +807,22 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
             style: TextStyle(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 12),
-          Row(
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              const Text('Personas:'),
-              const SizedBox(width: 12),
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text('Personas:'),
+              ),
               Container(
                 decoration: BoxDecoration(
                   border: Border.all(color: _border),
                   borderRadius: BorderRadius.circular(4),
                 ),
                 child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     IconButton(
                       icon: const Icon(Icons.remove),
@@ -744,7 +843,6 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                   ],
                 ),
               ),
-              const SizedBox(width: 16),
               ElevatedButton(
                 onPressed: viewModel.applyEqualSplit,
                 style: ElevatedButton.styleFrom(
@@ -760,43 +858,262 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
     );
   }
 
+  Widget _buildMergeChecksTools(
+    SplitBillState state,
+    SplitBillViewModel viewModel,
+  ) {
+    if (state.checks.length < 2) return const SizedBox.shrink();
+
+    final sourceId = state.checks.any((c) => c.id == _mergeSourceCheckId)
+        ? _mergeSourceCheckId!
+        : state.checks.first.id;
+    final targetChecks = state.checks.where((c) => c.id != sourceId).toList();
+    if (targetChecks.isEmpty) return const SizedBox.shrink();
+    final targetId = targetChecks.any((c) => c.id == _mergeTargetCheckId)
+        ? _mergeTargetCheckId!
+        : targetChecks.first.id;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 24),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Unir cuentas',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 12),
+          Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  border: Border.all(color: _border),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: sourceId,
+                    isExpanded: true,
+                    hint: const Text('Cuenta origen'),
+                    items: state.checks.map((check) {
+                      return DropdownMenuItem<String>(
+                        value: check.id,
+                        child: Text(_formatCheckLabel(check.label)),
+                      );
+                    }).toList(),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setState(() {
+                        _mergeSourceCheckId = value;
+                        if (_mergeTargetCheckId == value) {
+                          final fallback = state.checks.firstWhere(
+                            (c) => c.id != value,
+                            orElse: () => state.checks.first,
+                          );
+                          _mergeTargetCheckId = fallback.id == value
+                              ? null
+                              : fallback.id;
+                        }
+                      });
+                    },
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  border: Border.all(color: _border),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: targetId,
+                    isExpanded: true,
+                    hint: const Text('Cuenta destino'),
+                    items: targetChecks.map((check) {
+                      return DropdownMenuItem<String>(
+                        value: check.id,
+                        child: Text(_formatCheckLabel(check.label)),
+                      );
+                    }).toList(),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setState(() {
+                        _mergeTargetCheckId = value;
+                      });
+                    },
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerRight,
+                child: ElevatedButton(
+                  onPressed: sourceId == targetId
+                      ? null
+                      : () async {
+                          await viewModel.mergeChecks(
+                            sourceCheckId: sourceId,
+                            targetCheckId: targetId,
+                          );
+                          if (!mounted) return;
+                          setState(() {
+                            _showMergeTools = false;
+                            _mergeSourceCheckId = null;
+                            _mergeTargetCheckId = null;
+                          });
+                        },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _primary,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('Unir'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDeleteCheckTools(
+    SplitBillState state,
+    SplitBillViewModel viewModel,
+  ) {
+    if (state.checks.isEmpty) return const SizedBox.shrink();
+
+    final selectedDeleteId = state.checks.any((c) => c.id == _deleteCheckId)
+        ? _deleteCheckId!
+        : state.checks.first.id;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 24),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Eliminar subcuenta (mover a principal)',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 12),
+          Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  border: Border.all(color: _border),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: selectedDeleteId,
+                    isExpanded: true,
+                    hint: const Text('Selecciona subcuenta'),
+                    items: state.checks.map((check) {
+                      return DropdownMenuItem<String>(
+                        value: check.id,
+                        child: Text(_formatCheckLabel(check.label)),
+                      );
+                    }).toList(),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setState(() {
+                        _deleteCheckId = value;
+                      });
+                    },
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerRight,
+                child: ElevatedButton.icon(
+                  onPressed: () async {
+                    await viewModel.deleteCheck(selectedDeleteId);
+                    if (!mounted) return;
+                    setState(() {
+                      _showDeleteTools = false;
+                      _deleteCheckId = null;
+                    });
+                  },
+                  icon: const Icon(Icons.delete_outline, size: 16),
+                  label: const Text('Enviar a principal y eliminar'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   // --- FOOTER ---
   Widget _buildFooter(
     BuildContext context,
     SplitBillState state,
     SplitBillViewModel viewModel,
   ) {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          TextButton.icon(
-            onPressed: () => Navigator.of(context).pop(),
-            icon: const Icon(Icons.close, size: 18),
-            label: const Text('Cancelar división'),
-            style: TextButton.styleFrom(foregroundColor: _textSecondary),
-          ),
-
-          ElevatedButton.icon(
-            onPressed: state.canApplySplit
-                ? () => viewModel.applySplit()
-                : null,
-            icon: const Icon(Icons.check),
-            label: const Text('Aplicar división'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _primary,
-              disabledBackgroundColor: Colors.grey[300],
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-              elevation: 0,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact = constraints.maxWidth < 680;
+        final cancelButton = TextButton.icon(
+          onPressed: () => Navigator.of(context).pop(),
+          icon: const Icon(Icons.close, size: 18),
+          label: const Text('Cancelar división'),
+          style: TextButton.styleFrom(foregroundColor: _textSecondary),
+        );
+        final applyButton = ElevatedButton.icon(
+          onPressed: state.canApplySplit ? () => viewModel.applySplit() : null,
+          icon: const Icon(Icons.check),
+          label: const Text('Aplicar división'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: _primary,
+            disabledBackgroundColor: Colors.grey[300],
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
             ),
+            elevation: 0,
           ),
-        ],
-      ),
+        );
+
+        return Padding(
+          padding: const EdgeInsets.all(16),
+          child: isCompact
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Align(alignment: Alignment.centerLeft, child: cancelButton),
+                    const SizedBox(height: 10),
+                    Align(alignment: Alignment.centerRight, child: applyButton),
+                  ],
+                )
+              : Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [cancelButton, applyButton],
+                ),
+        );
+      },
     );
   }
 }
@@ -820,6 +1137,32 @@ class _CheckCard extends StatelessWidget {
     required this.onRemoveItem,
     required this.primaryColor,
   });
+
+  String _formatQty(double quantity) {
+    final normalized = double.parse(quantity.toStringAsFixed(2));
+    if ((normalized - normalized.roundToDouble()).abs() < 0.001) {
+      return normalized.toStringAsFixed(0);
+    }
+    return normalized.toStringAsFixed(2);
+  }
+
+  double _linePrice(OrderItem item) {
+    final expectedSubtotal = item.unitPrice * item.quantity;
+    final dbSubtotal = item.subtotal;
+    final isFractionalQty =
+        (item.quantity - item.quantity.roundToDouble()).abs() > 0.001;
+    final preferExpectedSubtotal =
+        isFractionalQty &&
+        dbSubtotal > 0 &&
+        (dbSubtotal - expectedSubtotal).abs() > 0.01;
+
+    final baseSubtotal = preferExpectedSubtotal
+        ? expectedSubtotal
+        : (dbSubtotal > 0 ? dbSubtotal : expectedSubtotal);
+
+    final net = baseSubtotal - item.discounts;
+    return net < 0 ? 0 : net;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -931,12 +1274,14 @@ class _CheckCard extends StatelessWidget {
                       children: [
                         SizedBox(
                           width: 40,
-                          child: Text('${item.quantity.toInt()}'),
+                          child: Text(_formatQty(item.quantity)),
                         ),
                         Expanded(child: Text(item.productName)),
                         SizedBox(
                           width: 80,
-                          child: Text('RD\$${item.total.toStringAsFixed(0)}'),
+                          child: Text(
+                            'RD\$${_linePrice(item).toStringAsFixed(2)}',
+                          ),
                         ),
                         // 'Más' action (Remove)
                         InkWell(

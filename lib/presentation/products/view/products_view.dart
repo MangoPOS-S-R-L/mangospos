@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/viewmodel/taxes_viewmodel.dart';
 import '../viewmodel/products_viewmodel.dart';
 import '../widgets/add_edit_product_dialog.dart';
 
@@ -17,6 +18,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
     // Initialize data
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(productsViewModelProvider).init();
+      ref.read(taxesVmProvider.notifier).load(businessId: 'auto');
     });
   }
 
@@ -424,6 +426,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
         product: product,
         categories: viewModel.categories,
         menus: viewModel.menus,
+        onCreateCategory: (name) => viewModel.createCategory(name: name),
         onAdd:
             ({
               required name,

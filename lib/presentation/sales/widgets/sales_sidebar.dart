@@ -116,7 +116,7 @@ class _SidebarButton extends StatelessWidget {
           boxShadow: isActive
               ? [
                   BoxShadow(
-                    color: SalesTheme.primary.withOpacity(0.5),
+                    color: SalesTheme.primary.withValues(alpha: 0.5),
                     blurRadius: 4,
                     offset: const Offset(0, 2),
                   ),

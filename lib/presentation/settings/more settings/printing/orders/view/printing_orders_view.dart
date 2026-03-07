@@ -324,7 +324,7 @@ class _PrintingOrdersViewState extends ConsumerState<PrintingOrdersView> {
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(
                                   content: Text('Área agregada exitosamente'),
-                                  backgroundColor: Colors.green,
+                                  backgroundColor: const Color(0xFF22C55E),
                                 ),
                               );
                             }
@@ -384,7 +384,7 @@ class _PrintingOrdersViewState extends ConsumerState<PrintingOrdersView> {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
                     content: Text('Área eliminada exitosamente'),
-                    backgroundColor: Colors.green,
+                    backgroundColor: const Color(0xFF22C55E),
                   ),
                 );
               }
@@ -519,7 +519,7 @@ class _KitchenAreaCard extends StatelessWidget {
                         Icon(
                           Icons.print,
                           size: 16,
-                          color: printer.online ? Colors.green : Colors.grey,
+                          color: printer.online ? const Color(0xFF22C55E) : Colors.grey,
                         ),
                         const SizedBox(width: 8),
                         Expanded(child: Text(printer.name)),

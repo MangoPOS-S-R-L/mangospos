@@ -56,6 +56,7 @@ dependencies:
   universal_ble: ^0.21.1
   web_socket_channel: ^3.0.3
   google_fonts: ^7.0.0
+  equatable: ^2.0.7
   tuple: ^2.0.2
   shared_preferences: ^2.2.2
   connectivity_plus: ^6.0.0
@@ -67,6 +68,9 @@ dependencies:
   esc_pos_utils_plus: ^2.0.4
   process_run: ^1.3.0
   qr_flutter: ^4.1.0
+  logger: ^2.6.2
+  pdf: ^3.11.3
+  printing: ^5.14.2
 
 
 

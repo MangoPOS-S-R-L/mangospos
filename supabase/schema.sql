@@ -662,20 +662,45 @@ CREATE OR REPLACE FUNCTION "public"."fn_close_cash_session"("p_session_id" "uuid
     LANGUAGE "plpgsql" SECURITY DEFINER
     AS $$
 DECLARE
-    v_start_amount NUMERIC;
-    v_total_sales NUMERIC;
-    v_total_deposits NUMERIC;
-    v_total_withdrawals NUMERIC;
-    v_expected_amount NUMERIC;
-    v_difference NUMERIC;
+    v_start_amount NUMERIC := 0;
+    v_total_sales NUMERIC := 0;
+    v_total_deposits NUMERIC := 0;
+    v_total_withdrawals NUMERIC := 0;
+    v_total_expenses NUMERIC := 0;
+    v_expected_amount NUMERIC := 0;
+    v_difference NUMERIC := 0;
 BEGIN
     SELECT start_amount INTO v_start_amount FROM cash_register_sessions WHERE id = p_session_id;
 
-    SELECT COALESCE(SUM(amount), 0) INTO v_total_sales FROM cash_transactions WHERE session_id = p_session_id AND type = 'sale';
-    SELECT COALESCE(SUM(amount), 0) INTO v_total_deposits FROM cash_transactions WHERE session_id = p_session_id AND type = 'deposit';
-    SELECT COALESCE(SUM(amount), 0) INTO v_total_withdrawals FROM cash_transactions WHERE session_id = p_session_id AND type = 'withdrawal';
+    IF v_start_amount IS NULL THEN
+        RAISE EXCEPTION 'SESSION_NOT_FOUND';
+    END IF;
 
-    v_expected_amount := (v_total_deposits + v_total_sales) - v_total_withdrawals;
+    SELECT COALESCE(SUM(amount), 0)
+      INTO v_total_sales
+      FROM cash_transactions
+     WHERE session_id = p_session_id
+       AND type = 'sale';
+
+    SELECT COALESCE(SUM(amount), 0)
+      INTO v_total_deposits
+      FROM cash_transactions
+     WHERE session_id = p_session_id
+       AND type = 'deposit';
+
+    SELECT COALESCE(SUM(amount), 0)
+      INTO v_total_withdrawals
+      FROM cash_transactions
+     WHERE session_id = p_session_id
+       AND type = 'withdrawal';
+
+    SELECT COALESCE(SUM(amount), 0)
+      INTO v_total_expenses
+      FROM cash_transactions
+     WHERE session_id = p_session_id
+       AND type = 'expense';
+
+    v_expected_amount := (v_total_deposits + v_total_sales) - (v_total_withdrawals + v_total_expenses);
     
     v_difference := p_end_amount - v_expected_amount;
 
@@ -687,7 +712,17 @@ BEGIN
         notes = p_notes
     WHERE id = p_session_id;
 
-    RETURN jsonb_build_object('success', true, 'difference', v_difference, 'expected', v_expected_amount);
+    RETURN jsonb_build_object(
+      'success', true,
+      'difference', v_difference,
+      'expected', v_expected_amount,
+      'expected_amount', v_expected_amount,
+      'start_amount', v_start_amount,
+      'total_sales', v_total_sales,
+      'total_deposits', v_total_deposits,
+      'total_withdrawals', v_total_withdrawals,
+      'total_expenses', v_total_expenses
+    );
 END;
 $$;
 
@@ -739,14 +774,41 @@ ALTER FUNCTION "public"."fn_close_order_and_table"("p_order_id" "uuid", "p_statu
 CREATE OR REPLACE FUNCTION "public"."fn_compute_item_totals"() RETURNS "trigger"
     LANGUAGE "plpgsql"
     AS $$
-declare mods_total numeric(12,2) := 0;
+declare
+  mods_total numeric(12,2) := 0;
+  v_origin public.order_origin;
+  v_default_tax numeric := 0;
+  v_service_enabled boolean := false;
+  v_service_rate numeric := 0;
+  v_tax_rate numeric := 0;
 begin
   select coalesce(sum(price*qty),0)
     into mods_total
   from public.order_item_modifiers
   where item_id = coalesce(new.id, old.id);
 
+  -- Resolver tasa de impuesto según origen de la orden y ajustes del negocio
+  select
+    ts.origin,
+    coalesce(bs.default_tax_rate, 0),
+    coalesce(bs.service_fee_enabled, false),
+    coalesce(bs.service_fee_rate, 0)
+  into v_origin, v_default_tax, v_service_enabled, v_service_rate
+  from public.orders o
+  join public.table_sessions ts on ts.id = o.session_id
+  left join public.business_settings bs on bs.business_id = ts.business_id
+  where o.id = new.order_id
+  limit 1;
+
+  if v_origin = 'quick' then
+    v_tax_rate := coalesce(v_service_rate, 0);
+  else
+    v_tax_rate := coalesce(v_default_tax, 0) +
+      (case when v_service_enabled then coalesce(v_service_rate, 0) else 0 end);
+  end if;
+
   new.subtotal := round((new.unit_price*new.qty) + mods_total, 2);
+  new.tax := round(new.subtotal * (v_tax_rate / 100.0), 2);
   new.total    := new.subtotal - coalesce(new.discounts,0) + coalesce(new.tax,0);
   return new;
 end $$;
@@ -830,7 +892,14 @@ BEGIN
         'opened_at', s.opened_at,
         'total_sales', (SELECT COALESCE(SUM(amount), 0) FROM cash_transactions WHERE session_id = s.id AND type = 'sale'),
         'total_deposits', (SELECT COALESCE(SUM(amount), 0) FROM cash_transactions WHERE session_id = s.id AND type = 'deposit'),
-        'total_withdrawals', (SELECT COALESCE(SUM(amount), 0) FROM cash_transactions WHERE session_id = s.id AND type = 'withdrawal')
+        'total_withdrawals', (SELECT COALESCE(SUM(amount), 0) FROM cash_transactions WHERE session_id = s.id AND type = 'withdrawal'),
+        'total_expenses', (SELECT COALESCE(SUM(amount), 0) FROM cash_transactions WHERE session_id = s.id AND type = 'expense'),
+        'total_income', (SELECT COALESCE(SUM(amount), 0) FROM cash_transactions WHERE session_id = s.id AND type IN ('sale', 'deposit')),
+        'total_outflows', (SELECT COALESCE(SUM(amount), 0) FROM cash_transactions WHERE session_id = s.id AND type IN ('withdrawal', 'expense')),
+        'expected_amount',
+          (SELECT COALESCE(SUM(amount), 0) FROM cash_transactions WHERE session_id = s.id AND type IN ('sale', 'deposit'))
+          -
+          (SELECT COALESCE(SUM(amount), 0) FROM cash_transactions WHERE session_id = s.id AND type IN ('withdrawal', 'expense'))
     ) INTO v_result
     FROM cash_register_sessions s
     WHERE s.id = p_session_id;
@@ -1399,6 +1468,172 @@ $_$;
 
 
 ALTER FUNCTION "public"."fn_process_payment_v2"("p_order_id" "uuid", "p_check_id" "uuid", "p_payment_method_id" "text", "p_amount" numeric, "p_reference" "text", "p_customer_id" "uuid", "p_customer_rnc" "text", "p_cashier_session_id" "uuid") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."fn_process_payment_v3"("p_order_id" "uuid", "p_check_id" "uuid", "p_payment_method_id" "text", "p_amount" numeric, "p_reference" "text", "p_customer_id" "uuid" DEFAULT NULL::"uuid", "p_customer_rnc" "text" DEFAULT NULL::"text", "p_cashier_session_id" "uuid" DEFAULT NULL::"uuid", "p_change_amount" numeric DEFAULT 0) RETURNS "public"."payments"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+declare
+  v_payment public.payments;
+  v_business_id uuid;
+  v_table_session_id uuid;
+  v_payment_method_id uuid;
+  v_payment_method_code text;
+  v_open_items_count bigint := 0;
+  v_cash_in_drawer numeric := 0;
+begin
+  select o.session_id
+    into v_table_session_id
+  from public.orders o
+  where o.id = p_order_id;
+
+  if v_table_session_id is null then
+    raise exception 'ORDER_NOT_FOUND';
+  end if;
+
+  select ts.business_id
+    into v_business_id
+  from public.table_sessions ts
+  where ts.id = v_table_session_id;
+
+  if v_business_id is null then
+    select bid into v_business_id
+    from public.current_user_business_ids() as bid
+    limit 1;
+  end if;
+
+  if v_business_id is null then
+    raise exception 'BUSINESS_NOT_FOUND';
+  end if;
+
+  if p_cashier_session_id is null then
+    raise exception 'CASH_SESSION_REQUIRED';
+  end if;
+
+  perform 1
+  from public.cash_register_sessions s
+  where s.id = p_cashier_session_id
+    and s.status = 'open'
+    and s.closed_at is null;
+
+  if not found then
+    raise exception 'CASH_SESSION_NOT_OPEN';
+  end if;
+
+  if p_payment_method_id ~* '^[0-9a-f-]{36}$' then
+    select pm.id, pm.code
+      into v_payment_method_id, v_payment_method_code
+    from public.payment_methods pm
+    where pm.id = p_payment_method_id::uuid
+      and pm.is_active = true
+    limit 1;
+  else
+    select pm.id, pm.code
+      into v_payment_method_id, v_payment_method_code
+    from public.payment_methods pm
+    where pm.business_id = v_business_id
+      and pm.code = p_payment_method_id
+      and pm.is_active = true
+    limit 1;
+  end if;
+
+  if v_payment_method_id is null then
+    raise exception 'INVALID_PAYMENT_METHOD';
+  end if;
+
+  insert into public.payments(
+    business_id,
+    order_id,
+    check_id,
+    payment_method_id,
+    amount,
+    reference,
+    change_amount,
+    status,
+    processed_by,
+    session_id,
+    customer_id,
+    customer_rnc,
+    created_at
+  )
+  values (
+    v_business_id,
+    p_order_id,
+    p_check_id,
+    v_payment_method_id,
+    p_amount,
+    p_reference,
+    coalesce(p_change_amount, 0),
+    'completed',
+    auth.uid(),
+    p_cashier_session_id,
+    p_customer_id,
+    p_customer_rnc,
+    now()
+  )
+  returning * into v_payment;
+
+  if p_check_id is not null then
+    update public.order_items
+    set status = 'paid'
+    where order_id = p_order_id
+      and check_id = p_check_id
+      and status <> 'void';
+
+    update public.order_checks
+    set is_closed = true,
+        closed_at = now()
+    where id = p_check_id;
+
+    select count(*)
+      into v_open_items_count
+    from public.order_items
+    where order_id = p_order_id
+      and status not in ('paid', 'void');
+
+    if v_open_items_count = 0 then
+      perform public.fn_close_order_and_table(p_order_id, 'paid');
+    end if;
+  else
+    update public.order_items
+    set status = 'paid'
+    where order_id = p_order_id
+      and status <> 'void';
+
+    perform public.fn_close_order_and_table(p_order_id, 'paid');
+  end if;
+
+  if v_payment_method_code = 'cash' then
+    v_cash_in_drawer := greatest(
+      coalesce(p_amount, 0) - coalesce(p_change_amount, 0),
+      0
+    );
+
+    if v_cash_in_drawer > 0 then
+      insert into public.cash_transactions(
+        session_id,
+        amount,
+        type,
+        description,
+        related_order_id
+      )
+      values (
+        p_cashier_session_id,
+        v_cash_in_drawer,
+        'sale',
+        'Venta ' || left(p_order_id::text, 8),
+        p_order_id
+      );
+    end if;
+  end if;
+
+  return v_payment;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."fn_process_payment_v3"("p_order_id" "uuid", "p_check_id" "uuid", "p_payment_method_id" "text", "p_amount" numeric, "p_reference" "text", "p_customer_id" "uuid", "p_customer_rnc" "text", "p_cashier_session_id" "uuid", "p_change_amount" numeric) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."fn_recalc_order_totals"("p_order_id" "uuid") RETURNS "void"
@@ -5490,6 +5725,9 @@ GRANT ALL ON FUNCTION "public"."fn_process_payment"("p_order_id" "uuid", "p_chec
 GRANT ALL ON FUNCTION "public"."fn_process_payment_v2"("p_order_id" "uuid", "p_check_id" "uuid", "p_payment_method_id" "text", "p_amount" numeric, "p_reference" "text", "p_customer_id" "uuid", "p_customer_rnc" "text", "p_cashier_session_id" "uuid") TO "anon";
 GRANT ALL ON FUNCTION "public"."fn_process_payment_v2"("p_order_id" "uuid", "p_check_id" "uuid", "p_payment_method_id" "text", "p_amount" numeric, "p_reference" "text", "p_customer_id" "uuid", "p_customer_rnc" "text", "p_cashier_session_id" "uuid") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."fn_process_payment_v2"("p_order_id" "uuid", "p_check_id" "uuid", "p_payment_method_id" "text", "p_amount" numeric, "p_reference" "text", "p_customer_id" "uuid", "p_customer_rnc" "text", "p_cashier_session_id" "uuid") TO "service_role";
+GRANT ALL ON FUNCTION "public"."fn_process_payment_v3"("p_order_id" "uuid", "p_check_id" "uuid", "p_payment_method_id" "text", "p_amount" numeric, "p_reference" "text", "p_customer_id" "uuid", "p_customer_rnc" "text", "p_cashier_session_id" "uuid", "p_change_amount" numeric) TO "anon";
+GRANT ALL ON FUNCTION "public"."fn_process_payment_v3"("p_order_id" "uuid", "p_check_id" "uuid", "p_payment_method_id" "text", "p_amount" numeric, "p_reference" "text", "p_customer_id" "uuid", "p_customer_rnc" "text", "p_cashier_session_id" "uuid", "p_change_amount" numeric) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."fn_process_payment_v3"("p_order_id" "uuid", "p_check_id" "uuid", "p_payment_method_id" "text", "p_amount" numeric, "p_reference" "text", "p_customer_id" "uuid", "p_customer_rnc" "text", "p_cashier_session_id" "uuid", "p_change_amount" numeric) TO "service_role";
 
 
 

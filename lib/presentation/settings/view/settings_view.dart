@@ -615,14 +615,14 @@ class _BusinessSummaryCard extends StatelessWidget {
               _MiniStat(
                 label: 'CF',
                 value: 'Pendiente',
-                color: Colors.orange,
+                color: const Color(0xFFF97316),
                 icon: Icons.access_time_rounded,
               ),
               const SizedBox(width: 12),
               _MiniStat(
                 label: 'Impresoras',
                 value: '3 activas',
-                color: Colors.green,
+                color: const Color(0xFF22C55E),
                 icon: Icons.print_rounded,
               ),
             ],

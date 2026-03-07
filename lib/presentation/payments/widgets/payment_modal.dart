@@ -84,7 +84,7 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
             content: Text(
               'Pago procesado exitosamente${state.fiscalDocument != null ? " - NCF: ${state.fiscalDocument!.ncfNumber}" : ""}',
             ),
-            backgroundColor: Colors.green,
+            backgroundColor: const Color(0xFF22C55E),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -274,7 +274,7 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: const Color(0xFFF26900).withOpacity(0.1),
+                color: const Color(0xFFF26900).withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: const Icon(
@@ -374,7 +374,7 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.grey.withOpacity(0.05),
+            color: Colors.grey.withValues(alpha: 0.05),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -385,7 +385,7 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
         children: [
           _SummaryRow(label: 'Total General', value: total, isMain: true),
           const Divider(height: 24),
-          _SummaryRow(label: 'Recibido', value: paid, color: Colors.green[700]),
+          _SummaryRow(label: 'Recibido', value: paid, color: const Color(0xFF22C55E)),
           const SizedBox(height: 8),
           if (pending > 0)
             _SummaryRow(
@@ -463,7 +463,7 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
             border: Border.all(color: const Color(0xFFF26900), width: 1.5),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFFF26900).withOpacity(0.05),
+                color: const Color(0xFFF26900).withValues(alpha: 0.05),
                 blurRadius: 15,
                 offset: const Offset(0, 4),
               ),
@@ -526,7 +526,7 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
         Expanded(
           child: Center(
             child: _Numpad(
-              onNumberTap: (num) {
+              onNumberTap: (digit) {
                 final current = state.amountReceived;
                 // Evitar decimales extraños o longitud excesiva
                 if (current > 999999) return;
@@ -538,9 +538,9 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
 
                 // Simple concat logic
                 if (str == '0') {
-                  viewModel.setAmountReceived(double.parse(num));
+                  viewModel.setAmountReceived(double.parse(digit));
                 } else {
-                  final newStr = '$str$num';
+                  final newStr = '$str$digit';
                   viewModel.setAmountReceived(
                     double.tryParse(newStr) ?? current,
                   );
@@ -610,7 +610,7 @@ class _PaymentMethodButton extends StatelessWidget {
           boxShadow: isSelected
               ? [
                   BoxShadow(
-                    color: const Color(0xFFF26900).withOpacity(0.15),
+                    color: const Color(0xFFF26900).withValues(alpha: 0.15),
                     blurRadius: 8,
                     offset: const Offset(0, 4),
                   ),

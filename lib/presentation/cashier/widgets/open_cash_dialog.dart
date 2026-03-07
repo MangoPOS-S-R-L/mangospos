@@ -147,7 +147,7 @@ class _OpenCashDialogState extends ConsumerState<OpenCashDialog> {
                 Container(
                   padding: EdgeInsets.all(context.wp(1.5)),
                   decoration: BoxDecoration(
-                    color: MangoColors.successGreen.withOpacity(0.1),
+                    color: MangoColors.successGreen.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(14),
                   ),
                   child: Icon(
@@ -201,13 +201,13 @@ class _OpenCashDialogState extends ConsumerState<OpenCashDialog> {
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   colors: [
-                    MangoColors.primaryOrange.withOpacity(0.1),
-                    MangoColors.primaryOrange.withOpacity(0.05),
+                    MangoColors.primaryOrange.withValues(alpha: 0.1),
+                    MangoColors.primaryOrange.withValues(alpha: 0.05),
                   ],
                 ),
                 borderRadius: BorderRadius.circular(25),
                 border: Border.all(
-                  color: MangoColors.primaryOrange.withOpacity(0.2),
+                  color: MangoColors.primaryOrange.withValues(alpha: 0.2),
                   width: 1.5,
                 ),
               ),
@@ -241,10 +241,10 @@ class _OpenCashDialogState extends ConsumerState<OpenCashDialog> {
                 vertical: context.hp(2),
               ),
               decoration: BoxDecoration(
-                color: MangoColors.successGreen.withOpacity(0.05),
+                color: MangoColors.successGreen.withValues(alpha: 0.05),
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
-                  color: MangoColors.successGreen.withOpacity(0.2),
+                  color: MangoColors.successGreen.withValues(alpha: 0.2),
                   width: 2,
                 ),
               ),
@@ -293,9 +293,9 @@ class _OpenCashDialogState extends ConsumerState<OpenCashDialog> {
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(16),
                             ),
-                            shadowColor: MangoColors.successGreen.withOpacity(
-                              0.3,
-                            ),
+                          shadowColor: MangoColors.successGreen.withValues(
+                            alpha: 0.3,
+                          ),
                           ),
                           child: _isSubmitting
                               ? const CircularProgressIndicator(

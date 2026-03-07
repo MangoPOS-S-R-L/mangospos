@@ -3,8 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
+import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
-import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/data/models/table_status.dart';
@@ -27,7 +27,7 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
   Timer? _autoRefreshTimer;
 
   // Configuración de actualización automática
-  static const Duration _refreshInterval = Duration(seconds: 5);
+  static const Duration _refreshInterval = Duration(seconds: 12);
 
   @override
   void initState() {
@@ -40,6 +40,14 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
   }
 
   void _loadData() {
+    final cashierVm = ref.read(cashierViewModelProvider);
+    if (!cashierVm.isLoading) {
+      if (cashierVm.currentRegisterId == null || cashierVm.businessId == null) {
+        unawaited(cashierVm.init());
+      } else {
+        unawaited(cashierVm.ensureCashOpenFast());
+      }
+    }
     ref.read(byZoneVmProvider.notifier).load(widget.businessId);
   }
 
@@ -109,6 +117,8 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
   @override
   Widget build(BuildContext context) {
     final vm = ref.watch(byZoneVmProvider);
+    final cashierVm = ref.watch(cashierViewModelProvider);
+    final isCashOpen = cashierVm.lastSession?['status'] == 'open';
     // Filter out 'Ventas manuales' as it is not a physical zone with tables
     final zones = vm.zones.where((z) => z.name != 'Ventas manuales').toList();
     final hasZones = zones.isNotEmpty;
@@ -157,7 +167,11 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
     } else {
       body = TabBarView(
         controller: _tabController!,
-        children: zones.map((zone) => _ZoneGrid(zoneId: zone.id)).toList(),
+        children: zones
+            .map(
+              (zone) => _ZoneGrid(zoneId: zone.id, canOpenTables: isCashOpen),
+            )
+            .toList(),
       );
     }
 
@@ -214,8 +228,8 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
                                   boxShadow: isActive
                                       ? [
                                           BoxShadow(
-                                            color: Colors.black.withOpacity(
-                                              0.05,
+                                            color: Colors.black.withValues(
+                                              alpha: 0.05,
                                             ),
                                             blurRadius: 2,
                                             offset: const Offset(0, 1),
@@ -246,6 +260,30 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
                     // INDICADORES DE ESTADO a la derecha
                     Row(
                       children: [
+                        if (!isCashOpen) ...[
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.red.withValues(alpha: 0.08),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: Colors.red.withValues(alpha: 0.22),
+                              ),
+                            ),
+                            child: const Text(
+                              'Caja cerrada',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.red,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                        ],
                         // Indicador DISPONIBLES (verde)
                         _buildStatusIndicator(
                           count: availableCount,
@@ -376,7 +414,8 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
 
 class _ZoneGrid extends ConsumerStatefulWidget {
   final String zoneId;
-  const _ZoneGrid({required this.zoneId});
+  final bool canOpenTables;
+  const _ZoneGrid({required this.zoneId, required this.canOpenTables});
 
   @override
   ConsumerState<_ZoneGrid> createState() => _ZoneGridState();
@@ -436,6 +475,32 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
 
     return Column(
       children: [
+        if (!widget.canOpenTables)
+          Container(
+            margin: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.red.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.red.withValues(alpha: 0.2)),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.lock_outline, size: 16, color: Colors.red),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Caja cerrada. Abre caja para abrir mesas.',
+                    style: TextStyle(
+                      color: Colors.red,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         // Eliminamos los indicadores de estado aquí, ya que están en el AppBar
         // y se actualizarán dinámicamente según la zona seleccionada
         // Grid
@@ -482,7 +547,10 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
                   return TableCard(
                     table: _convertTableStatusToVentasTable(table),
                     isOpening: opening,
-                    onTap: () => _handleTableAction(context, ref, table),
+                    enabled: widget.canOpenTables,
+                    onTap: widget.canOpenTables
+                        ? () => _handleTableAction(context, ref, table)
+                        : null,
                   );
                 },
               );
@@ -498,6 +566,19 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
     WidgetRef ref,
     TableStatus ts,
   ) async {
+    final cashierVm = ref.read(cashierViewModelProvider);
+    final isCashOpen = await cashierVm.ensureCashOpenFast();
+    if (!isCashOpen) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Debes abrir la caja antes de abrir una mesa.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
     final byZone = ref.read(byZoneVmProvider.notifier);
     final opening = ref
         .read(byZoneVmProvider)
@@ -514,6 +595,10 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
         session.activeRole == PosRole.administrador ||
         session.activeRole == PosRole.supervisor;
     if (isOtherWaiterTable && !bypassPin) {
+      if (!context.mounted) {
+        byZone.setOpening(ts.tableId, false);
+        return;
+      }
       final authorized = await showPinVerificationModal(
         context,
         ref,
@@ -528,14 +613,8 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
       }
     }
 
-    // Lanzamos apertura de mesa en background y navegamos de inmediato
-    unawaited(
-      ref
-          .read(currentOrderProvider.notifier)
-          .openTable(ts.tableId)
-          .whenComplete(() => byZone.setOpening(ts.tableId, false)),
-    );
-
+    // La apertura de mesa ocurre en TableOrderScreen; evitar doble openTable.
+    byZone.setOpening(ts.tableId, false);
     if (!context.mounted) return;
     context.go(
       Uri(

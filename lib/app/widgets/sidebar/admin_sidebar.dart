@@ -183,7 +183,7 @@ class _TileState extends State<_Tile> {
         ? const Color(0xFFF9F9F9)
         : Colors.transparent;
 
-    final borderColor = active ? const Color(0x80F7941A) : Colors.transparent;
+    final borderColor = active ? const Color(0x80F97316) : Colors.transparent;
     final labelColor = active ? MangoColors.primaryOrange : Colors.grey[700]!;
     final iconColor = active ? MangoColors.primaryOrange : Colors.grey[500]!;
 

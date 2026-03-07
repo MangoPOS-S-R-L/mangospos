@@ -219,68 +219,65 @@ class _TopNavItemState extends ConsumerState<_TopNavItem> {
     final loc = GoRouterState.of(context).uri.toString();
     final active =
         loc == widget.route ||
-        (widget.route != '/' && loc.startsWith(widget.route));
+        (widget.route != '/' && loc.startsWith(widget.route)) ||
+        (widget.route == AppRoutes.settings && loc.startsWith(AppRoutes.menu));
 
     final showLabel = MediaQuery.of(context).size.width >= 1024;
+    final iconColor = hasAccess
+        ? (active ? Colors.white : Colors.grey[600]!)
+        : Colors.grey[500]!;
+    final labelColor = hasAccess
+        ? (active ? Colors.white : Colors.grey[700]!)
+        : Colors.grey[500]!;
 
     return MouseRegion(
       onEnter: (_) => setState(() => _isHovering = true),
       onExit: (_) => setState(() => _isHovering = false),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(10),
-          onTap: hasAccess ? () => context.go(widget.route) : null,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            decoration: BoxDecoration(
-              color: hasAccess
-                  ? (active
-                        ? MangoColors.primaryOrange
-                        : (_isHovering
-                              ? const Color(0xFFF7F7F9)
-                              : Colors.transparent))
-                  : const Color(0xFFF7F7F9),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                ColorFiltered(
-                  colorFilter: ColorFilter.mode(
-                    hasAccess
-                        ? (active ? Colors.white : Colors.grey[600]!)
-                        : Colors.grey[500]!,
-                    BlendMode.srcIn,
-                  ),
-                  child: SvgPicture.asset(
-                    widget.asset,
-                    width: widget.iconSize,
-                    height: widget.iconSize,
+      cursor: hasAccess
+          ? SystemMouseCursors.click
+          : SystemMouseCursors.forbidden,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: hasAccess ? () => context.go(widget.route) : null,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: hasAccess
+                ? (active
+                      ? MangoColors.primaryOrange
+                      : (_isHovering
+                            ? const Color(0xFFF7F7F9)
+                            : Colors.transparent))
+                : const Color(0xFFF7F7F9),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SvgPicture.asset(
+                widget.asset,
+                width: widget.iconSize,
+                height: widget.iconSize,
+                colorFilter: ColorFilter.mode(iconColor, BlendMode.srcIn),
+              ),
+              if (showLabel) ...[
+                const SizedBox(width: 8),
+                Text(
+                  widget.label,
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 15,
+                    fontWeight: active && hasAccess
+                        ? FontWeight.bold
+                        : FontWeight.w600,
+                    color: labelColor,
                   ),
                 ),
-                if (showLabel) ...[
-                  const SizedBox(width: 8),
-                  Text(
-                    widget.label,
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 15,
-                      fontWeight: active && hasAccess
-                          ? FontWeight.bold
-                          : FontWeight.w600,
-                      color: hasAccess
-                          ? (active ? Colors.white : Colors.grey[700]!)
-                          : Colors.grey[500]!,
-                    ),
-                  ),
-                ],
-                if (!hasAccess) ...[
-                  const SizedBox(width: 6),
-                  const Icon(Icons.lock_outline, size: 14, color: Colors.grey),
-                ],
               ],
-            ),
+              if (!hasAccess) ...[
+                const SizedBox(width: 6),
+                const Icon(Icons.lock_outline, size: 14, color: Colors.grey),
+              ],
+            ],
           ),
         ),
       ),
@@ -294,18 +291,22 @@ class _NotificationButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 40,
-      height: 40,
-      decoration: BoxDecoration(
-        color: Colors.grey[100],
-        shape: BoxShape.circle,
-      ),
-      child: IconButton(
-        icon: Icon(Icons.notifications_none, color: Colors.grey[600]),
-        onPressed: () {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: () {
           // TODO show notifications
         },
+        child: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: Colors.grey[100],
+            shape: BoxShape.circle,
+          ),
+          alignment: Alignment.center,
+          child: Icon(Icons.notifications_none, color: Colors.grey[600]),
+        ),
       ),
     );
   }
@@ -529,6 +530,10 @@ class _UserInfo extends ConsumerWidget {
         const SizedBox(width: 8),
         PopupMenuButton<PosRole>(
           tooltip: 'Cambiar rol',
+          style: const ButtonStyle(
+            overlayColor: WidgetStatePropertyAll(Colors.transparent),
+            splashFactory: NoSplash.splashFactory,
+          ),
           onSelected: ctrl.switchRole,
           itemBuilder: (_) => session.availableRoles
               .map(
@@ -553,7 +558,7 @@ class _UserInfo extends ConsumerWidget {
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               gradient: const LinearGradient(
-                colors: [Color(0xFFF7941A), Color(0xFFFFB74D)],
+                colors: [Color(0xFFF97316), Color(0xFFFFB74D)],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),

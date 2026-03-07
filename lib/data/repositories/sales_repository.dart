@@ -13,7 +13,7 @@ class SalesRepository {
   SalesRepository(this._client);
 
   static const _itemFields =
-      'id,order_id,product_id,product_name,sku,quantity,unit_price,subtotal,discounts,tax,total,check_id,is_takeout,status,notes,created_at';
+      'id,order_id,product_id,product_name,sku,quantity,qty,unit_price,subtotal,discounts,tax,total,check_id,is_takeout,status,notes,created_at';
 
   // ============================================================
   // 📊 SESIONES DE MESA
@@ -73,6 +73,32 @@ class SalesRepository {
     }
   }
 
+  /// Asignar una orden manual a una mesa real
+  Future<Map<String, dynamic>> assignManualOrderToTable({
+    required String orderId,
+    required String tableId,
+    String? userId,
+  }) async {
+    try {
+      final response = await _client.rpc(
+        'fn_assign_manual_order_to_table',
+        params: {
+          'p_order_id': orderId,
+          'p_table_id': tableId,
+          'p_user_id': userId,
+        },
+      );
+
+      if (response == null) {
+        throw Exception('No se pudo asignar la venta manual a mesa');
+      }
+
+      return Map<String, dynamic>.from(response as Map);
+    } catch (e) {
+      throw Exception('Error al asignar venta manual a mesa: $e');
+    }
+  }
+
   /// Obtener sesiones activas
   Future<List<TableSession>> getActiveSessions(String businessId) async {
     try {
@@ -86,6 +112,60 @@ class SalesRepository {
       return data.map((json) => TableSession.fromMap(json)).toList();
     } catch (e) {
       throw Exception('Error al obtener sesiones activas: $e');
+    }
+  }
+
+  Future<({String? customerId, String? customerName})> getSessionCustomer(
+    String sessionId,
+  ) async {
+    try {
+      final data = await _client
+          .from('table_sessions')
+          .select('customer_id, customer_name')
+          .eq('id', sessionId)
+          .maybeSingle();
+
+      return (
+        customerId: data?['customer_id'] as String?,
+        customerName: data?['customer_name'] as String?,
+      );
+    } catch (e) {
+      throw Exception('Error al obtener cliente de la sesión: $e');
+    }
+  }
+
+  Future<void> assignCustomerToSession({
+    required String sessionId,
+    required String customerId,
+    required String customerName,
+  }) async {
+    try {
+      await _client.rpc(
+        'fn_assign_customer_to_session',
+        params: {
+          'p_session_id': sessionId,
+          'p_customer_id': customerId,
+          'p_customer_name': customerName.trim().isEmpty
+              ? null
+              : customerName.trim(),
+        },
+      );
+    } catch (e) {
+      throw Exception('Error al asignar cliente: $e');
+    }
+  }
+
+  Future<void> setMenuItemAvailability({
+    required String menuItemId,
+    required bool isActive,
+  }) async {
+    try {
+      await _client
+          .from('menu_items')
+          .update({'is_active': isActive})
+          .eq('id', menuItemId);
+    } catch (e) {
+      throw Exception('Error al actualizar disponibilidad del producto: $e');
     }
   }
 
@@ -151,6 +231,107 @@ class SalesRepository {
     }
   }
 
+  /// Actualizar detalle completo del item
+  Future<void> updateItemDetails({
+    required String itemId,
+    required String productName,
+    required double quantity,
+    required bool isTakeout,
+    required double discounts,
+    String? notes,
+  }) async {
+    try {
+      final normalizedQty = quantity <= 0 ? 1.0 : quantity;
+      try {
+        await _client.rpc(
+          SalesQueries.rpcUpdateItemDetails,
+          params: {
+            'p_item_id': itemId,
+            'p_product_name': productName,
+            'p_qty': normalizedQty,
+            'p_is_takeout': isTakeout,
+            'p_discounts': discounts,
+            'p_notes': notes,
+          },
+        );
+      } catch (rpcError) {
+        // Fallback temporal si el RPC aún no está migrado.
+        final updated = await _client
+            .from('order_items')
+            .update({
+              'product_name': productName,
+              'quantity': normalizedQty.round(),
+              'qty': normalizedQty,
+              'is_takeout': isTakeout,
+            })
+            .eq('id', itemId)
+            .select('id')
+            .maybeSingle();
+        if (updated == null) {
+          throw Exception('ITEM_NOT_UPDATED');
+        }
+        await updateItemDiscountAndNotes(
+          itemId: itemId,
+          discounts: discounts,
+          notes: notes,
+        );
+      }
+    } catch (e) {
+      throw Exception('Error al actualizar item: $e');
+    }
+  }
+
+  /// Actualiza solo el descuento del item (sin tocar qty/quantity).
+  Future<void> updateItemDiscount({
+    required String itemId,
+    required double discounts,
+  }) async {
+    try {
+      await _client.rpc(
+        SalesQueries.rpcUpdateItemDiscount,
+        params: {'p_item_id': itemId, 'p_discounts': discounts},
+      );
+    } catch (e) {
+      // Fallback temporal si el RPC aún no está migrado.
+      try {
+        await _client
+            .from('order_items')
+            .update({'discounts': discounts})
+            .eq('id', itemId);
+      } catch (_) {
+        throw Exception('Error al actualizar descuento del item: $e');
+      }
+    }
+  }
+
+  /// Actualiza descuento y notas del item en una sola escritura.
+  Future<void> updateItemDiscountAndNotes({
+    required String itemId,
+    required double discounts,
+    String? notes,
+  }) async {
+    try {
+      await _client.rpc(
+        SalesQueries.rpcUpdateItemDiscountAndNotes,
+        params: {
+          'p_item_id': itemId,
+          'p_discounts': discounts,
+          'p_notes': notes,
+        },
+      );
+    } catch (e) {
+      // Fallback temporal si el RPC aún no está migrado.
+      try {
+        await _client
+            .from('order_items')
+            .update({'discounts': discounts, 'notes': notes})
+            .eq('id', itemId);
+      } catch (_) {
+        throw Exception('Error al actualizar descuento/notas del item: $e');
+      }
+    }
+  }
+
   /// Eliminar item (Directo para evitar timeout en RPC)
   Future<void> deleteItem({required String itemId}) async {
     try {
@@ -202,6 +383,69 @@ class SalesRepository {
       return Order.fromMap(data);
     } catch (e) {
       throw Exception('Error al obtener orden: $e');
+    }
+  }
+
+  /// Obtener bundle de orden en una sola llamada RPC:
+  /// order + items + checks + customer(session)
+  Future<
+    ({
+      Order? order,
+      List<OrderItem> items,
+      List<OrderCheck> checks,
+      String? customerId,
+      String? customerName,
+    })
+  >
+  getOrderBundle(String orderId) async {
+    try {
+      final response = await _client.rpc(
+        SalesQueries.rpcGetOrderBundle,
+        params: {'p_order_id': orderId},
+      );
+
+      if (response == null) {
+        return (
+          order: null,
+          items: const <OrderItem>[],
+          checks: const <OrderCheck>[],
+          customerId: null,
+          customerName: null,
+        );
+      }
+
+      final payload = Map<String, dynamic>.from(response as Map);
+
+      final orderMap = payload['order'];
+      final order = orderMap is Map<String, dynamic>
+          ? Order.fromMap(orderMap)
+          : (orderMap is Map
+                ? Order.fromMap(Map<String, dynamic>.from(orderMap))
+                : null);
+
+      final itemsRaw = (payload['items'] as List?) ?? const [];
+      final items = itemsRaw
+          .map(
+            (row) => OrderItem.fromMap(Map<String, dynamic>.from(row as Map)),
+          )
+          .toList(growable: false);
+
+      final checksRaw = (payload['checks'] as List?) ?? const [];
+      final checks = checksRaw
+          .map(
+            (row) => OrderCheck.fromMap(Map<String, dynamic>.from(row as Map)),
+          )
+          .toList(growable: false);
+
+      return (
+        order: order,
+        items: items,
+        checks: checks,
+        customerId: payload['customer_id']?.toString(),
+        customerName: payload['customer_name']?.toString(),
+      );
+    } catch (e) {
+      throw Exception('Error al obtener bundle de orden: $e');
     }
   }
 
@@ -381,6 +625,24 @@ class SalesRepository {
     }
   }
 
+  /// Dividir cada item de la orden en partes iguales entre subcuentas.
+  Future<List<OrderCheck>> splitItemsEqually({
+    required String orderId,
+    required int people,
+  }) async {
+    try {
+      final response = await _client.rpc(
+        SalesQueries.rpcSplitItemsEqually,
+        params: {'p_order_id': orderId, 'p_people': people},
+      );
+
+      final checksData = response as List;
+      return checksData.map((json) => OrderCheck.fromMap(json)).toList();
+    } catch (e) {
+      throw Exception('Error al dividir items en partes iguales: $e');
+    }
+  }
+
   /// Mover item a otro check
   Future<void> moveItemToCheck({
     required String itemId,
@@ -393,6 +655,127 @@ class SalesRepository {
       );
     } catch (e) {
       throw Exception('Error al mover item a check: $e');
+    }
+  }
+
+  /// Mover múltiples items a un mismo check (batch).
+  Future<int> moveItemsToCheckBatch({
+    required List<String> itemIds,
+    required int checkPosition,
+  }) async {
+    if (itemIds.isEmpty) return 0;
+    try {
+      final response = await _client.rpc(
+        SalesQueries.rpcMoveItemsToCheckBatch,
+        params: {'p_item_ids': itemIds, 'p_check_position': checkPosition},
+      );
+      if (response == null) return 0;
+      return (response as num).toInt();
+    } catch (e) {
+      throw Exception('Error al mover items en lote: $e');
+    }
+  }
+
+  /// Consolida líneas duplicadas dentro de una subcuenta.
+  /// Útil después de unir cuentas para no terminar con items duplicados.
+  Future<void> consolidateCheckItems({required String checkId}) async {
+    try {
+      final rawItems = await _client
+          .from('order_items')
+          .select(
+            'id,product_id,product_name,sku,unit_price,is_takeout,status,notes,qty,quantity,discounts,created_at',
+          )
+          .eq('check_id', checkId)
+          .not('status', 'in', '(paid,void)')
+          .order('created_at', ascending: true);
+
+      final items = List<Map<String, dynamic>>.from(rawItems as List);
+      if (items.length < 2) return;
+
+      final itemIds = items
+          .map((i) => i['id']?.toString())
+          .whereType<String>()
+          .toList(growable: false);
+      if (itemIds.length < 2) return;
+
+      final rawMods = await _client
+          .from('order_item_modifiers')
+          .select('item_id')
+          .inFilter('item_id', itemIds);
+      final itemIdsWithMods = (rawMods as List)
+          .map((m) => (m as Map)['item_id']?.toString())
+          .whereType<String>()
+          .toSet();
+
+      final groups = <String, List<Map<String, dynamic>>>{};
+      for (final item in items) {
+        final id = item['id']?.toString();
+        if (id == null || id.isEmpty) continue;
+
+        // Si tiene modificadores, no consolidamos para evitar mezclar recetas distintas.
+        if (itemIdsWithMods.contains(id)) {
+          groups['id:$id'] = [item];
+          continue;
+        }
+
+        final key =
+            '${item['product_id'] ?? ''}|${item['product_name'] ?? ''}|${item['sku'] ?? ''}|'
+            '${item['unit_price'] ?? 0}|${item['is_takeout'] ?? false}|${item['status'] ?? ''}|'
+            '${item['notes'] ?? ''}';
+        groups.putIfAbsent(key, () => <Map<String, dynamic>>[]).add(item);
+      }
+
+      for (final grouped in groups.values) {
+        if (grouped.length < 2) continue;
+
+        final keeper = grouped.first;
+        final keeperId = keeper['id']?.toString();
+        if (keeperId == null || keeperId.isEmpty) continue;
+
+        double sumQty = 0;
+        double sumDiscounts = 0;
+        final removeIds = <String>[];
+
+        for (var idx = 0; idx < grouped.length; idx++) {
+          final row = grouped[idx];
+          final qtyRaw = row['qty'];
+          final quantityRaw = row['quantity'];
+          final qty = (qtyRaw is num)
+              ? qtyRaw.toDouble()
+              : (quantityRaw is num)
+              ? quantityRaw.toDouble()
+              : double.tryParse(qtyRaw?.toString() ?? '') ??
+                    double.tryParse(quantityRaw?.toString() ?? '') ??
+                    1.0;
+          final discountsRaw = row['discounts'];
+          final discounts = (discountsRaw is num)
+              ? discountsRaw.toDouble()
+              : double.tryParse(discountsRaw?.toString() ?? '') ?? 0.0;
+
+          sumQty += qty;
+          sumDiscounts += discounts;
+
+          if (idx > 0) {
+            final id = row['id']?.toString();
+            if (id != null && id.isNotEmpty) removeIds.add(id);
+          }
+        }
+
+        await _client
+            .from('order_items')
+            .update({
+              'qty': sumQty,
+              'quantity': sumQty.round(),
+              'discounts': sumDiscounts,
+            })
+            .eq('id', keeperId);
+
+        if (removeIds.isNotEmpty) {
+          await _client.from('order_items').delete().inFilter('id', removeIds);
+        }
+      }
+    } catch (e) {
+      throw Exception('Error al consolidar items de subcuenta: $e');
     }
   }
 
@@ -438,6 +821,7 @@ class SalesRepository {
           'p_payment_method_id': paymentMethodId,
           'p_amount': amount,
           'p_reference': reference,
+          'p_change_amount': changeAmount,
           'p_customer_id': customerId,
           'p_customer_rnc': customerRnc,
           'p_cashier_session_id': cashierSessionId,
@@ -446,6 +830,11 @@ class SalesRepository {
 
       return Payment.fromMap(response as Map<String, dynamic>);
     } catch (e) {
+      final msg = e.toString();
+      if (msg.contains('CASH_SESSION_REQUIRED') ||
+          msg.contains('CASH_SESSION_NOT_OPEN')) {
+        rethrow;
+      }
       // Si falla el RPC, intentamos el método directo como fallback
       return _processPaymentDirect(
         orderId: orderId,
@@ -556,11 +945,14 @@ class SalesRepository {
     }
 
     // 6) Registrar transaccion en caja si aplica
-    if (paymentMethodCode == 'cash' && cashierSessionId != null) {
+    final cashInDrawer = amount - changeAmount;
+    if (paymentMethodCode == 'cash' &&
+        cashierSessionId != null &&
+        cashInDrawer > 0) {
       try {
         await _client.from('cash_transactions').insert({
           'session_id': cashierSessionId,
-          'amount': amount,
+          'amount': cashInDrawer,
           'type': 'sale',
           'description': 'Venta ${orderId.substring(0, 8)}',
           'related_order_id': orderId,
@@ -824,12 +1216,22 @@ class SalesRepository {
 
   /// Contar mesas abiertas (LEGACY - usar getActiveSessions)
   Future<int> getOpenTablesCount(String businessId) async {
-    final count = await _client
-        .from('table_sessions')
-        .count(CountOption.exact)
-        .eq('business_id', businessId)
-        .isFilter('closed_at', null);
-    return count;
+    final rows = await _client
+        .from('orders')
+        .select('session_id, table_sessions!inner(id)')
+        .eq('table_sessions.business_id', businessId)
+        .eq('table_sessions.origin', 'dine_in')
+        .isFilter('table_sessions.closed_at', null)
+        .isFilter('closed_at', null)
+        .not('status_ext', 'in', '(paid,void)');
+
+    final sessionIds = rows
+        .map((row) => row['session_id']?.toString())
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet();
+
+    return sessionIds.length;
   }
 
   /// Confirmar pedido (LEGACY - usar sendToKitchen)

@@ -41,6 +41,7 @@ class CashierViewModel extends ChangeNotifier {
   double _weeklyAverage = 0.0;
   double _bestDayAmount = 0.0;
   String _bestDayName = '';
+  DateTime? _lastCashOpenValidationAt;
 
   CashierViewModel(this._repository, this._salesRepository);
 
@@ -57,6 +58,8 @@ class CashierViewModel extends ChangeNotifier {
   double get weeklyAverage => _weeklyAverage;
   double get bestDayAmount => _bestDayAmount;
   String get bestDayName => _bestDayName;
+  String? get currentRegisterId => _currentRegisterId;
+  String? get businessId => _businessId;
 
   Future<void> init() async {
     _isLoading = true;
@@ -96,6 +99,7 @@ class CashierViewModel extends ChangeNotifier {
         }
         if (_currentRegisterId != null) {
           _lastSession = await _repository.getLastSession(_currentRegisterId!);
+          _lastCashOpenValidationAt = DateTime.now();
           _pendingTables = await _salesRepository.getOpenTablesCount(
             _businessId!,
           );
@@ -603,6 +607,7 @@ class CashierViewModel extends ChangeNotifier {
     try {
       if (_currentRegisterId != null && _businessId != null) {
         _lastSession = await _repository.getLastSession(_currentRegisterId!);
+        _lastCashOpenValidationAt = DateTime.now();
         _pendingTables = await _salesRepository.getOpenTablesCount(
           _businessId!,
         );
@@ -614,6 +619,48 @@ class CashierViewModel extends ChangeNotifier {
       }
     } catch (e) {
       debugPrint('Error refreshing cashier data: $e');
+    }
+  }
+
+  Future<int> refreshPendingTablesCount() async {
+    if (_businessId == null) return _pendingTables;
+    try {
+      _pendingTables = await _salesRepository.getOpenTablesCount(_businessId!);
+      notifyListeners();
+      return _pendingTables;
+    } catch (e) {
+      debugPrint('Error refreshing pending tables: $e');
+      return _pendingTables;
+    }
+  }
+
+  /// Verificación ligera para flujo de ventas:
+  /// evita cargar resúmenes/movimientos en cada click de mesa.
+  Future<bool> ensureCashOpenFast({
+    Duration ttl = const Duration(seconds: 12),
+    bool force = false,
+  }) async {
+    final now = DateTime.now();
+    final hasRecentValidation =
+        _lastCashOpenValidationAt != null &&
+        now.difference(_lastCashOpenValidationAt!) < ttl;
+
+    if (!force && hasRecentValidation) {
+      return _lastSession?['status'] == 'open';
+    }
+
+    try {
+      if (_currentRegisterId == null || _businessId == null) {
+        await init();
+        return _lastSession?['status'] == 'open';
+      }
+
+      _lastSession = await _repository.getLastSession(_currentRegisterId!);
+      _lastCashOpenValidationAt = now;
+      return _lastSession?['status'] == 'open';
+    } catch (e) {
+      debugPrint('Error validating cash session quickly: $e');
+      return _lastSession?['status'] == 'open';
     }
   }
 }

@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
+
 import '../../../../../../data/models/menu.dart';
 import '../../../../../../data/repositories/menu_repository.dart';
 import '../state/menus_state.dart';
@@ -15,48 +16,71 @@ class MenusVm extends Notifier<MenusState> {
   @override
   MenusState build() => const MenusState();
 
-  // MenusVm
-Future<void> load({required String businessId}) async {
-  state = state.copyWith(data: const AsyncLoading());
-  try {
-    _businessId = await _normalizeBusinessId(businessId);
-    final res = await _repo.list(_businessId!, search: state.search);
-    state = state.copyWith(data: AsyncData(res));
-    // 👇 solo setea si no hay uno seleccionado aún
-    if (res.isNotEmpty && state.selectedId == null) {
-      state = state.copyWith(selectedId: res.first.id);
+  Future<void> load({required String businessId}) async {
+    state = state.copyWith(data: const AsyncLoading());
+    try {
+      _businessId = await _normalizeBusinessId(businessId);
+      final res = await _repo.list(_businessId!, search: state.search);
+      state = state.copyWith(
+        data: AsyncData(res),
+        selectedId: res.isNotEmpty ? (state.selectedId ?? res.first.id) : null,
+      );
+    } catch (e, st) {
+      state = state.copyWith(data: AsyncError(e, st));
     }
-  } catch (e, st) {
-    state = state.copyWith(data: AsyncError(e, st));
   }
-}
 
-
-  void setSearch(String q) async {
+  Future<void> setSearch(String q) async {
     state = state.copyWith(search: q);
-    if (_businessId != null) {
+    if (_businessId == null) return;
+    try {
       final res = await _repo.list(_businessId!, search: q);
       state = state.copyWith(data: AsyncData(res));
+    } catch (e, st) {
+      state = state.copyWith(data: AsyncError(e, st));
     }
   }
 
   void select(String id) => state = state.copyWith(selectedId: id);
 
-  Future<void> create({required String name}) async {
+  Future<void> createMenu({
+    required String name,
+    String? description,
+    String? schedule,
+    bool isActive = true,
+  }) async {
     final b = _ensureBusiness();
     final menu = Menu(
       id: const Uuid().v4(),
       businessId: b,
       name: name,
-      isActive: true,
+      description: description?.trim().isEmpty == true
+          ? null
+          : description?.trim(),
+      schedule: schedule?.trim().isEmpty == true ? null : schedule?.trim(),
+      isActive: isActive,
       createdAt: DateTime.now(),
+      itemsCount: 0,
     );
     await _repo.create(menu);
     await load(businessId: b);
   }
 
-  Future<void> rename(String id, String name) async {
-    await _repo.update(id, {'name': name});
+  Future<void> updateMenu({
+    required String id,
+    required String name,
+    String? description,
+    String? schedule,
+    required bool isActive,
+  }) async {
+    await _repo.update(id, {
+      'name': name,
+      'description': description?.trim().isEmpty == true
+          ? null
+          : description?.trim(),
+      'schedule': schedule?.trim().isEmpty == true ? null : schedule?.trim(),
+      'is_active': isActive,
+    });
     await load(businessId: _businessId ?? 'auto');
   }
 
@@ -70,10 +94,11 @@ Future<void> load({required String businessId}) async {
     await load(businessId: _businessId ?? 'auto');
   }
 
-  // Helpers
   String _ensureBusiness() {
     if (_businessId == null || _businessId == 'auto' || _businessId!.isEmpty) {
-      throw StateError('BusinessId no resuelto. Llama load(businessId) primero');
+      throw StateError(
+        'BusinessId no resuelto. Llama load(businessId) primero',
+      );
     }
     return _businessId!;
   }
@@ -90,7 +115,9 @@ Future<void> load({required String businessId}) async {
         .order('created_at')
         .limit(1)
         .maybeSingle();
-    if (ub != null && ub['business_id'] != null) return ub['business_id'] as String;
+    if (ub != null && ub['business_id'] != null) {
+      return ub['business_id'] as String;
+    }
 
     final mem = await _sp
         .from('memberships')
@@ -99,7 +126,9 @@ Future<void> load({required String businessId}) async {
         .order('created_at')
         .limit(1)
         .maybeSingle();
-    if (mem != null && mem['business_id'] != null) return mem['business_id'] as String;
+    if (mem != null && mem['business_id'] != null) {
+      return mem['business_id'] as String;
+    }
 
     final own = await _sp
         .from('businesses')
@@ -108,7 +137,9 @@ Future<void> load({required String businessId}) async {
         .order('created_at')
         .limit(1)
         .maybeSingle();
-    if (own != null && own['id'] != null) return own['id'] as String;
+    if (own != null && own['id'] != null) {
+      return own['id'] as String;
+    }
 
     throw Exception('No tienes un negocio asignado');
   }

@@ -58,13 +58,13 @@ class SplitPreviewPanel extends ConsumerWidget {
                     vertical: 4,
                   ),
                   decoration: BoxDecoration(
-                    color: Colors.green.withOpacity(0.1),
+                    color: const Color(0xFF22C55E).withOpacity(0.1),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: const Text(
                     'Todas completadas',
                     style: TextStyle(
-                      color: Colors.green,
+                      color: const Color(0xFF22C55E),
                       fontSize: 10,
                       fontWeight: FontWeight.bold,
                     ),

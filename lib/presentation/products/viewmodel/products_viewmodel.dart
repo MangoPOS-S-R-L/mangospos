@@ -2,7 +2,10 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mangopos/data/models/category.dart' as model;
+import 'package:mangopos/data/repositories/category_repository.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../../data/repositories/products_repository.dart';
 
@@ -19,6 +22,7 @@ final productsViewModelProvider = ChangeNotifierProvider<ProductsViewModel>((
 class ProductsViewModel extends ChangeNotifier {
   final SupabaseClient _supabase = Supabase.instance.client;
   final ProductsRepository _repository;
+  final CategoryRepository _categoryRepository = CategoryRepository();
 
   ProductsViewModel(this._repository);
 
@@ -230,6 +234,53 @@ class ProductsViewModel extends ChangeNotifier {
       debugPrint('Error deleting product: $e');
       rethrow;
     }
+  }
+
+  Future<Map<String, dynamic>> createCategory({required String name}) async {
+    if (_businessId == null) {
+      throw Exception('No hay negocio activo para crear categorías');
+    }
+
+    final normalizedName = name.trim();
+    if (normalizedName.isEmpty) {
+      throw Exception('El nombre de la categoría es requerido');
+    }
+
+    final existing = _categories.where((c) {
+      final categoryName = c['name']?.toString().trim().toLowerCase() ?? '';
+      return categoryName == normalizedName.toLowerCase();
+    });
+    if (existing.isNotEmpty) {
+      return Map<String, dynamic>.from(existing.first);
+    }
+
+    final nextPosition = _categories.fold<int>(0, (maxPos, category) {
+      final raw = category['position'];
+      final pos = raw is int ? raw : int.tryParse(raw?.toString() ?? '') ?? 0;
+      return pos > maxPos ? pos : maxPos;
+    }) + 1;
+
+    final created = await _categoryRepository.create(
+      model.Category(
+        id: const Uuid().v4(),
+        businessId: _businessId!,
+        name: normalizedName,
+        position: nextPosition,
+        isActive: true,
+      ),
+    );
+
+    await _fetchCategories();
+    notifyListeners();
+
+    return {
+      'id': created.id,
+      'business_id': created.businessId,
+      'name': created.name,
+      'position': created.position,
+      'is_active': created.isActive,
+      'created_at': created.createdAt?.toIso8601String(),
+    };
   }
 
   String _guessExt(String path) {

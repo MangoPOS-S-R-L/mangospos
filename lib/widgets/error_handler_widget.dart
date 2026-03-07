@@ -91,7 +91,7 @@ class ErrorHandlerWidget extends StatelessWidget {
     final message = _getErrorMessage().toLowerCase();
 
     if (message.contains('conexión') || message.contains('internet')) {
-      return Colors.orange;
+      return const Color(0xFFF97316);
     } else if (message.contains('tiempo') || message.contains('tardó')) {
       return Colors.amber;
     } else if (message.contains('permisos')) {

@@ -331,6 +331,7 @@ class SalesRepositoryImproved {
           'p_payment_method_id': paymentMethodId,
           'p_amount': amount,
           'p_reference': reference,
+          'p_change_amount': changeAmount,
           'p_customer_id': customerId,
           'p_customer_rnc': customerRnc,
           'p_cashier_session_id': cashierSessionId,
@@ -345,6 +346,11 @@ class SalesRepositoryImproved {
       return Payment.fromMap(Map<String, dynamic>.from(response as Map));
     } catch (e, s) {
       debugPrint('⚠️ Error en RPC processPayment: $e\nStack: $s');
+      final msg = e.toString();
+      if (msg.contains('CASH_SESSION_REQUIRED') ||
+          msg.contains('CASH_SESSION_NOT_OPEN')) {
+        rethrow;
+      }
       // Fallback a directo para evitar timeouts/errores del RPC si este falla
       try {
         return await _processPaymentDirect(
@@ -360,7 +366,7 @@ class SalesRepositoryImproved {
           closeOrder: closeOrder,
         );
       } catch (e2) {
-        print('❌ Error en Fallback Directo: $e2');
+        debugPrint('❌ Error en Fallback Directo: $e2');
         rethrow;
       }
     }
@@ -490,11 +496,14 @@ class SalesRepositoryImproved {
     }
 
     // 6) Registrar transaccion en caja si aplica
-    if (paymentMethodCode == 'cash' && cashierSessionId != null) {
+    final cashInDrawer = amount - changeAmount;
+    if (paymentMethodCode == 'cash' &&
+        cashierSessionId != null &&
+        cashInDrawer > 0) {
       try {
         await _client.from('cash_transactions').insert({
           'session_id': cashierSessionId,
-          'amount': amount,
+          'amount': cashInDrawer,
           'type': 'sale',
           'description': 'Venta ${orderId.substring(0, 8)}',
           'related_order_id': orderId,

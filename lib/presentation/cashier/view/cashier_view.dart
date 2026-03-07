@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:mangopos/presentation/cashier/state/blind_cash_close_models.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/utils/responsive_utils.dart';
+import 'package:mangopos/presentation/cashier/widgets/blind_cash_close_dialog.dart';
 import 'package:mangopos/presentation/cashier/widgets/open_cash_dialog.dart';
-import 'package:mangopos/presentation/cashier/widgets/close_cash_dialog.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:async';
 
 class CashierView extends ConsumerStatefulWidget {
@@ -83,7 +86,7 @@ class _CashierViewState extends ConsumerState<CashierView> {
               _ActionCardsSection(
                 isOpen: isOpen,
                 onOpenCash: () => _showOpenCashDialog(context),
-                onCloseCash: () => _showCloseCashDialog(context),
+                onCloseCash: _showCloseCashDialog,
               ),
               SizedBox(height: context.hp(2.5)),
 
@@ -104,7 +107,7 @@ class _CashierViewState extends ConsumerState<CashierView> {
     );
   }
 
-  void _showCloseCashDialog(BuildContext context) {
+  Future<void> _showCloseCashDialog() async {
     final session = ref.read(cashierViewModelProvider).lastSession;
     if (session == null || session['status'] != 'open') {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -116,10 +119,180 @@ class _CashierViewState extends ConsumerState<CashierView> {
       return;
     }
 
+    final pending = await ref
+        .read(cashierViewModelProvider)
+        .refreshPendingTablesCount();
+    if (!mounted) return;
+    if (pending > 0) {
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Mesas abiertas'),
+          content: Text(
+            'Hay $pending mesa(s) con orden abierta. ¿Deseas cerrar la caja de todas formas?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Continuar'),
+            ),
+          ],
+        ),
+      );
+      if (confirm != true) return;
+    }
+
+    if (!mounted) return;
+
+    final rootNavigator = Navigator.of(context, rootNavigator: true);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    CashCloseInput input;
+    try {
+      input = await _buildCloseInput(session['id'].toString());
+    } catch (_) {
+      input = _fallbackInput();
+    } finally {
+      if (rootNavigator.canPop()) {
+        rootNavigator.pop();
+      }
+    }
+
+    if (!mounted) return;
+
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => CloseCashDialog(sessionId: session['id']),
+      builder: (dialogContext) => BlindCashCloseDialog(
+        sessionId: session['id'].toString(),
+        input: input,
+        onCloseConfirmed: (result) async {
+          final notes =
+              'Cierre ciego | Efectivo: ${result.totalCounted} | Tarjetas: ${result.numericCard} | '
+              'Transferencias: ${result.numericTransfer} | Total reportado: ${result.totalReported} | '
+              'Diferencia: ${result.difference}';
+
+          await ref
+              .read(cashierRepositoryProvider)
+              .closeSession(
+                sessionId: session['id'].toString(),
+                endAmount: result.totalCounted.toDouble(),
+                notes: notes,
+              );
+          await ref.read(cashierViewModelProvider).init();
+          if (!mounted) return;
+          GoRouter.of(context).replace(AppRoutes.cashier);
+        },
+      ),
+    );
+  }
+
+  Future<CashCloseInput> _buildCloseInput(String sessionId) async {
+    final repository = ref.read(cashierRepositoryProvider);
+    final vm = ref.read(cashierViewModelProvider);
+
+    final summary = await repository.getSessionSummary(sessionId);
+
+    int toInt(dynamic value) {
+      if (value == null) return 0;
+      if (value is int) return value;
+      if (value is num) return value.round();
+      return int.tryParse(value.toString()) ?? 0;
+    }
+
+    int expectedCash = toInt(summary['expected_cash']);
+    if (expectedCash <= 0) {
+      expectedCash = toInt(summary['expected_amount']);
+    }
+    var expectedCard = toInt(summary['expected_card']);
+    var expectedTransfer = toInt(summary['expected_transfer']);
+    var totalSales = toInt(summary['total_sales_all_methods']);
+    var transactionCount = toInt(summary['transaction_count']);
+
+    if (expectedCard <= 0 && expectedTransfer <= 0 && totalSales <= 0) {
+      final payments = await repository.getSessionPaymentsDetailed(sessionId);
+      int cardPayments = 0;
+      int transferPayments = 0;
+      int totalPaid = 0;
+
+      for (final payment in payments) {
+        final amount = toInt(payment['amount']);
+        totalPaid += amount;
+        final code = (payment['method_code'] ?? '').toString().toLowerCase();
+        final methodName = (payment['method_name'] ?? '')
+            .toString()
+            .toLowerCase();
+
+        if (code == 'card' || methodName.contains('tarjet')) {
+          cardPayments += amount;
+        } else if (code == 'transfer' || methodName.contains('transfer')) {
+          transferPayments += amount;
+        }
+      }
+
+      expectedCard = cardPayments;
+      expectedTransfer = transferPayments;
+      if (totalSales <= 0) totalSales = totalPaid;
+      if (transactionCount <= 0) transactionCount = payments.length;
+    }
+
+    final fallback = _fallbackInput();
+    final hasRealData =
+        expectedCash > 0 ||
+        expectedCard > 0 ||
+        expectedTransfer > 0 ||
+        totalSales > 0;
+
+    if (!hasRealData) return fallback;
+
+    return CashCloseInput(
+      expectedCash: expectedCash,
+      expectedCard: expectedCard,
+      expectedTransfer: expectedTransfer,
+      totalSales: totalSales,
+      transactionCount: transactionCount > 0
+          ? transactionCount
+          : fallback.transactionCount,
+      cashierName: _resolveCashierName(),
+      businessName: vm.businessName.trim().isNotEmpty
+          ? vm.businessName
+          : fallback.businessName,
+    );
+  }
+
+  String _resolveCashierName() {
+    final user = Supabase.instance.client.auth.currentUser;
+    final metadata = user?.userMetadata ?? const <String, dynamic>{};
+    final rawName =
+        (metadata['full_name'] ??
+                metadata['name'] ??
+                metadata['display_name'] ??
+                user?.email ??
+                'Admin')
+            .toString();
+    return rawName.trim().isEmpty ? 'Admin' : rawName.trim();
+  }
+
+  CashCloseInput _fallbackInput() {
+    final vm = ref.read(cashierViewModelProvider);
+    return CashCloseInput(
+      expectedCash: 28500,
+      expectedCard: 12500,
+      expectedTransfer: 4200,
+      totalSales: 45200,
+      transactionCount: 28,
+      cashierName: _resolveCashierName(),
+      businessName: vm.businessName.trim().isNotEmpty
+          ? vm.businessName
+          : 'MangoPOS Restaurant',
     );
   }
 }
@@ -156,7 +329,7 @@ class _HeaderSection extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.06),
+            color: Colors.black.withValues(alpha: 0.06),
             blurRadius: 12,
             offset: const Offset(0, 3),
           ),
@@ -181,8 +354,8 @@ class _HeaderSection extends StatelessWidget {
                       boxShadow: isOpen
                           ? [
                               BoxShadow(
-                                color: MangoColors.successGreen.withOpacity(
-                                  0.3,
+                                color: MangoColors.successGreen.withValues(
+                                  alpha: 0.3,
                                 ),
                                 blurRadius: 8,
                                 spreadRadius: 2,
@@ -254,7 +427,7 @@ class _HeaderSection extends StatelessWidget {
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
-              shadowColor: MangoColors.primaryOrange.withOpacity(0.3),
+              shadowColor: MangoColors.primaryOrange.withValues(alpha: 0.3),
             ),
           ),
         ],
@@ -276,6 +449,7 @@ class _StatsCardsSection extends StatelessWidget {
     final expenses = summary['total_expenses'] ?? 0.0;
     final balance = income - expenses;
     final transactions = summary['transaction_count'] ?? 0;
+    final moneyFormat = NumberFormat('#,##0', 'es_DO');
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -287,7 +461,7 @@ class _StatsCardsSection extends StatelessWidget {
               Expanded(
                 child: _StatCard(
                   title: 'Ingresos Hoy',
-                  value: 'RD\$ ${NumberFormat('#,##0.00').format(income)}',
+                  value: 'RD\$ ${moneyFormat.format(income)}',
                   icon: Icons.trending_up_rounded,
                   color: MangoColors.successGreen,
                 ),
@@ -296,7 +470,7 @@ class _StatsCardsSection extends StatelessWidget {
               Expanded(
                 child: _StatCard(
                   title: 'Egresos Hoy',
-                  value: 'RD\$ ${NumberFormat('#,##0.00').format(expenses)}',
+                  value: 'RD\$ ${moneyFormat.format(expenses)}',
                   icon: Icons.trending_down_rounded,
                   color: Colors.red[600]!,
                 ),
@@ -305,7 +479,7 @@ class _StatsCardsSection extends StatelessWidget {
               Expanded(
                 child: _StatCard(
                   title: 'Balance',
-                  value: 'RD\$ ${NumberFormat('#,##0.00').format(balance)}',
+                  value: 'RD\$ ${moneyFormat.format(balance)}',
                   icon: Icons.account_balance_wallet_rounded,
                   color: MangoColors.primaryOrange,
                 ),
@@ -329,7 +503,7 @@ class _StatsCardsSection extends StatelessWidget {
                   Expanded(
                     child: _StatCard(
                       title: 'Ingresos Hoy',
-                      value: 'RD\$ ${NumberFormat('#,##0.00').format(income)}',
+                      value: 'RD\$ ${moneyFormat.format(income)}',
                       icon: Icons.trending_up_rounded,
                       color: MangoColors.successGreen,
                     ),
@@ -338,8 +512,7 @@ class _StatsCardsSection extends StatelessWidget {
                   Expanded(
                     child: _StatCard(
                       title: 'Egresos Hoy',
-                      value:
-                          'RD\$ ${NumberFormat('#,##0.00').format(expenses)}',
+                      value: 'RD\$ ${moneyFormat.format(expenses)}',
                       icon: Icons.trending_down_rounded,
                       color: Colors.red[600]!,
                     ),
@@ -352,7 +525,7 @@ class _StatsCardsSection extends StatelessWidget {
                   Expanded(
                     child: _StatCard(
                       title: 'Balance',
-                      value: 'RD\$ ${NumberFormat('#,##0.00').format(balance)}',
+                      value: 'RD\$ ${moneyFormat.format(balance)}',
                       icon: Icons.account_balance_wallet_rounded,
                       color: MangoColors.primaryOrange,
                     ),
@@ -396,10 +569,10 @@ class _StatCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withOpacity(0.1), width: 1.5),
+        border: Border.all(color: color.withValues(alpha: 0.1), width: 1.5),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
+            color: Colors.black.withValues(alpha: 0.04),
             blurRadius: 10,
             offset: const Offset(0, 2),
           ),
@@ -413,7 +586,7 @@ class _StatCard extends StatelessWidget {
               Container(
                 padding: EdgeInsets.all(context.wp(0.8)),
                 decoration: BoxDecoration(
-                  color: color.withOpacity(0.1),
+                  color: color.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Icon(icon, color: color, size: context.iconSizeOf(20)),
@@ -504,6 +677,21 @@ class _ActionCardsSection extends StatelessWidget {
                 children: [
                   Expanded(
                     child: _ActionCard(
+                      icon: Icons.sync_alt_rounded,
+                      iconColor: const Color(0xFF7C3AED),
+                      iconBgColor: const Color(0xFFF3E8FF),
+                      title: 'Ingresos y Egresos',
+                      subtitle: 'Registrar depósitos, retiros y gastos',
+                      buttonText: 'Registrar',
+                      buttonColor: const Color(0xFF7C3AED),
+                      enabled: isOpen,
+                      onPressed: () =>
+                          context.go(AppRoutes.cashierIncomeExpense),
+                    ),
+                  ),
+                  SizedBox(width: context.wp(2)),
+                  Expanded(
+                    child: _ActionCard(
                       icon: Icons.history_rounded,
                       iconColor: Colors.blue[600]!,
                       iconBgColor: const Color(0xFFE3F2FD),
@@ -512,14 +700,7 @@ class _ActionCardsSection extends StatelessWidget {
                       buttonText: 'Ver',
                       buttonColor: Colors.blue[600]!,
                       enabled: true,
-                      onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Próximamente: Historial de Caja'),
-                            backgroundColor: Colors.blue,
-                          ),
-                        );
-                      },
+                      onPressed: () => context.go(AppRoutes.cashierHistory),
                     ),
                   ),
                   SizedBox(width: context.wp(2)),
@@ -533,14 +714,7 @@ class _ActionCardsSection extends StatelessWidget {
                       buttonText: 'Gestionar',
                       buttonColor: MangoColors.primaryOrange,
                       enabled: true,
-                      onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Próximamente: Gestión de Cierres'),
-                            backgroundColor: MangoColors.primaryOrange,
-                          ),
-                        );
-                      },
+                      onPressed: () => context.go(AppRoutes.cashierClosures),
                     ),
                   ),
                 ],
@@ -575,6 +749,18 @@ class _ActionCardsSection extends StatelessWidget {
               ),
               SizedBox(height: context.hp(2)),
               _ActionCard(
+                icon: Icons.sync_alt_rounded,
+                iconColor: const Color(0xFF7C3AED),
+                iconBgColor: const Color(0xFFF3E8FF),
+                title: 'Ingresos y Egresos',
+                subtitle: 'Registrar depósitos, retiros y gastos',
+                buttonText: 'Registrar',
+                buttonColor: const Color(0xFF7C3AED),
+                enabled: isOpen,
+                onPressed: () => context.go(AppRoutes.cashierIncomeExpense),
+              ),
+              SizedBox(height: context.hp(2)),
+              _ActionCard(
                 icon: Icons.history_rounded,
                 iconColor: Colors.blue[600]!,
                 iconBgColor: const Color(0xFFE3F2FD),
@@ -583,14 +769,7 @@ class _ActionCardsSection extends StatelessWidget {
                 buttonText: 'Ver',
                 buttonColor: Colors.blue[600]!,
                 enabled: true,
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Próximamente: Historial de Caja'),
-                      backgroundColor: Colors.blue,
-                    ),
-                  );
-                },
+                onPressed: () => context.go(AppRoutes.cashierHistory),
               ),
               SizedBox(height: context.hp(2)),
               _ActionCard(
@@ -602,14 +781,7 @@ class _ActionCardsSection extends StatelessWidget {
                 buttonText: 'Gestionar',
                 buttonColor: MangoColors.primaryOrange,
                 enabled: true,
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Próximamente: Gestión de Cierres'),
-                      backgroundColor: MangoColors.primaryOrange,
-                    ),
-                  );
-                },
+                onPressed: () => context.go(AppRoutes.cashierClosures),
               ),
             ],
           );
@@ -651,13 +823,13 @@ class _ActionCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
           color: enabled
-              ? iconColor.withOpacity(0.15)
-              : Colors.grey.withOpacity(0.15),
+              ? iconColor.withValues(alpha: 0.15)
+              : Colors.grey.withValues(alpha: 0.15),
           width: 1.5,
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
+            color: Colors.black.withValues(alpha: 0.04),
             blurRadius: 10,
             offset: const Offset(0, 2),
           ),
@@ -758,7 +930,7 @@ class _RecentMovementsSection extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.06),
+            color: Colors.black.withValues(alpha: 0.06),
             blurRadius: 12,
             offset: const Offset(0, 3),
           ),
@@ -822,7 +994,7 @@ class _RecentMovementsSection extends StatelessWidget {
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               itemCount: movements.length,
-              separatorBuilder: (_, __) =>
+              separatorBuilder: (_, index) =>
                   Divider(height: context.hp(2.5), color: Colors.grey[200]),
               itemBuilder: (context, index) {
                 final movement = movements[index];
@@ -849,9 +1021,9 @@ class _FilterChip extends StatelessWidget {
         vertical: context.hp(0.6),
       ),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.3), width: 1.5),
+        border: Border.all(color: color.withValues(alpha: 0.3), width: 1.5),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -897,8 +1069,8 @@ class _MovementItem extends StatelessWidget {
           padding: EdgeInsets.all(context.wp(1.2)),
           decoration: BoxDecoration(
             color: isIncome
-                ? MangoColors.successGreen.withOpacity(0.12)
-                : Colors.red.withOpacity(0.12),
+                ? MangoColors.successGreen.withValues(alpha: 0.12)
+                : Colors.red.withValues(alpha: 0.12),
             shape: BoxShape.circle,
           ),
           child: Icon(

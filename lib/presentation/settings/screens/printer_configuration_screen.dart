@@ -41,7 +41,7 @@ class _PrinterConfigurationScreenState
     return Scaffold(
       appBar: AppBar(
         title: const Text('Configuración de Impresión'),
-        backgroundColor: const Color(0xFFF7941A),
+        backgroundColor: const Color(0xFFF97316),
         foregroundColor: Colors.white,
         bottom: TabBar(
           controller: _tabController,
@@ -112,7 +112,7 @@ class _PrintersTabState extends State<_PrintersTab> {
                 icon: const Icon(Icons.add),
                 label: const Text('Agregar'),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFF7941A),
+                  backgroundColor: const Color(0xFFF97316),
                   foregroundColor: Colors.white,
                 ),
               ),
@@ -144,7 +144,7 @@ class _PrintersTabState extends State<_PrintersTab> {
                         icon: const Icon(Icons.add),
                         label: const Text('Agregar Primera Impresora'),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFFF7941A),
+                          backgroundColor: const Color(0xFFF97316),
                           foregroundColor: Colors.white,
                         ),
                       ),
@@ -199,7 +199,7 @@ class _PrintersTabState extends State<_PrintersTab> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Trabajo de prueba enviado'),
-            backgroundColor: Colors.green,
+            backgroundColor: const Color(0xFF22C55E),
           ),
         );
       }
@@ -276,7 +276,7 @@ class _PrinterCard extends StatelessWidget {
                 Icon(
                   _getPrinterIcon(),
                   size: 32,
-                  color: printer.isActive ? Colors.green : Colors.grey,
+                  color: printer.isActive ? const Color(0xFF22C55E) : Colors.grey,
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -305,14 +305,14 @@ class _PrinterCard extends StatelessWidget {
                   ),
                   decoration: BoxDecoration(
                     color: printer.isActive
-                        ? Colors.green.withOpacity(0.1)
+                        ? const Color(0xFF22C55E).withOpacity(0.1)
                         : Colors.grey.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
                     printer.isActive ? 'Activa' : 'Inactiva',
                     style: TextStyle(
-                      color: printer.isActive ? Colors.green : Colors.grey,
+                      color: printer.isActive ? const Color(0xFF22C55E) : Colors.grey,
                       fontWeight: FontWeight.bold,
                       fontSize: 12,
                     ),
@@ -551,7 +551,7 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
         ElevatedButton(
           onPressed: _isLoading ? null : _savePrinter,
           style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFFF7941A),
+            backgroundColor: const Color(0xFFF97316),
             foregroundColor: Colors.white,
           ),
           child: _isLoading
@@ -588,7 +588,7 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Impresora agregada exitosamente'),
-            backgroundColor: Colors.green,
+            backgroundColor: const Color(0xFF22C55E),
           ),
         );
         widget.onSaved();

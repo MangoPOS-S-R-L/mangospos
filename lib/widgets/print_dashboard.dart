@@ -117,7 +117,7 @@ class StatusChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = text.startsWith('🟢')
-        ? Colors.green
+        ? const Color(0xFF22C55E)
         : text.startsWith('🔴')
             ? Colors.red
             : Colors.grey;

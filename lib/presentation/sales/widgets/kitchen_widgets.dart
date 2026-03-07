@@ -104,8 +104,8 @@ class _SendToKitchenButtonState extends ConsumerState<_SendToKitchenButton> {
         style: ElevatedButton.styleFrom(
           backgroundColor: config['bgColor'] as Color,
           foregroundColor: Colors.white,
-          disabledBackgroundColor: (config['bgColor'] as Color).withOpacity(
-            0.7,
+          disabledBackgroundColor: (config['bgColor'] as Color).withValues(
+            alpha: 0.7,
           ),
           disabledForegroundColor: Colors.white70,
           shape: RoundedRectangleBorder(
@@ -122,21 +122,21 @@ class _SendToKitchenButtonState extends ConsumerState<_SendToKitchenButton> {
         return {
           'text': 'Enviar a Cocina',
           'icon': Icons.restaurant,
-          'bgColor': const Color(0xFFFB7116), // kPrimary
+          'bgColor': const Color(0xFFF97316), // kPrimary
           'disabled': false,
         };
       case KitchenButtonState.validating:
         return {
           'text': 'Validando...',
           'icon': Icons.hourglass_empty,
-          'bgColor': const Color(0xFFFB7116),
+          'bgColor': const Color(0xFFF97316),
           'disabled': true,
         };
       case KitchenButtonState.sending:
         return {
           'text': 'Enviando...',
           'icon': Icons.cloud_upload,
-          'bgColor': const Color(0xFFFB7116),
+          'bgColor': const Color(0xFFF97316),
           'disabled': true,
         };
       case KitchenButtonState.success:
@@ -269,7 +269,7 @@ class _PreBillModal extends ConsumerWidget {
                             const SizedBox(width: 12),
                             Expanded(
                               child: Text(
-                                item.productName ?? 'Producto',
+                                item.productName,
                                 style: GoogleFonts.plusJakartaSans(
                                   fontSize: 14,
                                 ),
@@ -324,7 +324,7 @@ class _PreBillModal extends ConsumerWidget {
                         style: GoogleFonts.plusJakartaSans(
                           fontSize: 24,
                           fontWeight: FontWeight.w800,
-                          color: const Color(0xFFFB7116),
+                          color: const Color(0xFFF97316),
                         ),
                       ),
                     ],
@@ -356,7 +356,7 @@ class _PreBillModal extends ConsumerWidget {
                 child: ElevatedButton(
                   onPressed: () => Navigator.of(context).pop(),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFFB7116),
+                    backgroundColor: const Color(0xFFF97316),
                     padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
                   child: Text(

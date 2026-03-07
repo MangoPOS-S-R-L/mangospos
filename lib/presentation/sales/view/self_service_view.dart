@@ -8,7 +8,7 @@ class SelfServiceView extends StatelessWidget {
     return const Scaffold(
       body: Center(
         child: Text(
-          'Self Service',
+          'Self service no disponible',
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
         ),
       ),

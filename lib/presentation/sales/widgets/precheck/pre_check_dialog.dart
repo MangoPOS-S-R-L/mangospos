@@ -39,7 +39,7 @@ class PreCheckDialog extends StatelessWidget {
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.1),
+              color: Colors.black.withValues(alpha: 0.1),
               blurRadius: 20,
               offset: const Offset(0, 10),
             ),
@@ -216,7 +216,7 @@ class PreCheckDialog extends StatelessWidget {
                           style: GoogleFonts.inter(
                             fontSize: 20,
                             fontWeight: FontWeight.w900,
-                            color: const Color(0xFFFB7116), // Mango Orange
+                            color: const Color(0xFFF97316), // Mango Orange
                           ),
                         ),
                       ],
@@ -278,7 +278,7 @@ class PreCheckDialog extends StatelessWidget {
                     child: ElevatedButton.icon(
                       style: ElevatedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 16),
-                        backgroundColor: const Color(0xFFFB7116),
+                        backgroundColor: const Color(0xFFF97316),
                         foregroundColor: Colors.white,
                         elevation: 0,
                         shape: RoundedRectangleBorder(

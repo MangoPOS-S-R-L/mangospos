@@ -43,7 +43,7 @@ class PrinterSelectionDialog extends StatelessWidget {
                 child: ListView.separated(
                   shrinkWrap: true,
                   itemCount: printers.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  separatorBuilder: (_, index) => const Divider(height: 1),
                   itemBuilder: (context, index) {
                     final printer = printers[index];
                     return ListTile(
@@ -56,7 +56,7 @@ class PrinterSelectionDialog extends StatelessWidget {
                         ),
                         child: const Icon(
                           Icons.print,
-                          color: Color(0xFFFB7116),
+                          color: Color(0xFFF97316),
                         ),
                       ),
                       title: Text(
@@ -70,7 +70,7 @@ class PrinterSelectionDialog extends StatelessWidget {
                       trailing: printer.online
                           ? const Icon(
                               Icons.check_circle,
-                              color: Colors.green,
+                              color: const Color(0xFF22C55E),
                               size: 16,
                             )
                           : const Icon(

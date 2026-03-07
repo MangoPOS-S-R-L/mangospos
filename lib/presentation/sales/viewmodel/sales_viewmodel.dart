@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:mangopos/data/repositories/sales_repository.dart';
@@ -16,21 +17,59 @@ final currentOrderProvider =
     NotifierProvider<SalesViewModel, CurrentOrderState>(SalesViewModel.new);
 
 class SalesViewModel extends Notifier<CurrentOrderState> {
+  static const _courtesyPrefix = '[CORTESIA:';
   final Map<String, CurrentOrderState> _tableCache = {};
+  Timer? _refreshOrderDebounceTimer;
+  String? _queuedRefreshOrderId;
+  bool _queuedClearIfPaid = false;
+  bool _refreshOrderInFlight = false;
+
+  static const _refreshOrderDebounce = Duration(milliseconds: 250);
+
+  static const _cashierClosedMessage =
+      'Debes abrir la caja antes de iniciar una venta.';
 
   @override
   CurrentOrderState build() {
     ref.onDispose(() {
       _realtimeChannel?.unsubscribe();
+      _realtimeChannel = null;
+      _subscribedOrderId = null;
+      _refreshOrderDebounceTimer?.cancel();
+      _refreshOrderDebounceTimer = null;
     });
     return const CurrentOrderState();
   }
 
+  Future<bool> ensureCashSessionOpen() async {
+    final cashierVm = ref.read(cashierViewModelProvider);
+    try {
+      final isOpen = await cashierVm.ensureCashOpenFast();
+      if (!isOpen) {
+        state = state.copyWith(loading: false, error: _cashierClosedMessage);
+        return false;
+      }
+      return true;
+    } catch (_) {
+      state = state.copyWith(loading: false, error: _cashierClosedMessage);
+      return false;
+    }
+  }
+
   Future<void> openTable(String tableId) async {
+    if (!await ensureCashSessionOpen()) return;
+
     // Mostrar inmediatamente la última versión conocida si existe
     final cached = _tableCache[tableId];
     if (cached != null) {
-      state = cached.copyWith(loading: true, error: null);
+      // Evita pestañeo de subcuentas cerradas por cache obsoleto.
+      // Los checks autoritativos llegan en _loadOrderDetail().
+      state = cached.copyWith(
+        loading: true,
+        error: null,
+        checks: const [],
+        clearSelectedCheck: true,
+      );
     } else {
       state = const CurrentOrderState(loading: true, origin: 'table');
     }
@@ -82,10 +121,59 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     await openQuick(forceRestart: true);
   }
 
+  Future<void> assignManualOrderToTable({
+    required String orderId,
+    required String tableId,
+  }) async {
+    if (!await ensureCashSessionOpen()) return;
+
+    state = state.copyWith(loading: true, error: null);
+    try {
+      final userId = Supabase.instance.client.auth.currentUser?.id;
+      await ref
+          .read(salesRepositoryProvider)
+          .assignManualOrderToTable(
+            orderId: orderId,
+            tableId: tableId,
+            userId: userId,
+          );
+      await openTable(tableId);
+    } catch (e) {
+      state = state.copyWith(loading: false, error: e.toString());
+    }
+  }
+
+  Future<void> assignCustomerToCurrentOrder({
+    required String customerId,
+    required String customerName,
+  }) async {
+    final order = state.order;
+    if (order == null) return;
+
+    try {
+      await ref
+          .read(salesRepositoryProvider)
+          .assignCustomerToSession(
+            sessionId: order.sessionId,
+            customerId: customerId,
+            customerName: customerName,
+          );
+      state = state.copyWith(
+        customerId: customerId,
+        customerName: customerName,
+      );
+      await _loadOrderDetail(order.id, origin: state.origin);
+    } catch (e) {
+      state = state.copyWith(error: 'Error al asignar cliente: $e');
+    }
+  }
+
   Future<void> _openManualOrQuick(
     String origin, {
     bool forceReset = false,
   }) async {
+    if (!await ensureCashSessionOpen()) return;
+
     state = forceReset
         ? const CurrentOrderState(loading: true)
         : state.copyWith(loading: true, error: null);
@@ -294,34 +382,136 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     if (orderId == null) return;
 
     try {
-      final currentItem = state.items.firstWhere((i) => i.id == itemId);
-
-      // Chain updates - ideally this should be a single backend call or transaction
-      if (currentItem.quantity != updatedItem.quantity) {
-        await ref
-            .read(salesRepositoryProvider)
-            .updateItemQuantity(itemId: itemId, quantity: updatedItem.quantity);
-      }
-
-      if (currentItem.notes != updatedItem.notes) {
-        await ref
-            .read(salesRepositoryProvider)
-            .updateItemNotes(itemId: itemId, notes: updatedItem.notes ?? '');
-      }
-
-      if (currentItem.isTakeout != updatedItem.isTakeout) {
-        await ref
-            .read(salesRepositoryProvider)
-            .toggleItemTakeout(
-              itemId: itemId,
-              isTakeout: updatedItem.isTakeout,
-            );
-      }
-
-      // Refresh once at the end
+      await ref
+          .read(salesRepositoryProvider)
+          .updateItemDetails(
+            itemId: itemId,
+            productName: updatedItem.productName,
+            quantity: updatedItem.quantity,
+            isTakeout: updatedItem.isTakeout,
+            discounts: updatedItem.discounts,
+            notes: updatedItem.notes?.trim().isEmpty ?? true
+                ? null
+                : updatedItem.notes?.trim(),
+          );
       await _loadOrderDetail(orderId);
     } catch (e) {
       state = state.copyWith(error: 'Error al actualizar item: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> applyDiscountPercentToItems({
+    required List<String> itemIds,
+    required double percent,
+  }) async {
+    final orderId = state.order?.id;
+    if (orderId == null || itemIds.isEmpty) return;
+
+    final clampedPercent = percent.clamp(0, 100).toDouble();
+    final targetItems = state.items
+        .where(
+          (i) =>
+              itemIds.contains(i.id) &&
+              i.status != 'paid' &&
+              i.status != 'void',
+        )
+        .toList(growable: false);
+    if (targetItems.isEmpty) return;
+
+    state = state.copyWith(loading: true, error: null);
+    try {
+      await Future.wait(
+        targetItems.map((item) {
+          final base = (item.subtotal + item.tax)
+              .clamp(0, double.infinity)
+              .toDouble();
+          final discount = (base * (clampedPercent / 100))
+              .clamp(0, base)
+              .toDouble();
+          final notesWithoutCourtesy = _stripCourtesyFromNotes(item.notes);
+          return ref
+              .read(salesRepositoryProvider)
+              .updateItemDiscountAndNotes(
+                itemId: item.id,
+                discounts: discount,
+                notes: notesWithoutCourtesy.isEmpty
+                    ? null
+                    : notesWithoutCourtesy,
+              );
+        }),
+      );
+      await _loadOrderDetail(orderId, origin: state.origin);
+    } catch (e) {
+      state = state.copyWith(
+        loading: false,
+        error: 'Error aplicando descuento: $e',
+      );
+      rethrow;
+    }
+  }
+
+  Future<void> applyCourtesyToItems({
+    required List<String> itemIds,
+    required String reason,
+  }) async {
+    final orderId = state.order?.id;
+    if (orderId == null || itemIds.isEmpty) return;
+
+    final selectedItems = state.items
+        .where(
+          (i) =>
+              itemIds.contains(i.id) &&
+              i.status != 'paid' &&
+              i.status != 'void',
+        )
+        .toList(growable: false);
+    if (selectedItems.isEmpty) return;
+
+    // Si un producto se marca como cortesía en principal/subcuenta,
+    // aplicamos la cortesía a todas sus líneas en la orden.
+    final selectedProductKeys = selectedItems
+        .map(_courtesyProductKey)
+        .whereType<String>()
+        .toSet();
+
+    final freshOpenItems = await ref
+        .read(salesRepositoryProvider)
+        .getOrderItems(orderId, includeModifiers: true, onlyOpen: true);
+
+    final targetItems = freshOpenItems
+        .where(
+          (item) => selectedProductKeys.contains(_courtesyProductKey(item)),
+        )
+        .toList(growable: false);
+    if (targetItems.isEmpty) return;
+
+    final cleanedReason = reason.trim();
+    state = state.copyWith(loading: true, error: null);
+    try {
+      await Future.wait(
+        targetItems.map((item) {
+          final base = _courtesyLineAmount(item);
+          final notes = _buildCourtesyNotes(
+            originalNotes: item.notes,
+            reason: cleanedReason,
+          );
+          return ref
+              .read(salesRepositoryProvider)
+              .updateItemDiscountAndNotes(
+                itemId: item.id,
+                discounts: base,
+                notes: notes,
+              );
+        }),
+      );
+      await _loadOrderDetail(orderId, origin: state.origin);
+    } catch (e) {
+      state = state.copyWith(
+        loading: false,
+        error: 'Error aplicando cortesía: $e',
+      );
+      rethrow;
     }
   }
 
@@ -399,8 +589,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       final cashierVM = ref.read(cashierViewModelProvider.notifier);
       unawaited(cashierVM.refreshSilently());
     } catch (e) {
-      // Cashier refresh is not critical, just log
-      print('Note: Could not refresh cashier: $e');
+      // Cashier refresh is not critical for the sales flow.
+      debugPrint('Note: Could not refresh cashier: $e');
     }
 
     state = const CurrentOrderState();
@@ -434,9 +624,42 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   Future<void> refreshOrder({bool clearIfPaid = false}) async {
     final orderId = state.order?.id;
     if (orderId == null) return;
-    await _loadOrderDetail(orderId);
-    if (clearIfPaid && (state.order?.isPaid ?? false)) {
-      state = const CurrentOrderState();
+    _scheduleOrderRefresh(orderId, clearIfPaid: clearIfPaid);
+  }
+
+  void _scheduleOrderRefresh(String orderId, {bool clearIfPaid = false}) {
+    _queuedRefreshOrderId = orderId;
+    _queuedClearIfPaid = _queuedClearIfPaid || clearIfPaid;
+
+    _refreshOrderDebounceTimer?.cancel();
+    _refreshOrderDebounceTimer = Timer(_refreshOrderDebounce, () {
+      unawaited(_flushQueuedOrderRefresh());
+    });
+  }
+
+  Future<void> _flushQueuedOrderRefresh() async {
+    if (_refreshOrderInFlight) return;
+    if (_queuedRefreshOrderId == null) return;
+    _refreshOrderInFlight = true;
+
+    try {
+      while (_queuedRefreshOrderId != null) {
+        final orderId = _queuedRefreshOrderId!;
+        final clearIfPaid = _queuedClearIfPaid;
+
+        _queuedRefreshOrderId = null;
+        _queuedClearIfPaid = false;
+
+        await _loadOrderDetail(orderId);
+        if (clearIfPaid && (state.order?.isPaid ?? false)) {
+          state = const CurrentOrderState();
+        }
+      }
+    } finally {
+      _refreshOrderInFlight = false;
+      if (_queuedRefreshOrderId != null) {
+        unawaited(_flushQueuedOrderRefresh());
+      }
     }
   }
 
@@ -457,26 +680,56 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     List<OrderItem> items = const [];
     List<OrderCheck> checks = const [];
     String? loadError;
-    final orderFuture = repo.getOrder(orderId);
-    final itemsFuture = repo.getOrderItems(
-      orderId,
-      includeModifiers: false,
-      limit: 500,
-      onlyOpen: true,
-    );
-    final checksFuture = repo.getOrderChecks(orderId);
+    String? customerId;
+    String? customerName;
 
+    var loadedByBundle = false;
     try {
-      order = await orderFuture;
-      checks = await checksFuture;
+      final bundle = await repo.getOrderBundle(orderId);
+      order = bundle.order;
+      items = bundle.items;
+      checks = bundle.checks;
+      customerId = bundle.customerId;
+      customerName = bundle.customerName;
+      loadedByBundle = order != null;
     } catch (e) {
       loadError = e.toString();
     }
 
-    try {
-      items = await itemsFuture;
-    } catch (e) {
-      loadError ??= e.toString();
+    if (!loadedByBundle) {
+      final orderFuture = repo.getOrder(orderId);
+      final itemsFuture = repo.getOrderItems(
+        orderId,
+        includeModifiers: false,
+        limit: 500,
+        onlyOpen: true,
+      );
+      final checksFuture = repo.getOrderChecks(orderId);
+      Future<({String? customerId, String? customerName})>? customerFuture;
+
+      try {
+        order = await orderFuture;
+        if (order != null) {
+          customerFuture = repo.getSessionCustomer(order.sessionId);
+        }
+        checks = await checksFuture;
+      } catch (e) {
+        loadError ??= e.toString();
+      }
+
+      try {
+        items = await itemsFuture;
+      } catch (e) {
+        loadError ??= e.toString();
+      }
+
+      if (customerFuture != null) {
+        try {
+          final customer = await customerFuture;
+          customerId = customer.customerId;
+          customerName = customer.customerName;
+        } catch (_) {}
+      }
     }
 
     if (order == null && items.isEmpty) {
@@ -508,6 +761,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       selectedCheckId: newSelectedCheckId,
       clearSelectedCheck:
           newSelectedCheckId == null && state.selectedCheckId != null,
+      customerId: customerId,
+      customerName: customerName,
+      clearCustomer: customerId == null && customerName == null,
     );
 
     // Cachear última versión por mesa para apertura optimista
@@ -519,16 +775,20 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }
 
   RealtimeChannel? _realtimeChannel;
+  String? _subscribedOrderId;
 
   void _subscribeToOrderUpdates(String orderId) {
+    if (_subscribedOrderId == orderId && _realtimeChannel != null) {
+      return;
+    }
+
     if (_realtimeChannel != null) {
-      // If already subscribed to this order, do nothing
-      // We could check if channel topic matches, but simple unsubscribe/resubscribe is safer
       _realtimeChannel!.unsubscribe();
     }
 
     final client = Supabase.instance.client;
     _realtimeChannel = client.channel('order_view_$orderId');
+    _subscribedOrderId = orderId;
 
     _realtimeChannel!
         .onPostgresChanges(
@@ -598,44 +858,52 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       final orderMap = Map<String, dynamic>.from(payload['order'] as Map);
       final order = Order.fromMap(orderMap);
 
-      final checks = ((payload['checks'] as List?) ?? []).map((c) {
+      final checksRaw = (payload['checks'] as List?) ?? const [];
+      final hasCheckClosureMetadata = checksRaw.any((c) {
         final m = Map<String, dynamic>.from(c as Map);
-        return OrderCheck(
-          id: m['id'] ?? '',
-          orderId: order.id,
-          label: m['label'] ?? 'C1',
-          position: (m['position'] ?? 1) as int,
-          isClosed: false,
-          subtotal: (m['subtotal'] ?? 0).toDouble(),
-          discounts: (m['discounts'] ?? 0).toDouble(),
-          tax: (m['tax'] ?? 0).toDouble(),
-          total: (m['total'] ?? 0).toDouble(),
-          items: const [],
-        );
-      }).toList();
+        return m.containsKey('is_closed') ||
+            m.containsKey('isClosed') ||
+            m.containsKey('closed') ||
+            m.containsKey('closed_at');
+      });
+
+      final checks = hasCheckClosureMetadata
+          ? checksRaw.map((c) {
+              final m = Map<String, dynamic>.from(c as Map);
+              final rawIsClosed =
+                  m['is_closed'] ?? m['isClosed'] ?? m['closed'];
+              final isClosed = rawIsClosed != null
+                  ? _parseBool(rawIsClosed)
+                  : m['closed_at'] != null;
+              return OrderCheck(
+                id: m['id'] ?? '',
+                orderId: order.id,
+                label: m['label'] ?? 'C1',
+                position: (m['position'] ?? 1) as int,
+                isClosed: isClosed,
+                subtotal: (m['subtotal'] ?? 0).toDouble(),
+                discounts: (m['discounts'] ?? 0).toDouble(),
+                tax: (m['tax'] ?? 0).toDouble(),
+                total: (m['total'] ?? 0).toDouble(),
+                items: const [],
+              );
+            }).toList()
+          : const <OrderCheck>[];
 
       final items = ((payload['items'] as List?) ?? []).map((i) {
         final m = Map<String, dynamic>.from(i as Map);
-        return OrderItem(
-          id: m['id'] ?? '',
-          orderId: order.id,
-          productId: m['product_id'],
-          productName: m['product_name'] ?? '',
-          sku: m['sku'],
-          quantity: (m['quantity'] ?? m['qty'] ?? 1).toDouble(),
-          unitPrice: (m['unit_price'] ?? 0).toDouble(),
-          subtotal: (m['subtotal'] ?? 0).toDouble(),
-          discounts: (m['discounts'] ?? 0).toDouble(),
-          tax: (m['tax'] ?? 0).toDouble(),
-          total: (m['total'] ?? 0).toDouble(),
-          checkId: m['check_id'],
-          isTakeout: m['is_takeout'] ?? false,
-          status: m['status'] ?? 'draft',
-          notes: m['notes'],
-          createdAt: DateTime.tryParse(m['created_at'] ?? '') ?? DateTime.now(),
-          modifiers: const [],
-        );
+        return OrderItem.fromMap(m);
       }).toList();
+
+      String? nextSelectedCheckId = state.selectedCheckId;
+      if (nextSelectedCheckId != null) {
+        final exists = checks.any(
+          (c) => c.id == nextSelectedCheckId && !c.isClosed,
+        );
+        if (!exists) {
+          nextSelectedCheckId = null;
+        }
+      }
 
       final newState = state.copyWith(
         loading: false,
@@ -644,6 +912,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         items: items,
         checks: checks,
         error: null,
+        selectedCheckId: nextSelectedCheckId,
+        clearSelectedCheck:
+            nextSelectedCheckId == null && state.selectedCheckId != null,
       );
 
       state = newState;
@@ -651,5 +922,79 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     } catch (e) {
       // Si el payload viene incompleto, ignoramos y dejamos al load completo
     }
+  }
+
+  bool _parseBool(dynamic value) {
+    if (value is bool) return value;
+    if (value is num) return value != 0;
+    if (value is String) {
+      final normalized = value.trim().toLowerCase();
+      return normalized == 'true' ||
+          normalized == 't' ||
+          normalized == '1' ||
+          normalized == 'yes' ||
+          normalized == 'y';
+    }
+    return false;
+  }
+
+  String? _courtesyProductKey(OrderItem item) {
+    final productId = item.productId?.trim();
+    if (productId != null && productId.isNotEmpty) return 'id:$productId';
+
+    final name = item.productName.trim().toLowerCase();
+    if (name.isEmpty) return null;
+    final sku = (item.sku ?? '').trim().toLowerCase();
+    final price = item.unitPrice.toStringAsFixed(2);
+    return 'name:$name|sku:$sku|price:$price';
+  }
+
+  double _courtesyLineAmount(OrderItem item) {
+    final modifiersTotal = item.modifiers.fold<double>(
+      0,
+      (sum, modifier) => sum + (modifier.price * modifier.qty),
+    );
+    final estimatedSubtotal = (item.unitPrice * item.quantity) + modifiersTotal;
+
+    final taxRate = item.subtotal > 0
+        ? (item.tax / item.subtotal)
+        : (item.tax > 0 ? 0.18 : 0.0);
+    final estimatedTax = estimatedSubtotal * taxRate;
+
+    final total = (estimatedSubtotal + estimatedTax)
+        .clamp(0, double.infinity)
+        .toDouble();
+    return double.parse(total.toStringAsFixed(2));
+  }
+
+  String _stripCourtesyFromNotes(String? rawNotes) {
+    if (rawNotes == null || rawNotes.trim().isEmpty) return '';
+
+    final lines = rawNotes
+        .split('\n')
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .where(
+          (line) => !(line.startsWith(_courtesyPrefix) && line.endsWith(']')),
+        )
+        .toList(growable: false);
+
+    return lines.join('\n');
+  }
+
+  String? _buildCourtesyNotes({
+    required String? originalNotes,
+    required String reason,
+  }) {
+    final baseNotes = _stripCourtesyFromNotes(originalNotes);
+    final parts = <String>[];
+    if (baseNotes.isNotEmpty) {
+      parts.add(baseNotes);
+    }
+    if (reason.isNotEmpty) {
+      parts.add('$_courtesyPrefix$reason]');
+    }
+    if (parts.isEmpty) return null;
+    return parts.join('\n');
   }
 }

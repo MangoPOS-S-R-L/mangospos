@@ -30,19 +30,48 @@ class MenuRepository {
   }
 
   Future<Menu> create(Menu data) async {
-    final res = await _sp
-        .from(_table)
-        .insert(data.toInsert())
-        .select()
-        .single();
-    return Menu.fromMap(res);
+    try {
+      final res = await _sp
+          .from(_table)
+          .insert(data.toInsert(includeExtended: true))
+          .select()
+          .single();
+      return Menu.fromMap(res);
+    } on PostgrestException catch (e) {
+      if (_isMissingExtendedColumn(e)) {
+        final res = await _sp
+            .from(_table)
+            .insert(data.toInsert(includeExtended: false))
+            .select()
+            .single();
+        return Menu.fromMap(res);
+      }
+      rethrow;
+    }
   }
 
   Future<void> update(String id, Map<String, dynamic> patch) async {
-    await _sp.from(_table).update(patch).eq('id', id);
+    try {
+      await _sp.from(_table).update(patch).eq('id', id);
+    } on PostgrestException catch (e) {
+      if (_isMissingExtendedColumn(e)) {
+        final fallback = Map<String, dynamic>.from(patch)
+          ..remove('description')
+          ..remove('schedule');
+        await _sp.from(_table).update(fallback).eq('id', id);
+        return;
+      }
+      rethrow;
+    }
   }
 
   Future<void> remove(String id) async {
     await _sp.from(_table).delete().eq('id', id);
+  }
+
+  bool _isMissingExtendedColumn(PostgrestException e) {
+    if (e.code != '42703') return false;
+    final msg = e.message.toLowerCase();
+    return msg.contains('description') || msg.contains('schedule');
   }
 }

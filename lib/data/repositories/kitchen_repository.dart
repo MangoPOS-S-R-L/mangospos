@@ -17,42 +17,29 @@ class KitchenRepository {
     String? businessId,
     String? areaCode,
     String? status,
+    bool includeModifiers = false,
+    int? limit,
   }) async {
     try {
-      // Por ahora, obtener todos y filtrar en memoria
-      // TODO: Mejorar con filtros en query cuando se actualice Supabase
-      var query = _client.from('kds_active_items').select();
-      if (businessId != null) {
-        query = query.eq('business_id', businessId);
+      return await _fetchActiveItems(
+        businessId: businessId,
+        areaCode: areaCode,
+        status: status,
+        includeModifiers: includeModifiers,
+        limit: limit,
+      );
+    } on PostgrestException catch (e) {
+      // Fallback para evitar que la UI quede bloqueada en ambientes con dataset grande.
+      if (e.code == '57014') {
+        return _fetchActiveItems(
+          businessId: businessId,
+          areaCode: areaCode,
+          status: status,
+          includeModifiers: false,
+          limit: limit ?? 250,
+        );
       }
-
-      final data = await query.order('created_at', ascending: true);
-
-      var rawData = List<Map<String, dynamic>>.from(data);
-
-      // Filtrar en memoria por areaCode antes de convertir
-      if (areaCode != null) {
-        rawData = rawData.where((map) => map['area_code'] == areaCode).toList();
-      }
-
-      var items = rawData.map((json) {
-        final item = KitchenItem.fromMap(json);
-
-        // Cargar modificadores si existen
-        final modifiers =
-            (json['modifiers'] as List?)
-                ?.map((m) => KitchenModifier.fromMap(m))
-                .toList() ??
-            [];
-
-        return item.copyWith(modifiers: modifiers);
-      }).toList();
-
-      if (status != null) {
-        items = items.where((i) => i.status == status).toList();
-      }
-
-      return items;
+      throw Exception('Error al obtener items de cocina: $e');
     } catch (e) {
       throw Exception('Error al obtener items de cocina: $e');
     }
@@ -67,6 +54,7 @@ class KitchenRepository {
       final items = await getActiveItems(
         businessId: businessId,
         areaCode: areaCode,
+        includeModifiers: true,
       );
 
       // Agrupar items por orden
@@ -153,10 +141,7 @@ class KitchenRepository {
   /// Marcar todos los items de una orden como listos
   Future<void> markOrderReady(String orderId) async {
     try {
-      await _client.rpc(
-        'fn_mark_order_ready',
-        params: {'p_order_id': orderId},
-      );
+      await _client.rpc('fn_mark_order_ready', params: {'p_order_id': orderId});
     } catch (e) {
       throw Exception('Error al marcar orden como lista: $e');
     }
@@ -256,5 +241,137 @@ class KitchenRepository {
     } catch (e) {
       return null;
     }
+  }
+
+  Future<List<KitchenItem>> _fetchActiveItems({
+    String? businessId,
+    String? areaCode,
+    String? status,
+    required bool includeModifiers,
+    int? limit,
+  }) async {
+    const selectColumns =
+        'id,order_id,order_number,product_name,quantity,notes,status,created_at,started_at,ready_at,table_name,waiter_name,business_id,area_code';
+
+    final baseQuery = _client.from('kds_active_items').select(selectColumns);
+    var query = baseQuery;
+
+    if (businessId != null && businessId.isNotEmpty) {
+      query = query.eq('business_id', businessId);
+    }
+    if (areaCode != null && areaCode.isNotEmpty) {
+      query = query.eq('area_code', areaCode);
+    }
+    if (status != null && status.isNotEmpty) {
+      query = query.eq('status', status);
+    }
+    final data = await (limit != null && limit > 0
+        ? query.limit(limit)
+        : query);
+    var rows = List<Map<String, dynamic>>.from(data);
+
+    // Fallback defensivo:
+    // algunos ambientes aún tienen kds_active_items con business_id nulo
+    // para órdenes manual/rápida. Suplementamos esos rows usando el
+    // business real de la sesión de la orden.
+    if (businessId != null && businessId.isNotEmpty) {
+      var nullBusinessQuery = baseQuery.isFilter('business_id', null);
+      if (areaCode != null && areaCode.isNotEmpty) {
+        nullBusinessQuery = nullBusinessQuery.eq('area_code', areaCode);
+      }
+      if (status != null && status.isNotEmpty) {
+        nullBusinessQuery = nullBusinessQuery.eq('status', status);
+      }
+      final nullBusinessData = await (limit != null && limit > 0
+          ? nullBusinessQuery.limit(limit)
+          : nullBusinessQuery);
+      final nullBusinessRows = List<Map<String, dynamic>>.from(
+        nullBusinessData,
+      );
+
+      if (nullBusinessRows.isNotEmpty) {
+        final orderIds = nullBusinessRows
+            .map((row) => row['order_id']?.toString())
+            .whereType<String>()
+            .where((id) => id.isNotEmpty)
+            .toSet()
+            .toList(growable: false);
+
+        if (orderIds.isNotEmpty) {
+          final orderRows = await _client
+              .from('orders')
+              .select('id, table_sessions!inner(business_id)')
+              .inFilter('id', orderIds)
+              .eq('table_sessions.business_id', businessId);
+
+          final allowedOrderIds = List<Map<String, dynamic>>.from(
+            orderRows,
+          ).map((row) => row['id']?.toString()).whereType<String>().toSet();
+
+          if (allowedOrderIds.isNotEmpty) {
+            final existingIds = rows
+                .map((row) => row['id']?.toString())
+                .whereType<String>()
+                .toSet();
+            final supplementalRows = nullBusinessRows.where((row) {
+              final rowId = row['id']?.toString();
+              final orderId = row['order_id']?.toString();
+              return orderId != null &&
+                  allowedOrderIds.contains(orderId) &&
+                  (rowId == null || !existingIds.contains(rowId));
+            });
+            rows = [...rows, ...supplementalRows];
+          }
+        }
+      }
+    }
+
+    final items = rows.map(KitchenItem.fromMap).toList()
+      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+
+    if (!includeModifiers || items.isEmpty) return items;
+    return _attachModifiers(items);
+  }
+
+  Future<List<KitchenItem>> _attachModifiers(List<KitchenItem> items) async {
+    final itemIds = items.map((i) => i.id).toList(growable: false);
+    final modifiersByItem = <String, List<KitchenModifier>>{};
+    const chunkSize = 100;
+
+    for (var i = 0; i < itemIds.length; i += chunkSize) {
+      final end = (i + chunkSize > itemIds.length)
+          ? itemIds.length
+          : i + chunkSize;
+      final chunk = itemIds.sublist(i, end);
+
+      final rows = await _client
+          .from('order_item_modifiers')
+          .select('id,item_id,name,qty')
+          .inFilter('item_id', chunk);
+
+      for (final row in List<Map<String, dynamic>>.from(rows)) {
+        final itemId = row['item_id']?.toString();
+        if (itemId == null || itemId.isEmpty) continue;
+
+        final mods = modifiersByItem.putIfAbsent(
+          itemId,
+          () => <KitchenModifier>[],
+        );
+        mods.add(
+          KitchenModifier.fromMap({
+            'id': row['id'],
+            'name': row['name'],
+            'quantity': row['qty'],
+          }),
+        );
+      }
+    }
+
+    return items
+        .map(
+          (item) =>
+              item.copyWith(modifiers: modifiersByItem[item.id] ?? const []),
+        )
+        .toList(growable: false);
   }
 }

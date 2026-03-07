@@ -40,7 +40,6 @@ class InvoiceModal extends StatelessWidget {
 
     final subtotal = filteredItems.fold<double>(0, (s, i) => s + i.subtotal);
     final tax = filteredItems.fold<double>(0, (s, i) => s + i.tax);
-    final service = filteredItems.fold<double>(0, (s, i) => s + i.discounts);
     final total = filteredItems.fold<double>(0, (s, i) => s + i.total);
 
     return Dialog(
@@ -204,9 +203,9 @@ class InvoiceModal extends StatelessWidget {
                           horizontal: 12,
                         ),
                         decoration: BoxDecoration(
-                          color: Colors.green[50],
+                          color: const Color(0xFF22C55E),
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.green[200]!),
+                          border: Border.all(color: const Color(0xFF22C55E)),
                         ),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -214,14 +213,14 @@ class InvoiceModal extends StatelessWidget {
                             Text(
                               'CAMBIO',
                               style: TextStyle(
-                                color: Colors.green[800],
+                                color: const Color(0xFF22C55E),
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
                             Text(
                               'RD\$ ${currency.format(change)}',
                               style: TextStyle(
-                                color: Colors.green[800],
+                                color: const Color(0xFF22C55E),
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -245,8 +244,8 @@ class InvoiceModal extends StatelessWidget {
                       label: const Text('Imprimir'),
                       style: OutlinedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 16),
-                        side: const BorderSide(color: Color(0xFFFB7116)),
-                        foregroundColor: const Color(0xFFFB7116),
+                        side: const BorderSide(color: Color(0xFFF97316)),
+                        foregroundColor: const Color(0xFFF97316),
                       ),
                     ),
                   ),
@@ -257,7 +256,7 @@ class InvoiceModal extends StatelessWidget {
                       icon: const Icon(Icons.add_shopping_cart),
                       label: const Text('Nueva Venta'),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFFB7116),
+                        backgroundColor: const Color(0xFFF97316),
                         foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(vertical: 16),
                       ),

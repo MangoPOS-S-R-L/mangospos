@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 enum AuthStatus { unauthenticated, authenticated, loading }
 
@@ -204,8 +207,40 @@ class SessionState {
 
 /// Riverpod 3.0 → usar Notifier<T>
 class SessionController extends Notifier<SessionState> {
+  StreamSubscription<AuthState>? _authSub;
+
   @override
-  SessionState build() => const SessionState();
+  SessionState build() {
+    _authSub?.cancel();
+    final auth = Supabase.instance.client.auth;
+
+    _authSub = auth.onAuthStateChange.listen((event) {
+      final authEvent = event.event;
+      final session = event.session;
+
+      if (authEvent == AuthChangeEvent.signedOut) {
+        setUnauthenticated();
+        return;
+      }
+
+      if (authEvent == AuthChangeEvent.signedIn ||
+          authEvent == AuthChangeEvent.tokenRefreshed ||
+          authEvent == AuthChangeEvent.userUpdated ||
+          authEvent == AuthChangeEvent.initialSession) {
+        restoreFromSupabaseSession(session: session);
+      }
+    });
+
+    // Bootstrapping inicial para reload (web/desktop/mobile).
+    Future.microtask(() => restoreFromSupabaseSession());
+
+    ref.onDispose(() {
+      _authSub?.cancel();
+      _authSub = null;
+    });
+
+    return const SessionState(status: AuthStatus.loading);
+  }
 
   void setLoading() => state = state.copyWith(status: AuthStatus.loading);
 
@@ -234,6 +269,67 @@ class SessionController extends Notifier<SessionState> {
 
   void setActiveBusiness(String businessId) {
     state = state.copyWith(activeBusinessId: businessId);
+  }
+
+  Future<bool> restoreFromSupabaseSession({Session? session}) async {
+    final client = Supabase.instance.client;
+    final currentSession = session ?? client.auth.currentSession;
+    final user = currentSession?.user;
+
+    if (user == null) {
+      setUnauthenticated();
+      return false;
+    }
+
+    try {
+      final profileResp = await client
+          .from('profiles')
+          .select('full_name')
+          .eq('id', user.id)
+          .maybeSingle();
+      final fullName =
+          profileResp?['full_name'] as String? ??
+          user.userMetadata?['full_name'] as String? ??
+          user.email ??
+          'Usuario';
+
+      final userBizResp = await client
+          .from('user_businesses')
+          .select('business_id, role')
+          .eq('user_id', user.id)
+          .order('created_at', ascending: true)
+          .limit(1)
+          .maybeSingle();
+
+      if (userBizResp == null) {
+        setUnauthenticated();
+        return false;
+      }
+
+      final businessId = userBizResp['business_id'] as String?;
+      final roleStr = userBizResp['role']?.toString();
+      final posRole = _mapRole(roleStr);
+
+      if (businessId == null || businessId.isEmpty || posRole == null) {
+        setUnauthenticated();
+        return false;
+      }
+
+      setAuthenticated(
+        user.id,
+        businessId: businessId,
+        userName: fullName,
+        activeRole: posRole,
+        availableRoles: [posRole],
+      );
+      return true;
+    } catch (_) {
+      // Conserva estado previo si ya estaba autenticado.
+      if (!state.isAuthenticated) {
+        setUnauthenticated();
+      }
+      return false;
+    }
   }
 
   bool authenticateWithPin({required String pin, String? userId}) {
@@ -305,6 +401,28 @@ class SessionController extends Notifier<SessionState> {
   }
 
   void setUnauthenticated() => state = const SessionState();
+
+  PosRole? _mapRole(String? role) {
+    switch (role) {
+      case 'owner':
+      case 'admin':
+        return PosRole.administrador;
+      case 'manager':
+        return PosRole.supervisor;
+      case 'cashier':
+        return PosRole.cajero;
+      case 'waiter':
+        return PosRole.mesero;
+      case 'kitchen':
+      case 'cook':
+      case 'chef':
+        return PosRole.cocina;
+      case 'delivery':
+        return PosRole.delivery;
+      default:
+        return null;
+    }
+  }
 }
 
 /// Provider para Notifier en v3

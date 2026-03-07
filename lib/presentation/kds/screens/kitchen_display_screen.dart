@@ -49,7 +49,7 @@ class _KitchenDisplayScreenState extends ConsumerState<KitchenDisplayScreen>
         backgroundColor: Colors.black,
         title: Row(
           children: [
-            const Icon(Icons.restaurant_menu, color: Colors.orange),
+            const Icon(Icons.restaurant_menu, color: const Color(0xFFF97316)),
             const SizedBox(width: 12),
             const Text(
               'Kitchen Display System',
@@ -71,21 +71,21 @@ class _KitchenDisplayScreenState extends ConsumerState<KitchenDisplayScreen>
               _StatChip(
                 label: 'Preparando',
                 value: state.stats['preparing'] ?? 0,
-                color: Colors.orange,
+                color: const Color(0xFFF97316),
               ),
               const SizedBox(width: 8),
               _StatChip(
                 label: 'Listos',
                 value: state.stats['ready'] ?? 0,
-                color: Colors.green,
+                color: const Color(0xFF22C55E),
               ),
             ],
           ],
         ),
         bottom: TabBar(
           controller: _tabController,
-          indicatorColor: Colors.orange,
-          labelColor: Colors.orange,
+          indicatorColor: const Color(0xFFF97316),
+          labelColor: const Color(0xFFF97316),
           unselectedLabelColor: Colors.grey[400],
           tabs: [
             Tab(
@@ -115,7 +115,7 @@ class _KitchenDisplayScreenState extends ConsumerState<KitchenDisplayScreen>
           IconButton(
             icon: Icon(
               state.autoRefresh ? Icons.sync : Icons.sync_disabled,
-              color: state.autoRefresh ? Colors.green : Colors.grey,
+              color: state.autoRefresh ? const Color(0xFF22C55E) : Colors.grey,
             ),
             onPressed: () => viewModel.toggleAutoRefresh(),
           ),
@@ -128,7 +128,7 @@ class _KitchenDisplayScreenState extends ConsumerState<KitchenDisplayScreen>
         ],
       ),
       body: state.loading
-          ? const Center(child: CircularProgressIndicator(color: Colors.orange))
+          ? const Center(child: CircularProgressIndicator(color: const Color(0xFFF97316)))
           : Column(
               children: [
                 // Stats bar

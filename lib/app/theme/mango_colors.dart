@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 
 class MangoColors {
   // 🎨 Colores base
-  static const primaryOrange = Color(0xFFF7941A);
-  static const successGreen = Color(0xFF32AD40);
+  static const primaryOrange = Color(0xFFF97316);
+  static const successGreen = Color(0xFF22C55E);
   static const white = Color(0xFFFFFFFF);
   static const darkGray = Color(0xFF32363F);
   static const sidebarBg = Color(0xFFF7F7F7);

@@ -19,6 +19,7 @@ class TableCard extends StatefulWidget {
   final String? currentUserId;
   final VoidCallback? onTap;
   final bool isOpening;
+  final bool enabled;
 
   const TableCard({
     super.key,
@@ -26,6 +27,7 @@ class TableCard extends StatefulWidget {
     this.currentUserId,
     this.onTap,
     this.isOpening = false,
+    this.enabled = true,
   });
 
   @override
@@ -44,58 +46,67 @@ class _TableCardState extends State<TableCard> {
     return MouseRegion(
       onEnter: (_) => setState(() => _isHovered = true),
       onExit: (_) => setState(() => _isHovered = false),
-      cursor: SystemMouseCursors.click,
+      cursor: widget.enabled
+          ? SystemMouseCursors.click
+          : SystemMouseCursors.forbidden,
       child: GestureDetector(
-        onTap: widget.isOpening ? null : widget.onTap,
-        child: AnimatedScale(
-          scale: _isHovered ? 1.02 : 1.0,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeInOut,
-          child: AnimatedContainer(
+        onTap: (widget.isOpening || !widget.enabled) ? null : widget.onTap,
+        child: Opacity(
+          opacity: widget.enabled ? 1 : 0.65,
+          child: AnimatedScale(
+            scale: _isHovered && widget.enabled ? 1.02 : 1.0,
             duration: const Duration(milliseconds: 200),
             curve: Curves.easeInOut,
-            height: 140, // FIJO - NO cambia
-            constraints: const BoxConstraints(
-              minWidth: 240, // Ancho mínimo
-            ),
-            decoration: BoxDecoration(
-              color: AppColors.card,
-              borderRadius: BorderRadius.circular(12), // rounded-xl
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(_isHovered ? 0.08 : 0.05),
-                  blurRadius: _isHovered ? 12 : 3,
-                  offset: _isHovered ? const Offset(0, 4) : const Offset(0, 1),
-                ),
-              ],
-              // Barra de color izquierda de 6px
-              border: Border(
-                left: BorderSide(color: _getBorderColor(), width: 6),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeInOut,
+              height: 140, // FIJO - NO cambia
+              constraints: const BoxConstraints(
+                minWidth: 240, // Ancho mínimo
               ),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(
-                12,
-              ), // Reducido de 16 a 12 para evitar overflow
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // SECCIÓN SUPERIOR
-                  _buildTopSection(isOwnTable),
-
-                  // SECCIÓN MEDIA - Divisor con espaciado fijo
-                  const SizedBox(height: 8),
-                  Container(
-                    height: 1,
-                    width: double.infinity,
-                    color: AppColors.borderDivider,
+              decoration: BoxDecoration(
+                color: AppColors.card,
+                borderRadius: BorderRadius.circular(12), // rounded-xl
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(
+                      alpha: _isHovered && widget.enabled ? 0.08 : 0.05,
+                    ),
+                    blurRadius: _isHovered && widget.enabled ? 12 : 3,
+                    offset: _isHovered && widget.enabled
+                        ? const Offset(0, 4)
+                        : const Offset(0, 1),
                   ),
-                  const SizedBox(height: 8),
-
-                  // SECCIÓN INFERIOR
-                  _buildBottomSection(isOwnTable),
                 ],
+                // Barra de color izquierda de 6px
+                border: Border(
+                  left: BorderSide(color: _getBorderColor(), width: 6),
+                ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(
+                  12,
+                ), // Reducido de 16 a 12 para evitar overflow
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // SECCIÓN SUPERIOR
+                    _buildTopSection(isOwnTable),
+
+                    // SECCIÓN MEDIA - Divisor con espaciado fijo
+                    const SizedBox(height: 8),
+                    Container(
+                      height: 1,
+                      width: double.infinity,
+                      color: AppColors.borderDivider,
+                    ),
+                    const SizedBox(height: 8),
+
+                    // SECCIÓN INFERIOR
+                    _buildBottomSection(isOwnTable),
+                  ],
+                ),
               ),
             ),
           ),

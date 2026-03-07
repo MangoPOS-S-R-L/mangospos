@@ -22,6 +22,7 @@ class SplitBillState extends Equatable {
 
   // Estado del proceso
   final bool splitApplied;
+  final Set<String> pendingDeletedCheckIds;
 
   const SplitBillState({
     this.loading = false,
@@ -33,6 +34,7 @@ class SplitBillState extends Equatable {
     this.showEqualSplit = false,
     this.equalSplitPeople = 2,
     this.splitApplied = false,
+    this.pendingDeletedCheckIds = const {},
   });
 
   SplitBillState copyWith({
@@ -45,6 +47,7 @@ class SplitBillState extends Equatable {
     bool? showEqualSplit,
     int? equalSplitPeople,
     bool? splitApplied,
+    Set<String>? pendingDeletedCheckIds,
   }) {
     return SplitBillState(
       loading: loading ?? this.loading,
@@ -56,6 +59,8 @@ class SplitBillState extends Equatable {
       showEqualSplit: showEqualSplit ?? this.showEqualSplit,
       equalSplitPeople: equalSplitPeople ?? this.equalSplitPeople,
       splitApplied: splitApplied ?? this.splitApplied,
+      pendingDeletedCheckIds:
+          pendingDeletedCheckIds ?? this.pendingDeletedCheckIds,
     );
   }
 
@@ -74,13 +79,13 @@ class SplitBillState extends Equatable {
 
   // Verificar si se puede aplicar la división
   bool get canApplySplit {
-    // Debe haber al menos un check
-    if (checks.isEmpty) return false;
+    if (loading || order == null) return false;
 
-    // Todos los items deben estar asignados
-    if (unassignedItems.isNotEmpty) return false;
-
-    return true;
+    // Permitir guardar también cuando todas las subcuentas se eliminaron
+    // y los items quedaron en la cuenta principal (C1).
+    return allItems.isNotEmpty ||
+        checks.isNotEmpty ||
+        pendingDeletedCheckIds.isNotEmpty;
   }
 
   @override
@@ -94,5 +99,6 @@ class SplitBillState extends Equatable {
     showEqualSplit,
     equalSplitPeople,
     splitApplied,
+    pendingDeletedCheckIds,
   ];
 }

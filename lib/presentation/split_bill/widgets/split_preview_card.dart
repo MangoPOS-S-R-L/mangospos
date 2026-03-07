@@ -32,7 +32,7 @@ class SplitPreviewCard extends StatelessWidget {
             width: 4,
             height: 32,
             decoration: BoxDecoration(
-              color: isPaid ? Colors.green : Colors.orange,
+              color: isPaid ? const Color(0xFF22C55E) : const Color(0xFFF97316),
               borderRadius: BorderRadius.circular(2),
             ),
           ),
@@ -55,7 +55,7 @@ class SplitPreviewCard extends StatelessWidget {
                   style: TextStyle(
                     fontWeight: FontWeight.bold,
                     fontSize: 14,
-                    color: isPaid ? Colors.green : SalesTheme.foreground,
+                    color: isPaid ? const Color(0xFF22C55E) : SalesTheme.foreground,
                   ),
                 ),
               ],
@@ -63,7 +63,7 @@ class SplitPreviewCard extends StatelessWidget {
           ),
           // Actions
           if (isPaid)
-            const Icon(Icons.check_circle, color: Colors.green, size: 20)
+            const Icon(Icons.check_circle, color: const Color(0xFF22C55E), size: 20)
           else
             ElevatedButton(
               onPressed: onPay,

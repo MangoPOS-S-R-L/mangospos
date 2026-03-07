@@ -10,12 +10,15 @@ import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
 import 'package:mangopos/presentation/sales/view/invoice_modal.dart';
 import 'package:mangopos/presentation/split_bill/widgets/split_bill_modal.dart';
+import 'package:mangopos/presentation/customers/viewmodel/customers_viewmodel.dart';
 
 import 'package:mangopos/presentation/sales/widgets/precheck/pre_check_dialog.dart';
 import 'package:mangopos/presentation/sales/widgets/printer_selection_dialog.dart';
 import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
+import 'package:mangopos/data/models/table_status.dart';
 
 import 'package:mangopos/presentation/sales/view/widgets/product_detail_modal.dart';
 import 'payment_split_screen.dart';
@@ -27,7 +30,7 @@ const Color _salesTextSecondary = Color(0xFF7A7A7A);
 const Color _salesTextHint = Color(0xFF9A9A9A);
 const Color _salesKitchenButton = Color(0xFFFB8A3C); // naranja cocina sólido
 const Color _salesPayButton = Color(0xFF22C55E); // verde puro (success)
-const Color _salesTotalColor = Color(0xFFFB7116); // mango fuerte
+const Color _salesTotalColor = Color(0xFFF97316); // mango fuerte
 const Color _salesTabActiveBg = Color(0xFFF3F0ED);
 
 const double _salesRadiusCard = 14;
@@ -39,23 +42,83 @@ const List<BoxShadow> _salesSoftShadow = [
   BoxShadow(color: Color(0x10000000), blurRadius: 6, offset: Offset(0, 2)),
 ];
 
-class TableOrderScreen extends ConsumerStatefulWidget {
-  final String tableId;
-  final String tableCode;
-  final String zoneId;
+double _effectiveItemTotal(OrderItem item) {
+  return _effectiveItemAmounts(item).total;
+}
 
-  const TableOrderScreen({
+double _effectiveItemSubtotal(OrderItem item) {
+  return _effectiveItemAmounts(item).subtotal;
+}
+
+double _effectiveItemTax(OrderItem item) {
+  return _effectiveItemAmounts(item).tax;
+}
+
+({double subtotal, double tax, double total}) _effectiveItemAmounts(
+  OrderItem item,
+) {
+  final expectedSubtotal = item.unitPrice * item.quantity;
+  final dbSubtotal = item.subtotal;
+  final isFractionalQty =
+      (item.quantity - item.quantity.roundToDouble()).abs() > 0.001;
+  final useExpectedSubtotal =
+      isFractionalQty &&
+      dbSubtotal > 0 &&
+      (dbSubtotal - expectedSubtotal).abs() > 0.01;
+
+  final baseSubtotal = useExpectedSubtotal
+      ? expectedSubtotal
+      : (dbSubtotal > 0 ? dbSubtotal : expectedSubtotal);
+
+  final dbTax = item.tax;
+  final baseTax = (useExpectedSubtotal && dbSubtotal > 0)
+      ? (dbTax * (baseSubtotal / dbSubtotal))
+      : dbTax;
+
+  final discount = item.discounts.clamp(0, double.infinity).toDouble();
+  final discountOnSubtotal = discount > baseSubtotal ? baseSubtotal : discount;
+  final discountOnTax = discount - discountOnSubtotal;
+
+  final netSubtotal = (baseSubtotal - discountOnSubtotal)
+      .clamp(0, double.infinity)
+      .toDouble();
+  final netTax = (baseTax - discountOnTax).clamp(0, double.infinity).toDouble();
+  final netTotal = (netSubtotal + netTax).clamp(0, double.infinity).toDouble();
+
+  return (
+    subtotal: double.parse(netSubtotal.toStringAsFixed(2)),
+    tax: double.parse(netTax.toStringAsFixed(2)),
+    total: double.parse(netTotal.toStringAsFixed(2)),
+  );
+}
+
+enum OrderOrigin { table, manual, quick }
+
+class OrderScreen extends ConsumerStatefulWidget {
+  final OrderOrigin origin;
+  final String? tableId;
+  final String? tableCode;
+  final String? zoneId;
+
+  const OrderScreen({
     super.key,
-    required this.tableId,
-    required this.tableCode,
-    required this.zoneId,
+    this.origin = OrderOrigin.table,
+    this.tableId,
+    this.tableCode,
+    this.zoneId,
   });
 
   @override
-  ConsumerState<TableOrderScreen> createState() => _TableOrderScreenState();
+  ConsumerState<OrderScreen> createState() => _OrderScreenState();
 }
 
-class _TableOrderScreenState extends ConsumerState<TableOrderScreen> {
+class _OrderScreenState extends ConsumerState<OrderScreen> {
+  String? _currentTableCode;
+
+  bool _isOpenItem(OrderItem item) {
+    return item.status != 'paid' && item.status != 'void';
+  }
+
   Future<void> _handleBack(BuildContext context) async {
     final orderState = ref.read(currentOrderProvider);
     if (!orderState.loading &&
@@ -68,21 +131,190 @@ class _TableOrderScreenState extends ConsumerState<TableOrderScreen> {
     }
   }
 
+  Future<void> _handleReleaseTable(BuildContext context) async {
+    final orderState = ref.read(currentOrderProvider);
+    if (orderState.order == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Liberar mesa'),
+        content: const Text(
+          'Esto anulará la orden actual y liberará la mesa. ¿Deseas continuar?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Liberar'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+    await ref.read(currentOrderProvider.notifier).cancelCurrentOrder();
+    if (!context.mounted) return;
+    context.go(AppRoutes.salesByZone);
+  }
+
+  Future<void> _handleAssignClient(BuildContext context) async {
+    final selected = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (_) => const _AssignCustomerDialog(),
+    );
+
+    if (selected == null) return;
+
+    final customerId = selected['id'] as String?;
+    final customerName = (selected['name'] as String?)?.trim();
+    if (customerId == null || customerId.isEmpty) return;
+    if (customerName == null || customerName.isEmpty) return;
+
+    await ref
+        .read(currentOrderProvider.notifier)
+        .assignCustomerToCurrentOrder(
+          customerId: customerId,
+          customerName: customerName,
+        );
+
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('Cliente asignado: $customerName')));
+  }
+
+  Future<void> _handleApplyDiscount(BuildContext context) async {
+    final orderState = ref.read(currentOrderProvider);
+    final openItems = orderState.items
+        .where(_isOpenItem)
+        .toList(growable: false);
+    if (orderState.order == null || openItems.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No hay productos abiertos para descontar.'),
+        ),
+      );
+      return;
+    }
+
+    final result = await showDialog<_DiscountDialogResult>(
+      context: context,
+      builder: (_) => _DiscountDialog(items: openItems),
+    );
+    if (result == null) return;
+
+    final targetIds = result.scope == _DiscountScope.table
+        ? openItems.map((e) => e.id).toList(growable: false)
+        : result.selectedItemIds;
+    if (targetIds.isEmpty) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Selecciona al menos un producto.')),
+      );
+      return;
+    }
+
+    try {
+      await ref
+          .read(currentOrderProvider.notifier)
+          .applyDiscountPercentToItems(
+            itemIds: targetIds,
+            percent: result.percent,
+          );
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Descuento ${result.percent.toStringAsFixed(0)}% aplicado.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo aplicar descuento: $e')),
+      );
+    }
+  }
+
+  Future<void> _handleCourtesyByProduct(BuildContext context) async {
+    final orderState = ref.read(currentOrderProvider);
+    final openItems = orderState.items
+        .where(_isOpenItem)
+        .toList(growable: false);
+    if (orderState.order == null || openItems.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No hay productos abiertos para cortesía.'),
+        ),
+      );
+      return;
+    }
+
+    final result = await showDialog<_CourtesyDialogResult>(
+      context: context,
+      builder: (_) => _CourtesyDialog(items: openItems),
+    );
+    if (result == null || result.selectedItemIds.isEmpty) return;
+
+    try {
+      await ref
+          .read(currentOrderProvider.notifier)
+          .applyCourtesyToItems(
+            itemIds: result.selectedItemIds,
+            reason: result.reason,
+          );
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.reason.trim().isEmpty
+                ? 'Cortesía aplicada.'
+                : 'Cortesía aplicada: ${result.reason.trim()}',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo aplicar cortesía: $e')),
+      );
+    }
+  }
+
+  void _initializeOrder() {
+    final notifier = ref.read(currentOrderProvider.notifier);
+    if (widget.origin == OrderOrigin.table && widget.tableId != null) {
+      notifier.openTable(widget.tableId!);
+    } else if (widget.origin == OrderOrigin.manual) {
+      notifier.ensureManualOrder();
+    } else if (widget.origin == OrderOrigin.quick) {
+      notifier.ensureQuickOrder();
+    }
+  }
+
   @override
-  void didUpdateWidget(TableOrderScreen oldWidget) {
+  void didUpdateWidget(OrderScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.tableId != oldWidget.tableId) {
-      ref.read(currentOrderProvider.notifier).openTable(widget.tableId);
-      ref.read(menuBrowserVmProvider.notifier).loadAll();
+    if (widget.origin != oldWidget.origin ||
+        widget.tableId != oldWidget.tableId) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _initializeOrder();
+      });
     }
   }
 
   @override
   void initState() {
     super.initState();
+    _currentTableCode = widget.tableCode;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(currentOrderProvider.notifier).openTable(widget.tableId);
-      ref.read(menuBrowserVmProvider.notifier).loadAll();
+      _initializeOrder();
     });
   }
 
@@ -102,15 +334,14 @@ class _TableOrderScreenState extends ConsumerState<TableOrderScreen> {
               cartWidth = 400.0;
             }
 
-            final cart = _CartView(tableCode: widget.tableCode);
+            final cart = _CartView(
+              origin: widget.origin,
+              tableCode: _currentTableCode ?? '',
+              onAssignClient: () => _handleAssignClient(context),
+            );
             final catalog = _CatalogArea(
-              tableCode: widget.tableCode,
-              onBack: () => _handleBack(context),
-              onAssignClient: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Asignar cliente')),
-                );
-              },
+              origin: widget.origin,
+              tableCode: _currentTableCode ?? 'Venta Libre',
               onProductTap: (product) {
                 final orderState = ref.read(currentOrderProvider);
                 if (orderState.loading) {
@@ -144,8 +375,10 @@ class _TableOrderScreenState extends ConsumerState<TableOrderScreen> {
                   Expanded(
                     flex: 4,
                     child: _CartView(
-                      tableCode: widget.tableCode,
+                      origin: widget.origin,
+                      tableCode: widget.tableCode ?? 'Venta Local',
                       isStacked: true,
+                      onAssignClient: () => _handleAssignClient(context),
                     ),
                   ),
                   Container(height: 1, color: _salesDivider),
@@ -159,11 +392,10 @@ class _TableOrderScreenState extends ConsumerState<TableOrderScreen> {
               children: [
                 _SalesToolsRail(
                   onBack: () => _handleBack(context),
-                  onAction: (action) {
-                    ScaffoldMessenger.of(
-                      context,
-                    ).showSnackBar(SnackBar(content: Text('Accion: $action')));
-                  },
+                  showTableActions: widget.origin == OrderOrigin.table,
+                  onReleaseTable: () => _handleReleaseTable(context),
+                  onApplyDiscount: () => _handleApplyDiscount(context),
+                  onApplyCourtesy: () => _handleCourtesyByProduct(context),
                 ),
                 // Usamos ancho fijo según especificación (400px o 320px)
                 SizedBox(width: cartWidth, child: cart),
@@ -182,12 +414,31 @@ class _TableOrderScreenState extends ConsumerState<TableOrderScreen> {
 // 2. VISTA DE CARRITO
 // -----------------------------------------------------------------------------
 class _CartView extends ConsumerWidget {
+  final OrderOrigin origin;
   final String tableCode;
   final bool isStacked;
-  const _CartView({required this.tableCode, this.isStacked = false});
+  final VoidCallback onAssignClient;
+  const _CartView({
+    required this.origin,
+    required this.tableCode,
+    required this.onAssignClient,
+    this.isStacked = false,
+  });
 
   bool _isOpenItem(OrderItem item) {
     return item.status != 'paid' && item.status != 'void';
+  }
+
+  double _sumItemQty(Iterable<OrderItem> items) {
+    return items.fold<double>(0, (sum, item) => sum + item.quantity);
+  }
+
+  String _formatQtyBadge(double qty) {
+    final normalized = double.parse(qty.toStringAsFixed(2));
+    if ((normalized - normalized.roundToDouble()).abs() < 0.001) {
+      return normalized.toStringAsFixed(0);
+    }
+    return normalized.toStringAsFixed(2);
   }
 
   // --- 🪄 UI HELPERS ----------------------------------------------------
@@ -198,6 +449,8 @@ class _CartView extends ConsumerWidget {
     Order order,
     double total, {
     String? checkId,
+    String? customerId,
+    String? customerName,
   }) {
     // Usamos el tableCode disponible en la vista
     final tableName = tableCode;
@@ -210,6 +463,8 @@ class _CartView extends ConsumerWidget {
         totalAmount: total,
         tableName: tableName,
         checkId: checkId,
+        customerId: customerId,
+        customerName: customerName,
       ),
     ).then((result) async {
       if (result is List<Payment>) {
@@ -309,14 +564,39 @@ class _CartView extends ConsumerWidget {
       context: context,
       builder: (context) => ProductDetailModal(
         item: item,
-        onSave: (updatedItem) {
-          ref
+        onSave: (updatedItem) async {
+          await ref
               .read(currentOrderProvider.notifier)
               .updateItem(item.id, updatedItem);
         },
         onDelete: () {
           ref.read(currentOrderProvider.notifier).deleteItem(item.id);
         },
+        onMarkSoldOut: item.productId == null
+            ? null
+            : () async {
+                await ref
+                    .read(salesRepositoryProvider)
+                    .setMenuItemAvailability(
+                      menuItemId: item.productId!,
+                      isActive: false,
+                    );
+                await ref
+                    .read(menuBrowserVmProvider.notifier)
+                    .loadAll(
+                      preselectCategoryId: ref
+                          .read(menuBrowserVmProvider)
+                          .selectedCategoryId,
+                    );
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      '${item.productName} quedó marcado como agotado',
+                    ),
+                  ),
+                );
+              },
       ),
     );
   }
@@ -393,16 +673,29 @@ class _CartView extends ConsumerWidget {
     double displayTax = 0.0;
 
     if (selectedCheckId != null) {
-      displayTotal = displayedItems.fold(0.0, (sum, i) => sum + i.total);
-      displaySubtotal = displayedItems.fold(0.0, (sum, i) => sum + i.subtotal);
-      displayTax = displayedItems.fold(0.0, (sum, i) => sum + i.tax);
+      displayTotal = displayedItems.fold(0.0, (sum, i) {
+        return sum + _effectiveItemTotal(i);
+      });
+      displaySubtotal = displayedItems.fold(0.0, (sum, i) {
+        return sum + _effectiveItemSubtotal(i);
+      });
+      displayTax = displayedItems.fold(0.0, (sum, i) {
+        return sum + _effectiveItemTax(i);
+      });
     } else {
       // Global View (TODAS)
       // Calculate totals from displayed items only (excluding closed checks)
       // This ensures the total matches what is seen on screen
-      displayTotal = displayedItems.fold(0.0, (sum, i) => sum + i.total);
-      displaySubtotal = displayedItems.fold(0.0, (sum, i) => sum + i.subtotal);
-      displayTax = displayedItems.fold(0.0, (sum, i) => sum + i.tax);
+      displayTotal = displayedItems.fold(
+        0.0,
+        (sum, i) => sum + _effectiveItemTotal(i),
+      );
+      displaySubtotal = displayedItems.fold(0.0, (sum, i) {
+        return sum + _effectiveItemSubtotal(i);
+      });
+      displayTax = displayedItems.fold(0.0, (sum, i) {
+        return sum + _effectiveItemTax(i);
+      });
     }
 
     final currency = NumberFormat('#,##0.00', 'en_US');
@@ -412,13 +705,15 @@ class _CartView extends ConsumerWidget {
     final draftItems = displayedItems
         .where((i) => i.status == 'draft')
         .toList();
-    final itemsCount = displayedItems.length; // Count of visible items
+    final itemsCount = _sumItemQty(
+      displayedItems,
+    ); // Cantidad real, no cantidad de líneas
 
     final Map<String, _GroupedSentItem> groupedSent = {};
     for (final item in sentItems) {
-      final name = item.productName ?? 'Producto';
-      final qty = (item.quantity ?? 1).toDouble();
-      final totalItem = (item.total ?? 0.0).toDouble();
+      final name = item.productName;
+      final qty = item.quantity.toDouble();
+      final totalItem = _effectiveItemTotal(item);
       final key = name.toLowerCase().trim();
       if (groupedSent.containsKey(key)) {
         groupedSent[key] = groupedSent[key]!.copyWith(
@@ -444,44 +739,90 @@ class _CartView extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      'Mesa $tableCode',
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w600,
-                        color: _salesTextPrimary,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            origin == OrderOrigin.table
+                                ? 'Mesa $tableCode'
+                                : origin == OrderOrigin.manual
+                                ? 'Venta Manual ${tableCode.isNotEmpty ? " • $tableCode" : ""}'
+                                : 'Venta Rápida',
+                            style: const TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w600,
+                              color: _salesTextPrimary,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${_formatQtyBadge(itemsCount)} productos',
+                            style: const TextStyle(
+                              fontSize: 14,
+                              color: _salesTextSecondary,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    if (selectedCheckId != null)
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.blue.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: const Text(
-                          'Subcuenta',
-                          style: TextStyle(
-                            fontSize: 10,
-                            color: Colors.blue,
-                            fontWeight: FontWeight.bold,
+                    const SizedBox(width: 10),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        if (selectedCheckId != null)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.blue.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text(
+                              'Subcuenta',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: Colors.blue,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        const SizedBox(height: 8),
+                        OutlinedButton.icon(
+                          onPressed: onAssignClient,
+                          icon: const Icon(Icons.person_outline, size: 16),
+                          label: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 148),
+                            child: Text(
+                              orderState.customerName?.trim().isNotEmpty == true
+                                  ? orderState.customerName!
+                                  : 'Asignar cliente',
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                            ),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: _salesTotalColor,
+                            side: const BorderSide(color: _salesDivider),
+                            minimumSize: const Size(0, 36),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 8,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(
+                                _salesRadiusButton,
+                              ),
+                            ),
                           ),
                         ),
-                      ),
+                      ],
+                    ),
                   ],
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '$itemsCount productos',
-                  style: const TextStyle(
-                    fontSize: 14,
-                    color: _salesTextSecondary,
-                  ),
                 ),
               ],
             ),
@@ -490,14 +831,14 @@ class _CartView extends ConsumerWidget {
         // CHECK SELECTOR (TABS)
         if (hasChecks)
           Container(
-            height: 110,
+            height: 98,
             width: double.infinity,
             decoration: const BoxDecoration(
               border: Border(bottom: BorderSide(color: _salesDivider)),
             ),
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
               child: Row(
                 children: [
                   _BigCheckSelector(
@@ -506,7 +847,7 @@ class _CartView extends ConsumerWidget {
                     onTap: () => ref
                         .read(currentOrderProvider.notifier)
                         .selectCheck(null),
-                    itemCount: openItems.length,
+                    itemCount: _sumItemQty(openItems),
                     isGlobal: true,
                   ),
                   const SizedBox(width: 8),
@@ -516,9 +857,9 @@ class _CartView extends ConsumerWidget {
                       ) // Ocultar cuenta principal si esta dividida
                       .map((check) {
                         final isSelected = check.id == selectedCheckId;
-                        final checkItemsCount = openItems
-                            .where((i) => i.checkId == check.id)
-                            .length;
+                        final checkItemsCount = _sumItemQty(
+                          openItems.where((i) => i.checkId == check.id),
+                        );
                         return Padding(
                           padding: const EdgeInsets.only(right: 8),
                           child: _BigCheckSelector(
@@ -778,6 +1119,8 @@ class _CartView extends ConsumerWidget {
                             orderState.order!,
                             displayTotal,
                             checkId: selectedCheckId, // Pass Checks ID!
+                            customerId: orderState.customerId,
+                            customerName: orderState.customerName,
                           ),
                     icon: Icons.payments_outlined,
                   ),
@@ -804,7 +1147,7 @@ class _CartView extends ConsumerWidget {
                                       (i) => {
                                         'quantity': i.quantity,
                                         'name': i.productName,
-                                        'price': i.total,
+                                        'price': _effectiveItemTotal(i),
                                       },
                                     )
                                     .toList(),
@@ -872,6 +1215,8 @@ class _CartView extends ConsumerWidget {
                             orderState.order!,
                             displayTotal,
                             checkId: selectedCheckId,
+                            customerId: orderState.customerId,
+                            customerName: orderState.customerName,
                           ),
                     icon: Icons.payments_rounded,
                   ),
@@ -1010,7 +1355,7 @@ class _CartView extends ConsumerWidget {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Imprimiendo en ${selected.name}...'),
-            backgroundColor: Colors.green,
+            backgroundColor: const Color(0xFF22C55E),
           ),
         );
       }
@@ -1031,7 +1376,7 @@ class _BigCheckSelector extends StatelessWidget {
   final String label;
   final bool isSelected;
   final VoidCallback onTap;
-  final int itemCount;
+  final double itemCount;
   final bool isGlobal;
 
   const _BigCheckSelector({
@@ -1042,16 +1387,24 @@ class _BigCheckSelector extends StatelessWidget {
     this.isGlobal = false,
   });
 
+  String _formatQty(double qty) {
+    final normalized = double.parse(qty.toStringAsFixed(2));
+    if ((normalized - normalized.roundToDouble()).abs() < 0.001) {
+      return normalized.toStringAsFixed(0);
+    }
+    return normalized.toStringAsFixed(2);
+  }
+
   @override
   Widget build(BuildContext context) {
-    const primaryColor = Color(0xFFFB7116);
+    const primaryColor = Color(0xFFF97316);
 
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        width: 100,
-        height: 90,
-        padding: const EdgeInsets.all(8),
+        width: 92,
+        height: 82,
+        padding: const EdgeInsets.all(7),
         decoration: BoxDecoration(
           color: isSelected ? primaryColor : Colors.white,
           borderRadius: BorderRadius.circular(16),
@@ -1061,7 +1414,7 @@ class _BigCheckSelector extends StatelessWidget {
           boxShadow: isSelected
               ? [
                   BoxShadow(
-                    color: primaryColor.withOpacity(0.4),
+                    color: primaryColor.withValues(alpha: 0.4),
                     blurRadius: 8,
                     offset: const Offset(0, 4),
                   ),
@@ -1091,30 +1444,30 @@ class _BigCheckSelector extends StatelessWidget {
               style: TextStyle(
                 color: isSelected ? Colors.white : const Color(0xFF374151),
                 fontWeight: FontWeight.bold,
-                fontSize: 16,
+                fontSize: 14,
               ),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 3),
             // Items Count
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
-                  '$itemCount',
+                  _formatQty(itemCount),
                   style: TextStyle(
                     color: isSelected
-                        ? Colors.white.withOpacity(0.9)
+                        ? Colors.white.withValues(alpha: 0.9)
                         : const Color(0xFF6B7280),
-                    fontSize: 13,
+                    fontSize: 12,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
                 const SizedBox(width: 4),
                 Icon(
                   Icons.shopping_cart_outlined,
-                  size: 14,
+                  size: 13,
                   color: isSelected
-                      ? Colors.white.withOpacity(0.9)
+                      ? Colors.white.withValues(alpha: 0.9)
                       : const Color(0xFF6B7280),
                 ),
               ],
@@ -1127,23 +1480,23 @@ class _BigCheckSelector extends StatelessWidget {
 
   Widget _buildIconBox(bool isSelected) {
     return Container(
-      width: 16,
-      height: 16,
+      width: 14,
+      height: 14,
       decoration: BoxDecoration(
         color: isSelected
-            ? Colors.white.withOpacity(0.2)
+            ? Colors.white.withValues(alpha: 0.2)
             : const Color(0xFFFFF7ED), // Orange 50
         borderRadius: BorderRadius.circular(4),
         border: isSelected
-            ? Border.all(color: Colors.white.withOpacity(0.4), width: 1)
+            ? Border.all(color: Colors.white.withValues(alpha: 0.4), width: 1)
             : Border.all(color: const Color(0xFFFFEDD5), width: 1),
       ),
       child: Center(
         child: Text(
           '\$',
           style: TextStyle(
-            color: isSelected ? Colors.white : const Color(0xFFFB7116),
-            fontSize: 10,
+            color: isSelected ? Colors.white : const Color(0xFFF97316),
+            fontSize: 9,
             fontWeight: FontWeight.bold,
           ),
         ),
@@ -1154,9 +1507,18 @@ class _BigCheckSelector extends StatelessWidget {
 
 class _SalesToolsRail extends StatelessWidget {
   final VoidCallback onBack;
-  final Function(String) onAction;
+  final bool showTableActions;
+  final VoidCallback onReleaseTable;
+  final VoidCallback onApplyDiscount;
+  final VoidCallback onApplyCourtesy;
 
-  const _SalesToolsRail({required this.onBack, required this.onAction});
+  const _SalesToolsRail({
+    required this.onBack,
+    required this.showTableActions,
+    required this.onReleaseTable,
+    required this.onApplyDiscount,
+    required this.onApplyCourtesy,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1182,65 +1544,34 @@ class _SalesToolsRail extends StatelessWidget {
                 const SizedBox(height: 16),
                 const Divider(height: 1, color: _salesDivider),
                 const SizedBox(height: 12),
-                const Text(
-                  'OPCIONES',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: _salesTextSecondary,
+                if (showTableActions) ...[
+                  const Text(
+                    'OPCIONES',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: _salesTextSecondary,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
-                _RailButton(
-                  icon: Icons.edit_note_rounded,
-                  label: 'Editar\nmesa',
-                  onTap: () => onAction('edit_table'),
-                ),
-                _RailButton(
-                  icon: Icons.logout_rounded,
-                  label: 'Liberar\nmesa',
-                  onTap: () => onAction('release_table'),
-                ),
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: Divider(height: 1, color: _salesDivider),
-                ),
-                _RailButton(
-                  icon: Icons.call_split_rounded,
-                  label: 'Dividir\ncuentas',
-                  onTap: () => onAction('split'),
-                ),
-                _RailButton(
-                  icon: Icons.merge_type_rounded,
-                  label: 'Unir\nmesas',
-                  onTap: () => onAction('merge'),
-                ),
-                _RailButton(
-                  icon: Icons.move_up_rounded,
-                  label: 'Mover\npedidos',
-                  onTap: () => onAction('move'),
-                ),
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: Divider(height: 1, color: _salesDivider),
-                ),
-                _RailButton(
-                  icon: Icons.percent_rounded,
-                  label: 'Desc.',
-                  onTap: () => onAction('discount'),
-                ),
-                _RailButton(
-                  icon: Icons.receipt_long_rounded,
-                  label: 'Vale\npago',
-                  onTap: () => onAction('voucher'),
-                ),
+                  const SizedBox(height: 8),
+                  _RailButton(
+                    icon: Icons.logout_rounded,
+                    label: 'Liberar\nmesa',
+                    onTap: onReleaseTable,
+                  ),
+                  _RailButton(
+                    icon: Icons.percent_rounded,
+                    label: 'Aplicar\ndescuento',
+                    onTap: onApplyDiscount,
+                  ),
+                  _RailButton(
+                    icon: Icons.card_giftcard_rounded,
+                    label: 'Cortesía\nproducto',
+                    onTap: onApplyCourtesy,
+                  ),
+                ],
                 const Spacer(),
                 const SizedBox(height: 16),
-                _RailButton(
-                  icon: Icons.print_rounded,
-                  label: 'Imprimir',
-                  onTap: () => onAction('print'),
-                ),
                 const SizedBox(height: 16),
               ],
             ),
@@ -1364,33 +1695,31 @@ class _SectionLabel extends StatelessWidget {
 }
 
 class _CartLineItem extends StatelessWidget {
-  final dynamic item;
+  final OrderItem item;
   final bool isDraft;
   final VoidCallback? onDelete;
-  final bool dense;
   final VoidCallback? onTap;
 
   const _CartLineItem({
     required this.item,
     required this.isDraft,
     required this.onDelete,
-    this.dense = false,
     this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final name = item.productName ?? '';
-    final qty = (item.quantity ?? 1).toStringAsFixed(1);
-    final totalItem = (item.total ?? 0.0).toStringAsFixed(2);
+    final name = item.productName;
+    final qty = item.quantity.toStringAsFixed(1);
+    final totalItem = _effectiveItemTotal(item).toStringAsFixed(2);
 
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        hoverColor: Colors.black.withOpacity(0.04), // Subtle hover effect
+        hoverColor: Colors.black.withValues(alpha: 0.04), // Subtle hover effect
         child: Padding(
-          padding: EdgeInsets.symmetric(vertical: dense ? 4 : 6),
+          padding: const EdgeInsets.symmetric(vertical: 6),
           child: Row(
             children: [
               if (isDraft && onDelete != null)
@@ -1485,7 +1814,6 @@ class _ActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isEnabled = onPressed != null;
     return SizedBox(
       width: double.infinity,
       height: 50,
@@ -1680,14 +2008,12 @@ class _GroupedSentItem {
 // 3. CATALOG AREA
 // -----------------------------------------------------------------------------
 class _CatalogArea extends ConsumerStatefulWidget {
+  final OrderOrigin origin;
   final String tableCode;
-  final VoidCallback onBack;
-  final VoidCallback onAssignClient;
   final Function(dynamic) onProductTap;
   const _CatalogArea({
+    required this.origin,
     required this.tableCode,
-    required this.onBack,
-    required this.onAssignClient,
     required this.onProductTap,
   });
 
@@ -1705,10 +2031,59 @@ class _CatalogAreaState extends ConsumerState<_CatalogArea>
     super.initState();
     // Tabs: Categorias, Menu, Favoritos
     _mainTabController = TabController(length: 3, vsync: this);
+    _mainTabController.addListener(_handleTabChange);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(menuBrowserVmProvider.notifier).loadAll();
+    });
+  }
+
+  void _handleTabChange() {
+    if (_mainTabController.indexIsChanging) return;
+
+    final menuState = ref.read(menuBrowserVmProvider);
+    final notifier = ref.read(menuBrowserVmProvider.notifier);
+    final selectedCategoryId = menuState.selectedCategoryId;
+    final searchText = _searchController.text.trim();
+    switch (_mainTabController.index) {
+      case 0:
+        if (menuState.categories.isEmpty) {
+          notifier.loadAll();
+        }
+        break;
+      case 1:
+        if (searchText.isNotEmpty) {
+          if (menuState.productsMode != MenuProductsMode.search ||
+              menuState.search != searchText ||
+              menuState.products.isEmpty) {
+            notifier.searchProducts(searchText);
+          }
+        } else {
+          if (selectedCategoryId != null && selectedCategoryId.isNotEmpty) {
+            if (menuState.productsMode != MenuProductsMode.category ||
+                menuState.loadedCategoryId != selectedCategoryId ||
+                menuState.products.isEmpty) {
+              notifier.loadProductsByCategory(selectedCategoryId);
+            }
+          } else {
+            if (menuState.productsMode != MenuProductsMode.all ||
+                menuState.products.isEmpty) {
+              notifier.loadAllProducts();
+            }
+          }
+        }
+        break;
+      case 2:
+        if (menuState.productsMode != MenuProductsMode.favorites ||
+            menuState.products.isEmpty) {
+          notifier.loadFavoriteProducts();
+        }
+        break;
+    }
   }
 
   @override
   void dispose() {
+    _mainTabController.removeListener(_handleTabChange);
     _mainTabController.dispose();
     _searchController.dispose();
     super.dispose();
@@ -1716,78 +2091,53 @@ class _CatalogAreaState extends ConsumerState<_CatalogArea>
 
   @override
   Widget build(BuildContext context) {
-    final orderState = ref.watch(currentOrderProvider);
-    final elapsed = orderState.order == null
-        ? '--:--'
-        : _formatElapsed(
-            DateTime.now().difference(orderState.order!.createdAt),
-          );
-
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
-          child: Row(
-            children: [
-              IconButton(
-                onPressed: widget.onBack,
-                icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18),
-                color: _salesTextPrimary,
-              ),
-              const SizedBox(width: 8),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Mesa ${widget.tableCode}',
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                      color: _salesTextPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    'Pedido activo • $elapsed',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: _salesTextSecondary,
-                    ),
-                  ),
-                ],
-              ),
-              const Spacer(),
-              ElevatedButton(
-                onPressed: widget.onAssignClient,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _salesSurface,
-                  elevation: 0,
-                  side: const BorderSide(color: _salesDivider),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(_salesRadiusButton),
-                  ),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
-                ),
-                child: const Text(
-                  'Asignar cliente',
-                  style: TextStyle(
-                    color: _salesTextPrimary,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 13,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
           child: _SearchField(
             controller: _searchController,
-            onChanged: (value) {},
+            onChanged: (value) {
+              final menuState = ref.read(menuBrowserVmProvider);
+              final notifier = ref.read(menuBrowserVmProvider.notifier);
+              if (value.trim().isEmpty) {
+                if (_mainTabController.index == 2) {
+                  if (menuState.productsMode != MenuProductsMode.favorites ||
+                      menuState.products.isEmpty) {
+                    notifier.loadFavoriteProducts();
+                  }
+                } else if (_mainTabController.index == 0) {
+                  if (menuState.categories.isEmpty) {
+                    notifier.loadAll();
+                  }
+                } else {
+                  final selectedCategoryId = menuState.selectedCategoryId;
+                  if (selectedCategoryId != null &&
+                      selectedCategoryId.isNotEmpty) {
+                    if (menuState.productsMode != MenuProductsMode.category ||
+                        menuState.loadedCategoryId != selectedCategoryId ||
+                        menuState.products.isEmpty) {
+                      notifier.loadProductsByCategory(selectedCategoryId);
+                    }
+                  } else {
+                    if (menuState.productsMode != MenuProductsMode.all ||
+                        menuState.products.isEmpty) {
+                      notifier.loadAllProducts();
+                    }
+                  }
+                }
+                return;
+              }
+
+              final q = value.trim();
+              if (menuState.productsMode != MenuProductsMode.search ||
+                  menuState.search != q) {
+                notifier.searchProducts(q);
+              }
+              if (_mainTabController.index != 1) {
+                _mainTabController.animateTo(1);
+              }
+            },
           ),
         ),
         const SizedBox(height: 12),
@@ -1818,11 +2168,9 @@ class _CatalogAreaState extends ConsumerState<_CatalogArea>
                 // 2. Grid Productos
                 _ProductsGrid(onProductTap: widget.onProductTap),
                 // 3. Favoritos
-                const Center(
-                  child: Text(
-                    'Sin favoritos',
-                    style: TextStyle(color: _salesTextSecondary),
-                  ),
+                _ProductsGrid(
+                  onProductTap: widget.onProductTap,
+                  emptyText: 'Todavía no hay productos frecuentes',
                 ),
               ],
             ),
@@ -1831,15 +2179,120 @@ class _CatalogAreaState extends ConsumerState<_CatalogArea>
       ],
     );
   }
+}
 
-  String _formatElapsed(Duration duration) {
-    final hours = duration.inHours;
-    final minutes = duration.inMinutes.remainder(60);
-    final seconds = duration.inSeconds.remainder(60);
-    if (hours > 0) {
-      return '$hours:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
-    }
-    return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+class _AssignCustomerDialog extends ConsumerStatefulWidget {
+  const _AssignCustomerDialog();
+
+  @override
+  ConsumerState<_AssignCustomerDialog> createState() =>
+      _AssignCustomerDialogState();
+}
+
+class _AssignCustomerDialogState extends ConsumerState<_AssignCustomerDialog> {
+  final TextEditingController _searchController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(customersViewModelProvider).init();
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final vm = ref.watch(customersViewModelProvider);
+
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: 520,
+        height: 560,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Asignar cliente',
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _searchController,
+                onChanged: (value) =>
+                    ref.read(customersViewModelProvider).search(value),
+                decoration: InputDecoration(
+                  hintText: 'Buscar por nombre, teléfono o correo',
+                  prefixIcon: const Icon(Icons.search),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Expanded(
+                child: vm.isLoading
+                    ? const Center(child: CircularProgressIndicator())
+                    : vm.customers.isEmpty
+                    ? const Center(child: Text('No se encontraron clientes'))
+                    : ListView.separated(
+                        itemCount: vm.customers.length,
+                        separatorBuilder: (_, index) =>
+                            const Divider(height: 1),
+                        itemBuilder: (context, index) {
+                          final customer = vm.customers[index];
+                          final name =
+                              customer['name']?.toString() ?? 'Cliente';
+                          final phone = customer['phone']?.toString();
+                          final email = customer['email']?.toString();
+                          final subtitleParts = [phone, email]
+                              .where(
+                                (value) =>
+                                    value != null && value.trim().isNotEmpty,
+                              )
+                              .cast<String>()
+                              .toList();
+
+                          return ListTile(
+                            leading: CircleAvatar(
+                              backgroundColor: _salesTabActiveBg,
+                              child: Text(
+                                name.isNotEmpty ? name[0].toUpperCase() : 'C',
+                                style: const TextStyle(
+                                  color: _salesTextPrimary,
+                                ),
+                              ),
+                            ),
+                            title: Text(name),
+                            subtitle: subtitleParts.isEmpty
+                                ? null
+                                : Text(subtitleParts.join(' • ')),
+                            onTap: () => Navigator.of(context).pop(customer),
+                          );
+                        },
+                      ),
+              ),
+              const SizedBox(height: 16),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Cancelar'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -1945,28 +2398,149 @@ class _CategoriesGrid extends ConsumerWidget {
     final state = ref.watch(menuBrowserVmProvider);
     final categories = state.categories;
 
-    if (state.loading) return const Center(child: CircularProgressIndicator());
+    if (categories.isEmpty && state.loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (categories.isEmpty) {
+      return const Center(
+        child: Text(
+          'No hay categorías activas',
+          style: TextStyle(color: _salesTextSecondary),
+        ),
+      );
+    }
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        return GridView.builder(
+        final textScale = MediaQuery.textScalerOf(context).scale(1);
+        final categoryCardExtent = (190 + ((textScale - 1) * 24)).clamp(
+          190,
+          214,
+        );
+        return Stack(
+          children: [
+            GridView.builder(
+              padding: const EdgeInsets.all(16),
+              gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: 220, // cards pequeñas
+                mainAxisExtent: categoryCardExtent.toDouble(),
+                crossAxisSpacing: 12,
+                mainAxisSpacing: 12,
+              ),
+              itemCount: categories.length,
+              itemBuilder: (context, index) {
+                final cat = categories[index];
+                return InkWell(
+                  onTap: () => onCategoryTap(cat.id),
+                  borderRadius: BorderRadius.circular(_salesRadiusCard),
+                  child: Container(
+                    constraints: const BoxConstraints(
+                      minHeight: 140,
+                      minWidth: 160,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _salesSurface,
+                      borderRadius: BorderRadius.circular(_salesRadiusCard),
+                      border: Border.all(color: _salesDivider),
+                      boxShadow: _salesSoftShadow,
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 14,
+                    ),
+                    child: Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Text(
+                            cat.name,
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 16,
+                              color: _salesTextPrimary,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          const Text(
+                            'Ver items',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: _salesTextSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+            if (state.loading)
+              const Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: LinearProgressIndicator(
+                  minHeight: 2,
+                  color: _salesTotalColor,
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ProductsGrid extends ConsumerWidget {
+  final Function(dynamic) onProductTap;
+  final String emptyText;
+  const _ProductsGrid({
+    required this.onProductTap,
+    this.emptyText = 'Selecciona una categoria o busca productos',
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(menuBrowserVmProvider);
+    final products = state.products;
+
+    if (products.isEmpty && state.loading) {
+      return const Center(
+        child: CircularProgressIndicator(color: _salesTotalColor),
+      );
+    }
+    if (products.isEmpty) {
+      return Center(child: Text(emptyText));
+    }
+
+    final textScale = MediaQuery.textScalerOf(context).scale(1);
+    final productCardExtent = (206 + ((textScale - 1) * 32)).clamp(206, 238);
+
+    return Stack(
+      children: [
+        GridView.builder(
           padding: const EdgeInsets.all(16),
-          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent: 220, // cards pequeñas
-            mainAxisExtent: 190,
+          gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: 220, // mismo ancho que categorías
+            mainAxisExtent: productCardExtent.toDouble(),
             crossAxisSpacing: 12,
             mainAxisSpacing: 12,
           ),
-          itemCount: categories.length,
+          itemCount: products.length,
           itemBuilder: (context, index) {
-            final cat = categories[index];
-            return InkWell(
-              onTap: () => onCategoryTap(cat.id),
-              borderRadius: BorderRadius.circular(_salesRadiusCard),
+            final product = products[index];
+            return GestureDetector(
+              onTap: () => onProductTap(product),
               child: Container(
                 constraints: const BoxConstraints(
                   minHeight: 140,
                   minWidth: 160,
+                  maxWidth: 220,
                 ),
                 decoration: BoxDecoration(
                   color: _salesSurface,
@@ -1978,120 +2552,50 @@ class _CategoriesGrid extends ConsumerWidget {
                   horizontal: 16,
                   vertical: 14,
                 ),
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Text(
-                        cat.name,
-                        textAlign: TextAlign.center,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 16,
-                          color: _salesTextPrimary,
-                        ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    _ProductAvatar(imageUrl: product.imageUrl),
+                    const SizedBox(height: 10),
+                    Text(
+                      product.name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                        color: _salesTextPrimary,
                       ),
-                      const SizedBox(height: 6),
-                      const Text(
-                        'Ver items',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: _salesTextSecondary,
-                        ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'RD\$ ${product.price.toStringAsFixed(0)}',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: _salesTotalColor,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             );
           },
-        );
-      },
-    );
-  }
-}
-
-class _ProductsGrid extends ConsumerWidget {
-  final Function(dynamic) onProductTap;
-  const _ProductsGrid({required this.onProductTap});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(menuBrowserVmProvider);
-    final products = state.products;
-
-    if (state.loading) {
-      return const Center(
-        child: CircularProgressIndicator(color: _salesTotalColor),
-      );
-    }
-    if (products.isEmpty) {
-      return const Center(
-        child: Text('Selecciona una categoria o busca productos'),
-      );
-    }
-
-    return GridView.builder(
-      padding: const EdgeInsets.all(16),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 220, // mismo ancho que categorías
-        mainAxisExtent: 190, // mismo alto que categorías
-        crossAxisSpacing: 12,
-        mainAxisSpacing: 12,
-      ),
-      itemCount: products.length,
-      itemBuilder: (context, index) {
-        final product = products[index];
-        return GestureDetector(
-          onTap: () => onProductTap(product),
-          child: Container(
-            constraints: const BoxConstraints(
-              minHeight: 140,
-              minWidth: 160,
-              maxWidth: 220,
-            ),
-            decoration: BoxDecoration(
-              color: _salesSurface,
-              borderRadius: BorderRadius.circular(_salesRadiusCard),
-              border: Border.all(color: _salesDivider),
-              boxShadow: _salesSoftShadow,
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                _ProductAvatar(imageUrl: product.imageUrl),
-                const SizedBox(height: 10),
-                Text(
-                  product.name,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 14,
-                    color: _salesTextPrimary,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'RD\$ ${product.price.toStringAsFixed(0)}',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: _salesTotalColor,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                  ),
-                ),
-              ],
+        ),
+        if (state.loading)
+          const Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: LinearProgressIndicator(
+              minHeight: 2,
+              color: _salesTotalColor,
             ),
           ),
-        );
-      },
+      ],
     );
   }
 }
@@ -2115,6 +2619,499 @@ class _ProductAvatar extends StatelessWidget {
       child: imageUrl == null
           ? const Icon(Icons.fastfood, color: _salesTextHint, size: 32)
           : null,
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// 4. DIALOGO DE SELECCIÓN DE MESAS (MANUAL SALE)
+// -----------------------------------------------------------------------------
+class _SelectTableDialog extends ConsumerStatefulWidget {
+  const _SelectTableDialog();
+
+  @override
+  ConsumerState<_SelectTableDialog> createState() => _SelectTableDialogState();
+}
+
+class _SelectTableDialogState extends ConsumerState<_SelectTableDialog> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final session = ref.read(sessionProvider);
+      ref.read(byZoneVmProvider.notifier).load(session.activeBusinessId ?? '');
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = ref.watch(byZoneVmProvider);
+
+    if (state.loading && state.zones.isEmpty) {
+      return const Dialog(
+        child: Padding(
+          padding: EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 16),
+              Text('Cargando mesas...'),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Aplanar mesas disponibles
+    final availableTables = <TableStatus>[];
+    for (final zone in state.zones) {
+      final tablesInZone = state.statusByZone[zone.id] ?? [];
+      for (final t in tablesInZone) {
+        if (t.sessionId == null) {
+          availableTables.add(t);
+        }
+      }
+    }
+
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Container(
+        width: 600,
+        height: 500,
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Asignar a Mesa',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                ),
+                IconButton(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Expanded(
+              child: availableTables.isEmpty
+                  ? const Center(child: Text('No hay mesas disponibles'))
+                  : GridView.builder(
+                      gridDelegate:
+                          const SliverGridDelegateWithMaxCrossAxisExtent(
+                            maxCrossAxisExtent: 180,
+                            crossAxisSpacing: 12,
+                            mainAxisSpacing: 12,
+                            childAspectRatio: 1.1,
+                          ),
+                      itemCount: availableTables.length,
+                      itemBuilder: (context, index) {
+                        final t = availableTables[index];
+                        return InkWell(
+                          onTap: () {
+                            Navigator.pop(context, t);
+                          },
+                          borderRadius: BorderRadius.circular(12),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              border: Border.all(color: _salesDivider),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(
+                                  Icons.table_bar,
+                                  color: _salesTextSecondary,
+                                  size: 36,
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  t.code,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 18,
+                                    color: _salesTextPrimary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+enum _DiscountScope { table, products }
+
+class _DiscountDialogResult {
+  final _DiscountScope scope;
+  final double percent;
+  final List<String> selectedItemIds;
+
+  const _DiscountDialogResult({
+    required this.scope,
+    required this.percent,
+    required this.selectedItemIds,
+  });
+}
+
+class _DiscountDialog extends StatefulWidget {
+  final List<OrderItem> items;
+
+  const _DiscountDialog({required this.items});
+
+  @override
+  State<_DiscountDialog> createState() => _DiscountDialogState();
+}
+
+class _DiscountDialogState extends State<_DiscountDialog> {
+  _DiscountScope _scope = _DiscountScope.table;
+  final TextEditingController _percentController = TextEditingController(
+    text: '10',
+  );
+  final Set<String> _selectedItemIds = <String>{};
+  String? _error;
+
+  @override
+  void dispose() {
+    _percentController.dispose();
+    super.dispose();
+  }
+
+  String _formatQty(double qty) {
+    if ((qty - qty.roundToDouble()).abs() < 0.001) {
+      return qty.toStringAsFixed(0);
+    }
+    return qty.toStringAsFixed(2);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: _salesSurface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: 560,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Aplicar descuento',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 14),
+              SegmentedButton<_DiscountScope>(
+                segments: const [
+                  ButtonSegment<_DiscountScope>(
+                    value: _DiscountScope.table,
+                    label: Text('Toda la mesa'),
+                  ),
+                  ButtonSegment<_DiscountScope>(
+                    value: _DiscountScope.products,
+                    label: Text('Productos'),
+                  ),
+                ],
+                selected: <_DiscountScope>{_scope},
+                onSelectionChanged: (selection) {
+                  if (selection.isEmpty) return;
+                  setState(() {
+                    _scope = selection.first;
+                    _error = null;
+                  });
+                },
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _percentController,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: InputDecoration(
+                  labelText: 'Porcentaje (%)',
+                  hintText: 'Ejemplo: 10',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+              ),
+              if (_scope == _DiscountScope.products) ...[
+                const SizedBox(height: 12),
+                Container(
+                  constraints: const BoxConstraints(maxHeight: 220),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: _salesDivider),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: widget.items.length,
+                    separatorBuilder: (context, index) =>
+                        const Divider(height: 1),
+                    itemBuilder: (context, index) {
+                      final item = widget.items[index];
+                      final checked = _selectedItemIds.contains(item.id);
+                      return CheckboxListTile(
+                        value: checked,
+                        title: Text(item.productName),
+                        subtitle: Text(
+                          'Cant: ${_formatQty(item.quantity)} • RD\$${_effectiveItemTotal(item).toStringAsFixed(2)}',
+                        ),
+                        onChanged: (_) {
+                          setState(() {
+                            if (checked) {
+                              _selectedItemIds.remove(item.id);
+                            } else {
+                              _selectedItemIds.add(item.id);
+                            }
+                            _error = null;
+                          });
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
+              if (_error != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  _error!,
+                  style: const TextStyle(
+                    color: Colors.red,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Cancelar'),
+                  ),
+                  const SizedBox(width: 10),
+                  FilledButton(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _salesTotalColor,
+                      foregroundColor: Colors.white,
+                    ),
+                    onPressed: () {
+                      final percent = double.tryParse(
+                        _percentController.text.trim().replaceAll(',', '.'),
+                      );
+                      if (percent == null || percent <= 0 || percent > 100) {
+                        setState(() {
+                          _error = 'Ingresa un porcentaje válido (0.01 - 100).';
+                        });
+                        return;
+                      }
+
+                      if (_scope == _DiscountScope.products &&
+                          _selectedItemIds.isEmpty) {
+                        setState(() {
+                          _error = 'Selecciona al menos un producto.';
+                        });
+                        return;
+                      }
+
+                      Navigator.pop(
+                        context,
+                        _DiscountDialogResult(
+                          scope: _scope,
+                          percent: percent,
+                          selectedItemIds: _selectedItemIds.toList(
+                            growable: false,
+                          ),
+                        ),
+                      );
+                    },
+                    child: const Text('Aplicar'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CourtesyDialogResult {
+  final List<String> selectedItemIds;
+  final String reason;
+
+  const _CourtesyDialogResult({
+    required this.selectedItemIds,
+    required this.reason,
+  });
+}
+
+class _CourtesyDialog extends StatefulWidget {
+  final List<OrderItem> items;
+
+  const _CourtesyDialog({required this.items});
+
+  @override
+  State<_CourtesyDialog> createState() => _CourtesyDialogState();
+}
+
+class _CourtesyDialogState extends State<_CourtesyDialog> {
+  final Set<String> _selectedItemIds = <String>{};
+  final TextEditingController _reasonController = TextEditingController();
+  String? _error;
+
+  @override
+  void dispose() {
+    _reasonController.dispose();
+    super.dispose();
+  }
+
+  String _formatQty(double qty) {
+    if ((qty - qty.roundToDouble()).abs() < 0.001) {
+      return qty.toStringAsFixed(0);
+    }
+    return qty.toStringAsFixed(2);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: _salesSurface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: 620,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Cortesía por producto',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  color: _salesTextPrimary,
+                ),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Selecciona productos y opcionalmente agrega el motivo.',
+                style: TextStyle(fontSize: 13, color: _salesTextSecondary),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _reasonController,
+                maxLength: 120,
+                decoration: InputDecoration(
+                  labelText: 'Motivo de cortesía (opcional)',
+                  hintText: 'Ejemplo: atención de la casa',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                constraints: const BoxConstraints(maxHeight: 300),
+                decoration: BoxDecoration(
+                  border: Border.all(color: _salesDivider),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: widget.items.length,
+                  separatorBuilder: (context, index) =>
+                      const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final item = widget.items[index];
+                    final checked = _selectedItemIds.contains(item.id);
+                    return CheckboxListTile(
+                      value: checked,
+                      title: Text(item.productName),
+                      subtitle: Text(
+                        'Cant: ${_formatQty(item.quantity)} • RD\$${_effectiveItemTotal(item).toStringAsFixed(2)}',
+                      ),
+                      onChanged: (_) {
+                        setState(() {
+                          if (checked) {
+                            _selectedItemIds.remove(item.id);
+                          } else {
+                            _selectedItemIds.add(item.id);
+                          }
+                          _error = null;
+                        });
+                      },
+                    );
+                  },
+                ),
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _error!,
+                  style: const TextStyle(
+                    color: Colors.red,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Cancelar'),
+                  ),
+                  const SizedBox(width: 10),
+                  FilledButton(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _salesTotalColor,
+                      foregroundColor: Colors.white,
+                    ),
+                    onPressed: () {
+                      if (_selectedItemIds.isEmpty) {
+                        setState(() {
+                          _error = 'Selecciona al menos un producto.';
+                        });
+                        return;
+                      }
+                      Navigator.pop(
+                        context,
+                        _CourtesyDialogResult(
+                          selectedItemIds: _selectedItemIds.toList(
+                            growable: false,
+                          ),
+                          reason: _reasonController.text.trim(),
+                        ),
+                      );
+                    },
+                    child: const Text('Aplicar'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

@@ -56,7 +56,7 @@ class _PaymentScreenImprovedExampleState
                 Text('Pago procesado exitosamente'),
               ],
             ),
-            backgroundColor: Colors.green,
+            backgroundColor: const Color(0xFF22C55E),
           ),
         );
 
@@ -106,7 +106,7 @@ class _PaymentScreenImprovedExampleState
                       style: const TextStyle(
                         fontSize: 32,
                         fontWeight: FontWeight.bold,
-                        color: Color(0xFFF7941A),
+                        color: Color(0xFFF97316),
                       ),
                     ),
                   ],
@@ -128,7 +128,7 @@ class _PaymentScreenImprovedExampleState
             ElevatedButton(
               onPressed: _isProcessing ? null : _processPayment,
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFF7941A),
+                backgroundColor: const Color(0xFFF97316),
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 shape: RoundedRectangleBorder(
@@ -218,7 +218,7 @@ class OrdersListExample extends ConsumerWidget {
                 margin: const EdgeInsets.only(bottom: 12),
                 child: ListTile(
                   leading: const CircleAvatar(
-                    backgroundColor: Color(0xFFF7941A),
+                    backgroundColor: Color(0xFFF97316),
                     child: Icon(Icons.table_restaurant, color: Colors.white),
                   ),
                   title: Text('Mesa ${session.tableId}'),

@@ -38,6 +38,7 @@ class SupabaseConfig {
         authFlowType: AuthFlowType.pkce,
         // Mantener sesión activa
         autoRefreshToken: true,
+        detectSessionInUri: true,
       ),
       realtimeClientOptions: const RealtimeClientOptions(
         // Configuración de reconexión automática

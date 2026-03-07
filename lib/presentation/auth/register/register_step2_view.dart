@@ -7,8 +7,8 @@ class RegisterStep2View extends ConsumerStatefulWidget {
   const RegisterStep2View({super.key});
 
   // Paleta oficial MangoPOS
-  static const kPrimaryOrange = Color(0xFFF7941A);
-  static const kSuccessGreen = Color(0xFF32AD40);
+  static const kPrimaryOrange = Color(0xFFF97316);
+  static const kSuccessGreen = Color(0xFF22C55E);
   static const kWhite = Color(0xFFFFFFFF);
   static const kDarkGray = Color(0xFF32363F);
 
