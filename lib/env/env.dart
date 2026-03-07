@@ -2,7 +2,7 @@
 class Env {
   static const supabaseUrl = String.fromEnvironment(
     'SUPABASE_URL',
-    defaultValue: 'https://supabase.mangopos.do:8000',
+    defaultValue: 'https://supabase.mangopos.do',
   );
 
   // Anon PUBLIC de Supabase Cloud (ok en cliente; RLS es la barrera real)
