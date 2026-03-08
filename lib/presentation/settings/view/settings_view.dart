@@ -1,15 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/services/session/session_controller.dart';
 
-class SettingsView extends StatelessWidget {
+class SettingsView extends ConsumerWidget {
   const SettingsView({super.key, this.businessId = ''});
 
   final String businessId;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
       backgroundColor: const Color(0xFFF7F7F7),
       appBar: AppBar(
@@ -34,7 +36,9 @@ class SettingsView extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
         children: [
-          const _BusinessSummaryCard(),
+          _BusinessSummaryCard(
+            businessName: ref.watch(sessionProvider).activeBusinessName,
+          ),
           const SizedBox(height: 18),
           ..._sections(context),
         ],
@@ -129,12 +133,14 @@ class SettingsView extends StatelessWidget {
             subtitle: 'Catálogo de productos',
             icon: Icons.inventory_2_rounded,
             color: const Color(0xFFFFE6D5),
+            route: AppRoutes.products,
           ),
           _SettingsOption(
             title: 'Modificadores',
             subtitle: 'Extras y variantes de productos',
             icon: Icons.tune_rounded,
             color: const Color(0xFFEAF0FF),
+            route: AppRoutes.menuModifiers,
           ),
           _SettingsOption(
             title: 'Combos',
@@ -154,6 +160,7 @@ class SettingsView extends StatelessWidget {
             subtitle: 'Ingredientes y costos de recetas',
             icon: Icons.receipt_rounded,
             color: const Color(0xFFF1F1F1),
+            route: AppRoutes.menuRecipes,
           ),
           _SettingsOption(
             title: 'Insumos',
@@ -244,12 +251,14 @@ class SettingsView extends StatelessWidget {
             subtitle: 'Historial de movimientos por ubicación',
             icon: Icons.list_rounded,
             color: Color(0xFFFFE6D5),
+            route: AppRoutes.inventoryKardex,
           ),
           _SettingsOption(
             title: 'Registro de Salida de Inventario',
             subtitle: 'Control de salidas de stock',
             icon: Icons.logout_rounded,
             color: Color(0xFFFFF0D9),
+            route: AppRoutes.inventoryOutflow,
           ),
           _SettingsOption(
             title: 'Mover Inventario entre Almacenes',
@@ -262,6 +271,7 @@ class SettingsView extends StatelessWidget {
             subtitle: 'Ajustes de inventario',
             icon: Icons.inventory_rounded,
             color: Color(0xFFE6F7EE),
+            route: AppRoutes.inventoryReconciliation,
           ),
           _SettingsOption(
             title: 'Mermas o Perecederos',
@@ -285,18 +295,21 @@ class SettingsView extends StatelessWidget {
             subtitle: 'Listado de pedidos a proveedores',
             icon: Icons.list_alt_rounded,
             color: Color(0xFFFFE6D5),
+            route: AppRoutes.purchasesList,
           ),
           _SettingsOption(
             title: 'Registro de Compras',
             subtitle: 'Historial de compras realizadas',
             icon: Icons.receipt_long_rounded,
             color: Color(0xFFEAF0FF),
+            route: AppRoutes.purchasesRegister,
           ),
           _SettingsOption(
             title: 'Gestión de Proveedores',
             subtitle: 'Catalogo de proveedores',
             icon: Icons.group_rounded,
             color: Color(0xFFE6F7EE),
+            route: AppRoutes.purchasesList,
           ),
           _SettingsOption(
             title: 'Crédito de Compras a Proveedores',
@@ -410,42 +423,49 @@ class SettingsView extends StatelessWidget {
             subtitle: 'Programa de puntos y recompensas',
             icon: Icons.card_membership_rounded,
             color: Color(0xFFFFE6D5),
+            route: AppRoutes.promosCenter,
           ),
           _SettingsOption(
             title: 'Niveles de Membresías',
             subtitle: 'Categorias de clientes VIP',
             icon: Icons.star_rounded,
             color: Color(0xFFEAF0FF),
+            route: AppRoutes.promosCenter,
           ),
           _SettingsOption(
             title: 'Promociones y Descuentos',
             subtitle: 'Ofertas y promociones activas',
             icon: Icons.local_offer_rounded,
             color: Color(0xFFE6F7EE),
+            route: AppRoutes.promosCenter,
           ),
           _SettingsOption(
             title: 'Gestión de Cupones',
             subtitle: 'Códigos promocionales',
             icon: Icons.confirmation_number_rounded,
             color: Color(0xFFFFF0D9),
+            route: AppRoutes.promosCenter,
           ),
           _SettingsOption(
             title: 'Gift Cards y Bonos',
             subtitle: 'Tarjetas de regalo',
             icon: Icons.card_giftcard_rounded,
             color: Color(0xFFFFEDED),
+            route: AppRoutes.promosCenter,
           ),
           _SettingsOption(
             title: 'Puntos de Recompensa',
             subtitle: 'Sistema de puntos acumulables',
             icon: Icons.workspace_premium_rounded,
             color: Color(0xFFF1F1F1),
+            route: AppRoutes.promosCenter,
           ),
           _SettingsOption(
             title: 'Historial de Fidelidad',
             subtitle: 'Registro de actividad de clientes',
             icon: Icons.history_rounded,
             color: Color(0xFFEAF0FF),
+            route: AppRoutes.promosCenter,
           ),
         ],
       ),
@@ -550,10 +570,15 @@ class SettingsView extends StatelessWidget {
 }
 
 class _BusinessSummaryCard extends StatelessWidget {
-  const _BusinessSummaryCard();
+  const _BusinessSummaryCard({this.businessName});
+
+  final String? businessName;
 
   @override
   Widget build(BuildContext context) {
+    final resolvedBusinessName = businessName?.trim().isNotEmpty == true
+        ? businessName!.trim()
+        : 'Negocio no configurado';
     return Container(
       decoration: BoxDecoration(
         color: MangoColors.white,
@@ -588,12 +613,12 @@ class _BusinessSummaryCard extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'Restaurante Demo',
-                    style: TextStyle(fontWeight: FontWeight.w700),
+                  Text(
+                    resolvedBusinessName,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                   Text(
-                    'RNC: 123-45678-9',
+                    'Configuracion general del negocio',
                     style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                   ),
                 ],
@@ -652,7 +677,7 @@ class _MiniStat extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.08),
+          color: color.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Row(

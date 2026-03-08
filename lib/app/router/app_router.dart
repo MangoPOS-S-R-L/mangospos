@@ -2,8 +2,9 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/categories/view/categories_view.dart';
-import 'package:mangopos/presentation/settings/more%20settings/menus/menu%20items/view/menu_items_view.dart';
+import 'package:mangopos/presentation/settings/more%20settings/menus/modifiers/view/modifiers_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/menus/view/menus_view.dart';
+import 'package:mangopos/presentation/settings/more%20settings/menus/recipes/view/recipes_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/view/printers_view.dart.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/main/printing_home_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/areas/view/print_areas_view.dart';
@@ -27,6 +28,12 @@ import '../../presentation/cashier/view/sales_history_view.dart';
 import '../../presentation/kitchen/view/kitchen_view.dart';
 import '../../presentation/customers/view/customers_view.dart';
 import '../../presentation/customers/view/customer_detail_view.dart';
+import '../../presentation/inventory/view/inventory_outflow_view.dart';
+import '../../presentation/inventory/view/requirements_view.dart';
+import '../../presentation/inventory/view/stock_reconciliation_view.dart';
+import '../../presentation/purchases/view/purchases_list_view.dart';
+import '../../presentation/purchases/view/purchases_register_view.dart';
+import '../../presentation/promos/view/discounts_view.dart';
 import '../../presentation/products/view/products_view.dart';
 import 'routes.dart';
 
@@ -40,6 +47,7 @@ import '../../presentation/reports/view/reports_view.dart';
 
 // More Settings module
 import 'package:mangopos/presentation/settings/view/settings_view.dart';
+import 'package:mangopos/presentation/settings/view/plan_management_view.dart';
 
 // ====== Gestión de impresión (imports) ======
 
@@ -195,11 +203,16 @@ class AppRouter {
               final tableId = state.pathParameters['tableId']!;
               final tableCode = state.uri.queryParameters['code'] ?? 'Mesa';
               final zoneId = state.uri.queryParameters['zone'] ?? '';
+              final initialPeopleCount =
+                  int.tryParse(state.uri.queryParameters['guests'] ?? '') ?? 1;
               return OrderScreen(
                 origin: OrderOrigin.table,
                 tableId: tableId,
                 tableCode: tableCode,
                 zoneId: zoneId,
+                initialPeopleCount: initialPeopleCount > 0
+                    ? initialPeopleCount
+                    : 1,
               );
             },
           ),
@@ -266,6 +279,10 @@ class AppRouter {
             builder: (context, state) => const SettingsView(),
           ),
           GoRoute(
+            path: AppRoutes.settingsPlan,
+            builder: (context, state) => const PlanManagementView(),
+          ),
+          GoRoute(
             path: AppRoutes.settingsUsers,
             builder: (context, state) =>
                 const SettingsUsersView(businessId: 'auto'),
@@ -283,6 +300,30 @@ class AppRouter {
           GoRoute(
             path: AppRoutes.settingsTaxes,
             builder: (context, state) => const TaxesView(businessId: 'auto'),
+          ),
+          GoRoute(
+            path: AppRoutes.inventoryKardex,
+            builder: (context, state) => const RequirementsView(),
+          ),
+          GoRoute(
+            path: AppRoutes.inventoryOutflow,
+            builder: (context, state) => const InventoryOutflowView(),
+          ),
+          GoRoute(
+            path: AppRoutes.inventoryReconciliation,
+            builder: (context, state) => const StockReconciliationView(),
+          ),
+          GoRoute(
+            path: AppRoutes.purchasesList,
+            builder: (context, state) => const PurchasesListView(),
+          ),
+          GoRoute(
+            path: AppRoutes.purchasesRegister,
+            builder: (context, state) => const PurchasesRegisterView(),
+          ),
+          GoRoute(
+            path: AppRoutes.promosCenter,
+            builder: (context, state) => const DiscountsView(),
           ),
 
           // ===================== GESTIÓN DE PRODUCTOS (MENÚ) =====================
@@ -305,8 +346,7 @@ class AppRouter {
               // /menu/items
               GoRoute(
                 path: AppRoutes.menuItems,
-                builder: (context, state) =>
-                    const MenuItemsView(businessId: 'auto'),
+                builder: (context, state) => const ProductsView(),
               ),
 
               // /menu/categories
@@ -316,18 +356,21 @@ class AppRouter {
                     const CategoriesView(businessId: 'auto'),
               ),
 
+              GoRoute(
+                path: AppRoutes.menuRecipes,
+                builder: (context, state) => const RecipesView(),
+              ),
+
               // /menu/modifier-groups
               GoRoute(
                 path: AppRoutes.menuModifierGroups,
-                builder: (context, state) =>
-                    const _Placeholder('Grupos de modificadores'),
+                redirect: (context, state) => AppRoutes.menuModifiers,
               ),
 
               // /menu/modifiers
               GoRoute(
                 path: AppRoutes.menuModifiers,
-                builder: (context, state) =>
-                    const _Placeholder('Modificadores de artículo'),
+                builder: (context, state) => const ModifiersView(),
               ),
             ],
           ),

@@ -99,6 +99,7 @@ class OrderScreen extends ConsumerStatefulWidget {
   final String? tableId;
   final String? tableCode;
   final String? zoneId;
+  final int initialPeopleCount;
 
   const OrderScreen({
     super.key,
@@ -106,6 +107,7 @@ class OrderScreen extends ConsumerStatefulWidget {
     this.tableId,
     this.tableCode,
     this.zoneId,
+    this.initialPeopleCount = 1,
   });
 
   @override
@@ -289,7 +291,10 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   void _initializeOrder() {
     final notifier = ref.read(currentOrderProvider.notifier);
     if (widget.origin == OrderOrigin.table && widget.tableId != null) {
-      notifier.openTable(widget.tableId!);
+      notifier.openTable(
+        widget.tableId!,
+        peopleCount: widget.initialPeopleCount,
+      );
     } else if (widget.origin == OrderOrigin.manual) {
       notifier.ensureManualOrder();
     } else if (widget.origin == OrderOrigin.quick) {
@@ -364,6 +369,8 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                       menuItemId: product.id,
                       productName: product.name,
                       productPrice: product.price,
+                      productTaxMode: product.taxMode,
+                      productTaxRate: product.taxRate,
                     );
               },
             );
@@ -1094,8 +1101,29 @@ class _CartView extends ConsumerWidget {
                   _ActionButton(
                     label: 'Enviar a Cocina',
                     background: _salesKitchenButton,
-                    onPressed: () =>
-                        ref.read(currentOrderProvider.notifier).confirmOrder(),
+                    onPressed: () async {
+                      try {
+                        await ref
+                            .read(currentOrderProvider.notifier)
+                            .confirmOrder();
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Orden enviada a cocina'),
+                          ),
+                        );
+                      } catch (e) {
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              'Error al enviar a cocina: ${e.toString()}',
+                            ),
+                            backgroundColor: Colors.red,
+                          ),
+                        );
+                      }
+                    },
                     icon: Icons.soup_kitchen_outlined,
                   ),
                   const SizedBox(height: 12),

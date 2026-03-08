@@ -7,5 +7,5 @@ class ProductsQueries {
   static const tableMenuItemTaxes = 'menu_item_taxes';
 
   static const selectProducts =
-      '*, categories(name), menu_item_links(menu_id, menus(name)), menu_item_taxes(tax_id)';
+      '*, categories(name), menu_item_links(menu_id, menus(name)), menu_item_taxes(tax_id, taxes(rate, name))';
 }

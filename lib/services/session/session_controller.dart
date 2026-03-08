@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:mangopos/core/security/access_control_catalog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -91,55 +92,13 @@ const pinLoginUsers = <PinLoginUser>[
   ),
 ];
 
-const _rolePermissions = <PosRole, Set<String>>{
+final _rolePermissions = <PosRole, Set<String>>{
   PosRole.administrador: {'*'},
-  PosRole.supervisor: {
-    'ventas.mesas.acceso',
-    'ventas.mesas.abrir',
-    'ventas.orden.enviar_cocina',
-    'ventas.orden.ver_total',
-    'ventas.cuenta.split_manual',
-    'ventas.cuenta.split_equiv',
-    'ventas_rapida.acceso',
-    'ventas_rapida.crear_orden',
-    'ventas_rapida.enviar_cocina',
-    'delivery.crear_orden',
-    'pagos.acceso',
-    'pagos.cobrar_efectivo',
-    'pagos.cobrar_tarjeta',
-    'pagos.cobrar_transferencia',
-    'caja.apertura',
-    'caja.cierre',
-    'kds.acceso',
-    'reportes.ventas',
-    'inventario.acceso',
-    'settings.usuarios.acceso',
-  },
-  PosRole.cajero: {
-    'ventas.mesas.acceso',
-    'ventas.orden.ver_total',
-    'ventas_rapida.acceso',
-    'ventas_rapida.crear_orden',
-    'pagos.acceso',
-    'pagos.cobrar_efectivo',
-    'pagos.cobrar_tarjeta',
-    'pagos.cobrar_transferencia',
-    'caja.apertura',
-    'caja.cierre',
-  },
-  PosRole.mesero: {
-    'ventas.mesas.acceso',
-    'ventas.mesas.abrir',
-    'ventas.orden.agregar_item',
-    'ventas.orden.editar_item',
-    'ventas.orden.eliminar_item',
-    'ventas.orden.enviar_cocina',
-    'ventas.orden.ver_total',
-    'ventas.cuenta.split_manual',
-    'ventas.cuenta.split_equiv',
-  },
-  PosRole.cocina: {'kds.acceso'},
-  PosRole.delivery: {'delivery.crear_orden', 'ventas_rapida.acceso'},
+  PosRole.supervisor: rolePresets['manager']!.permissionCodes,
+  PosRole.cajero: rolePresets['cashier']!.permissionCodes,
+  PosRole.mesero: rolePresets['waiter']!.permissionCodes,
+  PosRole.cocina: rolePresets['cook']!.permissionCodes,
+  PosRole.delivery: rolePresets['delivery']!.permissionCodes,
 };
 
 bool _hasPermission(Set<String> granted, String permission) {
@@ -168,6 +127,7 @@ class SessionState {
   final String? userId;
   final String? userName;
   final String? activeBusinessId;
+  final String? activeBusinessName;
   final PosRole? activeRole;
   final List<PosRole> availableRoles;
   final Set<String> permissions;
@@ -177,6 +137,7 @@ class SessionState {
     this.userId,
     this.userName,
     this.activeBusinessId,
+    this.activeBusinessName,
     this.activeRole,
     this.availableRoles = const [],
     this.permissions = const {},
@@ -187,6 +148,7 @@ class SessionState {
     String? userId,
     String? userName,
     String? activeBusinessId,
+    String? activeBusinessName,
     PosRole? activeRole,
     List<PosRole>? availableRoles,
     Set<String>? permissions,
@@ -196,6 +158,7 @@ class SessionState {
       userId: userId ?? this.userId,
       userName: userName ?? this.userName,
       activeBusinessId: activeBusinessId ?? this.activeBusinessId,
+      activeBusinessName: activeBusinessName ?? this.activeBusinessName,
       activeRole: activeRole ?? this.activeRole,
       availableRoles: availableRoles ?? this.availableRoles,
       permissions: permissions ?? this.permissions,
@@ -205,7 +168,7 @@ class SessionState {
   bool get isAuthenticated => status == AuthStatus.authenticated;
 }
 
-/// Riverpod 3.0 → usar Notifier<T>
+/// Riverpod 3.0: usar `Notifier` tipado.
 class SessionController extends Notifier<SessionState> {
   StreamSubscription<AuthState>? _authSub;
 
@@ -247,19 +210,22 @@ class SessionController extends Notifier<SessionState> {
   void setAuthenticated(
     String userId, {
     String? businessId,
+    String? businessName,
     String? userName,
     PosRole? activeRole,
     List<PosRole> availableRoles = const [],
+    Set<String>? permissions,
   }) {
     final role =
         activeRole ?? (availableRoles.isNotEmpty ? availableRoles.first : null);
-    final perms = role == null
-        ? <String>{}
-        : _rolePermissions[role] ?? <String>{};
+    final perms =
+        permissions ??
+        (role == null ? <String>{} : _rolePermissions[role] ?? <String>{});
     state = SessionState(
       status: AuthStatus.authenticated,
       userId: userId,
       activeBusinessId: businessId,
+      activeBusinessName: businessName,
       userName: userName,
       activeRole: role,
       availableRoles: availableRoles,
@@ -315,12 +281,31 @@ class SessionController extends Notifier<SessionState> {
         return false;
       }
 
+      final businessResp = await client
+          .from('businesses')
+          .select('business_name, branch_name')
+          .eq('id', businessId)
+          .maybeSingle();
+      final businessName =
+          (businessResp?['branch_name'] as String?)?.trim().isNotEmpty == true
+          ? (businessResp?['branch_name'] as String).trim()
+          : (businessResp?['business_name'] as String?)?.trim();
+
+      final effectivePermissions = await _loadEffectivePermissions(
+        userId: user.id,
+        businessId: businessId,
+        roleStr: roleStr,
+        posRole: posRole,
+      );
+
       setAuthenticated(
         user.id,
         businessId: businessId,
+        businessName: businessName,
         userName: fullName,
         activeRole: posRole,
         availableRoles: [posRole],
+        permissions: effectivePermissions,
       );
       return true;
     } catch (_) {
@@ -355,6 +340,7 @@ class SessionController extends Notifier<SessionState> {
     setAuthenticated(
       found.id,
       businessId: found.businessId,
+      businessName: 'Negocio demo',
       userName: found.fullName,
       activeRole: found.roles.first,
       availableRoles: found.roles,
@@ -387,10 +373,53 @@ class SessionController extends Notifier<SessionState> {
     return true;
   }
 
-  bool verifyPin({
+  Future<bool> verifyPin({
     required String pin,
     PinAccessLevel level = PinAccessLevel.any,
-  }) {
+  }) async {
+    final businessId = state.activeBusinessId;
+    if (businessId != null && businessId.isNotEmpty) {
+      final client = Supabase.instance.client;
+      try {
+        final rows = await client
+            .from('employees')
+            .select('user_id')
+            .eq('business_id', businessId)
+            .eq('status', 'active')
+            .eq('pin', pin)
+            .limit(10);
+
+        final candidates = List<Map<String, dynamic>>.from(rows as List);
+        if (candidates.isNotEmpty) {
+          if (level == PinAccessLevel.any) {
+            return true;
+          }
+
+          for (final candidate in candidates) {
+            final candidateUserId = candidate['user_id']?.toString();
+            if (candidateUserId == null || candidateUserId.isEmpty) {
+              continue;
+            }
+
+            final membership = await client
+                .from('user_businesses')
+                .select('role')
+                .eq('user_id', candidateUserId)
+                .eq('business_id', businessId)
+                .maybeSingle();
+
+            final candidateRole = _mapRole(membership?['role']?.toString());
+            if (candidateRole != null &&
+                _meetsPinAccess(candidateRole, level)) {
+              return true;
+            }
+          }
+        }
+      } catch (_) {
+        // fallback demo below
+      }
+    }
+
     for (final user in pinLoginUsers) {
       if (user.pin != pin) continue;
       for (final role in user.roles) {
@@ -401,6 +430,71 @@ class SessionController extends Notifier<SessionState> {
   }
 
   void setUnauthenticated() => state = const SessionState();
+
+  Future<void> signOut() async {
+    try {
+      await Supabase.instance.client.auth.signOut();
+    } finally {
+      setUnauthenticated();
+    }
+  }
+
+  Future<Set<String>> _loadEffectivePermissions({
+    required String userId,
+    required String? businessId,
+    required String? roleStr,
+    required PosRole? posRole,
+  }) async {
+    if (businessId == null || businessId.isEmpty) {
+      return _fallbackPermissions(roleStr, posRole);
+    }
+
+    try {
+      final response = await Supabase.instance.client.rpc(
+        'fn_user_effective_permissions',
+        params: {'p_user_id': userId, 'p_business_id': businessId},
+      );
+
+      if (response is List) {
+        final granted = response
+            .where(
+              (row) =>
+                  row is Map<String, dynamic> &&
+                  row['allowed'] == true &&
+                  row['code'] != null,
+            )
+            .map((row) => (row as Map<String, dynamic>)['code'].toString())
+            .where((code) => code.isNotEmpty)
+            .toSet();
+
+        if (granted.isNotEmpty) {
+          if (normalizeBusinessRole(roleStr) == 'owner' ||
+              normalizeBusinessRole(roleStr) == 'admin') {
+            return {'*', ...granted};
+          }
+          return granted;
+        }
+      }
+    } catch (_) {
+      // fallback below
+    }
+
+    return _fallbackPermissions(roleStr, posRole);
+  }
+
+  Set<String> _fallbackPermissions(String? roleStr, PosRole? posRole) {
+    final normalizedRole = normalizeBusinessRole(roleStr);
+    if (normalizedRole == 'owner' || normalizedRole == 'admin') {
+      return {'*'};
+    }
+    final preset = presetCodesForRole(roleStr);
+    if (preset.isNotEmpty) {
+      return preset;
+    }
+    return posRole == null
+        ? <String>{}
+        : (_rolePermissions[posRole] ?? <String>{});
+  }
 
   PosRole? _mapRole(String? role) {
     switch (role) {

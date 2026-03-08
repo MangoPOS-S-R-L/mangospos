@@ -4,4 +4,8 @@ class ReportsQueries {
   static const tablePayments = 'payments';
   static const tableCashSessions = 'cash_register_sessions';
   static const tableCashTransactions = 'cash_transactions';
+  static const tablePurchaseOrders = 'purchase_orders';
+  static const tableSuppliers = 'suppliers';
+  static const tableInventoryItems = 'inventory_items';
+  static const tableInventoryStock = 'inventory_stock';
 }

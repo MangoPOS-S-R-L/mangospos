@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/viewmodel/taxes_viewmodel.dart';
 import '../viewmodel/products_viewmodel.dart';
 import '../widgets/add_edit_product_dialog.dart';
@@ -25,6 +26,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
   @override
   Widget build(BuildContext context) {
     final viewModel = ref.watch(productsViewModelProvider);
+    final products = viewModel.filteredProducts;
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -87,12 +89,29 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                     ],
                   ),
                   const SizedBox(height: 24),
+                  if (viewModel.error != null) ...[
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFEF2F2),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFFECACA)),
+                      ),
+                      child: Text(
+                        viewModel.error!,
+                        style: const TextStyle(color: Color(0xFF991B1B)),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
 
                   // Toolbar
                   Row(
                     children: [
                       Expanded(
                         child: TextField(
+                          onChanged: viewModel.setSearchQuery,
                           decoration: InputDecoration(
                             hintText: 'Busca tu elemento del menú aquí',
                             prefixIcon: const Icon(
@@ -119,9 +138,19 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                         ),
                       ),
                       const SizedBox(width: 16),
-                      _buildDropdownButton('Todos', viewModel.categories),
+                      _buildDropdownButton(
+                        label: 'Todas',
+                        items: viewModel.categories,
+                        value: viewModel.selectedCategoryFilterId,
+                        onChanged: viewModel.setCategoryFilter,
+                      ),
                       const SizedBox(width: 16),
-                      _buildDropdownButton('Todas', viewModel.menus),
+                      _buildDropdownButton(
+                        label: 'Todos',
+                        items: viewModel.menus,
+                        value: viewModel.selectedMenuFilterId,
+                        onChanged: viewModel.setMenuFilter,
+                      ),
                     ],
                   ),
                   const SizedBox(height: 24),
@@ -214,20 +243,22 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                   ),
 
                   // Table Body
-                  if (viewModel.products.isEmpty)
+                  if (products.isEmpty)
                     const Padding(
                       padding: EdgeInsets.all(32.0),
-                      child: Center(child: Text('No hay productos')),
+                      child: Center(
+                        child: Text('No hay productos para los filtros actuales'),
+                      ),
                     )
                   else
                     ListView.separated(
                       shrinkWrap: true,
                       physics: const NeverScrollableScrollPhysics(),
-                      itemCount: viewModel.products.length,
+                      itemCount: products.length,
                       separatorBuilder: (context, index) =>
                           const Divider(height: 1, color: Color(0xFFE5E7EB)),
                       itemBuilder: (context, index) {
-                        final product = viewModel.products[index];
+                        final product = products[index];
                         final categoryName =
                             product['categories']?['name'] ?? '-';
                         final links =
@@ -241,6 +272,14 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                         }
                         final menuName = firstMenu ?? '-';
                         final isActive = product['is_active'] == true;
+                        final taxMode =
+                            product['tax_mode']?.toString() == 'inclusive'
+                            ? 'Incluido'
+                            : 'Excluido';
+                        final taxModeColor =
+                            product['tax_mode']?.toString() == 'inclusive'
+                            ? const Color(0xFF2563EB)
+                            : MangoColors.primaryOrange;
 
                         return Padding(
                           padding: const EdgeInsets.symmetric(
@@ -292,9 +331,37 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                               ),
                               Expanded(
                                 flex: 1,
-                                child: Text(
-                                  '\$${(product['price'] ?? 0).toStringAsFixed(2)}',
-                                  style: const TextStyle(color: Colors.black54),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      '\$${(product['price'] ?? 0).toStringAsFixed(2)}',
+                                      style: const TextStyle(
+                                        color: Colors.black54,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 3,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: taxModeColor.withValues(
+                                          alpha: 0.10,
+                                        ),
+                                        borderRadius: BorderRadius.circular(999),
+                                      ),
+                                      child: Text(
+                                        'Imp. $taxMode',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w700,
+                                          color: taxModeColor,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                               Expanded(
@@ -386,7 +453,12 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
     );
   }
 
-  Widget _buildDropdownButton(String label, List<Map<String, dynamic>> items) {
+  Widget _buildDropdownButton({
+    required String label,
+    required List<Map<String, dynamic>> items,
+    required String? value,
+    required ValueChanged<String?> onChanged,
+  }) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
@@ -395,21 +467,25 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
-          value: null,
+          value: value,
           hint: Text(
             '-- $label --',
             style: TextStyle(color: Colors.grey.shade600, fontSize: 14),
           ),
           icon: const Icon(Icons.arrow_drop_down, color: Colors.grey),
-          items: items.map((item) {
-            return DropdownMenuItem<String>(
-              value: item['id'].toString(),
-              child: Text(item['name'] ?? ''),
-            );
-          }).toList(),
-          onChanged: (value) {
-            // Filter logic could go here
-          },
+          items: [
+            DropdownMenuItem<String>(
+              value: null,
+              child: Text('-- $label --'),
+            ),
+            ...items.map((item) {
+              return DropdownMenuItem<String>(
+                value: item['id'].toString(),
+                child: Text(item['name'] ?? ''),
+              );
+            }),
+          ],
+          onChanged: onChanged,
         ),
       ),
     );
@@ -432,6 +508,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
               required name,
               required price,
               required categoryId,
+              taxMode = 'exclusive',
               sku,
               description,
               menuId,
@@ -442,12 +519,12 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
               imageFile,
               imageBytes,
               taxIds = const [],
-              productType,
             }) {
               viewModel.addProduct(
                 name: name,
                 price: price,
                 categoryId: categoryId,
+                taxMode: taxMode,
                 sku: sku,
                 description: description,
                 menuId: menuId,
@@ -458,7 +535,6 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                 imageFile: imageFile,
                 imageBytes: imageBytes,
                 taxIds: taxIds,
-                productType: productType,
               );
             },
         onUpdate:
@@ -467,6 +543,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
               required name,
               required price,
               required categoryId,
+              taxMode = 'exclusive',
               sku,
               required isActive,
               description,
@@ -477,13 +554,13 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
               imageFile,
               imageBytes,
               taxIds = const [],
-              productType,
             }) {
               viewModel.updateProduct(
                 id: id,
                 name: name,
                 price: price,
                 categoryId: categoryId,
+                taxMode: taxMode,
                 sku: sku,
                 isActive: isActive,
                 description: description,
@@ -494,7 +571,6 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                 imageFile: imageFile,
                 imageBytes: imageBytes,
                 taxIds: taxIds,
-                productType: productType,
               );
             },
       ),

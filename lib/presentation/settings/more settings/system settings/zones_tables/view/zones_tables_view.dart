@@ -58,22 +58,23 @@ class _ZonesTablesViewState extends ConsumerState<ZonesTablesView> {
             padding: const EdgeInsets.only(right: 16),
             child: ElevatedButton.icon(
               onPressed: () async {
+                final messenger = ScaffoldMessenger.of(context);
                 final name = await _prompt(context, 'Nombre de la zona');
                 if (name != null && name.trim().isNotEmpty) {
                   try {
                     await ref
                         .read(zonesTablesVmProvider.notifier)
                         .addZone(widget.businessId, name.trim());
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
+                    if (!context.mounted) return;
+                    messenger.showSnackBar(
                       const SnackBar(
                         content: Text('Zona creada'),
-                        backgroundColor: const Color(0xFF22C55E),
+                        backgroundColor: Color(0xFF22C55E),
                       ),
                     );
                   } catch (e) {
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
+                    if (!context.mounted) return;
+                    messenger.showSnackBar(
                       SnackBar(
                         content: Text('Error: $e'),
                         backgroundColor: Colors.red,
@@ -114,188 +115,256 @@ class _ZonesTablesViewState extends ConsumerState<ZonesTablesView> {
             )
           : Padding(
               padding: const EdgeInsets.all(24),
-              child: ListView.separated(
-                itemCount: vm.zones.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 16),
-                itemBuilder: (context, i) {
-                  final zone = vm.zones[i];
-                  final tables = vm.tablesByZone[zone.id] ?? const [];
-
-                  return Card(
+              child: Column(
+                children: [
+                  Card(
                     elevation: 0,
                     color: Colors.white,
                     surfaceTintColor: Colors.white,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
-                      side: BorderSide(color: Colors.grey.withOpacity(0.2)),
+                      side: BorderSide(
+                        color: Colors.grey.withValues(alpha: 0.2),
+                      ),
                     ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(20),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      zone.name,
-                                      style: text.titleMedium?.copyWith(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 18,
-                                        color: Colors.black87,
-                                      ),
-                                    ),
-                                    Text(
-                                      '${tables.length} mesas registradas',
-                                      style: text.bodySmall?.copyWith(
-                                        color: Colors.grey[600],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              // ---- Agregar mesa ----
-                              TextButton.icon(
-                                onPressed: () async {
-                                  final nextCode = _generateNextTableCode(
-                                    zone.name,
-                                    tables,
-                                  );
-                                  final okCode = await _prompt(
-                                    context,
-                                    'Código de mesa',
-                                    initialValue: nextCode,
-                                  );
-                                  if (okCode != null &&
-                                      okCode.trim().isNotEmpty) {
-                                    try {
-                                      await ref
-                                          .read(zonesTablesVmProvider.notifier)
-                                          .addTable(zone.id, okCode.trim());
-                                      if (!mounted) return;
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        const SnackBar(
-                                          content: Text('Mesa creada'),
-                                          backgroundColor: const Color(0xFF22C55E),
-                                        ),
-                                      );
-                                    } catch (e) {
-                                      if (!mounted) return;
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        SnackBar(
-                                          content: Text('Error: $e'),
-                                          backgroundColor: Colors.red,
-                                        ),
-                                      );
-                                    }
-                                  }
-                                },
-                                icon: const Icon(
-                                  Icons.add_circle_outline,
-                                  size: 20,
-                                ),
-                                label: const Text('Agregar mesa'),
-                                style: TextButton.styleFrom(
-                                  foregroundColor: const Color(0xFF22C55E),
-                                  textStyle: const TextStyle(
-                                    fontWeight: FontWeight.w600,
+                    child: SwitchListTile.adaptive(
+                      value: vm.promptPeopleCountOnOpen,
+                      onChanged: vm.savingOpenTableConfig
+                          ? null
+                          : (value) async {
+                              final messenger = ScaffoldMessenger.of(context);
+                              await ref
+                                  .read(zonesTablesVmProvider.notifier)
+                                  .setPromptPeopleCountOnOpen(value);
+                              if (!context.mounted) return;
+                              messenger.showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    value
+                                        ? 'Se pedirá cantidad de personas al abrir mesa.'
+                                        : 'La mesa abrirá sin pedir cantidad de personas.',
                                   ),
+                                  backgroundColor: const Color(0xFF22C55E),
                                 ),
-                              ),
-                            ],
+                              );
+                            },
+                      secondary: vm.savingOpenTableConfig
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.groups_rounded),
+                      title: const Text(
+                        'Pedir cantidad de personas al abrir mesa',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      subtitle: const Text(
+                        'Si está activo, el camarero debe digitar la cantidad de comensales antes de abrir una mesa libre.',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Expanded(
+                    child: ListView.separated(
+                      itemCount: vm.zones.length,
+                      separatorBuilder: (_, index) =>
+                          const SizedBox(height: 16),
+                      itemBuilder: (context, i) {
+                        final zone = vm.zones[i];
+                        final tables = vm.tablesByZone[zone.id] ?? const [];
+
+                        return Card(
+                          elevation: 0,
+                          color: Colors.white,
+                          surfaceTintColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            side: BorderSide(
+                              color: Colors.grey.withValues(alpha: 0.2),
+                            ),
                           ),
-                          const SizedBox(height: 16),
-                          const Divider(height: 1, thickness: 0.5),
-                          const SizedBox(height: 16),
-                          // ---- Listado de mesas / chips ----
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: tables.isEmpty
-                                ? [
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        vertical: 8,
-                                        horizontal: 12,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.grey[100],
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Text(
-                                        'No hay mesas configuradas',
-                                        style: TextStyle(
-                                          color: Colors.grey[600],
-                                          fontSize: 13,
-                                        ),
+                          child: Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            zone.name,
+                                            style: text.titleMedium?.copyWith(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 18,
+                                              color: Colors.black87,
+                                            ),
+                                          ),
+                                          Text(
+                                            '${tables.length} mesas registradas',
+                                            style: text.bodySmall?.copyWith(
+                                              color: Colors.grey[600],
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
-                                  ]
-                                : tables.map((t) {
-                                    return Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 4,
-                                      ),
-                                      // Usar Chip personalizado o decorado
-                                      child: Chip(
-                                        label: Text(
-                                          t.code,
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.w600,
-                                            color: Colors.black87,
-                                          ),
-                                        ),
-                                        backgroundColor: Colors.white,
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(
-                                            8,
-                                          ),
-                                          side: BorderSide(
-                                            color: Colors.grey.withOpacity(0.3),
-                                          ),
-                                        ),
-                                        deleteIcon: const Icon(
-                                          Icons.close,
-                                          size: 16,
-                                          color: Colors.redAccent,
-                                        ),
-                                        onDeleted: () async {
-                                          final ok = await _confirm(
-                                            context,
-                                            '¿Eliminar mesa ${t.code}?',
-                                          );
-                                          if (ok == true) {
+                                    const SizedBox(width: 8),
+                                    TextButton.icon(
+                                      onPressed: () async {
+                                        final messenger = ScaffoldMessenger.of(
+                                          context,
+                                        );
+                                        final nextCode = _generateNextTableCode(
+                                          zone.name,
+                                          tables,
+                                        );
+                                        final okCode = await _prompt(
+                                          context,
+                                          'Código de mesa',
+                                          initialValue: nextCode,
+                                        );
+                                        if (okCode != null &&
+                                            okCode.trim().isNotEmpty) {
+                                          try {
                                             await ref
                                                 .read(
                                                   zonesTablesVmProvider
                                                       .notifier,
                                                 )
-                                                .deleteTable(
-                                                  t.id,
-                                                  zoneId: zone.id,
+                                                .addTable(
+                                                  zone.id,
+                                                  okCode.trim(),
                                                 );
+                                            if (!context.mounted) return;
+                                            messenger.showSnackBar(
+                                              const SnackBar(
+                                                content: Text('Mesa creada'),
+                                                backgroundColor: Color(
+                                                  0xFF22C55E,
+                                                ),
+                                              ),
+                                            );
+                                          } catch (e) {
+                                            if (!context.mounted) return;
+                                            messenger.showSnackBar(
+                                              SnackBar(
+                                                content: Text('Error: $e'),
+                                                backgroundColor: Colors.red,
+                                              ),
+                                            );
                                           }
-                                        },
-                                        materialTapTargetSize:
-                                            MaterialTapTargetSize.shrinkWrap,
-                                        visualDensity: VisualDensity.compact,
+                                        }
+                                      },
+                                      icon: const Icon(
+                                        Icons.add_circle_outline,
+                                        size: 20,
                                       ),
-                                    );
-                                  }).toList(),
+                                      label: const Text('Agregar mesa'),
+                                      style: TextButton.styleFrom(
+                                        foregroundColor: const Color(
+                                          0xFF22C55E,
+                                        ),
+                                        textStyle: const TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 16),
+                                const Divider(height: 1, thickness: 0.5),
+                                const SizedBox(height: 16),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: tables.isEmpty
+                                      ? [
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              vertical: 8,
+                                              horizontal: 12,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: Colors.grey[100],
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
+                                            ),
+                                            child: Text(
+                                              'No hay mesas configuradas',
+                                              style: TextStyle(
+                                                color: Colors.grey[600],
+                                                fontSize: 13,
+                                              ),
+                                            ),
+                                          ),
+                                        ]
+                                      : tables.map((t) {
+                                          return Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 4,
+                                            ),
+                                            child: Chip(
+                                              label: Text(
+                                                t.code,
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.w600,
+                                                  color: Colors.black87,
+                                                ),
+                                              ),
+                                              backgroundColor: Colors.white,
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(8),
+                                                side: BorderSide(
+                                                  color: Colors.grey.withValues(
+                                                    alpha: 0.3,
+                                                  ),
+                                                ),
+                                              ),
+                                              deleteIcon: const Icon(
+                                                Icons.close,
+                                                size: 16,
+                                                color: Colors.redAccent,
+                                              ),
+                                              onDeleted: () async {
+                                                final ok = await _confirm(
+                                                  context,
+                                                  '¿Eliminar mesa ${t.code}?',
+                                                );
+                                                if (ok == true) {
+                                                  await ref
+                                                      .read(
+                                                        zonesTablesVmProvider
+                                                            .notifier,
+                                                      )
+                                                      .deleteTable(
+                                                        t.id,
+                                                        zoneId: zone.id,
+                                                      );
+                                                }
+                                              },
+                                              materialTapTargetSize:
+                                                  MaterialTapTargetSize
+                                                      .shrinkWrap,
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                            ),
+                                          );
+                                        }).toList(),
+                                ),
+                              ],
+                            ),
                           ),
-                        ],
-                      ),
+                        );
+                      },
                     ),
-                  );
-                },
+                  ),
+                ],
               ),
             ),
       bottomNavigationBar: vm.loading

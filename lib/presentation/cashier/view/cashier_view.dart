@@ -307,6 +307,9 @@ class _HeaderSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final session = viewModel.lastSession;
+    final registerName = viewModel.currentRegisterName.trim().isNotEmpty
+        ? viewModel.currentRegisterName.trim()
+        : 'Caja sin configurar';
 
     // Format last closed date
     String lastClosedText = 'Sin registros';
@@ -380,7 +383,7 @@ class _HeaderSection extends StatelessWidget {
               ),
               SizedBox(height: context.hp(0.8)),
               Text(
-                'Caja #001',
+                registerName,
                 style: TextStyle(
                   fontSize: context.sp(28),
                   fontWeight: FontWeight.w800,

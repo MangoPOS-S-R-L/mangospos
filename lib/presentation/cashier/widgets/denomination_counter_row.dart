@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/presentation/cashier/state/blind_cash_close_models.dart';
 import 'package:mangopos/presentation/cashier/state/cash_close_formatters.dart';
@@ -23,23 +24,34 @@ class DenominationCounterRow extends StatefulWidget {
 
 class _DenominationCounterRowState extends State<DenominationCounterRow> {
   late final TextEditingController _controller;
+  late final FocusNode _focusNode;
 
   @override
   void initState() {
     super.initState();
-    _controller = TextEditingController(text: widget.denomination.count.toString());
+    _controller = TextEditingController(
+      text: widget.denomination.count.toString(),
+    );
+    _focusNode = FocusNode();
+    _focusNode.addListener(() {
+      if (!_focusNode.hasFocus) {
+        _controller.text = widget.denomination.count.toString();
+      }
+    });
   }
 
   @override
   void didUpdateWidget(covariant DenominationCounterRow oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.denomination.count != widget.denomination.count) {
+    if (!_focusNode.hasFocus &&
+        oldWidget.denomination.count != widget.denomination.count) {
       _controller.text = widget.denomination.count.toString();
     }
   }
 
   @override
   void dispose() {
+    _focusNode.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -61,9 +73,9 @@ class _DenominationCounterRowState extends State<DenominationCounterRow> {
             child: Text(
               formatRD(widget.denomination.value),
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    color: MangoColors.darkGray,
-                  ),
+                fontWeight: FontWeight.w800,
+                color: MangoColors.darkGray,
+              ),
             ),
           ),
           IconButton(
@@ -76,10 +88,12 @@ class _DenominationCounterRowState extends State<DenominationCounterRow> {
           ),
           const SizedBox(width: 8),
           SizedBox(
-            width: 72,
+            width: 96,
             child: TextField(
               controller: _controller,
+              focusNode: _focusNode,
               keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
               textAlign: TextAlign.center,
               decoration: InputDecoration(
                 isDense: true,
@@ -95,12 +109,25 @@ class _DenominationCounterRowState extends State<DenominationCounterRow> {
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
-                  borderSide: const BorderSide(color: MangoColors.primaryOrange),
+                  borderSide: const BorderSide(
+                    color: MangoColors.primaryOrange,
+                  ),
                 ),
               ),
+              onTap: () {
+                _controller.selection = TextSelection(
+                  baseOffset: 0,
+                  extentOffset: _controller.text.length,
+                );
+              },
               onChanged: (value) {
                 final parsed = int.tryParse(value) ?? 0;
                 widget.onCountChanged(parsed < 0 ? 0 : parsed);
+              },
+              onSubmitted: (value) {
+                final parsed = int.tryParse(value) ?? 0;
+                widget.onCountChanged(parsed < 0 ? 0 : parsed);
+                _controller.text = (parsed < 0 ? 0 : parsed).toString();
               },
             ),
           ),
@@ -108,7 +135,9 @@ class _DenominationCounterRowState extends State<DenominationCounterRow> {
           IconButton(
             onPressed: widget.onIncrement,
             style: IconButton.styleFrom(
-              backgroundColor: MangoColors.primaryOrange.withValues(alpha: 0.12),
+              backgroundColor: MangoColors.primaryOrange.withValues(
+                alpha: 0.12,
+              ),
               foregroundColor: MangoColors.primaryOrange,
             ),
             icon: const Icon(Icons.add_circle_outline),
@@ -117,9 +146,9 @@ class _DenominationCounterRowState extends State<DenominationCounterRow> {
           Text(
             formatRD(widget.denomination.subtotal),
             style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w800,
-                  color: MangoColors.darkGray,
-                ),
+              fontWeight: FontWeight.w800,
+              color: MangoColors.darkGray,
+            ),
           ),
         ],
       ),

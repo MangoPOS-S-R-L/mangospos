@@ -26,6 +26,10 @@ class AppRoutes {
   static const products = '/products';
   static const reports = '/reports';
   static const settings = '/settings';
+  static const settingsPlan = '$settings/plan';
+  static const purchasesList = '$settings/purchases';
+  static const purchasesRegister = '$settings/purchases/register';
+  static const promosCenter = '$settings/promos';
   static const settingsUsers = '$settings/users';
   static const settingsRoles = '$settings/roles';
 
@@ -46,11 +50,15 @@ class AppRoutes {
   static const menuMenus = '$menu/menus';
   static const menuItems = '$menu/items';
   static const menuCategories = '$menu/categories';
+  static const menuRecipes = '$menu/recipes';
   static const menuModifierGroups = '$menu/modifier-groups';
   static const menuModifiers = '$menu/modifiers';
 
   static const settingsZonesTables = '$settings/zones-tables';
   static const settingsTaxes = '$settings/taxes';
+  static const inventoryKardex = '$settings/inventory-kardex';
+  static const inventoryOutflow = '$settings/inventory-outflow';
+  static const inventoryReconciliation = '$settings/inventory-reconciliation';
   static const printingBase = '$settings/printing';
 
   // ---- Gestión de impresión (sin businessId en URL) ----

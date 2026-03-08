@@ -9,7 +9,9 @@ import 'package:mangopos/core/theme/app_shadows.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/data/models/sales_models.dart';
+import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
+import 'package:mangopos/services/session/session_controller.dart';
 import 'widgets/hoverable_card.dart';
 
 class DashboardView extends ConsumerStatefulWidget {
@@ -31,6 +33,7 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
   @override
   Widget build(BuildContext context) {
     final vm = ref.watch(cashierViewModelProvider);
+    final session = ref.watch(sessionProvider);
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -55,7 +58,11 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 // WELCOME CARD
-                _WelcomeCard(isVertical: isMobile, viewModel: vm),
+                _WelcomeCard(
+                  isVertical: isMobile,
+                  viewModel: vm,
+                  session: session,
+                ),
                 SizedBox(height: gap),
 
                 // MAIN LAYOUT
@@ -112,7 +119,13 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
 class _WelcomeCard extends StatelessWidget {
   final bool isVertical;
   final CashierViewModel viewModel;
-  const _WelcomeCard({this.isVertical = false, required this.viewModel});
+  final SessionState session;
+
+  const _WelcomeCard({
+    this.isVertical = false,
+    required this.viewModel,
+    required this.session,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -133,6 +146,21 @@ class _WelcomeCard extends StatelessWidget {
   }
 
   Widget _buildContent(BuildContext context) {
+    final businessName = viewModel.businessName.trim().isEmpty
+        ? 'Negocio no configurado'
+        : viewModel.businessName;
+    final userName = session.userName?.trim().isNotEmpty == true
+        ? session.userName!.trim()
+        : 'Usuario';
+    final registerName = viewModel.currentRegisterName.trim().isNotEmpty
+        ? viewModel.currentRegisterName.trim()
+        : 'Caja sin configurar';
+    final isCashOpen = viewModel.isCashOpen;
+    final statusColor = isCashOpen ? AppColors.success : AppColors.warning;
+    final statusLabel = isCashOpen ? 'Caja abierta' : 'Caja cerrada';
+    final actionLabel = isCashOpen ? 'Gestionar Caja' : 'Aperturar Caja';
+    final actionIcon = isCashOpen ? Icons.point_of_sale : Icons.lock_open;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -196,11 +224,11 @@ class _WelcomeCard extends StatelessWidget {
                     runSpacing: 8,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      _metaItem(const Color(0xFF22C55E), viewModel.businessName),
+                      _metaItem(const Color(0xFF22C55E), businessName),
                       _metaDot(),
-                      _metaText('Usuario: Admin'),
+                      _metaText('Usuario: $userName'),
                       _metaDot(),
-                      _metaIconText(Icons.attach_money, 'Caja #001'),
+                      _metaIconText(Icons.attach_money, registerName),
                     ],
                   ),
                 ],
@@ -222,22 +250,24 @@ class _WelcomeCard extends StatelessWidget {
                       vertical: 8,
                     ),
                     decoration: BoxDecoration(
-                      color: AppColors.warning.withOpacity(0.1),
+                      color: statusColor.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(AppRadius.button),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
-                      children: const [
+                      children: [
                         Icon(
-                          Icons.watch_later_outlined,
+                          isCashOpen
+                              ? Icons.check_circle_outline
+                              : Icons.watch_later_outlined,
                           size: 16,
-                          color: AppColors.warning,
+                          color: statusColor,
                         ),
-                        SizedBox(width: 8),
+                        const SizedBox(width: 8),
                         Text(
-                          'Caja cerrada',
+                          statusLabel,
                           style: TextStyle(
-                            color: AppColors.warning,
+                            color: statusColor,
                             fontWeight: FontWeight.w600,
                             fontSize: 13,
                           ),
@@ -261,7 +291,7 @@ class _WelcomeCard extends StatelessWidget {
                     child: Material(
                       color: Colors.transparent,
                       child: InkWell(
-                        onTap: () {},
+                        onTap: () => context.go(AppRoutes.cashier),
                         borderRadius: BorderRadius.circular(AppRadius.button),
                         child: Padding(
                           padding: const EdgeInsets.symmetric(
@@ -270,15 +300,11 @@ class _WelcomeCard extends StatelessWidget {
                           ),
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.center,
-                            children: const [
-                              Icon(
-                                Icons.lock_open,
-                                color: Colors.white,
-                                size: 18,
-                              ),
-                              SizedBox(width: 8),
+                            children: [
+                              Icon(actionIcon, color: Colors.white, size: 18),
+                              const SizedBox(width: 8),
                               Text(
-                                'Aperturar Caja',
+                                actionLabel,
                                 style: TextStyle(
                                   color: Colors.white,
                                   fontWeight: FontWeight.w600,
@@ -305,21 +331,23 @@ class _WelcomeCard extends StatelessWidget {
                       vertical: 8,
                     ),
                     decoration: BoxDecoration(
-                      color: AppColors.warning.withOpacity(0.1),
+                      color: statusColor.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(AppRadius.button),
                     ),
                     child: Row(
-                      children: const [
+                      children: [
                         Icon(
-                          Icons.watch_later_outlined,
+                          isCashOpen
+                              ? Icons.check_circle_outline
+                              : Icons.watch_later_outlined,
                           size: 16,
-                          color: AppColors.warning,
+                          color: statusColor,
                         ),
-                        SizedBox(width: 8),
+                        const SizedBox(width: 8),
                         Text(
-                          'Caja cerrada',
+                          statusLabel,
                           style: TextStyle(
-                            color: AppColors.warning,
+                            color: statusColor,
                             fontWeight: FontWeight.w600,
                             fontSize: 14,
                           ),
@@ -343,7 +371,7 @@ class _WelcomeCard extends StatelessWidget {
                     child: Material(
                       color: Colors.transparent,
                       child: InkWell(
-                        onTap: () {},
+                        onTap: () => context.go(AppRoutes.cashier),
                         borderRadius: BorderRadius.circular(AppRadius.button),
                         child: Padding(
                           padding: const EdgeInsets.symmetric(
@@ -351,15 +379,11 @@ class _WelcomeCard extends StatelessWidget {
                             vertical: 12,
                           ),
                           child: Row(
-                            children: const [
-                              Icon(
-                                Icons.lock_open,
-                                color: Colors.white,
-                                size: 18,
-                              ),
-                              SizedBox(width: 8),
+                            children: [
+                              Icon(actionIcon, color: Colors.white, size: 18),
+                              const SizedBox(width: 8),
                               Text(
-                                'Aperturar Caja',
+                                actionLabel,
                                 style: TextStyle(
                                   color: Colors.white,
                                   fontWeight: FontWeight.w600,
@@ -564,7 +588,9 @@ class _QuickActionsSection extends StatelessWidget {
     // - Min height: 110px (SPEC REQUIREMENT)
     return HoverableCard(
       onTap: () => context.go(route),
-      borderColor: color.withOpacity(0.4), // Different color for each card
+      borderColor: color.withValues(
+        alpha: 0.4,
+      ), // Different color for each card
       child: Container(
         padding: const EdgeInsets.all(14),
         constraints: const BoxConstraints.tightFor(height: 122),
@@ -577,7 +603,7 @@ class _QuickActionsSection extends StatelessWidget {
               width: 44,
               height: 44,
               decoration: BoxDecoration(
-                color: color.withOpacity(0.1),
+                color: color.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(AppRadius.md), // 8px
               ),
               child: Icon(icon, color: color, size: 22),
@@ -614,16 +640,20 @@ class _QuickActionsSection extends StatelessWidget {
   Widget _largeButton(BuildContext context, bool isPrimary) {
     // Spec 3.2.2: Nueva Venta (gradient)
     // Spec 3.2.3: Delivery (white card with badge)
-    final deliveryAvailable = false;
+    final route = isPrimary ? AppRoutes.sales : null;
+    final subtitle = isPrimary ? 'Iniciar orden' : 'No disponible';
+    final iconBackground = isPrimary
+        ? Colors.white.withValues(alpha: 0.2)
+        : AppColors.info.withValues(alpha: 0.1);
+    final subtitleColor = isPrimary
+        ? Colors.white.withValues(alpha: 0.8)
+        : AppColors.mutedForeground;
+    final trailingIconColor = Colors.white.withValues(alpha: 0.7);
+    final badgeColor = Colors.grey.withValues(alpha: 0.15);
+    final badgeBorderColor = Colors.grey.withValues(alpha: 0.25);
+
     return HoverableCard(
-      onTap: () {
-        if (isPrimary) {
-          context.go('/sales'); // Go to Sales shell
-        } else {
-          if (!deliveryAvailable) return;
-          context.go('/sales/delivery'); // Go to Delivery
-        }
-      },
+      onTap: route == null ? null : () => context.go(route),
       child: Container(
         height: 80, // Fixed 80px per spec
         decoration: BoxDecoration(
@@ -647,9 +677,7 @@ class _QuickActionsSection extends StatelessWidget {
                 width: 56,
                 height: 56,
                 decoration: BoxDecoration(
-                  color: isPrimary
-                      ? Colors.white.withOpacity(0.2)
-                      : AppColors.info.withOpacity(0.1),
+                  color: iconBackground,
                   borderRadius: BorderRadius.circular(AppRadius.card), // 12px
                 ),
                 child: Icon(
@@ -667,7 +695,7 @@ class _QuickActionsSection extends StatelessWidget {
                   children: [
                     // Title - 18px semibold per spec
                     Text(
-                  isPrimary ? 'Nueva Venta' : 'Delivery',
+                      isPrimary ? 'Nueva Venta' : 'Delivery',
                       style: TextStyle(
                         fontWeight: FontWeight.w600, // semibold
                         fontSize: 18, // text-lg per spec
@@ -678,16 +706,10 @@ class _QuickActionsSection extends StatelessWidget {
                     const SizedBox(height: 4),
                     // Subtitle - 14px per spec
                     Text(
-                  isPrimary
-                      ? 'Iniciar orden'
-                      : (deliveryAvailable
-                            ? 'Gestionar entregas'
-                            : 'No disponible'),
+                      subtitle,
                       style: TextStyle(
                         fontSize: 14, // text-sm per spec
-                        color: isPrimary
-                            ? Colors.white.withOpacity(0.8)
-                            : AppColors.mutedForeground,
+                        color: subtitleColor,
                       ),
                     ),
                   ],
@@ -696,11 +718,7 @@ class _QuickActionsSection extends StatelessWidget {
               // Right side element
               if (isPrimary)
                 // Arrow icon for Nueva Venta
-                Icon(
-                  Icons.arrow_forward,
-                  size: 20,
-                  color: Colors.white.withOpacity(0.7),
-                )
+                Icon(Icons.arrow_forward, size: 20, color: trailingIconColor)
               else
                 // Badge for Delivery (spec: "4 en ruta")
                 Container(
@@ -709,24 +727,16 @@ class _QuickActionsSection extends StatelessWidget {
                     vertical: 4,
                   ),
                   decoration: BoxDecoration(
-                    color: deliveryAvailable
-                        ? AppColors.info.withOpacity(0.1)
-                        : Colors.grey.withOpacity(0.15),
-                    border: Border.all(
-                      color: deliveryAvailable
-                          ? AppColors.info.withOpacity(0.2)
-                          : Colors.grey.withOpacity(0.25),
-                    ),
+                    color: badgeColor,
+                    border: Border.all(color: badgeBorderColor),
                     borderRadius: BorderRadius.circular(AppRadius.full),
                   ),
                   child: Text(
-                    deliveryAvailable ? '4 en ruta' : 'No disponible',
+                    'No disponible',
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.bold,
-                      color: deliveryAvailable
-                          ? AppColors.info
-                          : Colors.grey.shade700,
+                      color: Colors.grey.shade700,
                     ),
                   ),
                 ),
@@ -816,7 +826,7 @@ class _SalesChart extends StatelessWidget {
                   vertical: 6,
                 ),
                 decoration: BoxDecoration(
-                  color: AppColors.muted.withOpacity(0.1),
+                  color: AppColors.muted.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Row(
@@ -859,7 +869,7 @@ class _SalesChart extends StatelessWidget {
                   drawVerticalLine: false,
                   horizontalInterval: interval,
                   getDrawingHorizontalLine: (value) => FlLine(
-                    color: AppColors.border.withOpacity(0.5),
+                    color: AppColors.border.withValues(alpha: 0.5),
                     strokeWidth: 1,
                     dashArray: [4, 4],
                   ),
@@ -905,7 +915,7 @@ class _SalesChart extends StatelessWidget {
                     dotData: FlDotData(show: false),
                     belowBarData: BarAreaData(
                       show: true,
-                      color: AppColors.primary.withOpacity(0.1),
+                      color: AppColors.primary.withValues(alpha: 0.1),
                     ),
                   ),
                 ],
@@ -1010,9 +1020,9 @@ class _SalesChart extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.05),
+        color: color.withValues(alpha: 0.05),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.1)),
+        border: Border.all(color: color.withValues(alpha: 0.1)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1105,9 +1115,9 @@ class _ActiveTablesWidget extends StatelessWidget {
         height: 200,
         width: double.infinity,
         decoration: BoxDecoration(
-          color: AppColors.secondary.withOpacity(0.3),
+          color: AppColors.secondary.withValues(alpha: 0.3),
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.border.withOpacity(0.5)),
+          border: Border.all(color: AppColors.border.withValues(alpha: 0.5)),
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -1115,7 +1125,7 @@ class _ActiveTablesWidget extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.5),
+                color: Colors.white.withValues(alpha: 0.5),
                 shape: BoxShape.circle,
               ),
               child: const Icon(
@@ -1146,7 +1156,7 @@ class _ActiveTablesWidget extends StatelessWidget {
         itemCount: visibleSessions.length,
         shrinkWrap: false,
         physics: const AlwaysScrollableScrollPhysics(),
-        separatorBuilder: (_, __) => const SizedBox(height: 16),
+        separatorBuilder: (_, index) => const SizedBox(height: 16),
         itemBuilder: (context, index) {
           final s = visibleSessions[index];
           final total = viewModel.sessionTotals[s.id] ?? 0.0;
@@ -1293,7 +1303,7 @@ class _ActiveTableRow extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: AppColors.secondary.withOpacity(0.6),
+            color: AppColors.secondary.withValues(alpha: 0.6),
             borderRadius: BorderRadius.circular(16),
           ),
           child: Row(

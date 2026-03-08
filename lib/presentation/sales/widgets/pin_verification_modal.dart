@@ -25,7 +25,7 @@ Future<bool> showPinVerificationModal(
               setState(() => localError = 'El PIN debe tener 4 dígitos.');
               return;
             }
-            final ok = ref
+            final ok = await ref
                 .read(sessionProvider.notifier)
                 .verifyPin(pin: pin, level: level);
             if (!ok) {

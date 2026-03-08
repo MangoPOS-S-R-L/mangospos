@@ -393,35 +393,82 @@ ALTER FUNCTION "public"."calculate_order_totals"("_order_id" "uuid") OWNER TO "p
 
 CREATE OR REPLACE FUNCTION "public"."consume_inventory_from_order"("_order_id" "uuid") RETURNS "void"
     LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
     AS $$
 declare
-  oi record;
-  ri record;
+  v_main_warehouse_id uuid;
+  v_business_id uuid;
+  v_ingredient record;
+  v_consumed numeric;
+  v_delta numeric;
 begin
-  for oi in
-    select * from public.order_items where order_id = _order_id
+  select ts.business_id
+    into v_business_id
+  from public.orders o
+  join public.table_sessions ts on ts.id = o.session_id
+  where o.id = _order_id
+  limit 1;
+
+  if v_business_id is null then
+    return;
+  end if;
+
+  select w.id
+    into v_main_warehouse_id
+  from public.warehouses w
+  where w.business_id = v_business_id
+  order by w.is_main desc, w.created_at asc nulls first, w.id asc
+  limit 1;
+
+  if v_main_warehouse_id is null then
+    return;
+  end if;
+
+  for v_ingredient in
+    select
+      i.inventory_item_id,
+      sum(i.quantity * coalesce(oi.qty, oi.quantity::numeric, 0)) as expected_qty
+    from public.order_items oi
+    join public.recipes r on r.menu_item_id = oi.product_id
+    join public.recipe_ingredients i on i.recipe_id = r.id
+    where oi.order_id = _order_id
+      and oi.product_id is not null
+      and oi.status <> 'void'
+      and coalesce(oi.qty, oi.quantity::numeric, 0) > 0
+    group by i.inventory_item_id
   loop
-    for ri in
-      select r.id as recipe_id, i.inventory_item_id, i.quantity
-      from public.recipes r
-      join public.recipe_ingredients i on i.recipe_id = r.id
-      where r.menu_item_id = oi.product_id
-    loop
+    select coalesce(abs(sum(im.quantity)), 0)
+      into v_consumed
+    from public.inventory_movements im
+    where im.reference_id = _order_id
+      and im.reference_type = 'order'
+      and im.movement_type = 'sale'
+      and im.item_id = v_ingredient.inventory_item_id;
+
+    v_delta := greatest(v_ingredient.expected_qty - v_consumed, 0);
+
+    if v_delta > 0 then
       insert into public.inventory_movements (
-        business_id, warehouse_id, item_id,
-        movement_type, quantity, reference_id, reference_type
+        business_id,
+        warehouse_id,
+        item_id,
+        movement_type,
+        quantity,
+        reference_id,
+        reference_type,
+        notes
       )
-      select
-        oi.business_id,
-        w.id,
-        ri.inventory_item_id,
+      values (
+        v_business_id,
+        v_main_warehouse_id,
+        v_ingredient.inventory_item_id,
         'sale',
-        -(ri.quantity * oi.quantity),
-        oi.order_id,
-        'order'
-      from public.warehouses w
-      where w.business_id = oi.business_id and w.is_main = true;
-    end loop;
+        -v_delta,
+        _order_id,
+        'order',
+        'Auto-consumo por venta'
+      );
+    end if;
   end loop;
 end;
 $$;
@@ -517,27 +564,36 @@ CREATE OR REPLACE FUNCTION "public"."create_fiscal_document"("p_order_id" "uuid"
     AS $$
 declare
   v_doc public.fiscal_documents;
-  v_business_id uuid;
-  v_total numeric;
-  v_tax numeric;
-  v_subtotal numeric;
+  v_doc_id uuid;
 begin
-  -- Get order details
-  select subtotal, tax, total into v_subtotal, v_tax, v_total
-  from public.orders where id = p_order_id;
+  -- Idempotencia: si ya existe documento para el pago/orden, retornarlo.
+  select *
+    into v_doc
+  from public.fiscal_documents fd
+  where (p_payment_id is not null and fd.payment_id = p_payment_id)
+     or (fd.order_id = p_order_id and fd.status = 'active')
+  order by fd.created_at desc
+  limit 1;
 
-  -- Mock NCF generation
-  insert into public.fiscal_documents(
-    business_id, order_id, payment_id, customer_id, customer_rnc,
-    ncf_type, ncf_number, total, subtotal, itbis_amount, status
-  )
-  select
-    b.id, p_order_id, p_payment_id, p_customer_id, p_customer_rnc,
-    'B02', 'B0200000001', -- MOCK
-    v_total, v_subtotal, v_tax, 'issued'
-  from public.businesses b
-  limit 1 -- Fallback logic needed for real business_id
-  returning * into v_doc;
+  if found then
+    return v_doc;
+  end if;
+
+  -- Emisión real usando secuencia NCF.
+  v_doc_id := public.issue_fiscal_document(p_order_id, p_payment_id);
+
+  select * into v_doc
+  from public.fiscal_documents
+  where id = v_doc_id;
+
+  -- Completar datos de cliente si fueron provistos.
+  if p_customer_id is not null or p_customer_rnc is not null then
+    update public.fiscal_documents
+       set customer_id = coalesce(customer_id, p_customer_id),
+           customer_rnc = coalesce(customer_rnc, p_customer_rnc)
+     where id = v_doc_id
+     returning * into v_doc;
+  end if;
 
   return v_doc;
 end;
@@ -589,6 +645,45 @@ end$$;
 ALTER FUNCTION "public"."enqueue_print_test"("p_printer_id" "uuid") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."fn_resolve_order_item_tax_profile"("p_product_id" "uuid", "p_order_id" "uuid") RETURNS TABLE("tax_mode" "text", "tax_rate" numeric)
+    LANGUAGE "sql" STABLE
+    AS $$
+  with item as (
+    select coalesce(mi.tax_mode, 'exclusive') as tax_mode
+    from public.menu_items mi
+    where mi.id = p_product_id
+  ),
+  linked_tax as (
+    select coalesce(sum(t.rate), 0)::numeric as tax_rate
+    from public.menu_item_taxes mit
+    join public.taxes t
+      on t.id = mit.tax_id
+    where mit.item_id = p_product_id
+      and coalesce(t.is_active, true)
+  ),
+  business_default as (
+    select coalesce(bs.default_tax_rate, 0)::numeric as tax_rate
+    from public.orders o
+    join public.table_sessions ts
+      on ts.id = o.session_id
+    left join public.business_settings bs
+      on bs.business_id = ts.business_id
+    where o.id = p_order_id
+    limit 1
+  )
+  select
+    coalesce((select tax_mode from item), 'exclusive') as tax_mode,
+    case
+      when coalesce((select tax_rate from linked_tax), 0) > 0
+        then coalesce((select tax_rate from linked_tax), 0)
+      else coalesce((select tax_rate from business_default), 0)
+    end as tax_rate;
+$$;
+
+
+ALTER FUNCTION "public"."fn_resolve_order_item_tax_profile"("p_product_id" "uuid", "p_order_id" "uuid") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."fn_add_item_from_menu"("p_order_id" "uuid", "p_menu_item_id" "uuid", "p_qty" numeric DEFAULT 1, "p_check_position" integer DEFAULT 1, "p_is_takeout" boolean DEFAULT false, "p_notes" "text" DEFAULT NULL::"text") RETURNS "uuid"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'public'
@@ -596,6 +691,8 @@ CREATE OR REPLACE FUNCTION "public"."fn_add_item_from_menu"("p_order_id" "uuid",
 declare
   v_name text;
   v_price numeric(12,2);
+  v_tax_mode text;
+  v_tax_rate numeric := 0;
   v_check uuid;
   v_item_id uuid;
   v_qty numeric(10,3);
@@ -612,14 +709,19 @@ begin
     raise exception 'MENU_ITEM_NOT_FOUND';
   end if;
 
+  select profile.tax_mode, profile.tax_rate
+    into v_tax_mode, v_tax_rate
+  from public.fn_resolve_order_item_tax_profile(p_menu_item_id, p_order_id) profile;
+
   v_check := public.fn_get_or_create_check(p_order_id, p_check_position);
 
   insert into public.order_items(
     order_id, check_id, product_id, product_name,
-    qty, quantity, unit_price, is_takeout, notes, status
+    qty, quantity, unit_price, tax_mode, tax_rate, is_takeout, notes, status
   ) values (
     p_order_id, v_check, p_menu_item_id, v_name,
-    v_qty, v_qty, v_price, coalesce(p_is_takeout, false), p_notes, 'draft'
+    v_qty, v_qty, v_price, coalesce(v_tax_mode, 'exclusive'),
+    coalesce(v_tax_rate, 0), coalesce(p_is_takeout, false), p_notes, 'draft'
   )
   returning id into v_item_id;
 
@@ -776,40 +878,35 @@ CREATE OR REPLACE FUNCTION "public"."fn_compute_item_totals"() RETURNS "trigger"
     AS $$
 declare
   mods_total numeric(12,2) := 0;
-  v_origin public.order_origin;
-  v_default_tax numeric := 0;
-  v_service_enabled boolean := false;
-  v_service_rate numeric := 0;
-  v_tax_rate numeric := 0;
+  v_line_amount numeric(12,2) := 0;
+  v_tax_rate numeric := greatest(coalesce(new.tax_rate, 0), 0);
+  v_tax_mode text := coalesce(new.tax_mode, 'exclusive');
+  v_net_subtotal numeric(12,2) := 0;
 begin
   select coalesce(sum(price*qty),0)
     into mods_total
   from public.order_item_modifiers
   where item_id = coalesce(new.id, old.id);
 
-  -- Resolver tasa de impuesto según origen de la orden y ajustes del negocio
-  select
-    ts.origin,
-    coalesce(bs.default_tax_rate, 0),
-    coalesce(bs.service_fee_enabled, false),
-    coalesce(bs.service_fee_rate, 0)
-  into v_origin, v_default_tax, v_service_enabled, v_service_rate
-  from public.orders o
-  join public.table_sessions ts on ts.id = o.session_id
-  left join public.business_settings bs on bs.business_id = ts.business_id
-  where o.id = new.order_id
-  limit 1;
+  v_line_amount := round(
+    (coalesce(new.unit_price, 0) * coalesce(new.qty, new.quantity, 1)) +
+    mods_total,
+    2
+  );
 
-  if v_origin = 'quick' then
-    v_tax_rate := coalesce(v_service_rate, 0);
+  if v_tax_mode = 'inclusive' and v_tax_rate > 0 then
+    v_net_subtotal := round(v_line_amount / (1 + (v_tax_rate / 100.0)), 2);
+    new.subtotal := v_net_subtotal;
+    new.tax := round(v_line_amount - v_net_subtotal, 2);
+    new.total := round(v_line_amount - coalesce(new.discounts,0), 2);
   else
-    v_tax_rate := coalesce(v_default_tax, 0) +
-      (case when v_service_enabled then coalesce(v_service_rate, 0) else 0 end);
+    new.subtotal := v_line_amount;
+    new.tax := round(new.subtotal * (v_tax_rate / 100.0), 2);
+    new.total := round(
+      new.subtotal - coalesce(new.discounts,0) + coalesce(new.tax,0),
+      2
+    );
   end if;
-
-  new.subtotal := round((new.unit_price*new.qty) + mods_total, 2);
-  new.tax := round(new.subtotal * (v_tax_rate / 100.0), 2);
-  new.total    := new.subtotal - coalesce(new.discounts,0) + coalesce(new.tax,0);
   return new;
 end $$;
 
@@ -831,6 +928,8 @@ begin
   set status = 'pending'
   where order_id = p_order_id
     and status in ('draft', 'pending');
+
+  perform public.consume_inventory_from_order(p_order_id);
 end;
 $$;
 
@@ -1966,7 +2065,8 @@ CREATE OR REPLACE FUNCTION "public"."trigger_inventory_on_order_sent"() RETURNS 
     LANGUAGE "plpgsql"
     AS $$
 BEGIN
-  IF NEW.status = 'sent' AND OLD.status IS DISTINCT FROM 'sent' THEN
+  IF NEW.status_ext = 'sent_to_kitchen'
+     AND OLD.status_ext IS DISTINCT FROM 'sent_to_kitchen' THEN
     PERFORM public.consume_inventory_from_order(NEW.id);
   END IF;
   RETURN NEW;
@@ -2561,9 +2661,12 @@ CREATE TABLE IF NOT EXISTS "public"."order_items" (
     "subtotal" numeric(12,2) DEFAULT 0,
     "discounts" numeric(12,2) DEFAULT 0,
     "tax" numeric(12,2) DEFAULT 0,
+    "tax_mode" "text" DEFAULT 'exclusive'::"text" NOT NULL,
+    "tax_rate" numeric DEFAULT 0 NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"(),
     "started_at" timestamp with time zone,
-    "ready_at" timestamp with time zone
+    "ready_at" timestamp with time zone,
+    CONSTRAINT "order_items_tax_mode_check" CHECK (("tax_mode" = ANY (ARRAY['exclusive'::"text", 'inclusive'::"text"])))
 );
 
 
@@ -2750,6 +2853,7 @@ CREATE TABLE IF NOT EXISTS "public"."menu_items" (
     "category_id" "uuid",
     "name" "text" NOT NULL,
     "price" numeric(12,2) DEFAULT 0 NOT NULL,
+    "tax_mode" "text" DEFAULT 'exclusive'::"text" NOT NULL,
     "sku" "text",
     "is_active" boolean DEFAULT true NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
@@ -2766,7 +2870,8 @@ CREATE TABLE IF NOT EXISTS "public"."menu_items" (
     "cost" numeric,
     "barcode" "text",
     "updated_at" timestamp with time zone,
-    "position" integer DEFAULT 0
+    "position" integer DEFAULT 0,
+    CONSTRAINT "menu_items_tax_mode_check" CHECK (("tax_mode" = ANY (ARRAY['exclusive'::"text", 'inclusive'::"text"])))
 );
 
 
@@ -3121,7 +3226,7 @@ CREATE TABLE IF NOT EXISTS "public"."user_businesses" (
     "role" "text" DEFAULT 'owner'::"text" NOT NULL,
     "permissions" "text"[] DEFAULT ARRAY['all'::"text"] NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    CONSTRAINT "user_businesses_role_check" CHECK (("role" = ANY (ARRAY['owner'::"text", 'admin'::"text", 'cashier'::"text", 'chef'::"text", 'waiter'::"text"])))
+    CONSTRAINT "user_businesses_role_check" CHECK (("role" = ANY (ARRAY['owner'::"text", 'admin'::"text", 'manager'::"text", 'cashier'::"text", 'waiter'::"text", 'cook'::"text", 'chef'::"text", 'delivery'::"text"])))
 );
 
 
@@ -3211,7 +3316,12 @@ CREATE OR REPLACE VIEW "public"."v_menu_items_list" WITH ("security_invoker"='on
     "i"."created_at",
     "l"."menu_id",
     "m"."name" AS "menu_name",
-    "l"."position"
+    "l"."position",
+    "i"."tax_mode",
+    COALESCE(( SELECT sum("t"."rate") AS "sum"
+           FROM ("public"."menu_item_taxes" "mit"
+             JOIN "public"."taxes" "t" ON (("t"."id" = "mit"."tax_id")))
+          WHERE (("mit"."item_id" = "i"."id") AND COALESCE("t"."is_active", true))), (0)::numeric) AS "effective_tax_rate"
    FROM ((("public"."menu_items" "i"
      LEFT JOIN LATERAL ( SELECT "l1"."menu_id",
             "l1"."position"
@@ -5323,7 +5433,10 @@ CREATE POLICY "read areas members" ON "public"."print_areas" FOR SELECT USING ("
 
 
 
-CREATE POLICY "read item taxes" ON "public"."menu_item_taxes" FOR SELECT USING (true);
+CREATE POLICY "menu_item_taxes_read" ON "public"."menu_item_taxes" FOR SELECT TO "authenticated" USING ((EXISTS ( SELECT 1
+   FROM ("public"."menu_items" "mi"
+     JOIN "public"."taxes" "t" ON (("t"."id" = "menu_item_taxes"."tax_id")))
+  WHERE (("mi"."id" = "menu_item_taxes"."item_id") AND ("mi"."business_id" = "t"."business_id") AND "public"."user_has_business_access"("auth"."uid"(), "mi"."business_id")))));
 
 
 
@@ -5331,13 +5444,21 @@ CREATE POLICY "read printers members" ON "public"."printers" FOR SELECT USING ("
 
 
 
-CREATE POLICY "read taxes" ON "public"."taxes" FOR SELECT USING (true);
+CREATE POLICY "taxes_read" ON "public"."taxes" FOR SELECT TO "authenticated" USING ("public"."user_has_business_access"("auth"."uid"(), "business_id"));
 
 
 
 CREATE POLICY "rec_select" ON "public"."recipes" FOR SELECT TO "authenticated" USING ((EXISTS ( SELECT 1
    FROM "public"."menu_items" "mi"
   WHERE (("mi"."id" = "recipes"."menu_item_id") AND "public"."user_has_business_access"("auth"."uid"(), "mi"."business_id")))));
+
+
+
+CREATE POLICY "rec_write" ON "public"."recipes" TO "authenticated" USING ((EXISTS ( SELECT 1
+   FROM "public"."menu_items" "mi"
+  WHERE (("mi"."id" = "recipes"."menu_item_id") AND ("public"."user_business_role"("auth"."uid"(), "mi"."business_id") = ANY (ARRAY['owner'::"text", 'admin'::"text"])))))) WITH CHECK ((EXISTS ( SELECT 1
+   FROM "public"."menu_items" "mi"
+  WHERE (("mi"."id" = "recipes"."menu_item_id") AND ("public"."user_business_role"("auth"."uid"(), "mi"."business_id") = ANY (ARRAY['owner'::"text", 'admin'::"text"]))))));
 
 
 
@@ -5351,6 +5472,17 @@ CREATE POLICY "ri_select" ON "public"."recipe_ingredients" FOR SELECT TO "authen
    FROM ("public"."recipes" "r"
      JOIN "public"."menu_items" "mi" ON (("mi"."id" = "r"."menu_item_id")))
   WHERE (("r"."id" = "recipe_ingredients"."recipe_id") AND "public"."user_has_business_access"("auth"."uid"(), "mi"."business_id")))));
+
+
+
+CREATE POLICY "ri_write" ON "public"."recipe_ingredients" TO "authenticated" USING ((EXISTS ( SELECT 1
+   FROM ("public"."recipes" "r"
+     JOIN "public"."menu_items" "mi" ON (("mi"."id" = "r"."menu_item_id")))
+  WHERE (("r"."id" = "recipe_ingredients"."recipe_id") AND ("public"."user_business_role"("auth"."uid"(), "mi"."business_id") = ANY (ARRAY['owner'::"text", 'admin'::"text"])))))) WITH CHECK ((EXISTS ( SELECT 1
+   FROM (("public"."recipes" "r"
+     JOIN "public"."menu_items" "mi" ON (("mi"."id" = "r"."menu_item_id")))
+     JOIN "public"."inventory_items" "ii" ON (("ii"."id" = "recipe_ingredients"."inventory_item_id")))
+  WHERE (("r"."id" = "recipe_ingredients"."recipe_id") AND ("ii"."business_id" = "mi"."business_id") AND ("public"."user_business_role"("auth"."uid"(), "mi"."business_id") = ANY (ARRAY['owner'::"text", 'admin'::"text"]))))));
 
 
 
@@ -5474,11 +5606,17 @@ CREATE POLICY "wh_select" ON "public"."warehouses" FOR SELECT TO "authenticated"
 
 
 
-CREATE POLICY "write item taxes (auth)" ON "public"."menu_item_taxes" TO "authenticated" USING (true) WITH CHECK (true);
+CREATE POLICY "menu_item_taxes_write" ON "public"."menu_item_taxes" TO "authenticated" USING ((EXISTS ( SELECT 1
+   FROM ("public"."menu_items" "mi"
+     JOIN "public"."taxes" "t" ON (("t"."id" = "menu_item_taxes"."tax_id")))
+  WHERE (("mi"."id" = "menu_item_taxes"."item_id") AND ("mi"."business_id" = "t"."business_id") AND ("public"."user_business_role"("auth"."uid"(), "mi"."business_id") = ANY (ARRAY['owner'::"text", 'admin'::"text"])))))) WITH CHECK ((EXISTS ( SELECT 1
+   FROM ("public"."menu_items" "mi"
+     JOIN "public"."taxes" "t" ON (("t"."id" = "menu_item_taxes"."tax_id")))
+  WHERE (("mi"."id" = "menu_item_taxes"."item_id") AND ("mi"."business_id" = "t"."business_id") AND ("public"."user_business_role"("auth"."uid"(), "mi"."business_id") = ANY (ARRAY['owner'::"text", 'admin'::"text"]))))));
 
 
 
-CREATE POLICY "write taxes (auth)" ON "public"."taxes" TO "authenticated" USING (true) WITH CHECK (true);
+CREATE POLICY "taxes_write" ON "public"."taxes" TO "authenticated" USING (("public"."user_business_role"("auth"."uid"(), "business_id") = ANY (ARRAY['owner'::"text", 'admin'::"text"]))) WITH CHECK (("public"."user_business_role"("auth"."uid"(), "business_id") = ANY (ARRAY['owner'::"text", 'admin'::"text"])));
 
 
 

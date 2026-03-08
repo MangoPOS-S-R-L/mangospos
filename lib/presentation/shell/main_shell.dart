@@ -4,44 +4,20 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http; // ✅ check internet
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import 'package:mangopos/utils/responsive_utils.dart';
-import 'package:mangopos/widgets/responsive/responsive_icon.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 
 import '../../app/theme/mango_colors.dart';
 import '../../app/router/routes.dart';
 
-class MainShell extends ConsumerStatefulWidget {
+class MainShell extends ConsumerWidget {
   final Widget child;
   const MainShell({super.key, required this.child});
 
   @override
-  ConsumerState<MainShell> createState() => _MainShellState();
-}
-
-class _MainShellState extends ConsumerState<MainShell> {
-  late Timer _tick;
-  DateTime _now = DateTime.now();
-
-  @override
-  void initState() {
-    super.initState();
-    _tick = Timer.periodic(const Duration(minutes: 1), (_) {
-      setState(() => _now = DateTime.now());
-    });
-  }
-
-  @override
-  void dispose() {
-    _tick.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     const topBarHeight = 64.0;
     const horizontalPadding = 16.0;
     const navGap = 16.0;
@@ -159,30 +135,11 @@ class _MainShellState extends ConsumerState<MainShell> {
             ),
 
             // ======= CONTENIDO =======
-            Expanded(child: widget.child),
+            Expanded(child: child),
           ],
         ),
       ),
     );
-  }
-
-  static String _fmtDate(DateTime d) {
-    const wk = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    const mo = [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
-    ];
-    return '${wk[d.weekday - 1]}, ${d.day} ${mo[d.month - 1]} ${d.year}';
   }
 }
 
@@ -191,13 +148,11 @@ class _TopNavItem extends ConsumerStatefulWidget {
   final String label;
   final String route;
   final String asset;
-  final double iconSize;
   final String? permissionCode;
   const _TopNavItem({
     required this.label,
     required this.route,
     required this.asset,
-    this.iconSize = 22,
     this.permissionCode,
   });
 
@@ -256,8 +211,8 @@ class _TopNavItemState extends ConsumerState<_TopNavItem> {
             children: [
               SvgPicture.asset(
                 widget.asset,
-                width: widget.iconSize,
-                height: widget.iconSize,
+                width: 22,
+                height: 22,
                 colorFilter: ColorFilter.mode(iconColor, BlendMode.srcIn),
               ),
               if (showLabel) ...[
@@ -308,94 +263,6 @@ class _NotificationButton extends StatelessWidget {
           child: Icon(Icons.notifications_none, color: Colors.grey[600]),
         ),
       ),
-    );
-  }
-}
-
-// ===== BOTÓN MAS AJUSTES =====
-class _SettingsButton extends StatelessWidget {
-  const _SettingsButton();
-
-  @override
-  Widget build(BuildContext context) {
-    final loc = GoRouterState.of(context).uri.toString();
-    final active =
-        loc == AppRoutes.settings || loc.startsWith(AppRoutes.settings);
-
-    final iconColor = active ? MangoColors.primaryOrange : Colors.grey[600]!;
-    final textColor = active ? MangoColors.darkGray : Colors.grey[700]!;
-    final iconSize = context.iconSizeOf(24);
-
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        splashColor: MangoColors.primaryOrange.withOpacity(0.1),
-        highlightColor: MangoColors.primaryOrange.withOpacity(0.05),
-        onTap: () => context.go(AppRoutes.settings),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          padding: EdgeInsets.symmetric(
-            horizontal: context.wp(context.isDesktop ? 1.2 : 2),
-            vertical: context.hp(context.isMobile ? 0.6 : 0.4),
-          ),
-          decoration: BoxDecoration(
-            color: active
-                ? MangoColors.primaryOrange.withOpacity(0.08)
-                : Colors.transparent,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: active
-                  ? MangoColors.primaryOrange.withOpacity(0.2)
-                  : Colors.transparent,
-              width: 1,
-            ),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SvgPicture.asset(
-                'assets/icons/masajustes.svg',
-                width: iconSize,
-                height: iconSize,
-                colorFilter: ColorFilter.mode(iconColor, BlendMode.srcIn),
-              ),
-              SizedBox(height: context.hp(context.isMobile ? 0.6 : 0.4)),
-              Text(
-                'Mas Ajustes',
-                style: TextStyle(
-                  fontSize: context.sp(12),
-                  fontWeight: FontWeight.w600,
-                  color: textColor,
-                ),
-              ),
-              SizedBox(height: context.hp(context.isMobile ? 0.8 : 0.5)),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ===== CHIP (para fecha) =====
-class _Chip extends StatelessWidget {
-  final Widget child;
-  const _Chip({required this.child});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: context.wp(context.isDesktop ? 1.4 : 3),
-        vertical: context.hp(context.isMobile ? 0.8 : 0.6),
-      ),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF7F7F9),
-        borderRadius: BorderRadius.circular(30),
-        border: Border.all(color: const Color(0xFFEAEAEA)),
-      ),
-      child: child,
     );
   }
 }
@@ -506,6 +373,9 @@ class _UserInfo extends ConsumerWidget {
     final ctrl = ref.read(sessionProvider.notifier);
     final role = session.activeRole;
     final roleLabel = role?.label ?? 'Sin rol';
+    final businessName = session.activeBusinessName?.trim().isNotEmpty == true
+        ? session.activeBusinessName!.trim()
+        : 'Negocio';
 
     return Row(
       children: [
@@ -514,44 +384,203 @@ class _UserInfo extends ConsumerWidget {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text(
-              session.userName ?? 'Usuario',
+              'Hola, ${session.userName ?? 'Usuario'}',
               style: const TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                fontSize: 15,
                 color: Color(0xFF1F2937),
               ),
             ),
-            Text(
-              roleLabel,
-              style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
+            const SizedBox(height: 4),
+            InkWell(
+              onTap: session.availableRoles.length > 1
+                  ? () async {
+                      final selected = await showMenu<PosRole>(
+                        context: context,
+                        position: const RelativeRect.fromLTRB(0, 64, 24, 0),
+                        items: session.availableRoles
+                            .map(
+                              (r) => PopupMenuItem<PosRole>(
+                                value: r,
+                                child: Row(
+                                  children: [
+                                    if (r == role)
+                                      const Padding(
+                                        padding: EdgeInsets.only(right: 8),
+                                        child: Icon(Icons.check, size: 14),
+                                      ),
+                                    Text(r.label),
+                                  ],
+                                ),
+                              ),
+                            )
+                            .toList(),
+                      );
+                      if (selected != null) {
+                        ctrl.switchRole(selected);
+                      }
+                    }
+                  : null,
+              borderRadius: BorderRadius.circular(999),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 5,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF1F5F9),
+                  border: Border.all(color: const Color(0xFFE2E8F0)),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  roleLabel,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF475569),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
             ),
           ],
         ),
         const SizedBox(width: 8),
-        PopupMenuButton<PosRole>(
-          tooltip: 'Cambiar rol',
+        PopupMenuButton<_UserMenuAction>(
+          tooltip: 'Menu de usuario',
+          color: Colors.white,
+          surfaceTintColor: Colors.white,
+          shadowColor: const Color(0x14000000),
+          elevation: 10,
+          constraints: const BoxConstraints(minWidth: 300, maxWidth: 300),
+          menuPadding: EdgeInsets.zero,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: const BorderSide(color: Color(0xFFE5E7EB)),
+          ),
           style: const ButtonStyle(
             overlayColor: WidgetStatePropertyAll(Colors.transparent),
             splashFactory: NoSplash.splashFactory,
           ),
-          onSelected: ctrl.switchRole,
-          itemBuilder: (_) => session.availableRoles
-              .map(
-                (r) => PopupMenuItem<PosRole>(
-                  value: r,
-                  child: Row(
-                    children: [
-                      if (r == role)
-                        const Padding(
-                          padding: EdgeInsets.only(right: 8),
-                          child: Icon(Icons.check, size: 14),
-                        ),
-                      Text(r.label),
-                    ],
+          offset: const Offset(0, 12),
+          onSelected: (value) async {
+            switch (value) {
+              case _UserMenuAction.plan:
+                context.go(AppRoutes.settingsPlan);
+                break;
+              case _UserMenuAction.settings:
+                context.go(AppRoutes.settings);
+                break;
+              case _UserMenuAction.logout:
+                await ctrl.signOut();
+                if (!context.mounted) return;
+                context.go(AppRoutes.login);
+                break;
+            }
+          },
+          itemBuilder: (_) => [
+            PopupMenuItem<_UserMenuAction>(
+              enabled: false,
+              padding: EdgeInsets.zero,
+              height: 88,
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF0E7),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.storefront_rounded,
+                        color: MangoColors.primaryOrange,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            businessName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 15,
+                              color: Color(0xFF1F2937),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Sesion activa como $roleLabel',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF6B7280),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const PopupMenuDivider(height: 1),
+            const PopupMenuItem<_UserMenuAction>(
+              value: _UserMenuAction.plan,
+              padding: EdgeInsets.zero,
+              height: 56,
+              child: _UserMenuTile(
+                icon: Icons.rocket_launch_rounded,
+                label: 'Mejorar plan',
+                accent: Color(0xFFFFF0D9),
+                iconColor: MangoColors.primaryOrange,
+              ),
+            ),
+            const PopupMenuItem<_UserMenuAction>(
+              value: _UserMenuAction.settings,
+              padding: EdgeInsets.zero,
+              height: 56,
+              child: _UserMenuTile(
+                icon: Icons.settings_rounded,
+                label: 'Ajustes del sistema',
+                accent: Color(0xFFEAF0FF),
+                iconColor: Color(0xFF2563EB),
+              ),
+            ),
+            const PopupMenuDivider(height: 1),
+            const PopupMenuItem<_UserMenuAction>(
+              value: _UserMenuAction.logout,
+              padding: EdgeInsets.zero,
+              height: 56,
+              child: _UserMenuTile(
+                icon: Icons.logout_rounded,
+                label: 'Cerrar sesion',
+                accent: Color(0xFFFFE7E7),
+                iconColor: Color(0xFFDC2626),
+                textColor: Color(0xFFDC2626),
+              ),
+            ),
+            const PopupMenuDivider(height: 1),
+            const PopupMenuItem<_UserMenuAction>(
+              enabled: false,
+              padding: EdgeInsets.zero,
+              height: 40,
+              child: ColoredBox(
+                color: Color(0xFFF8FAFC),
+                child: Center(
+                  child: Text(
+                    'version 1.0.0',
+                    style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
                   ),
                 ),
-              )
-              .toList(),
+              ),
+            ),
+          ],
           child: Container(
             width: 40,
             height: 40,
@@ -562,6 +591,13 @@ class _UserInfo extends ConsumerWidget {
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x1FF97316),
+                  blurRadius: 12,
+                  offset: Offset(0, 4),
+                ),
+              ],
             ),
             child: const Icon(Icons.person, color: Colors.white, size: 20),
           ),
@@ -571,18 +607,58 @@ class _UserInfo extends ConsumerWidget {
   }
 }
 
-class _UserData {
-  final String fullName;
-  final String uid;
-  final String businessId;
-  final String role;
-  final List<String> permissions;
+enum _UserMenuAction { plan, settings, logout }
 
-  const _UserData({
-    required this.fullName,
-    required this.uid,
-    required this.businessId,
-    required this.role,
-    required this.permissions,
+class _UserMenuTile extends StatelessWidget {
+  const _UserMenuTile({
+    required this.icon,
+    required this.label,
+    required this.accent,
+    required this.iconColor,
+    this.textColor,
   });
+
+  final IconData icon;
+  final String label;
+  final Color accent;
+  final Color iconColor;
+  final Color? textColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      child: Row(
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: accent,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, size: 18, color: iconColor),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                color: textColor ?? const Color(0xFF374151),
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          Icon(
+            Icons.chevron_right_rounded,
+            size: 18,
+            color: (textColor ?? const Color(0xFF9CA3AF)).withValues(
+              alpha: 0.8,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

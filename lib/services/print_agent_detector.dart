@@ -102,14 +102,20 @@ class PrintAgentDetector {
 
   /// Deriva subnet IPv4 (192/10/172) desde adaptadores activos
   Future<String?> subnetFromConnectivity() async {
-    final conn = await Connectivity().checkConnectivity();
-    if (conn == ConnectivityResult.wifi || conn == ConnectivityResult.ethernet) {
+    final connectivityResults = await Connectivity().checkConnectivity();
+    final hasLanConnectivity =
+        connectivityResults.contains(ConnectivityResult.wifi) ||
+        connectivityResults.contains(ConnectivityResult.ethernet);
+
+    if (hasLanConnectivity) {
       final ifaces = await NetworkInterface.list();
       for (final iface in ifaces) {
         for (final addr in iface.addresses) {
           final ip = addr.address;
           if (addr.type == InternetAddressType.IPv4 &&
-              (ip.startsWith('192.') || ip.startsWith('10.') || ip.startsWith('172.'))) {
+              (ip.startsWith('192.') ||
+                  ip.startsWith('10.') ||
+                  ip.startsWith('172.'))) {
             final parts = ip.split('.');
             return '${parts[0]}.${parts[1]}.${parts[2]}';
           }

@@ -338,11 +338,48 @@ class EmployeeRepository {
   }) async {
     final res = await _client
         .from('roles')
-        .select('id, name, description, level')
+        .select('id, name, description, is_system')
         .eq('business_id', businessId)
         .order('name');
 
     return List<Map<String, dynamic>>.from(res as List);
+  }
+
+  Future<void> ensureBusinessRoleDefaults({required String businessId}) async {
+    await _client.rpc(
+      'fn_seed_business_rbac_defaults',
+      params: {'p_business_id': businessId},
+    );
+  }
+
+  Future<Map<String, dynamic>> fetchUserAccessProfile({
+    required String employeeId,
+    required String businessId,
+  }) async {
+    final response = await _client.rpc(
+      'fn_get_user_access_profile',
+      params: {'p_employee_id': employeeId, 'p_business_id': businessId},
+    );
+    return Map<String, dynamic>.from(response as Map);
+  }
+
+  Future<void> saveUserAccessProfile({
+    required String employeeId,
+    required String businessId,
+    required List<String> roleIds,
+    required String primaryRole,
+    required Set<String> effectivePermissionCodes,
+  }) async {
+    await _client.rpc(
+      'fn_save_user_access_profile',
+      params: {
+        'p_employee_id': employeeId,
+        'p_business_id': businessId,
+        'p_role_ids': roleIds,
+        'p_primary_role': primaryRole,
+        'p_effective_permission_codes': effectivePermissionCodes.toList(),
+      },
+    );
   }
 
   Future<void> deleteEmployee({required String employeeId}) async {

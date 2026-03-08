@@ -70,7 +70,7 @@ class MenuRepository {
   }
 
   bool _isMissingExtendedColumn(PostgrestException e) {
-    if (e.code != '42703') return false;
+    if (e.code != '42703' && e.code != 'PGRST204') return false;
     final msg = e.message.toLowerCase();
     return msg.contains('description') || msg.contains('schedule');
   }

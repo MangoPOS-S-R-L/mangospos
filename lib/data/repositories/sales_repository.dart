@@ -492,44 +492,11 @@ class SalesRepository {
 
   /// Elimina todos los items de un check y recalcula totales en DB
   Future<void> clearCheck(String checkId) async {
-    // Obtener order_id del check
-    final check = await _client
-        .from('order_checks')
-        .select('order_id')
-        .eq('id', checkId)
-        .maybeSingle();
-
-    if (check == null || check['order_id'] == null) return;
-    final orderId = check['order_id'] as String;
-
-    // Marcar items como pagados (conservando historial)
-    await _client
-        .from('order_items')
-        .update({'status': 'paid'})
-        .eq('check_id', checkId)
-        .neq('status', 'void');
-
-    // Marcar check cerrado
-    await _client
-        .from('order_checks')
-        .update({
-          'is_closed': true,
-          'closed_at': DateTime.now().toUtc().toIso8601String(),
-        })
-        .eq('id', checkId);
-
-    // Recalcular totales de la orden en DB
-    await _recomputeOrderTotals(orderId);
-
-    // Cerrar orden/mesa si no quedan lÃ­neas abiertas
-    final openItemsCount = await _client
-        .from('order_items')
-        .count(CountOption.exact)
-        .eq('order_id', orderId)
-        .not('status', 'in', '(paid,void)');
-    if (openItemsCount == 0) {
-      await closeOrder(orderId: orderId, status: 'paid');
-    }
+    throw UnsupportedError(
+      'clearCheck() fue deshabilitado porque podia marcar items como pagados '
+      'sin registrar un pago. Usa processPayment() para cobrar o deleteCheck() '
+      'para eliminar la subcuenta despues de mover sus items.',
+    );
   }
 
   Future<void> _recomputeOrderTotals(String orderId) async {
@@ -835,141 +802,10 @@ class SalesRepository {
           msg.contains('CASH_SESSION_NOT_OPEN')) {
         rethrow;
       }
-      // Si falla el RPC, intentamos el método directo como fallback
-      return _processPaymentDirect(
-        orderId: orderId,
-        checkId: checkId,
-        paymentMethodId: paymentMethodId,
-        amount: amount,
-        reference: reference,
-        customerId: customerId,
-        customerRnc: customerRnc,
-        cashierSessionId: cashierSessionId,
-        changeAmount: changeAmount,
-        closeOrder: closeOrder,
-      );
-    }
-  }
-
-  Future<Payment> _processPaymentDirect({
-    required String orderId,
-    String? checkId,
-    required String paymentMethodId,
-    required double amount,
-    String? reference,
-    String? customerId,
-    String? customerRnc,
-    String? cashierSessionId,
-    double changeAmount = 0,
-    bool closeOrder = true,
-  }) async {
-    // 1) Resolver sesion y negocio
-    final orderData = await _client
-        .from('orders')
-        .select('session_id')
-        .eq('id', orderId)
-        .maybeSingle();
-
-    if (orderData == null) {
-      throw Exception('Orden no encontrada para registrar el pago.');
-    }
-
-    final tableSessionId = orderData['session_id'] as String?;
-
-    String? businessId;
-    if (tableSessionId != null) {
-      final sessionData = await _client
-          .from('table_sessions')
-          .select('business_id')
-          .eq('id', tableSessionId)
-          .maybeSingle();
-      businessId = sessionData?['business_id'] as String?;
-    }
-
-    businessId ??= await resolveBusinessIdOrNull(_client, 'auto');
-
-    if (businessId == null) {
       throw Exception(
-        'No se pudo determinar el negocio para registrar el pago.',
+        'No se pudo procesar el pago de forma atomica. La operacion fue cancelada: $e',
       );
     }
-
-    // 2) Resolver metodo de pago (acepta UUID o codigo)
-    final paymentMethodData = await _client
-        .from('payment_methods')
-        .select('id, code')
-        .eq('business_id', businessId)
-        .eq(_isUuid(paymentMethodId) ? 'id' : 'code', paymentMethodId)
-        .eq('is_active', true)
-        .maybeSingle();
-
-    if (paymentMethodData == null || paymentMethodData['id'] == null) {
-      throw Exception('Metodo de pago no valido: $paymentMethodId');
-    }
-
-    final resolvedPaymentMethodId = paymentMethodData['id'] as String;
-    final paymentMethodCode = paymentMethodData['code'] as String?;
-    final userId = _client.auth.currentUser?.id;
-
-    // 3) Insertar en payments
-    final paymentRow = await _client
-        .from('payments')
-        .insert({
-          'business_id': businessId,
-          'order_id': orderId,
-          'check_id': checkId,
-          'payment_method_id': resolvedPaymentMethodId,
-          'amount': amount,
-          'reference': reference,
-          'change_amount': changeAmount,
-          'status': 'completed',
-          if (userId != null) 'processed_by': userId,
-          if (cashierSessionId != null) 'session_id': cashierSessionId,
-        })
-        .select()
-        .single();
-
-    // 4) Marcar líneas/cheques como pagados
-    if (checkId != null) {
-      await _markCheckPaid(orderId: orderId, checkId: checkId);
-    } else if (closeOrder) {
-      await _markOrderPaid(orderId);
-    }
-
-    // 5) Cerrar orden y mesa solo si corresponde
-    if (closeOrder && checkId == null) {
-      await _client.rpc(
-        SalesQueries.rpcCloseOrderAndTable,
-        params: {'p_order_id': orderId, 'p_status': 'paid'},
-      );
-    }
-
-    // 6) Registrar transaccion en caja si aplica
-    final cashInDrawer = amount - changeAmount;
-    if (paymentMethodCode == 'cash' &&
-        cashierSessionId != null &&
-        cashInDrawer > 0) {
-      try {
-        await _client.from('cash_transactions').insert({
-          'session_id': cashierSessionId,
-          'amount': cashInDrawer,
-          'type': 'sale',
-          'description': 'Venta ${orderId.substring(0, 8)}',
-          'related_order_id': orderId,
-        });
-      } catch (_) {
-        // Si falla, no bloquear el flujo de pago
-      }
-    }
-
-    return Payment.fromMap(paymentRow);
-  }
-
-  bool _isUuid(String value) {
-    final regex = RegExp(
-      r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
-    );
-    return regex.hasMatch(value);
   }
 
   /// Obtener pagos de una orden
@@ -1049,46 +885,6 @@ class SalesRepository {
     } catch (e) {
       throw Exception('Error al cerrar orden: $e');
     }
-  }
-
-  // ============================================================
-  // 💰 Helpers de pago de subcuentas / items
-  // ============================================================
-
-  Future<void> _markCheckPaid({
-    required String orderId,
-    required String checkId,
-  }) async {
-    await _client
-        .from('order_items')
-        .update({'status': 'paid'})
-        .eq('order_id', orderId)
-        .eq('check_id', checkId);
-
-    await _client
-        .from('order_checks')
-        .update({
-          'is_closed': true,
-          'closed_at': DateTime.now().toUtc().toIso8601String(),
-        })
-        .eq('id', checkId);
-
-    final openItemsCount = await _client
-        .from('order_items')
-        .count(CountOption.exact)
-        .eq('order_id', orderId)
-        .not('status', 'in', '(paid,void)');
-    if (openItemsCount == 0) {
-      await closeOrder(orderId: orderId, status: 'paid');
-    }
-  }
-
-  Future<void> _markOrderPaid(String orderId) async {
-    await _client
-        .from('order_items')
-        .update({'status': 'paid'})
-        .eq('order_id', orderId)
-        .neq('status', 'void');
   }
 
   // ============================================================

@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
+import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
@@ -613,15 +615,109 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
       }
     }
 
+    int peopleCount = 1;
+    if (ts.sessionId == null) {
+      final businessId =
+          ref.read(byZoneVmProvider).businessId ??
+          ref.read(sessionProvider).activeBusinessId;
+      if (businessId != null && businessId.isNotEmpty) {
+        final promptEnabled = await ref
+            .read(posSettingsRepositoryProvider)
+            .getPromptPeopleCountOnTableOpen(businessId);
+        if (promptEnabled) {
+          if (!context.mounted) {
+            byZone.setOpening(ts.tableId, false);
+            return;
+          }
+          final requestedCount = await _promptPeopleCount(context, ts.code);
+          if (requestedCount == null) {
+            byZone.setOpening(ts.tableId, false);
+            return;
+          }
+          peopleCount = requestedCount;
+        }
+      }
+    }
+
     // La apertura de mesa ocurre en TableOrderScreen; evitar doble openTable.
     byZone.setOpening(ts.tableId, false);
     if (!context.mounted) return;
     context.go(
       Uri(
         path: '${AppRoutes.sales}/table/${ts.tableId}',
-        queryParameters: {'code': ts.code, 'zone': ts.zoneId},
+        queryParameters: {
+          'code': ts.code,
+          'zone': ts.zoneId,
+          'guests': peopleCount.toString(),
+        },
       ).toString(),
     );
+  }
+
+  Future<int?> _promptPeopleCount(
+    BuildContext context,
+    String tableCode,
+  ) async {
+    final controller = TextEditingController(text: '1');
+    final focusNode = FocusNode();
+
+    final result = await showDialog<int>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (focusNode.canRequestFocus) {
+            focusNode.requestFocus();
+            controller.selection = TextSelection(
+              baseOffset: 0,
+              extentOffset: controller.text.length,
+            );
+          }
+        });
+        return AlertDialog(
+          title: Text('Abrir Mesa $tableCode'),
+          content: SizedBox(
+            width: 320,
+            child: TextField(
+              controller: controller,
+              focusNode: focusNode,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              decoration: const InputDecoration(
+                labelText: 'Cantidad de personas',
+                hintText: 'Ej. 4',
+                border: OutlineInputBorder(),
+              ),
+              onSubmitted: (_) {
+                final parsed = int.tryParse(controller.text.trim());
+                if (parsed != null && parsed > 0) {
+                  Navigator.of(dialogContext).pop(parsed);
+                }
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final parsed = int.tryParse(controller.text.trim());
+                if (parsed == null || parsed <= 0) return;
+                Navigator.of(dialogContext).pop(parsed);
+              },
+              child: const Text('Abrir mesa'),
+            ),
+          ],
+        );
+      },
+    );
+
+    controller.dispose();
+    focusNode.dispose();
+    return result;
   }
 
   /// Convierte TableStatus a VentasTable para el  nuevo TableCard

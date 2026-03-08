@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/security/access_control_catalog.dart';
 import 'package:mangopos/data/repositories/employee_repository.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -42,6 +43,13 @@ class _SettingsUsersViewState extends State<SettingsUsersView> {
       final bid =
           await resolveBusinessIdOrNull(sb, widget.businessId) ??
           widget.businessId;
+
+      try {
+        await _repo.ensureBusinessRoleDefaults(businessId: bid);
+      } catch (_) {
+        // Si el RPC aún no está aplicado en DB, seguimos cargando para no
+        // bloquear la pantalla completa.
+      }
 
       final results = await Future.wait([
         _repo.fetchEmployees(businessId: bid),
@@ -114,16 +122,6 @@ class _SettingsUsersViewState extends State<SettingsUsersView> {
           ],
         ),
         actions: [
-          OutlinedButton.icon(
-            onPressed: () => context.go(AppRoutes.settingsRoles),
-            icon: const Icon(Icons.shield_outlined),
-            label: const Text('Gestionar Roles'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: MangoColors.darkGray,
-              side: BorderSide(color: Colors.grey.shade300),
-            ),
-          ),
-          const SizedBox(width: 8),
           ElevatedButton.icon(
             onPressed: () => _openUserDialog(context),
             icon: const Icon(Icons.add),
@@ -329,7 +327,7 @@ class _KpiCard extends StatelessWidget {
         child: Row(
           children: [
             CircleAvatar(
-              backgroundColor: color.withOpacity(0.12),
+              backgroundColor: color.withValues(alpha: 0.12),
               foregroundColor: color,
               child: Icon(icon),
             ),
@@ -388,7 +386,7 @@ class _FiltersBar extends StatelessWidget {
           BoxShadow(
             blurRadius: 12,
             offset: const Offset(0, 3),
-            color: Colors.black.withOpacity(0.04),
+            color: Colors.black.withValues(alpha: 0.04),
           ),
         ],
       ),
@@ -656,7 +654,7 @@ class _UserRow extends StatelessWidget {
                   _showResetPasswordDialog(context, user);
                   break;
                 case 'view_permissions':
-                  _showPermissionsDialog(context, user);
+                  onEdit();
                   break;
                 case 'deactivate':
                   _showDeactivateDialog(context, user);
@@ -701,7 +699,7 @@ class _UserRow extends StatelessWidget {
                       color: Colors.grey[700],
                     ),
                     const SizedBox(width: 12),
-                    const Text('Ver Permisos'),
+                    const Text('Editar Permisos'),
                   ],
                 ),
               ),
@@ -768,37 +766,6 @@ class _UserRow extends StatelessWidget {
     );
   }
 
-  void _showPermissionsDialog(BuildContext context, Employee user) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('Permisos de ${user.fullName}'),
-        content: SizedBox(
-          width: 400,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Roles: ${user.roles.join(", ")}'),
-              const SizedBox(height: 16),
-              const Text('Permisos activos:'),
-              const SizedBox(height: 8),
-              // TODO: Cargar permisos desde el backend
-              const Text('- Cargando permisos...'),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cerrar'),
-          ),
-        ],
-      ),
-    );
-  }
-
   void _showDeactivateDialog(BuildContext context, Employee user) {
     showDialog(
       context: context,
@@ -812,7 +779,9 @@ class _UserRow extends StatelessWidget {
             child: const Text('Cancelar'),
           ),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFF97316)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFF97316),
+            ),
             onPressed: () {
               // TODO: Implementar desactivación
               Navigator.pop(context);
@@ -959,12 +928,21 @@ class _UserDialogState extends State<_UserDialog> {
   String _ars = 'ARS Humano';
   String _bank = 'Popular';
   final List<String> _selectedRoles = [];
+  Set<String> _effectivePermissionCodes = {};
+  String _primaryBusinessRole = 'waiter';
+  bool _loadingAccess = false;
+  bool _accessDirty = false;
+  bool _hasLoginAccess = false;
 
   @override
   void initState() {
     super.initState();
     if (widget.user != null) {
       _loadUserData(widget.user!);
+      _loadAccessProfile();
+    } else {
+      _ensureDefaultRoleSelected();
+      _applyPresetForRole(_primaryBusinessRole);
     }
   }
 
@@ -1010,6 +988,7 @@ class _UserDialogState extends State<_UserDialog> {
           (r) => r['name'] == roleName,
         );
         _selectedRoles.add(role['id'] as String);
+        _primaryBusinessRole = normalizeBusinessRole(role['name']?.toString());
       } catch (_) {
         // Rol no encontrado en la configuración actual o borrado
       }
@@ -1018,7 +997,399 @@ class _UserDialogState extends State<_UserDialog> {
     // TODO: Cargar AFP y ARS cuando estén disponibles en el modelo
   }
 
-  Future<void> _onSubmit(BuildContext context) async {
+  Future<void> _loadAccessProfile() async {
+    final user = widget.user;
+    if (user == null) return;
+
+    setState(() => _loadingAccess = true);
+    try {
+      final payload = await widget.repo.fetchUserAccessProfile(
+        employeeId: user.id,
+        businessId: widget.businessId,
+      );
+
+      final roleIds =
+          (payload['role_ids'] as List?)
+              ?.map((value) => value.toString())
+              .where((value) => value.isNotEmpty)
+              .toList() ??
+          const <String>[];
+      final effectivePermissions =
+          (payload['effective_permissions'] as List?)
+              ?.map((value) => value.toString())
+              .where((value) => value.isNotEmpty)
+              .toSet() ??
+          <String>{};
+
+      if (!mounted) return;
+      setState(() {
+        _selectedRoles
+          ..clear()
+          ..addAll(roleIds);
+        _primaryBusinessRole = normalizeBusinessRole(
+          payload['primary_role']?.toString(),
+        );
+        _effectivePermissionCodes = effectivePermissions;
+        _hasLoginAccess = payload['has_login'] == true;
+        _loadingAccess = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loadingAccess = false;
+        _hasLoginAccess = user.userId != null;
+        if (_effectivePermissionCodes.isEmpty) {
+          _applyPresetForRole(_primaryBusinessRole);
+        }
+      });
+    }
+  }
+
+  void _applyPresetForRole(String roleKey) {
+    _effectivePermissionCodes = presetCodesForRole(roleKey);
+  }
+
+  void _ensureDefaultRoleSelected() {
+    if (_selectedRoles.isNotEmpty) return;
+    Map<String, dynamic>? preferredRole;
+    for (final role in _systemRoles) {
+      final normalized = normalizeBusinessRole(role['name']?.toString());
+      if (normalized == 'waiter') {
+        preferredRole = role;
+        break;
+      }
+      preferredRole ??= role;
+    }
+    if (preferredRole == null) return;
+    _selectedRoles
+      ..clear()
+      ..add(preferredRole['id'].toString());
+    _primaryBusinessRole = normalizeBusinessRole(
+      preferredRole['name']?.toString(),
+    );
+  }
+
+  List<Map<String, dynamic>> get _systemRoles {
+    return widget.availableRoles
+        .where((role) {
+          final name = role['name']?.toString();
+          return {
+            'owner',
+            'admin',
+            'manager',
+            'cashier',
+            'waiter',
+            'cook',
+            'delivery',
+            'chef',
+          }.contains((name ?? '').toLowerCase());
+        })
+        .toList(growable: false);
+  }
+
+  Map<String, int> _categoryCounts(Set<String> codes) {
+    final counts = <String, int>{};
+    for (final category in accessCategories) {
+      final items = permissionsForCategory(category.id);
+      counts[category.id] = items
+          .where((item) => codes.contains(item.code))
+          .length;
+    }
+    return counts;
+  }
+
+  Future<void> _openPermissionsEditor() async {
+    final selectedRole = _primaryBusinessRole;
+    final currentCodes = {..._effectivePermissionCodes};
+    var workingCodes = {...currentCodes};
+    var selectedCategoryId = accessCategories.first.id;
+
+    final applied = await showDialog<Set<String>>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final category = accessCategories.firstWhere(
+              (item) => item.id == selectedCategoryId,
+            );
+            final categoryPermissions = permissionsForCategory(category.id);
+            final allSelected =
+                categoryPermissions.isNotEmpty &&
+                categoryPermissions.every(
+                  (permission) => workingCodes.contains(permission.code),
+                );
+            final counts = _categoryCounts(workingCodes);
+
+            return Dialog(
+              backgroundColor: Colors.white,
+              insetPadding: const EdgeInsets.all(24),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: SizedBox(
+                width: 1080,
+                height: 720,
+                child: Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Permisos del usuario',
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  'Cargo: ${businessRoleLabel(selectedRole)}',
+                                  style: TextStyle(
+                                    color: Colors.grey[700],
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          TextButton.icon(
+                            onPressed: () {
+                              setModalState(() {
+                                workingCodes = presetCodesForRole(selectedRole);
+                              });
+                            },
+                            icon: const Icon(Icons.replay_outlined),
+                            label: const Text('Usar permisos predeterminados'),
+                          ),
+                          const SizedBox(width: 8),
+                          IconButton(
+                            onPressed: () => Navigator.of(context).pop(),
+                            icon: const Icon(Icons.close),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Divider(height: 1),
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 320,
+                            padding: const EdgeInsets.all(20),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF8F7F5),
+                              border: Border(
+                                right: BorderSide(color: Colors.grey.shade200),
+                              ),
+                            ),
+                            child: ListView.separated(
+                              itemCount: accessCategories.length,
+                              separatorBuilder: (_, separatorIndex) =>
+                                  const SizedBox(height: 10),
+                              itemBuilder: (context, index) {
+                                final item = accessCategories[index];
+                                final total = permissionsForCategory(
+                                  item.id,
+                                ).length;
+                                final selected = counts[item.id] ?? 0;
+                                final active = item.id == selectedCategoryId;
+
+                                return InkWell(
+                                  onTap: () {
+                                    setModalState(() {
+                                      selectedCategoryId = item.id;
+                                    });
+                                  },
+                                  borderRadius: BorderRadius.circular(14),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 14,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: active
+                                          ? const Color(0xFFFFF1E4)
+                                          : Colors.white,
+                                      borderRadius: BorderRadius.circular(14),
+                                      border: Border.all(
+                                        color: active
+                                            ? const Color(0xFFFFB36B)
+                                            : Colors.grey.shade200,
+                                      ),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            item.label,
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.w700,
+                                              color: active
+                                                  ? const Color(0xFFF97316)
+                                                  : const Color(0xFF2C2C2C),
+                                            ),
+                                          ),
+                                        ),
+                                        Text(
+                                          '$selected/$total',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w700,
+                                            color: Colors.grey[700],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.all(20),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          category.label,
+                                          style: const TextStyle(
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                        ),
+                                      ),
+                                      Checkbox(
+                                        value: allSelected,
+                                        onChanged: (value) {
+                                          setModalState(() {
+                                            for (final permission
+                                                in categoryPermissions) {
+                                              if (value == true) {
+                                                workingCodes.add(
+                                                  permission.code,
+                                                );
+                                              } else {
+                                                workingCodes.remove(
+                                                  permission.code,
+                                                );
+                                              }
+                                            }
+                                          });
+                                        },
+                                      ),
+                                      const Text(
+                                        'Seleccionar todo',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Expanded(
+                                    child: ListView.separated(
+                                      itemCount: categoryPermissions.length,
+                                      separatorBuilder: (_, separatorIndex) =>
+                                          Divider(
+                                            height: 1,
+                                            color: Colors.grey.shade200,
+                                          ),
+                                      itemBuilder: (context, index) {
+                                        final permission =
+                                            categoryPermissions[index];
+                                        final selected = workingCodes.contains(
+                                          permission.code,
+                                        );
+                                        return SwitchListTile(
+                                          value: selected,
+                                          onChanged: (value) {
+                                            setModalState(() {
+                                              if (value) {
+                                                workingCodes.add(
+                                                  permission.code,
+                                                );
+                                              } else {
+                                                workingCodes.remove(
+                                                  permission.code,
+                                                );
+                                              }
+                                            });
+                                          },
+                                          title: Text(
+                                            permission.label,
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                          subtitle: Text(
+                                            permission.description,
+                                            style: TextStyle(
+                                              color: Colors.grey[600],
+                                            ),
+                                          ),
+                                          activeThumbColor: const Color(
+                                            0xFF3B82F6,
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Divider(height: 1),
+                    Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          TextButton(
+                            onPressed: () => Navigator.of(context).pop(),
+                            child: const Text('Cancelar'),
+                          ),
+                          ElevatedButton.icon(
+                            onPressed: () =>
+                                Navigator.of(context).pop({...workingCodes}),
+                            icon: const Icon(Icons.add_task_outlined),
+                            label: const Text('Aplicar permisos'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF3B82F6),
+                              foregroundColor: Colors.white,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    if (applied == null || !mounted) return;
+    setState(() {
+      _effectivePermissionCodes = applied;
+      _accessDirty = true;
+    });
+  }
+
+  Future<void> _onSubmit() async {
     if (_firstName.text.isEmpty ||
         _lastName.text.isEmpty ||
         _email.text.isEmpty ||
@@ -1026,6 +1397,14 @@ class _UserDialogState extends State<_UserDialog> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Completa nombre, apellido, email y teléfono.'),
+        ),
+      );
+      return;
+    }
+    if (_selectedRoles.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Selecciona al menos un cargo para el usuario.'),
         ),
       );
       return;
@@ -1070,15 +1449,23 @@ class _UserDialogState extends State<_UserDialog> {
           roleIds: roleIds,
         );
 
+        await widget.repo.saveUserAccessProfile(
+          employeeId: widget.user!.id,
+          businessId: widget.businessId,
+          roleIds: roleIds,
+          primaryRole: _primaryBusinessRole,
+          effectivePermissionCodes: _effectivePermissionCodes,
+        );
+
         if (mounted) {
-          Navigator.pop(context, true);
+          Navigator.of(context).pop(true);
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Usuario actualizado correctamente.')),
           );
         }
       } else {
         // CREAR NUEVO USUARIO
-        await widget.repo.createEmployee(
+        final createdEmployee = await widget.repo.createEmployee(
           businessId: widget.businessId,
           firstName: _firstName.text.trim(),
           lastName: _lastName.text.trim(),
@@ -1104,8 +1491,16 @@ class _UserDialogState extends State<_UserDialog> {
           roleIds: roleIds,
         );
 
+        await widget.repo.saveUserAccessProfile(
+          employeeId: createdEmployee.id,
+          businessId: widget.businessId,
+          roleIds: roleIds,
+          primaryRole: _primaryBusinessRole,
+          effectivePermissionCodes: _effectivePermissionCodes,
+        );
+
         if (mounted) {
-          Navigator.pop(context, true);
+          Navigator.of(context).pop(true);
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Usuario creado correctamente.')),
           );
@@ -1315,7 +1710,7 @@ class _UserDialogState extends State<_UserDialog> {
                                 if (_tab > _maxStep) _maxStep = _tab;
                               });
                             } else {
-                              _onSubmit(context);
+                              _onSubmit();
                             }
                           },
                     style: ElevatedButton.styleFrom(
@@ -1604,21 +1999,34 @@ class _UserDialogState extends State<_UserDialog> {
           ],
         );
       case 3:
+        final categoryCounts = _categoryCounts(_effectivePermissionCodes);
         return Column(
           key: const ValueKey(3),
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const SizedBox(height: 8),
-            Text(
-              'Selecciona los roles para este usuario',
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.grey[600],
-                fontWeight: FontWeight.w500,
-              ),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Define el cargo principal y ajusta los permisos de este usuario.',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.grey[600],
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+                if (_loadingAccess)
+                  const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+              ],
             ),
             const SizedBox(height: 16),
-            if (widget.availableRoles.isEmpty)
+            if (_systemRoles.isEmpty)
               const Center(
                 child: Padding(
                   padding: EdgeInsets.all(20),
@@ -1626,29 +2034,125 @@ class _UserDialogState extends State<_UserDialog> {
                 ),
               )
             else
-              ...widget.availableRoles.map((role) {
+              ..._systemRoles.map((role) {
                 final id = role['id'] as String;
-                final name = role['name'] as String;
+                final roleName = role['name'] as String;
                 final desc = role['description'] as String?;
+                final normalizedRole = normalizeBusinessRole(roleName);
 
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 12),
                   child: _RoleCheckbox(
-                    title: name,
-                    description: desc ?? '',
+                    title: businessRoleLabel(roleName),
+                    description: desc ?? roleName,
                     isSelected: _selectedRoles.contains(id),
                     onChanged: (selected) {
                       setState(() {
-                        if (selected) {
-                          _selectedRoles.add(id);
-                        } else {
-                          _selectedRoles.remove(id);
-                        }
+                        _selectedRoles
+                          ..clear()
+                          ..add(id);
+                        _primaryBusinessRole = normalizedRole;
+                        _applyPresetForRole(normalizedRole);
+                        _accessDirty = false;
                       });
                     },
                   ),
                 );
               }),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8F7F5),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.grey.shade200),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Permisos',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              _hasLoginAccess
+                                  ? 'Este usuario tiene acceso al sistema. Puedes ajustar permisos finos por encima del cargo.'
+                                  : 'Este registro es un empleado sin login enlazado. El cargo y permisos quedaran preparados para cuando tenga acceso.',
+                              style: TextStyle(
+                                color: Colors.grey[700],
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _selectedRoles.isEmpty
+                            ? null
+                            : _openPermissionsEditor,
+                        icon: const Icon(Icons.tune_outlined),
+                        label: Text(
+                          _accessDirty
+                              ? 'Editar permisos personalizados'
+                              : 'Asignar permisos',
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: accessCategories
+                        .map((category) {
+                          final total = permissionsForCategory(
+                            category.id,
+                          ).length;
+                          final selected = categoryCounts[category.id] ?? 0;
+                          return Container(
+                            width: 220,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.grey.shade200),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  category.label,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  '$selected / $total permisos',
+                                  style: TextStyle(
+                                    color: Colors.grey[700],
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        })
+                        .toList(growable: false),
+                  ),
+                ],
+              ),
+            ),
             const SizedBox(height: 24),
           ],
         );
@@ -1905,7 +2409,7 @@ class _RoleCheckbox extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: isSelected
-              ? const Color(0xFFFF7F1F).withOpacity(0.08)
+              ? const Color(0xFFFF7F1F).withValues(alpha: 0.08)
               : Colors.grey.shade50,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(

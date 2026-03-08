@@ -30,6 +30,7 @@ class CashierViewModel extends ChangeNotifier {
   Map<String, dynamic>? _lastSession;
   int _pendingTables = 0;
   String? _currentRegisterId;
+  String _currentRegisterName = '';
   String? _businessId;
   String _businessName = '';
   Map<String, dynamic> _todaySummary = {};
@@ -59,6 +60,8 @@ class CashierViewModel extends ChangeNotifier {
   double get bestDayAmount => _bestDayAmount;
   String get bestDayName => _bestDayName;
   String? get currentRegisterId => _currentRegisterId;
+  String get currentRegisterName => _currentRegisterName;
+  bool get isCashOpen => _lastSession?['status'] == 'open';
   String? get businessId => _businessId;
 
   Future<void> init() async {
@@ -90,12 +93,15 @@ class CashierViewModel extends ChangeNotifier {
         final registers = await _repository.getCashRegisters(_businessId!);
         if (registers.isNotEmpty) {
           _currentRegisterId = registers.first['id'] as String;
+          _currentRegisterName = registers.first['name']?.toString() ?? '';
         } else {
           final created = await _repository.createCashRegister(
             businessId: _businessId!,
             name: 'Caja principal',
           );
           _currentRegisterId = created['id'] as String;
+          _currentRegisterName =
+              created['name']?.toString() ?? 'Caja principal';
         }
         if (_currentRegisterId != null) {
           _lastSession = await _repository.getLastSession(_currentRegisterId!);
@@ -582,6 +588,7 @@ class CashierViewModel extends ChangeNotifier {
         name: 'Caja principal',
       );
       _currentRegisterId = created['id'] as String;
+      _currentRegisterName = created['name']?.toString() ?? 'Caja principal';
     }
     final userId = Supabase.instance.client.auth.currentUser?.id;
     if (userId == null) throw Exception('No user logged in');

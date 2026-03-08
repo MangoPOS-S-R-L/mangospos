@@ -17,6 +17,7 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     required String name,
     required double price,
     required String? categoryId,
+    String taxMode,
     String? sku,
     String? description,
     String? menuId,
@@ -27,7 +28,6 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     File? imageFile,
     Uint8List? imageBytes,
     List<String> taxIds,
-    String? productType,
   })
   onAdd;
 
@@ -36,6 +36,7 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     required String name,
     required double price,
     required String? categoryId,
+    String taxMode,
     String? sku,
     required bool isActive,
     String? description,
@@ -46,7 +47,6 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     File? imageFile,
     Uint8List? imageBytes,
     List<String> taxIds,
-    String? productType,
   })
   onUpdate;
 
@@ -76,7 +76,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
 
   String? _selectedCategoryId;
   String? _selectedMenuId;
-  String? _selectedProductType;
+  String _taxMode = 'exclusive';
   bool _isActive = true;
   bool _hasVariants = false;
 
@@ -102,7 +102,9 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
 
     _selectedCategoryId = p?['category_id']?.toString();
     _selectedMenuId = p?['menu_id']?.toString();
-    _selectedProductType = p?['product_type']?.toString();
+    _taxMode = (p?['tax_mode']?.toString() == 'inclusive')
+        ? 'inclusive'
+        : 'exclusive';
     _isActive = p?['is_active'] ?? true;
     _hasVariants = p?['has_variants'] ?? false;
 
@@ -309,20 +311,6 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
           maxLines: 4,
         ),
         const SizedBox(height: 14),
-        _fieldLabel('Tipo de Producto', required: true),
-        _buildDropdown<String?>(
-          value: _selectedProductType,
-          hint: 'Seleccionar tipo',
-          items: const [
-            DropdownMenuItem(value: 'Plato', child: Text('Plato')),
-            DropdownMenuItem(value: 'Comida', child: Text('Comida')),
-            DropdownMenuItem(value: 'Bebida', child: Text('Bebida')),
-            DropdownMenuItem(value: 'Combo', child: Text('Combo')),
-            DropdownMenuItem(value: 'Postre', child: Text('Postre')),
-          ],
-          onChanged: (v) => setState(() => _selectedProductType = v),
-        ),
-        const SizedBox(height: 14),
         _fieldLabel('Menú', required: true),
         _buildDropdown<String?>(
           value: _selectedMenuId,
@@ -497,6 +485,16 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
               }
             });
           },
+        ),
+        const SizedBox(height: 10),
+        _fieldLabel('Modo de impuesto'),
+        _taxModeSelector(),
+        const SizedBox(height: 6),
+        Text(
+          _taxMode == 'inclusive'
+              ? 'El precio del producto ya incluye el impuesto aplicado en venta.'
+              : 'El impuesto se suma sobre el precio del producto durante la venta.',
+          style: const TextStyle(fontSize: 12, color: Color(0xFF7A746D)),
         ),
         if (taxesState.data.isLoading)
           const Padding(
@@ -697,6 +695,105 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     );
   }
 
+  Widget _taxModeSelector() {
+    return Container(
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8F5F2),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE1DBD6)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _taxModeOption(
+              value: 'exclusive',
+              title: 'Exclusivo',
+              subtitle: 'Se suma al vender',
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _taxModeOption(
+              value: 'inclusive',
+              title: 'Inclusivo',
+              subtitle: 'Ya viene incluido',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _taxModeOption({
+    required String value,
+    required String title,
+    required String subtitle,
+  }) {
+    final selected = _taxMode == value;
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: () => setState(() => _taxMode = value),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        decoration: BoxDecoration(
+          color: selected ? Colors.white : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected
+                ? MangoColors.primaryOrange
+                : const Color(0x00000000),
+            width: 1.5,
+          ),
+          boxShadow: selected
+              ? const [
+                  BoxShadow(
+                    color: Color(0x0F000000),
+                    blurRadius: 8,
+                    offset: Offset(0, 2),
+                  ),
+                ]
+              : null,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  selected
+                      ? Icons.radio_button_checked_rounded
+                      : Icons.radio_button_off_rounded,
+                  size: 18,
+                  color: selected
+                      ? MangoColors.primaryOrange
+                      : const Color(0xFF9C948B),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: selected
+                        ? const Color(0xFF2D2A29)
+                        : const Color(0xFF5F5A56),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              subtitle,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF7A746D)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _pickImage() async {
     try {
       final r = await FilePicker.platform.pickFiles(
@@ -739,10 +836,6 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
   void _submit() {
     if (_formKey.currentState?.validate() != true) return;
 
-    if (_selectedProductType == null || _selectedProductType!.isEmpty) {
-      _showValidationMessage('Selecciona el tipo de producto.');
-      return;
-    }
     if (_selectedMenuId == null || _selectedMenuId!.isEmpty) {
       _showValidationMessage('Selecciona el menú.');
       return;
@@ -771,6 +864,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         name: name,
         price: price,
         categoryId: _selectedCategoryId,
+        taxMode: _taxMode,
         sku: sku,
         isActive: _isActive,
         description: desc,
@@ -781,13 +875,13 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         imageFile: _pickedImageFile,
         imageBytes: _pickedImageBytes,
         taxIds: _selectedTaxIds.toList(),
-        productType: _selectedProductType,
       );
     } else {
       widget.onAdd(
         name: name,
         price: price,
         categoryId: _selectedCategoryId,
+        taxMode: _taxMode,
         sku: sku,
         description: desc,
         menuId: _selectedMenuId,
@@ -798,7 +892,6 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         imageFile: _pickedImageFile,
         imageBytes: _pickedImageBytes,
         taxIds: _selectedTaxIds.toList(),
-        productType: _selectedProductType,
       );
     }
     Navigator.pop(context);

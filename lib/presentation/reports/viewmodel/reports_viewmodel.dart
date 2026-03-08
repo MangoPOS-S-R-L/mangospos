@@ -25,6 +25,8 @@ class ReportsState {
   final String? error;
   final Map<String, dynamic>? salesSummary;
   final Map<String, dynamic>? cashSummary;
+  final Map<String, dynamic>? purchasesSummary;
+  final Map<String, dynamic>? inventorySummary;
 
   const ReportsState({
     this.selectedCategory,
@@ -32,6 +34,8 @@ class ReportsState {
     this.error,
     this.salesSummary,
     this.cashSummary,
+    this.purchasesSummary,
+    this.inventorySummary,
   });
 
   ReportsState copyWith({
@@ -40,6 +44,8 @@ class ReportsState {
     String? error,
     Map<String, dynamic>? salesSummary,
     Map<String, dynamic>? cashSummary,
+    Map<String, dynamic>? purchasesSummary,
+    Map<String, dynamic>? inventorySummary,
     bool clearError = false,
   }) {
     return ReportsState(
@@ -48,6 +54,8 @@ class ReportsState {
       error: clearError ? null : (error ?? this.error),
       salesSummary: salesSummary ?? this.salesSummary,
       cashSummary: cashSummary ?? this.cashSummary,
+      purchasesSummary: purchasesSummary ?? this.purchasesSummary,
+      inventorySummary: inventorySummary ?? this.inventorySummary,
     );
   }
 }
@@ -87,12 +95,20 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
       final results = await Future.wait([
         _repository.getSalesSummary(businessId: businessId, from: from, to: to),
         _repository.getCashSummary(businessId: businessId, from: from, to: to),
+        _repository.getPurchasesSummary(
+          businessId: businessId,
+          from: from,
+          to: to,
+        ),
+        _repository.getInventorySummary(businessId: businessId),
       ]);
 
       state = state.copyWith(
         loading: false,
         salesSummary: results[0],
         cashSummary: results[1],
+        purchasesSummary: results[2],
+        inventorySummary: results[3],
         clearError: true,
       );
     } catch (e) {
@@ -126,10 +142,25 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
           ),
         ];
       case ReportCategory.purchases:
-        return const [
+        final ordersCount = state.purchasesSummary?['orders_count'] ?? 0;
+        final suppliersCount = state.purchasesSummary?['suppliers_count'] ?? 0;
+        final totalOrdered =
+            (state.purchasesSummary?['total_ordered'] as num?)?.toDouble() ?? 0;
+        final totalReceived =
+            (state.purchasesSummary?['total_received'] as num?)?.toDouble() ?? 0;
+        final receivedCount = state.purchasesSummary?['received_count'] ?? 0;
+        final partialCount = state.purchasesSummary?['partial_count'] ?? 0;
+        final draftCount = state.purchasesSummary?['draft_count'] ?? 0;
+        return [
           ReportItem(
-            title: 'Compras (pendiente)',
-            description: 'Módulo de compras se implementa en Sprint 3',
+            title: 'Órdenes de compra',
+            description:
+                'Órdenes: $ordersCount | Total ordenado: RD\$${totalOrdered.toStringAsFixed(2)}',
+          ),
+          ReportItem(
+            title: 'Recepción y proveedores',
+            description:
+                'Recibidas: $receivedCount | Parciales: $partialCount | Borradores: $draftCount | Proveedores activos: $suppliersCount | Recibido: RD\$${totalReceived.toStringAsFixed(2)}',
           ),
         ];
       case ReportCategory.finances:
@@ -153,10 +184,24 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
           ),
         ];
       case ReportCategory.inventory:
-        return const [
+        final itemsCount = state.inventorySummary?['items_count'] ?? 0;
+        final activeItems =
+            state.inventorySummary?['active_items_count'] ?? 0;
+        final totalUnits =
+            (state.inventorySummary?['total_units'] as num?)?.toDouble() ?? 0;
+        final lowStock = state.inventorySummary?['low_stock_count'] ?? 0;
+        final outOfStock =
+            state.inventorySummary?['out_of_stock_count'] ?? 0;
+        return [
           ReportItem(
-            title: 'Inventario (pendiente)',
-            description: 'Módulo de inventario se implementa en Sprint 2',
+            title: 'Estado de inventario',
+            description:
+                'Items: $itemsCount | Activos: $activeItems | Stock total: ${totalUnits.toStringAsFixed(2)} unidades',
+          ),
+          ReportItem(
+            title: 'Alertas de stock',
+            description:
+                'Bajo mínimo: $lowStock | Agotados: $outOfStock',
           ),
         ];
     }

@@ -1,4 +1,5 @@
 // lib/data/repositories/printing_service.dart
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/sales_models.dart';
 import 'printing_repository.dart';
@@ -34,6 +35,14 @@ class PrintingService {
         includeModifiers: true,
       );
 
+      final draftItems = items
+          .where((item) => item.status == 'draft' || item.status == 'open')
+          .toList(growable: false);
+
+      if (draftItems.isEmpty) {
+        throw Exception('No hay items nuevos pendientes de enviar a cocina');
+      }
+
       if (items.isEmpty) {
         throw Exception('La orden no tiene items');
       }
@@ -42,9 +51,12 @@ class PrintingService {
       final orderData = await _getOrderDisplayData(orderId);
 
       // 4. Agrupar items por área de impresión
-      final itemsByArea = await _groupItemsByPrintArea(items);
+      final itemsByArea = await _groupItemsByPrintArea(draftItems);
 
-      // 5. Crear trabajos de impresión para cada área
+      // 5. Marcar orden como enviada a cocina antes de crear jobs.
+      await _salesRepo.sendToKitchen(orderId);
+
+      // 6. Crear trabajos de impresión para cada área
       final createdJobs = <String, String>{}; // areaCode -> jobId
 
       for (final entry in itemsByArea.entries) {
@@ -56,7 +68,7 @@ class PrintingService {
         final area = areas.where((a) => a.code == areaCode).firstOrNull;
 
         if (area == null) {
-          print(
+          debugPrint(
             '⚠️ Área no encontrada: $areaCode - Creando automáticamente...',
           );
           // Crear área automáticamente si no existe
@@ -79,7 +91,7 @@ class PrintingService {
         final printers = await _printingRepo.getPrintersForArea(area.id);
 
         if (printers.isEmpty) {
-          print('⚠️ Área "$areaCode" no tiene impresoras asignadas');
+          debugPrint('⚠️ Área "$areaCode" no tiene impresoras asignadas');
           // Continuar de todas formas - el job quedará pendiente
         }
 
@@ -94,9 +106,6 @@ class PrintingService {
 
         createdJobs[areaCode] = jobId;
       }
-
-      // 6. Marcar orden como enviada a cocina
-      await _salesRepo.sendToKitchen(orderId);
 
       return createdJobs;
     } catch (e) {
@@ -142,7 +151,7 @@ class PrintingService {
 
       return data?['print_area_code'] as String?;
     } catch (e) {
-      print('Error al obtener área de impresión: $e');
+      debugPrint('Error al obtener área de impresión: $e');
       return null;
     }
   }
@@ -175,7 +184,7 @@ class PrintingService {
         'createdAt': data['created_at'],
       };
     } catch (e) {
-      print('Error al obtener datos de orden: $e');
+      debugPrint('Error al obtener datos de orden: $e');
       return {
         'orderNumber': '',
         'tableName': 'N/A',

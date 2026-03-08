@@ -9,8 +9,10 @@ class ZonesTablesState {
 
   final String? businessId;
   final List<Zone> zones;
+  final bool promptPeopleCountOnOpen;
+  final bool savingOpenTableConfig;
 
-  /// Map de mesas por zona (zoneId -> List<DiningTable>)
+  /// Map de mesas por zona (`zoneId -> List<DiningTable>`)
   final Map<String, List<DiningTable>> tablesByZone;
 
   const ZonesTablesState({
@@ -18,6 +20,8 @@ class ZonesTablesState {
     this.error,
     this.businessId,
     this.zones = const [],
+    this.promptPeopleCountOnOpen = false,
+    this.savingOpenTableConfig = false,
     this.tablesByZone = const {},
   });
 
@@ -26,6 +30,8 @@ class ZonesTablesState {
     Object? error = _errorSentinel,
     String? businessId,
     List<Zone>? zones,
+    bool? promptPeopleCountOnOpen,
+    bool? savingOpenTableConfig,
     Map<String, List<DiningTable>>? tablesByZone,
   }) {
     return ZonesTablesState(
@@ -39,6 +45,10 @@ class ZonesTablesState {
           : this.error,
       businessId: businessId ?? this.businessId,
       zones: zones ?? this.zones,
+      promptPeopleCountOnOpen:
+          promptPeopleCountOnOpen ?? this.promptPeopleCountOnOpen,
+      savingOpenTableConfig:
+          savingOpenTableConfig ?? this.savingOpenTableConfig,
       tablesByZone: tablesByZone ?? this.tablesByZone,
     );
   }

@@ -31,14 +31,53 @@ class ProductsViewModel extends ChangeNotifier {
   List<Map<String, dynamic>> _menus = [];
   bool _isLoading = false;
   String? _businessId;
+  String? _error;
+  String _searchQuery = '';
+  String? _selectedCategoryFilterId;
+  String? _selectedMenuFilterId;
 
   List<Map<String, dynamic>> get products => _products;
+  List<Map<String, dynamic>> get filteredProducts {
+    final query = _searchQuery.trim().toLowerCase();
+    return _products.where((product) {
+      final name = product['name']?.toString().toLowerCase() ?? '';
+      final sku = product['sku']?.toString().toLowerCase() ?? '';
+      final barcode = product['barcode']?.toString().toLowerCase() ?? '';
+      final categoryId = product['category_id']?.toString();
+      final links = product['menu_item_links'] as List<dynamic>? ?? const [];
+      String? firstMenuId;
+      if (links.isNotEmpty) {
+        final firstLink = links.first;
+        if (firstLink is Map<String, dynamic>) {
+          firstMenuId = firstLink['menu_id']?.toString();
+        }
+      }
+
+      final matchesSearch =
+          query.isEmpty ||
+          name.contains(query) ||
+          sku.contains(query) ||
+          barcode.contains(query);
+      final matchesCategory =
+          _selectedCategoryFilterId == null ||
+          categoryId == _selectedCategoryFilterId;
+      final matchesMenu =
+          _selectedMenuFilterId == null || firstMenuId == _selectedMenuFilterId;
+
+      return matchesSearch && matchesCategory && matchesMenu;
+    }).toList(growable: false);
+  }
   List<Map<String, dynamic>> get categories => _categories;
   List<Map<String, dynamic>> get menus => _menus;
   bool get isLoading => _isLoading;
+  String? get error => _error;
+  String get searchQuery => _searchQuery;
+  String? get selectedCategoryFilterId => _selectedCategoryFilterId;
+  String? get selectedMenuFilterId => _selectedMenuFilterId;
 
   Future<void> init() async {
     _isLoading = true;
+    _error = null;
     notifyListeners();
 
     try {
@@ -51,11 +90,28 @@ class ProductsViewModel extends ChangeNotifier {
 
       await Future.wait([_fetchProducts(), _fetchCategories(), _fetchMenus()]);
     } catch (e) {
+      _error = 'Error cargando productos: $e';
       debugPrint('Error initializing ProductsViewModel: $e');
     } finally {
       _isLoading = false;
       notifyListeners();
     }
+  }
+
+  void setSearchQuery(String value) {
+    _searchQuery = value;
+    notifyListeners();
+  }
+
+  void setCategoryFilter(String? categoryId) {
+    _selectedCategoryFilterId =
+        categoryId == null || categoryId.isEmpty ? null : categoryId;
+    notifyListeners();
+  }
+
+  void setMenuFilter(String? menuId) {
+    _selectedMenuFilterId = menuId == null || menuId.isEmpty ? null : menuId;
+    notifyListeners();
   }
 
   Future<void> _fetchProducts() async {
@@ -77,6 +133,7 @@ class ProductsViewModel extends ChangeNotifier {
     required String name,
     required double price,
     required String? categoryId,
+    String taxMode = 'exclusive',
     String? sku,
     String? description,
     String? menuId,
@@ -87,7 +144,6 @@ class ProductsViewModel extends ChangeNotifier {
     File? imageFile,
     Uint8List? imageBytes,
     List<String> taxIds = const [],
-    String? productType,
   }) async {
     if (_businessId == null) return;
 
@@ -124,6 +180,7 @@ class ProductsViewModel extends ChangeNotifier {
         name: name,
         price: price,
         categoryId: categoryId,
+        taxMode: taxMode,
         sku: sku,
         description: description,
         menuId: menuId,
@@ -137,9 +194,10 @@ class ProductsViewModel extends ChangeNotifier {
       );
 
       await _fetchProducts();
+      _error = null;
       notifyListeners();
     } catch (e) {
-      debugPrint('Error adding product: $e | productType=$productType');
+      debugPrint('Error adding product: $e');
       rethrow;
     }
   }
@@ -149,6 +207,7 @@ class ProductsViewModel extends ChangeNotifier {
     required String name,
     required double price,
     required String? categoryId,
+    String taxMode = 'exclusive',
     String? sku,
     required bool isActive,
     String? description,
@@ -159,7 +218,6 @@ class ProductsViewModel extends ChangeNotifier {
     File? imageFile,
     Uint8List? imageBytes,
     List<String> taxIds = const [],
-    String? productType,
   }) async {
     try {
       String? imagePath;
@@ -195,6 +253,7 @@ class ProductsViewModel extends ChangeNotifier {
         price: price,
         categoryId: categoryId,
         isActive: isActive,
+        taxMode: taxMode,
         sku: sku,
         description: description,
         menuId: menuId,
@@ -207,9 +266,10 @@ class ProductsViewModel extends ChangeNotifier {
       );
 
       await _fetchProducts();
+      _error = null;
       notifyListeners();
     } catch (e) {
-      debugPrint('Error updating product: $e | productType=$productType');
+      debugPrint('Error updating product: $e');
       rethrow;
     }
   }
@@ -218,6 +278,7 @@ class ProductsViewModel extends ChangeNotifier {
     try {
       await _repository.toggleAvailability(id: id, isActive: !currentValue);
       await _fetchProducts();
+      _error = null;
       notifyListeners();
     } catch (e) {
       debugPrint('Error toggling product availability: $e');
@@ -229,6 +290,7 @@ class ProductsViewModel extends ChangeNotifier {
     try {
       await _repository.deleteProduct(id);
       await _fetchProducts();
+      _error = null;
       notifyListeners();
     } catch (e) {
       debugPrint('Error deleting product: $e');

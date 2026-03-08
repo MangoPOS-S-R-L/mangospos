@@ -5,17 +5,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../../../../data/models/dining_table.dart';
+import '../../../../../../data/repositories/pos_settings_repository.dart';
 import '../../../../../../data/repositories/zones_repository.dart';
 import '../../../../../../data/utils/business_id_resolver.dart';
 import '../state/zones_tables_state.dart';
 
-final zonesRepoProvider =
-    Provider((ref) => ZonesRepository(Supabase.instance.client));
+final zonesRepoProvider = Provider(
+  (ref) => ZonesRepository(Supabase.instance.client),
+);
 
 final zonesTablesVmProvider =
     NotifierProvider<ZonesTablesViewModel, ZonesTablesState>(
-  ZonesTablesViewModel.new,
-);
+      ZonesTablesViewModel.new,
+    );
 
 class ZonesTablesViewModel extends Notifier<ZonesTablesState> {
   late final SupabaseClient sb;
@@ -52,10 +54,13 @@ class ZonesTablesViewModel extends Notifier<ZonesTablesState> {
       }
 
       final repo = ref.read(zonesRepoProvider);
+      final settingsRepo = ref.read(posSettingsRepositoryProvider);
 
       final zones = await repo.fetchZones(bizId);
+      final promptPeopleCountOnOpen = await settingsRepo
+          .getPromptPeopleCountOnTableOpen(bizId);
       zones.sort((a, b) {
-        final s = (a.sortIndex ?? 0).compareTo(b.sortIndex ?? 0);
+        final s = a.sortIndex.compareTo(b.sortIndex);
         return s != 0 ? s : a.name.compareTo(b.name);
       });
 
@@ -63,6 +68,7 @@ class ZonesTablesViewModel extends Notifier<ZonesTablesState> {
         loading: false,
         businessId: bizId,
         zones: zones,
+        promptPeopleCountOnOpen: promptPeopleCountOnOpen,
       );
 
       await Future.wait(zones.map((z) => refreshTables(z.id)));
@@ -94,9 +100,11 @@ class ZonesTablesViewModel extends Notifier<ZonesTablesState> {
   Future<void> addTable(String zoneId, String code) async {
     state = state.copyWith(loading: true, error: null);
     try {
-      await sb
-          .from('dining_tables')
-          .insert({'zone_id': zoneId, 'code': code, 'label': code});
+      await sb.from('dining_tables').insert({
+        'zone_id': zoneId,
+        'code': code,
+        'label': code,
+      });
       await refreshTables(zoneId);
     } catch (e) {
       state = state.copyWith(error: '$e');
@@ -112,6 +120,27 @@ class ZonesTablesViewModel extends Notifier<ZonesTablesState> {
     }
   }
 
+  Future<void> setPromptPeopleCountOnOpen(bool enabled) async {
+    final businessId = state.businessId;
+    if (businessId == null || businessId.isEmpty) return;
+
+    state = state.copyWith(savingOpenTableConfig: true, error: null);
+    try {
+      await ref
+          .read(posSettingsRepositoryProvider)
+          .setPromptPeopleCountOnTableOpen(
+            businessId: businessId,
+            enabled: enabled,
+          );
+      state = state.copyWith(
+        promptPeopleCountOnOpen: enabled,
+        savingOpenTableConfig: false,
+      );
+    } catch (e) {
+      state = state.copyWith(savingOpenTableConfig: false, error: '$e');
+    }
+  }
+
   // ---------------- Helpers ----------------
   Future<void> refreshTables(String zoneId) async {
     final repo = ref.read(zonesRepoProvider);
@@ -122,34 +151,38 @@ class ZonesTablesViewModel extends Notifier<ZonesTablesState> {
   }
 
   void _subscribeRealtime(String businessId) {
-    _rtZones ??= sb
-        .channel('rt:settings_zones:$businessId')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'zones',
-          filter: PostgresChangeFilter(
-            type: PostgresChangeFilterType.eq,
-            column: 'business_id',
-            value: businessId,
-          ),
-          callback: (_) => _debounced(() => load(businessId: businessId)),
-        )
-      ..subscribe();
+    _rtZones ??=
+        sb
+            .channel('rt:settings_zones:$businessId')
+            .onPostgresChanges(
+              event: PostgresChangeEvent.all,
+              schema: 'public',
+              table: 'zones',
+              filter: PostgresChangeFilter(
+                type: PostgresChangeFilterType.eq,
+                column: 'business_id',
+                value: businessId,
+              ),
+              callback: (_) => _debounced(() => load(businessId: businessId)),
+            )
+          ..subscribe();
 
-    _rtTables ??= sb
-        .channel('rt:settings_tables:$businessId')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'dining_tables',
-          callback: (payload) {
-            final zId = (payload.newRecord['zone_id'] ??
-                payload.oldRecord['zone_id']) as String?;
-            if (zId != null) _debounced(() => refreshTables(zId));
-          },
-        )
-      ..subscribe();
+    _rtTables ??=
+        sb
+            .channel('rt:settings_tables:$businessId')
+            .onPostgresChanges(
+              event: PostgresChangeEvent.all,
+              schema: 'public',
+              table: 'dining_tables',
+              callback: (payload) {
+                final zId =
+                    (payload.newRecord['zone_id'] ??
+                            payload.oldRecord['zone_id'])
+                        as String?;
+                if (zId != null) _debounced(() => refreshTables(zId));
+              },
+            )
+          ..subscribe();
   }
 
   void _debounced(void Function() fn) {

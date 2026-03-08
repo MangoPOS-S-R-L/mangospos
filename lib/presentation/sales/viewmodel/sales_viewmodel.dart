@@ -56,7 +56,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
   }
 
-  Future<void> openTable(String tableId) async {
+  Future<void> openTable(String tableId, {int peopleCount = 1}) async {
     if (!await ensureCashSessionOpen()) return;
 
     // Mostrar inmediatamente la última versión conocida si existe
@@ -83,7 +83,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           .openTable(
             tableId: tableId,
             userId: userId, // si es null, el RPC tiene fallback
-            peopleCount: 1,
+            peopleCount: peopleCount,
           );
       final orderId = result['order_id'] as String;
 
@@ -199,6 +199,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     String? notes,
     String? productName,
     double? productPrice,
+    String productTaxMode = 'exclusive',
+    double? productTaxRate,
   }) async {
     final orderId = state.order?.id;
     if (orderId == null) {
@@ -230,16 +232,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         previousOrder != null &&
         qty > 0) {
       final tempId = 'tmp_${DateTime.now().microsecondsSinceEpoch}';
-      final base = productPrice * qty;
-      final taxRate = previousOrder.subtotal > 0
-          ? previousOrder.tax / previousOrder.subtotal
-          : 0;
-      final serviceRate = previousOrder.subtotal > 0
-          ? previousOrder.serviceFee / previousOrder.subtotal
-          : 0;
-      final addTax = base * taxRate;
-      final addService = base * serviceRate;
-      final addTotal = base + addTax + addService;
+      final grossAmount = productPrice * qty;
+      final inferredTaxRate = productTaxRate != null && productTaxRate > 0
+          ? productTaxRate / 100
+          : (previousOrder.subtotal > 0
+                ? previousOrder.tax / previousOrder.subtotal
+                : 0.0);
+      final addService = 0.0;
+      final optimisticAmounts = _estimateOptimisticItemAmounts(
+        grossAmount: grossAmount,
+        taxMode: productTaxMode,
+        taxRate: inferredTaxRate,
+      );
 
       optimisticItem = OrderItem(
         id: tempId,
@@ -249,10 +253,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         sku: null,
         quantity: qty,
         unitPrice: productPrice,
-        subtotal: base,
+        subtotal: optimisticAmounts.subtotal,
         discounts: 0,
-        tax: addTax,
-        total: addTotal,
+        tax: optimisticAmounts.tax,
+        total: optimisticAmounts.total,
         checkId: null,
         isTakeout: takeout,
         status: 'draft',
@@ -262,10 +266,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       );
 
       final updatedOrder = previousOrder.copyWith(
-        subtotal: previousOrder.subtotal + base,
-        tax: previousOrder.tax + addTax,
+        subtotal: previousOrder.subtotal + optimisticAmounts.subtotal,
+        tax: previousOrder.tax + optimisticAmounts.tax,
         serviceFee: previousOrder.serviceFee + addService,
-        total: previousOrder.total + addTotal,
+        total: previousOrder.total + optimisticAmounts.total + addService,
       );
 
       state = state.copyWith(
@@ -298,6 +302,31 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         state = state.copyWith(error: 'Error al agregar producto: $e');
       }
     }
+  }
+
+  ({double subtotal, double tax, double total}) _estimateOptimisticItemAmounts({
+    required double grossAmount,
+    required String taxMode,
+    required double taxRate,
+  }) {
+    final normalizedTaxRate = taxRate.clamp(0, 1).toDouble();
+    if (taxMode == 'inclusive' && normalizedTaxRate > 0) {
+      final subtotal = grossAmount / (1 + normalizedTaxRate);
+      final tax = grossAmount - subtotal;
+      return (
+        subtotal: double.parse(subtotal.toStringAsFixed(2)),
+        tax: double.parse(tax.toStringAsFixed(2)),
+        total: double.parse(grossAmount.toStringAsFixed(2)),
+      );
+    }
+
+    final tax = grossAmount * normalizedTaxRate;
+    final total = grossAmount + tax;
+    return (
+      subtotal: double.parse(grossAmount.toStringAsFixed(2)),
+      tax: double.parse(tax.toStringAsFixed(2)),
+      total: double.parse(total.toStringAsFixed(2)),
+    );
   }
 
   Future<void> toggleTakeout(bool value) async {
@@ -618,6 +647,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       await _loadOrderDetail(orderId);
     } catch (e) {
       state = state.copyWith(loading: false, error: e.toString());
+      rethrow;
     }
   }
 

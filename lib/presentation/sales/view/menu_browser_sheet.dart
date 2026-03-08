@@ -40,7 +40,7 @@ class _MenuBrowserSheetState extends ConsumerState<MenuBrowserSheet>
         );
         break;
       case 1:
-        notifier.loadAllProducts();
+        notifier.loadDefaultMenuProducts();
         break;
       case 2:
         if (_searchCtrl.text.trim().isNotEmpty) {
@@ -101,7 +101,10 @@ class _MenuBrowserSheetState extends ConsumerState<MenuBrowserSheet>
             tooltip: 'Actualizar',
             onPressed: () => ref
                 .read(menuBrowserVmProvider.notifier)
-                .loadAll(preselectCategoryId: vm.selectedCategoryId),
+                .loadAll(
+                  preselectCategoryId: vm.selectedCategoryId,
+                  preselectMenuId: vm.selectedMenuId,
+                ),
             icon: const Icon(Icons.refresh, color: MangoColors.darkGray),
           ),
           const SizedBox(width: 8),
@@ -113,7 +116,7 @@ class _MenuBrowserSheetState extends ConsumerState<MenuBrowserSheet>
             controller: _tab,
             children: [
               _CategoriesTab(),
-              _ProductsGridTab(),
+              _MenusTab(),
               _SearchTab(controller: _searchCtrl),
               _FavoritesTab(),
             ],
@@ -186,7 +189,75 @@ class _CategoriesTab extends ConsumerWidget {
   }
 }
 
+class _MenusTab extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final vm = ref.watch(menuBrowserVmProvider);
+    final notifier = ref.read(menuBrowserVmProvider.notifier);
+
+    if (vm.error != null) {
+      return _ErrorBox(
+        message: vm.error!,
+        onRetry: () => notifier.loadDefaultMenuProducts(),
+      );
+    }
+
+    if (vm.menus.isEmpty && vm.loading) {
+      return const _CenteredSpinner(label: 'Cargando menus...');
+    }
+
+    if (vm.menus.isEmpty) {
+      return const _EmptyBox(
+        icon: Icons.restaurant_menu_outlined,
+        text: 'No hay menus activos',
+      );
+    }
+
+    return Column(
+      children: [
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: vm.menus
+              .map(
+                (menu) => ChoiceChip(
+                  label: Text(menu.name),
+                  selectedColor: MangoColors.primaryOrange.withValues(
+                    alpha: .12,
+                  ),
+                  selected: vm.selectedMenuId == menu.id,
+                  onSelected: (_) => notifier.loadProductsByMenu(menu.id),
+                  labelStyle: TextStyle(
+                    color: vm.selectedMenuId == menu.id
+                        ? MangoColors.primaryOrange
+                        : MangoColors.darkGray,
+                    fontWeight: vm.selectedMenuId == menu.id
+                        ? FontWeight.w700
+                        : FontWeight.w500,
+                  ),
+                ),
+              )
+              .toList(),
+        ),
+        const Divider(height: 24),
+        const Expanded(
+          child: _ProductsGridTab(
+            emptyText: 'No hay productos activos en este menu',
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _ProductsGridTab extends ConsumerWidget {
+  final String emptyText;
+
+  const _ProductsGridTab({
+    this.emptyText = 'No hay productos en esta categoría',
+  });
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final vm = ref.watch(menuBrowserVmProvider);
@@ -194,9 +265,15 @@ class _ProductsGridTab extends ConsumerWidget {
     if (vm.error != null && !vm.loading) {
       return _ErrorBox(
         message: vm.error!,
-        onRetry: () => ref
-            .read(menuBrowserVmProvider.notifier)
-            .loadProductsByCategory(vm.selectedCategoryId ?? ''),
+        onRetry: () {
+          final notifier = ref.read(menuBrowserVmProvider.notifier);
+          if (vm.productsMode == MenuProductsMode.menu &&
+              vm.selectedMenuId != null) {
+            notifier.loadProductsByMenu(vm.selectedMenuId!);
+            return;
+          }
+          notifier.loadProductsByCategory(vm.selectedCategoryId ?? '');
+        },
       );
     }
 
@@ -205,9 +282,9 @@ class _ProductsGridTab extends ConsumerWidget {
     }
 
     if (vm.products.isEmpty) {
-      return const _EmptyBox(
+      return _EmptyBox(
         icon: Icons.fastfood_outlined,
-        text: 'No hay productos en esta categoría',
+        text: emptyText,
       );
     }
 
@@ -337,6 +414,8 @@ class _ProductCard extends ConsumerWidget {
               qty: 1,
               productName: item.name,
               productPrice: item.price,
+              productTaxMode: item.taxMode,
+              productTaxRate: item.taxRate,
             );
 
         // Feedback visual sutil
