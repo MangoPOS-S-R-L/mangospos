@@ -23,14 +23,29 @@ class _PrintingOrdersViewState extends ConsumerState<PrintingOrdersView> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      // Cargar áreas y impresoras
-      ref
-          .read(printingAreasViewModelProvider.notifier)
-          .load(businessId: widget.businessId);
-      ref
-          .read(printingPrintersViewModelProvider.notifier)
-          .load(businessId: widget.businessId);
+      _bootstrap();
     });
+  }
+
+  Future<void> _bootstrap() async {
+    final areasCtrl = ref.read(printingAreasViewModelProvider.notifier);
+    final printersCtrl = ref.read(printingPrintersViewModelProvider.notifier);
+
+    await printersCtrl.load(businessId: widget.businessId);
+
+    try {
+      final selections = await areasCtrl.bootstrapOrderPrinterSelections(
+        businessId: widget.businessId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _selectedPrinters
+          ..clear()
+          ..addAll(selections);
+      });
+    } catch (_) {
+      // Si no hay vínculos guardados, el formulario sigue usable.
+    }
   }
 
   @override
@@ -324,7 +339,7 @@ class _PrintingOrdersViewState extends ConsumerState<PrintingOrdersView> {
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(
                                   content: Text('Área agregada exitosamente'),
-                                  backgroundColor: const Color(0xFF22C55E),
+                                  backgroundColor: Color(0xFF22C55E),
                                 ),
                               );
                             }
@@ -376,15 +391,17 @@ class _PrintingOrdersViewState extends ConsumerState<PrintingOrdersView> {
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () async {
+              final messenger = ScaffoldMessenger.of(context);
               final success = await areasCtrl.deleteArea(area.id);
               if (dialogContext.mounted) {
                 Navigator.of(dialogContext).pop();
               }
-              if (success && mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
+              if (success) {
+                if (!mounted) return;
+                messenger.showSnackBar(
                   const SnackBar(
                     content: Text('Área eliminada exitosamente'),
-                    backgroundColor: const Color(0xFF22C55E),
+                    backgroundColor: Color(0xFF22C55E),
                   ),
                 );
               }

@@ -3,7 +3,11 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:mangopos/core/network/connectivity_service.dart';
+import 'package:mangopos/core/offline/offline_pos_service.dart';
+import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/data/repositories/sales_repository.dart';
+import 'package:mangopos/services/session/session_controller.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../state/sales_state.dart';
 import '../../../data/models/sales_models.dart';
@@ -13,12 +17,18 @@ final salesRepositoryProvider = Provider<SalesRepository>(
   (ref) => SalesRepository(Supabase.instance.client),
 );
 
+final printingServiceProvider = Provider<PrintingService>(
+  (ref) => PrintingService(Supabase.instance.client),
+);
+
 final currentOrderProvider =
     NotifierProvider<SalesViewModel, CurrentOrderState>(SalesViewModel.new);
 
 class SalesViewModel extends Notifier<CurrentOrderState> {
   static const _courtesyPrefix = '[CORTESIA:';
   final Map<String, CurrentOrderState> _tableCache = {};
+  final OfflinePosService _offlinePos = OfflinePosService();
+  final ConnectivityService _connectivity = ConnectivityService();
   Timer? _refreshOrderDebounceTimer;
   String? _queuedRefreshOrderId;
   bool _queuedClearIfPaid = false;
@@ -39,6 +49,33 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       _refreshOrderDebounceTimer = null;
     });
     return const CurrentOrderState();
+  }
+
+  String? get _activeBusinessId => ref.read(sessionProvider).activeBusinessId;
+
+  Future<void> _persistCurrentState({
+    String? tableId,
+    bool localOnly = false,
+  }) async {
+    final businessId = _activeBusinessId;
+    final origin = state.origin;
+    if (businessId == null ||
+        businessId.isEmpty ||
+        origin == null ||
+        state.order == null) {
+      return;
+    }
+
+    await _offlinePos.saveSnapshot(
+      businessId: businessId,
+      slotId:
+          tableId ??
+          (origin == 'table' ? (state.order?.sessionId ?? origin) : origin),
+      origin: origin,
+      tableId: tableId,
+      state: state,
+      localOnly: localOnly,
+    );
   }
 
   Future<bool> ensureCashSessionOpen() async {
@@ -102,6 +139,22 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       // 3) Refresco completo (asegura consistencia)
       await _loadOrderDetail(orderId, origin: 'table', tableId: tableId);
     } catch (e) {
+      final businessId = _activeBusinessId;
+      if (businessId != null && businessId.isNotEmpty) {
+        final offlineState = await _offlinePos.loadSnapshot(
+          businessId: businessId,
+          slotId: tableId,
+        );
+        if (offlineState != null) {
+          state = offlineState.copyWith(
+            loading: false,
+            error: 'Modo offline: usando copia local de la mesa.',
+            origin: 'table',
+          );
+          _tableCache[tableId] = state;
+          return;
+        }
+      }
       state = state.copyWith(loading: false, error: e.toString());
     }
   }
@@ -168,6 +221,44 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
   }
 
+  Future<void> updateCurrentSessionNote(String? note) async {
+    final order = state.order;
+    if (order == null) return;
+
+    try {
+      await ref
+          .read(salesRepositoryProvider)
+          .updateSessionNote(sessionId: order.sessionId, note: note);
+      state = state.copyWith(
+        sessionNote: note?.trim(),
+        clearSessionNote: note == null,
+      );
+    } catch (e) {
+      state = state.copyWith(error: 'Error al actualizar nota de sesión: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> appendVoidAuditNote({required String reason}) async {
+    final order = state.order;
+    if (order == null) return;
+
+    final trimmedReason = reason.trim();
+    if (trimmedReason.isEmpty) return;
+
+    final userName = ref.read(sessionProvider).userName?.trim() ?? '';
+    final stamp = DateTime.now().toLocal().toIso8601String();
+    final auditLine =
+        '[ANULACION][$stamp] ${userName.isEmpty ? 'Usuario' : userName}: $trimmedReason';
+
+    final current = state.sessionNote?.trim();
+    final nextNote = (current == null || current.isEmpty)
+        ? auditLine
+        : '$current\n$auditLine';
+
+    await updateCurrentSessionNote(nextNote);
+  }
+
   Future<void> _openManualOrQuick(
     String origin, {
     bool forceReset = false,
@@ -187,6 +278,30 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           );
       await _loadOrderDetail(res['order_id'] as String, origin: origin);
     } catch (e) {
+      final businessId = _activeBusinessId;
+      if (businessId != null && businessId.isNotEmpty) {
+        final cached = await _offlinePos.loadSnapshot(
+          businessId: businessId,
+          slotId: origin,
+        );
+        if (cached != null) {
+          state = cached.copyWith(
+            loading: false,
+            error: 'Modo offline: usando venta local persistida.',
+            origin: origin,
+          );
+          return;
+        }
+
+        final localDraft = await _offlinePos.createLocalDraft(
+          businessId: businessId,
+          origin: origin,
+        );
+        state = localDraft.copyWith(
+          error: 'Modo offline: venta local creada. Se sincroniza luego.',
+        );
+        return;
+      }
       state = state.copyWith(loading: false, error: e.toString());
     }
   }
@@ -291,6 +406,35 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           );
       unawaited(_loadOrderDetail(orderId));
     } catch (e) {
+      final businessId = _activeBusinessId;
+      final isOffline =
+          !_connectivity.isConnected || orderId.startsWith('local-order-');
+
+      if (isOffline &&
+          optimisticItem != null &&
+          businessId != null &&
+          businessId.isNotEmpty) {
+        await _offlinePos.enqueueAction(
+          businessId: businessId,
+          action: {
+            'type': 'add_item',
+            'order_id': orderId,
+            'menu_item_id': menuItemId,
+            'qty': qty,
+            'check_pos': effectiveCheckPos,
+            'takeout': takeout,
+            'notes': notes,
+            'product_name': productName,
+            'product_price': productPrice,
+          },
+        );
+        await _persistCurrentState(localOnly: true);
+        state = state.copyWith(
+          error: 'Producto agregado en local. Pendiente de sincronizar.',
+        );
+        return;
+      }
+
       // Revertir si hicimos optimismo
       if (optimisticItem != null) {
         state = state.copyWith(
@@ -625,11 +769,15 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     state = const CurrentOrderState();
   }
 
-  Future<void> cancelCurrentOrder() async {
+  Future<void> cancelCurrentOrder({String? reason}) async {
     final orderId = state.order?.id;
     if (orderId == null) {
       state = const CurrentOrderState();
       return;
+    }
+    final trimmedReason = reason?.trim();
+    if (trimmedReason != null && trimmedReason.isNotEmpty) {
+      await appendVoidAuditNote(reason: trimmedReason);
     }
     await ref
         .read(salesRepositoryProvider)
@@ -643,7 +791,43 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     if (orderId == null) return;
     state = state.copyWith(loading: true);
     try {
-      await ref.read(salesRepositoryProvider).confirmOrderToKitchen(orderId);
+      final session = ref.read(sessionProvider);
+      final businessId = session.activeBusinessId;
+      if (businessId == null || businessId.isEmpty) {
+        throw Exception(
+          'No se pudo resolver el negocio activo para imprimir la comanda.',
+        );
+      }
+
+      if (!_connectivity.isConnected || orderId.startsWith('local-order-')) {
+        await ref
+            .read(printingServiceProvider)
+            .sendLocalOrderToKitchen(
+              businessId: businessId,
+              localState: state,
+              tableName: state.origin == 'table' ? 'MESA' : 'LOCAL',
+              waiterName: session.userName,
+              businessName: session.activeBusinessName,
+            );
+        await _offlinePos.enqueueAction(
+          businessId: businessId,
+          action: {
+            'type': 'send_to_kitchen',
+            'order_id': orderId,
+            'origin': state.origin,
+          },
+        );
+        await _persistCurrentState(localOnly: true);
+        state = state.copyWith(
+          loading: false,
+          error: 'Comanda impresa/localmente. Pendiente de sincronizar.',
+        );
+        return;
+      }
+
+      await ref
+          .read(printingServiceProvider)
+          .sendOrderToKitchen(orderId: orderId, businessId: businessId);
       await _loadOrderDetail(orderId);
     } catch (e) {
       state = state.copyWith(loading: false, error: e.toString());
@@ -712,6 +896,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     String? loadError;
     String? customerId;
     String? customerName;
+    String? sessionNote;
 
     var loadedByBundle = false;
     try {
@@ -721,6 +906,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       checks = bundle.checks;
       customerId = bundle.customerId;
       customerName = bundle.customerName;
+      if (order != null) {
+        try {
+          final session = await repo.getSessionCustomer(order.sessionId);
+          customerId = session.customerId ?? customerId;
+          customerName = session.customerName ?? customerName;
+          sessionNote = session.note;
+        } catch (_) {}
+      }
       loadedByBundle = order != null;
     } catch (e) {
       loadError = e.toString();
@@ -735,7 +928,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         onlyOpen: true,
       );
       final checksFuture = repo.getOrderChecks(orderId);
-      Future<({String? customerId, String? customerName})>? customerFuture;
+      Future<({String? customerId, String? customerName, String? note})>?
+      customerFuture;
 
       try {
         order = await orderFuture;
@@ -758,6 +952,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           final customer = await customerFuture;
           customerId = customer.customerId;
           customerName = customer.customerName;
+          sessionNote = customer.note;
         } catch (_) {}
       }
     }
@@ -794,6 +989,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       customerId: customerId,
       customerName: customerName,
       clearCustomer: customerId == null && customerName == null,
+      sessionNote: sessionNote,
+      clearSessionNote: sessionNote == null,
     );
 
     // Cachear última versión por mesa para apertura optimista
@@ -801,6 +998,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       _tableCache[tableId] = state;
     }
 
+    await _persistCurrentState(tableId: tableId);
     _subscribeToOrderUpdates(orderId);
   }
 

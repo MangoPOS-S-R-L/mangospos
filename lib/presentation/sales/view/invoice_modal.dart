@@ -8,6 +8,12 @@ class InvoiceModal extends StatelessWidget {
   final List<Payment> payments;
   final String? tableName;
   final String? serverName;
+  final String? businessName;
+  final String? businessAddress;
+  final String? businessPhone;
+  final String? businessRnc;
+  final String? fiscalNcf;
+  final DateTime? issuedAt;
   final double change;
   final VoidCallback onNewSale;
   final VoidCallback onPrint;
@@ -20,6 +26,12 @@ class InvoiceModal extends StatelessWidget {
     required this.payments,
     this.tableName,
     this.serverName,
+    this.businessName,
+    this.businessAddress,
+    this.businessPhone,
+    this.businessRnc,
+    this.fiscalNcf,
+    this.issuedAt,
     required this.change,
     required this.onNewSale,
     required this.onPrint,
@@ -37,6 +49,13 @@ class InvoiceModal extends StatelessWidget {
     final filteredPayments = checkId == null
         ? payments
         : payments.where((p) => p.checkId == checkId).toList();
+    final effectiveIssuedAt =
+        issuedAt ??
+        (filteredPayments.isNotEmpty
+            ? filteredPayments
+                .map((payment) => payment.createdAt)
+                .reduce((a, b) => a.isAfter(b) ? a : b)
+            : order.createdAt);
 
     final subtotal = filteredItems.fold<double>(0, (s, i) => s + i.subtotal);
     final tax = filteredItems.fold<double>(0, (s, i) => s + i.tax);
@@ -83,16 +102,21 @@ class InvoiceModal extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     // Business Info
-                    const Text(
-                      'MangoPOS Restaurant',
+                    Text(
+                      businessName?.trim().isNotEmpty == true
+                          ? businessName!.trim()
+                          : 'Negocio',
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-                    const Text('RNC: 123456789'),
-                    const Text('Av. Principal #123, Santo Domingo'),
-                    const Text('Tel: (809) 555-0123'),
+                    if (businessRnc?.trim().isNotEmpty == true)
+                      Text('RNC: ${businessRnc!.trim()}'),
+                    if (businessAddress?.trim().isNotEmpty == true)
+                      Text(businessAddress!.trim()),
+                    if (businessPhone?.trim().isNotEmpty == true)
+                      Text('Tel: ${businessPhone!.trim()}'),
                     const SizedBox(height: 24),
 
                     // Invoice Details
@@ -100,8 +124,9 @@ class InvoiceModal extends StatelessWidget {
                       'No. Factura:',
                       'FAC-${order.id.substring(0, 8).toUpperCase()}',
                     ),
-                    _DetailRow('NCF:', 'B0100000001'), // Placeholder
-                    _DetailRow('Fecha:', dateFormat.format(DateTime.now())),
+                    if (fiscalNcf?.trim().isNotEmpty == true)
+                      _DetailRow('NCF:', fiscalNcf!.trim()),
+                    _DetailRow('Fecha:', dateFormat.format(effectiveIssuedAt)),
                     if (tableName != null) _DetailRow('Mesa:', tableName!),
                     if (serverName != null)
                       _DetailRow('Camarero:', serverName!),
@@ -190,7 +215,7 @@ class InvoiceModal extends StatelessWidget {
                       (p) => Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Text('Método: ${_getMethodLabel(p.paymentMethodId)}'),
+                          Text('Método: ${_getMethodLabel(p)}'),
                           Text('RD\$ ${currency.format(p.amount)}'),
                         ],
                       ),
@@ -283,10 +308,18 @@ class InvoiceModal extends StatelessWidget {
     );
   }
 
-  String _getMethodLabel(String methodId) {
-    if (methodId.contains('cash')) return 'Efectivo';
-    if (methodId.contains('card')) return 'Tarjeta';
-    if (methodId.contains('transfer')) return 'Transferencia';
+  String _getMethodLabel(Payment payment) {
+    final explicitName = payment.paymentMethodName?.trim();
+    if (explicitName != null && explicitName.isNotEmpty) {
+      return explicitName;
+    }
+
+    final methodCode =
+        payment.paymentMethodCode?.toLowerCase().trim() ??
+        payment.paymentMethodId.toLowerCase().trim();
+    if (methodCode.contains('cash')) return 'Efectivo';
+    if (methodCode.contains('card')) return 'Tarjeta';
+    if (methodCode.contains('transfer')) return 'Transferencia';
     return 'Otro';
   }
 }

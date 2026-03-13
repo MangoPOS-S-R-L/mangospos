@@ -34,13 +34,14 @@ class EscposTicketService {
     required String orderId,
     required List<Map<String, dynamic>> items,
     double total = 0,
+    String businessName = 'Negocio',
   }) async {
     final profile = await CapabilityProfile.load();
     final gen = Generator(PaperSize.mm80, profile);
     final bytes = <int>[];
     bytes.addAll(
       gen.text(
-        'MANGO POS',
+        businessName,
         styles: const PosStyles(
           bold: true,
           height: PosTextSize.size2,

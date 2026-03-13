@@ -29,7 +29,8 @@ const DEFAULT_CONFIG = {
         whitelist: ['127.0.0.1']
     },
     discovery: {
-        enabled: true
+        enabled: true,
+        protocols: ['network', 'usb'],
     },
     printers: []
 };

@@ -161,6 +161,7 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
     required String name,
     String? ip,
     String? mac,
+    String? devicePath,
     dynamic type = 'network',
   }) async {
     final trimmed = name.trim();
@@ -179,6 +180,10 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         businessId: b,
         name: trimmed,
         ipAddress: (ip ?? '').trim().isEmpty ? null : (ip ?? '').trim(),
+        mac: (mac ?? '').trim().isEmpty ? null : (mac ?? '').trim(),
+        devicePath: (devicePath ?? '').trim().isEmpty
+            ? null
+            : (devicePath ?? '').trim(),
         type: t.name,
       );
 
@@ -196,6 +201,8 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       state = state.copyWith(isLoading: true, errorMessage: null);
       final b = await _ensureOrResolveBusiness();
       await _repo.deletePrinter(printerId);
+      final nextSelectedIds = {...state.selectedIds}..remove(printerId);
+      state = state.copyWith(selectedIds: nextSelectedIds);
       await load(businessId: b, force: true);
       return true;
     } catch (e, st) {
@@ -434,8 +441,14 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
           idHint = x.id;
         } else if (x is Map<String, dynamic>) {
           final map = x;
-          ip = map['ip'] as String?;
-          mac = map['mac'] as String?;
+          ip =
+              (map['ip'] as String?) ??
+              (map['address'] as String?) ??
+              (map['host'] as String?);
+          mac =
+              (map['mac'] as String?) ??
+              (map['deviceId'] as String?) ??
+              (map['address'] as String?);
           name =
               (map['name'] as String?) ??
               (ip != null
@@ -447,7 +460,10 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
               : (mac != null && (ip == null || ip.isEmpty)
                     ? PrinterType.bluetooth
                     : PrinterType.network);
-          idHint = map['id']?.toString();
+          idHint =
+              map['deviceId']?.toString() ??
+              map['address']?.toString() ??
+              map['id']?.toString();
         } else {
           continue; // tipo inesperado
         }
@@ -751,7 +767,6 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         }
       }
 
-      int inserted = 0;
       for (final entry in found.entries) {
         final ip = entry.key;
         final portsOpen = entry.value.toList()..sort();
@@ -765,7 +780,6 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
             ipAddress: ip,
             type: PrinterType.network.name,
           );
-          inserted++;
         }
       }
 
@@ -1020,16 +1034,6 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
 
   /// Helper method to convert PrinterConfig to PrinterDevice
   PrinterDevice _toPrinterDevice(PrinterConfig config) {
-    return PrinterDevice(
-      id: config.id,
-      businessId: config.businessId,
-      name: config.name,
-      ip: config.ipAddress,
-      mac: null, // PrinterConfig doesn't have mac field
-      type: PrinterTypeX.fromName(config.type),
-      online: config.isActive,
-      lastSeen: null, // PrinterConfig doesn't have lastSeen field
-      createdAt: DateTime.now(), // PrinterConfig doesn't have createdAt field
-    );
+    return PrinterDevice.fromConfig(config);
   }
 }

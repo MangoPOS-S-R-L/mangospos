@@ -19,6 +19,7 @@ import '../../presentation/auth/login/login_view.dart';
 import '../../tests/cache_test_page.dart';
 import '../../presentation/auth/register/register_step1_view.dart';
 import '../../presentation/auth/register/register_step2_view.dart';
+import '../../presentation/auth/register/register_step3_view.dart';
 import '../../presentation/dashboard/dashboard_view.dart';
 import '../../presentation/shell/main_shell.dart';
 import '../../presentation/cashier/view/cashier_view.dart';
@@ -111,6 +112,10 @@ class AppRouter {
       GoRoute(
         path: AppRoutes.registerStep2,
         builder: (context, state) => const RegisterStep2View(),
+      ),
+      GoRoute(
+        path: AppRoutes.registerSetup,
+        builder: (context, state) => const RegisterStep3View(),
       ),
 
       // ---------- Shell principal (app autenticada) ----------

@@ -12,6 +12,7 @@ class CurrentOrderState extends Equatable {
   final String? selectedCheckId;
   final String? customerId;
   final String? customerName;
+  final String? sessionNote;
 
   const CurrentOrderState({
     this.loading = false,
@@ -24,6 +25,7 @@ class CurrentOrderState extends Equatable {
     this.selectedCheckId,
     this.customerId,
     this.customerName,
+    this.sessionNote,
   });
 
   CurrentOrderState copyWith({
@@ -40,6 +42,8 @@ class CurrentOrderState extends Equatable {
     String? customerId,
     String? customerName,
     bool clearCustomer = false,
+    String? sessionNote,
+    bool clearSessionNote = false,
   }) {
     return CurrentOrderState(
       loading: loading ?? this.loading,
@@ -54,6 +58,7 @@ class CurrentOrderState extends Equatable {
           : (selectedCheckId ?? this.selectedCheckId),
       customerId: clearCustomer ? null : (customerId ?? this.customerId),
       customerName: clearCustomer ? null : (customerName ?? this.customerName),
+      sessionNote: clearSessionNote ? null : (sessionNote ?? this.sessionNote),
     );
   }
 
@@ -69,5 +74,6 @@ class CurrentOrderState extends Equatable {
     selectedCheckId,
     customerId,
     customerName,
+    sessionNote,
   ];
 }

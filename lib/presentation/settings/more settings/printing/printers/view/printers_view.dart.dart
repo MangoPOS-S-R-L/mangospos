@@ -20,8 +20,6 @@ class PrintingPrintersView extends ConsumerStatefulWidget {
 
 class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
   bool get _isWindows => !kIsWeb && Platform.isWindows;
-  bool _isSearching = false;
-  int _searchProgress = 0;
 
   @override
   void initState() {
@@ -41,42 +39,6 @@ class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
         ref
             .read(printingPrintersViewModelProvider.notifier)
             .load(businessId: widget.businessId, force: true);
-      });
-    }
-  }
-
-  Future<void> _startNetworkSearch() async {
-    if (_isSearching) return;
-
-    setState(() {
-      _isSearching = true;
-      _searchProgress = 0;
-    });
-
-    for (int i = 0; i <= 100; i++) {
-      if (!mounted || !_isSearching) break;
-      await Future.delayed(const Duration(milliseconds: 450));
-      if (mounted) {
-        setState(() {
-          _searchProgress = i;
-        });
-      }
-    }
-
-    final vmCtrl = ref.read(printingPrintersViewModelProvider.notifier);
-    // Escaneo (no persistente) solo para mostrar progreso general
-    await vmCtrl.scanOnLANUnified();
-
-    if (mounted && _searchProgress < 100) {
-      await Future.delayed(
-        Duration(milliseconds: (100 - _searchProgress) * 150),
-      );
-    }
-
-    if (mounted) {
-      setState(() {
-        _isSearching = false;
-        _searchProgress = 0;
       });
     }
   }
@@ -157,7 +119,7 @@ class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
                     ),
                     const SizedBox(width: 12),
                     FilledButton.icon(
-                      onPressed: _isSearching
+                      onPressed: vm.isDiscovering
                           ? null
                           : () => _showAddPrinterDialog(context, vmCtrl),
                       icon: const Icon(Icons.add_circle, size: 20),
@@ -236,9 +198,9 @@ class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
             ],
           ),
         ),
-        if (_isSearching)
+        if (vm.isDiscovering)
           Container(
-            color: Colors.black.withOpacity(0.7),
+            color: Colors.black.withValues(alpha: 0.7),
             child: Center(
               child: Container(
                 constraints: const BoxConstraints(maxWidth: 400),
@@ -283,19 +245,9 @@ class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
                     ClipRRect(
                       borderRadius: BorderRadius.circular(8),
                       child: LinearProgressIndicator(
-                        value: _searchProgress / 100,
                         minHeight: 8,
                         backgroundColor: MangoColors.bgLight,
                         color: MangoColors.primaryOrange,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      '$_searchProgress%',
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: MangoColors.darkGray,
                       ),
                     ),
                   ],
@@ -319,11 +271,11 @@ class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
     );
   }
 
-  void _confirmDeletePrinter(
+  Future<void> _confirmDeletePrinter(
     BuildContext context, {
-    required VoidCallback onConfirm,
-  }) {
-    showDialog(
+    required Future<bool> Function() onConfirm,
+  }) async {
+    final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         backgroundColor: MangoColors.white,
@@ -357,15 +309,26 @@ class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
                 borderRadius: BorderRadius.circular(12),
               ),
             ),
-            onPressed: () {
-              onConfirm();
-              Navigator.pop(dialogContext);
-            },
+            onPressed: () => Navigator.pop(dialogContext, true),
             child: const Text('Eliminar'),
           ),
         ],
       ),
     );
+
+    if (confirmed != true || !context.mounted) return;
+
+    final ok = await onConfirm();
+    if (!context.mounted) return;
+
+    final state = ref.read(printingPrintersViewModelProvider);
+    final message = ok
+        ? 'Impresora eliminada'
+        : (state.errorMessage ?? 'No se pudo eliminar la impresora');
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   void _showPrinterInfo(
@@ -507,7 +470,7 @@ class _PrinterCard extends StatelessWidget {
                   ),
                   decoration: BoxDecoration(
                     color: selected
-                        ? MangoColors.primaryOrange.withOpacity(0.1)
+                        ? MangoColors.primaryOrange.withValues(alpha: 0.1)
                         : const Color(0xFFF5F5F5),
                     borderRadius: BorderRadius.circular(20),
                   ),
@@ -715,6 +678,7 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
               'name': d.name,
               'id': d.idHint,
               'type': d.type.name, // Add type
+              'devicePath': d.idHint,
             },
           )
           .toList();
@@ -740,7 +704,14 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
       final results = await widget.vmCtrl.scanBluetooth(); // ← NO guarda
       _foundPrinters = results
           .map(
-            (d) => {'ip': d.ip, 'mac': d.mac, 'name': d.name, 'id': d.idHint},
+            (d) => {
+              'ip': d.ip,
+              'mac': d.mac,
+              'name': d.name,
+              'id': d.idHint,
+              'type': d.type.name,
+              'devicePath': d.idHint,
+            },
           )
           .toList();
       setState(() => _isSearching = false);
@@ -766,6 +737,7 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
       name: _nameCtrl.text,
       ip: ip.isEmpty ? null : ip,
       mac: mac.isEmpty ? null : mac,
+      devicePath: _selectedPrinter?['devicePath'] as String?,
       type: type,
     );
     if (created && mounted) Navigator.pop(context);
@@ -1296,7 +1268,7 @@ class _InlineError extends StatelessWidget {
       decoration: BoxDecoration(
         color: const Color(0xFFFFE5E5),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.redAccent.withOpacity(0.3)),
+        border: Border.all(color: Colors.redAccent.withValues(alpha: 0.3)),
       ),
       child: Row(
         children: [

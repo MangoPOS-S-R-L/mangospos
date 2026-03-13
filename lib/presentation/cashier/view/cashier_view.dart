@@ -123,6 +123,8 @@ class _CashierViewState extends ConsumerState<CashierView> {
         .read(cashierViewModelProvider)
         .refreshPendingTablesCount();
     if (!mounted) return;
+
+    var forceWithOpenTables = false;
     if (pending > 0) {
       final confirm = await showDialog<bool>(
         context: context,
@@ -144,6 +146,7 @@ class _CashierViewState extends ConsumerState<CashierView> {
         ),
       );
       if (confirm != true) return;
+      forceWithOpenTables = true;
     }
 
     if (!mounted) return;
@@ -180,16 +183,28 @@ class _CashierViewState extends ConsumerState<CashierView> {
               'Transferencias: ${result.numericTransfer} | Total reportado: ${result.totalReported} | '
               'Diferencia: ${result.difference}';
 
-          await ref
-              .read(cashierRepositoryProvider)
-              .closeSession(
-                sessionId: session['id'].toString(),
-                endAmount: result.totalCounted.toDouble(),
-                notes: notes,
-              );
-          await ref.read(cashierViewModelProvider).init();
-          if (!mounted) return;
-          GoRouter.of(context).replace(AppRoutes.cashier);
+          try {
+            await ref
+                .read(cashierRepositoryProvider)
+                .closeSession(
+                  sessionId: session['id'].toString(),
+                  endAmount: result.totalCounted.toDouble(),
+                  notes: notes,
+                  forceWithOpenTables: forceWithOpenTables,
+                );
+            await ref.read(cashierViewModelProvider).init();
+            if (!mounted) return;
+            GoRouter.of(context).replace(AppRoutes.cashier);
+          } catch (e) {
+            if (!mounted) return;
+            final msg = e.toString();
+            final friendly = msg.contains('OPEN_TABLES_EXIST')
+                ? 'Todavía hay mesas abiertas. Si deseas cerrar por cambio de turno, confirma el cierre con mesas abiertas.'
+                : 'No se pudo cerrar la caja: $e';
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(friendly), backgroundColor: Colors.red),
+            );
+          }
         },
       ),
     );
@@ -341,64 +356,78 @@ class _HeaderSection extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          Row(
             children: [
-              Row(
+              IconButton(
+                onPressed: () => context.go(AppRoutes.dashboard),
+                tooltip: 'Volver',
+                icon: const Icon(Icons.arrow_back),
+                style: IconButton.styleFrom(
+                  backgroundColor: const Color(0xFFF5F5F5),
+                  foregroundColor: MangoColors.darkGray,
+                ),
+              ),
+              SizedBox(width: context.wp(1.2)),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    width: context.iconSizeOf(10),
-                    height: context.iconSizeOf(10),
-                    decoration: BoxDecoration(
-                      color: isOpen
-                          ? MangoColors.successGreen
-                          : Colors.grey[400],
-                      shape: BoxShape.circle,
-                      boxShadow: isOpen
-                          ? [
-                              BoxShadow(
-                                color: MangoColors.successGreen.withValues(
-                                  alpha: 0.3,
-                                ),
-                                blurRadius: 8,
-                                spreadRadius: 2,
-                              ),
-                            ]
-                          : null,
+                  Row(
+                    children: [
+                      Container(
+                        width: context.iconSizeOf(10),
+                        height: context.iconSizeOf(10),
+                        decoration: BoxDecoration(
+                          color: isOpen
+                              ? MangoColors.successGreen
+                              : Colors.grey[400],
+                          shape: BoxShape.circle,
+                          boxShadow: isOpen
+                              ? [
+                                  BoxShadow(
+                                    color: MangoColors.successGreen.withValues(
+                                      alpha: 0.3,
+                                    ),
+                                    blurRadius: 8,
+                                    spreadRadius: 2,
+                                  ),
+                                ]
+                              : null,
+                        ),
+                      ),
+                      SizedBox(width: context.wp(1.2)),
+                      Text(
+                        isOpen ? 'Caja Abierta' : 'Caja Cerrada',
+                        style: TextStyle(
+                          color: isOpen
+                              ? MangoColors.successGreen
+                              : Colors.grey[600],
+                          fontSize: context.sp(13),
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: context.hp(0.8)),
+                  Text(
+                    registerName,
+                    style: TextStyle(
+                      fontSize: context.sp(28),
+                      fontWeight: FontWeight.w800,
+                      color: MangoColors.darkGray,
+                      letterSpacing: -0.5,
                     ),
                   ),
-                  SizedBox(width: context.wp(1.2)),
+                  SizedBox(height: context.hp(0.4)),
                   Text(
-                    isOpen ? 'Caja Abierta' : 'Caja Cerrada',
+                    'Último cierre: $lastClosedText',
                     style: TextStyle(
-                      color: isOpen
-                          ? MangoColors.successGreen
-                          : Colors.grey[600],
-                      fontSize: context.sp(13),
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.3,
+                      fontSize: context.sp(12),
+                      color: Colors.grey[600],
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
                 ],
-              ),
-              SizedBox(height: context.hp(0.8)),
-              Text(
-                registerName,
-                style: TextStyle(
-                  fontSize: context.sp(28),
-                  fontWeight: FontWeight.w800,
-                  color: MangoColors.darkGray,
-                  letterSpacing: -0.5,
-                ),
-              ),
-              SizedBox(height: context.hp(0.4)),
-              Text(
-                'Último cierre: $lastClosedText',
-                style: TextStyle(
-                  fontSize: context.sp(12),
-                  color: Colors.grey[600],
-                  fontWeight: FontWeight.w500,
-                ),
               ),
             ],
           ),

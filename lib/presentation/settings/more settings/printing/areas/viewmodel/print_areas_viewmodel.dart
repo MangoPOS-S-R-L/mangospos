@@ -47,6 +47,7 @@ final printingAreasViewModelProvider =
 
 class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
   String? _businessId;
+  String? _lastLoadedBusinessId;
 
   PrintingRepository get _repo => ref.read(printingAreasRepositoryProvider);
 
@@ -54,14 +55,20 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
   PrintingAreasState build() => const PrintingAreasState();
 
   /// Carga / recarga
-  Future<void> load({required String businessId}) async {
+  Future<void> load({required String businessId, bool force = false}) async {
     state = state.copyWith(isLoading: true, errorMessage: null);
     try {
-      _businessId = await BusinessResolver.ensure(
-        businessId.isEmpty ? 'auto' : businessId,
-      );
+      final resolvedBusinessId = await _resolveBusiness(businessId);
 
-      final items = await _repo.getPrintAreas(_businessId!);
+      if (!force &&
+          _lastLoadedBusinessId == resolvedBusinessId &&
+          state.items.isNotEmpty) {
+        state = state.copyWith(isLoading: false);
+        return;
+      }
+
+      final items = await _repo.getPrintAreas(resolvedBusinessId);
+      _lastLoadedBusinessId = resolvedBusinessId;
       state = state.copyWith(items: items, isLoading: false);
     } catch (e) {
       state = state.copyWith(isLoading: false, errorMessage: e.toString());
@@ -69,8 +76,8 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
   }
 
   Future<void> refresh() async {
-    final b = _ensureBusiness();
-    await load(businessId: b);
+    final b = await _ensureBusiness();
+    await load(businessId: b, force: true);
   }
 
   Future<bool> createArea({required String name}) async {
@@ -83,11 +90,11 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
     }
     try {
       state = state.copyWith(isLoading: true, errorMessage: null);
-      final b = _ensureBusiness();
+      final b = await _ensureBusiness();
 
       final code = trimmed.toUpperCase().replaceAll(' ', '_');
       await _repo.createArea(businessId: b, name: trimmed, code: code);
-      await load(businessId: b);
+      await load(businessId: b, force: true);
       return true;
     } catch (e) {
       state = state.copyWith(isLoading: false, errorMessage: e.toString());
@@ -98,10 +105,10 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
   Future<bool> deleteArea(String areaId) async {
     try {
       state = state.copyWith(isLoading: true, errorMessage: null);
-      final b = _ensureBusiness();
+      final b = await _ensureBusiness();
 
       await _repo.deleteArea(areaId);
-      await load(businessId: b);
+      await load(businessId: b, force: true);
       return true;
     } catch (e) {
       state = state.copyWith(isLoading: false, errorMessage: e.toString());
@@ -118,23 +125,76 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
     bool printsReceipts = false,
   }) async {
     try {
-      final b = _ensureBusiness();
+      final b = await _ensureBusiness();
 
-      await _repo.linkAreaToPrinter(
+      await _repo.setAreaPrinterAssignment(
         businessId: b,
         areaId: areaId,
         printerId: printerId,
-        enabled: enabled,
-        printsOrders: printsOrders,
-        printsPrebills: printsPrebills,
-        printsReceipts: printsReceipts,
+        printsOrders: enabled && printsOrders,
+        printsPrebills: enabled && printsPrebills,
+        printsReceipts: enabled && printsReceipts,
       );
-      // No es necesario recargar; el listado de áreas no cambia por el vínculo
       return true;
     } catch (e) {
       state = state.copyWith(errorMessage: e.toString());
       return false;
     }
+  }
+
+  Future<Map<String, String>> loadOrderPrinterSelections() async {
+    final b = await _ensureBusiness();
+    return _repo.getOrderPrinterSelections(b);
+  }
+
+  Future<Map<String, String>> loadPrinterSelectionsByType({
+    bool printsOrders = false,
+    bool printsPrebills = false,
+    bool printsReceipts = false,
+  }) async {
+    final b = await _ensureBusiness();
+    return _repo.getPrinterSelectionsByType(
+      businessId: b,
+      printsOrders: printsOrders,
+      printsPrebills: printsPrebills,
+      printsReceipts: printsReceipts,
+    );
+  }
+
+  Future<PrintArea> ensureSystemArea({
+    required String code,
+    required String name,
+  }) async {
+    final b = await _ensureBusiness();
+    return _repo.ensurePrintArea(businessId: b, code: code, name: name);
+  }
+
+  Future<Map<String, String>> bootstrapOrderPrinterSelections({
+    required String businessId,
+  }) async {
+    await load(businessId: businessId);
+    return loadOrderPrinterSelections();
+  }
+
+  Future<ReceiptAssignmentsBootstrap> bootstrapReceiptAssignments({
+    required String businessId,
+  }) async {
+    await load(businessId: businessId);
+
+    final cashierArea = await ensureSystemArea(code: 'cashier', name: 'Caja');
+    final fiscalArea = await ensureSystemArea(code: 'fiscal', name: 'Fiscal');
+
+    await refresh();
+
+    final prebills = await loadPrinterSelectionsByType(printsPrebills: true);
+    final receipts = await loadPrinterSelectionsByType(printsReceipts: true);
+
+    return ReceiptAssignmentsBootstrap(
+      cashierArea: cashierArea,
+      fiscalArea: fiscalArea,
+      selectedPrebillPrinter: prebills[cashierArea.id],
+      selectedReceiptPrinter: receipts[fiscalArea.id],
+    );
   }
 
   // -------- selección múltiple --------
@@ -147,12 +207,31 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
   void clearSelection() => state = state.copyWith(selectedIds: <String>{});
 
   // -------- helpers --------
-  String _ensureBusiness() {
+  Future<String> _resolveBusiness(String businessId) async {
+    _businessId = await BusinessResolver.ensure(
+      businessId.isEmpty ? 'auto' : businessId,
+    );
+    return _businessId!;
+  }
+
+  Future<String> _ensureBusiness() async {
     if (_businessId == null || _businessId!.isEmpty || _businessId == 'auto') {
-      throw StateError(
-        'BusinessId no resuelto. Llama load(businessId) primero.',
-      );
+      _businessId = await BusinessResolver.ensure('auto');
     }
     return _businessId!;
   }
+}
+
+class ReceiptAssignmentsBootstrap {
+  const ReceiptAssignmentsBootstrap({
+    required this.cashierArea,
+    required this.fiscalArea,
+    required this.selectedPrebillPrinter,
+    required this.selectedReceiptPrinter,
+  });
+
+  final PrintArea cashierArea;
+  final PrintArea fiscalArea;
+  final String? selectedPrebillPrinter;
+  final String? selectedReceiptPrinter;
 }

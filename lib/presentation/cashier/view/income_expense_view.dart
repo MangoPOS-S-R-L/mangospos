@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/data/models/payment_models.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
@@ -128,6 +130,10 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
         backgroundColor: Colors.white,
         foregroundColor: Colors.black87,
         elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => context.go(AppRoutes.cashier),
+        ),
       ),
       body: RefreshIndicator(
         onRefresh: _refresh,

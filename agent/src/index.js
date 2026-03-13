@@ -1,6 +1,7 @@
 ﻿const path = require('path');
 const io = require('socket.io-client');
 const winston = require('winston');
+const discoveryService = require('./core/discovery');
 
 // Cargar .env desde la carpeta del agente (no desde C:\Windows\System32 del servicio)
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
@@ -249,7 +250,15 @@ async function processPrintJob(job) {
 
 
                     // 2. PRINTING
-                    if (content.type === 'precheck') {
+                    if (content.type === 'raw_base64') {
+                        const dataBase64 = content.dataBase64 || job.dataBase64;
+                        if (!dataBase64) {
+                            throw new Error('Missing dataBase64 in raw job');
+                        }
+                        const payload = Buffer.from(dataBase64, 'base64');
+                        device.write(payload);
+                        printer.feed(3).cut().close();
+                    } else if (content.type === 'precheck') {
                         await printPreCheck(device, printer, content.data);
                     } else if (content.type === 'invoice') {
                         await printInvoice(device, printer, content.data);
@@ -560,6 +569,14 @@ app.use(express.json());
 
 
 // 1. Endpoint de Estado (Health Check)
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        agent: AGENT_ID,
+        version: '1.0.0'
+    });
+});
+
 app.get('/status', (req, res) => {
     res.json({
         status: 'online',
@@ -635,6 +652,26 @@ app.post('/api/printers/raw', async (req, res) => {
     } catch (error) {
         logger.error(`Error RAW print: ${error.message}`);
         return res.status(500).json({ ok: false, error: error.message });
+    }
+});
+
+app.get('/api/printers/discover', async (req, res) => {
+    try {
+        const devices = await discoveryService.scan();
+        const items = devices.map((device) => ({
+            type: device.type || 'network',
+            name: device.name || 'Printer',
+            ip: device.address && device.type === 'network' ? device.address : null,
+            port: device.port || 9100,
+            mac: device.deviceId || null,
+            deviceId: device.deviceId || device.address || null,
+            vid: device.vid || null,
+            pid: device.pid || null,
+        }));
+        res.json({ items });
+    } catch (error) {
+        logger.error(`Discovery error: ${error.message}`);
+        res.status(500).json({ items: [], error: error.message });
     }
 });
 
@@ -714,7 +751,6 @@ app.listen(LOCAL_PORT, () => {
 process.on('uncaughtException', (err) => {
     logger.error('CRITICAL ERROR:', err);
 });
-
 
 
 

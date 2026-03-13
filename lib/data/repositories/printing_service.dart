@@ -1,16 +1,38 @@
 // lib/data/repositories/printing_service.dart
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../models/printing_models.dart';
 import '../models/sales_models.dart';
+import '../../core/offline/offline_pos_service.dart';
+import '../../core/storage/storage_service.dart';
+import '../../services/printing/print_ticket_service.dart';
+import '../../presentation/sales/state/sales_state.dart';
 import 'printing_repository.dart';
 import 'sales_repository.dart';
 
 /// 🖨️ Servicio de Impresión con Agrupación por Departamento
 /// Maneja la lógica de envío de órdenes a diferentes áreas de impresión
+class NoAssignedKitchenPrinterException implements Exception {
+  final List<String> areaCodes;
+
+  const NoAssignedKitchenPrinterException(this.areaCodes);
+
+  @override
+  String toString() {
+    if (areaCodes.isEmpty) {
+      return 'NO_ASSIGNED_KITCHEN_PRINTER';
+    }
+    return 'NO_ASSIGNED_KITCHEN_PRINTER:${areaCodes.join(",")}';
+  }
+}
+
 class PrintingService {
   final SupabaseClient _client;
   late final PrintingRepository _printingRepo;
   late final SalesRepository _salesRepo;
+  final OfflinePosService _offlinePos = OfflinePosService();
 
   PrintingService(this._client) {
     _printingRepo = PrintingRepository(_client);
@@ -49,67 +71,178 @@ class PrintingService {
 
       // 3. Obtener información adicional para el ticket
       final orderData = await _getOrderDisplayData(orderId);
+      final businessName = await _getBusinessName(businessId);
 
       // 4. Agrupar items por área de impresión
       final itemsByArea = await _groupItemsByPrintArea(draftItems);
 
-      // 5. Marcar orden como enviada a cocina antes de crear jobs.
+      // 5. Resolver áreas e impresoras antes de marcar la orden.
+      final printersByAreaCode = <String, List<PrinterConfig>>{};
+      final missingPrinterAreas = <String>[];
+      final areasByCode = <String, PrintArea>{};
+
+      for (final areaCode in itemsByArea.keys) {
+        final area = await _ensureAreaForCode(businessId, areaCode);
+        areasByCode[areaCode] = area;
+
+        final printers = await _getOrderPrintersWithOfflineFallback(
+          businessId: businessId,
+          areaId: area.id,
+          areaCode: areaCode,
+        );
+        printersByAreaCode[areaCode] = printers;
+        if (printers.isEmpty) {
+          missingPrinterAreas.add(areaCode);
+        }
+      }
+
+      if (missingPrinterAreas.isNotEmpty) {
+        throw NoAssignedKitchenPrinterException(missingPrinterAreas);
+      }
+
+      // 6. Marcar orden como enviada a cocina solo cuando hay impresoras.
       await _salesRepo.sendToKitchen(orderId);
 
-      // 6. Crear trabajos de impresión para cada área
-      final createdJobs = <String, String>{}; // areaCode -> jobId
+      final createdJobs = <String, String>{}; // areaCode -> local dispatch id
 
       for (final entry in itemsByArea.entries) {
         final areaCode = entry.key;
         final areaItems = entry.value;
 
-        // Obtener área por código
-        final areas = await _printingRepo.getPrintAreas(businessId);
-        final area = areas.where((a) => a.code == areaCode).firstOrNull;
-
-        if (area == null) {
-          debugPrint(
-            '⚠️ Área no encontrada: $areaCode - Creando automáticamente...',
-          );
-          // Crear área automáticamente si no existe
-          final newAreaId = await _createDefaultArea(businessId, areaCode);
-
-          // Crear job con el área nueva
-          final jobId = await _createKitchenPrintJob(
-            businessId: businessId,
-            areaId: newAreaId,
-            orderId: orderId,
-            items: areaItems,
-            orderData: orderData,
-          );
-
-          createdJobs[areaCode] = jobId;
-          continue;
-        }
-
-        // Verificar que el área tenga impresoras asignadas
-        final printers = await _printingRepo.getPrintersForArea(area.id);
-
-        if (printers.isEmpty) {
-          debugPrint('⚠️ Área "$areaCode" no tiene impresoras asignadas');
-          // Continuar de todas formas - el job quedará pendiente
-        }
-
-        // Crear trabajo de impresión
-        final jobId = await _createKitchenPrintJob(
-          businessId: businessId,
-          areaId: area.id,
-          orderId: orderId,
-          items: areaItems,
-          orderData: orderData,
+        areasByCode[areaCode] ??= await _ensureAreaForCode(
+          businessId,
+          areaCode,
         );
 
-        createdJobs[areaCode] = jobId;
+        final printers = printersByAreaCode[areaCode] ?? const [];
+        final dispatchId = _createLocalDispatchId(areaCode);
+        createdJobs[areaCode] = dispatchId;
+
+        final ticket = PrintTicketService.generateKitchenTicket(
+          order: order,
+          items: areaItems,
+          tableName: orderData['tableName']?.toString() ?? 'N/A',
+          waiterName: orderData['waiterName']?.toString(),
+          businessName: businessName,
+        );
+
+        await _dispatchKitchenTicket(
+          printers: printers,
+          bytes: ticket.escPosCommands,
+          areaCode: areaCode,
+          fallbackData: {
+            'title': 'COMANDA ${orderData['tableName'] ?? 'COCINA'}',
+            'body':
+                'Orden ${orderData['orderNumber'] ?? ''}\n'
+                'Mesa: ${orderData['tableName'] ?? 'N/A'}\n'
+                'Mesero: ${orderData['waiterName'] ?? 'N/A'}',
+          },
+        );
       }
 
       return createdJobs;
+    } on NoAssignedKitchenPrinterException {
+      rethrow;
     } catch (e) {
       throw Exception('Error al enviar orden a cocina: $e');
+    }
+  }
+
+  Future<void> _dispatchKitchenTicket({
+    required List<PrinterConfig> printers,
+    required List<int> bytes,
+    required String areaCode,
+    required Map<String, dynamic> fallbackData,
+  }) async {
+    final errors = <String>[];
+    String? firstPrintedPrinterId;
+
+    for (final printer in printers) {
+      try {
+        await _printKitchenTicketToPrinter(
+          printer: printer,
+          bytes: bytes,
+          areaCode: areaCode,
+          fallbackData: fallbackData,
+        );
+        firstPrintedPrinterId ??= printer.id;
+      } catch (e) {
+        errors.add('${printer.name}: $e');
+      }
+    }
+
+    if (firstPrintedPrinterId != null) {
+      if (errors.isNotEmpty) {
+        debugPrint(
+          '⚠️ Impresión parcial en área $areaCode. Impresora exitosa: $firstPrintedPrinterId. Errores: ${errors.join(' | ')}',
+        );
+      }
+      return;
+    }
+
+    if (errors.isNotEmpty) {
+      throw Exception(errors.join(' | '));
+    }
+  }
+
+  Future<void> _printKitchenTicketToPrinter({
+    required PrinterConfig printer,
+    required List<int> bytes,
+    required String areaCode,
+    required Map<String, dynamic> fallbackData,
+  }) async {
+    switch (printer.type) {
+      case 'network':
+        final ip = printer.ipAddress?.trim();
+        if (ip == null || ip.isEmpty) {
+          throw Exception('La impresora de red no tiene IP configurada.');
+        }
+        if (kIsWeb) {
+          await _printingRepo.printRawViaAgent(
+            ip: ip,
+            port: printer.port ?? 9100,
+            data: bytes,
+          );
+          return;
+        }
+        try {
+          await _printingRepo.printRawDirectTcp(
+            ip: ip,
+            port: printer.port ?? 9100,
+            data: bytes,
+          );
+        } catch (_) {
+          await _printingRepo.printRawViaAgent(
+            ip: ip,
+            port: printer.port ?? 9100,
+            data: bytes,
+          );
+        }
+        return;
+      case 'usb':
+        await _printingRepo.printJobViaAgent({
+          'id': 'KITCHEN-${DateTime.now().millisecondsSinceEpoch}',
+          'printer': {
+            'id': printer.id,
+            'type': 'usb',
+            'name': printer.name,
+            'devicePath': printer.devicePath,
+            'path': printer.devicePath,
+          },
+          'content': {
+            'type': 'raw_base64',
+            'dataBase64': base64Encode(bytes),
+            'fallback': fallbackData,
+          },
+          'meta': {'areaCode': areaCode},
+        });
+        return;
+      case 'bluetooth':
+        throw Exception(
+          'La autoimpresión de cocina no soporta Bluetooth todavía.',
+        );
+      default:
+        throw Exception('Tipo de impresora no soportado: ${printer.type}.');
     }
   }
 
@@ -195,52 +328,38 @@ class PrintingService {
     }
   }
 
-  /// Crear trabajo de impresión para cocina
-  Future<String> _createKitchenPrintJob({
-    required String businessId,
-    required String areaId,
-    required String orderId,
-    required List<OrderItem> items,
-    required Map<String, dynamic> orderData,
-  }) async {
-    // Preparar datos del ticket
-    final ticketData = {
-      'orderNumber': orderData['orderNumber'],
-      'tableName': orderData['tableName'],
-      'waiterName': orderData['waiterName'],
-      'peopleCount': orderData['peopleCount'],
-      'timestamp': DateTime.now().toIso8601String(),
-      'items': items
-          .map(
-            (item) => {
-              'name': item.productName,
-              'quantity': item.quantity,
-              'notes': item.notes,
-              'isTakeout': item.isTakeout,
-              'modifiers': item.modifiers
-                  .map((m) => {'name': m.name, 'quantity': m.qty})
-                  .toList(),
-            },
-          )
-          .toList(),
-    };
+  Future<String?> _getBusinessName(String businessId) async {
+    try {
+      final data = await _client
+          .from('businesses')
+          .select('business_name, branch_name')
+          .eq('id', businessId)
+          .maybeSingle();
 
-    // Crear trabajo de impresión
-    final job = await _printingRepo.createPrintJob(
-      businessId: businessId,
-      areaId: areaId,
-      type: 'kitchen_order',
-      orderId: orderId,
-      data: ticketData,
-    );
-
-    return job.id;
+      final branchName = data?['branch_name']?.toString().trim();
+      if (branchName != null && branchName.isNotEmpty) {
+        return branchName;
+      }
+      final businessName = data?['business_name']?.toString().trim();
+      if (businessName != null && businessName.isNotEmpty) {
+        return businessName;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
   }
 
-  /// Crear área por defecto si no existe
-  Future<String> _createDefaultArea(String businessId, String areaCode) async {
-    // Mapeo de códigos a nombres amigables
-    final areaNames = {
+  Future<PrintArea> _ensureAreaForCode(String businessId, String areaCode) {
+    return _printingRepo.ensurePrintArea(
+      businessId: businessId,
+      code: areaCode,
+      name: _friendlyAreaName(areaCode),
+    );
+  }
+
+  String _friendlyAreaName(String areaCode) {
+    const areaNames = {
       'kitchen_hot': 'Cocina Caliente',
       'kitchen_cold': 'Cocina Fría',
       'bar': 'Bar',
@@ -248,15 +367,88 @@ class PrintingService {
       'fiscal': 'Fiscal',
     };
 
-    final areaName = areaNames[areaCode] ?? areaCode.toUpperCase();
+    return areaNames[areaCode] ?? areaCode.toUpperCase();
+  }
 
-    final area = await _printingRepo.createArea(
+  Future<Map<String, String>> sendLocalOrderToKitchen({
+    required String businessId,
+    required CurrentOrderState localState,
+    String tableName = 'LOCAL',
+    String? waiterName,
+    String? businessName,
+  }) async {
+    final order = localState.order;
+    if (order == null) {
+      throw Exception('No hay orden local para imprimir');
+    }
+
+    final draftItems = localState.items
+        .where((item) => item.status == 'draft' || item.status == 'open')
+        .toList(growable: false);
+    if (draftItems.isEmpty) {
+      throw Exception('No hay items locales pendientes de imprimir');
+    }
+
+    final itemsByArea = await _groupItemsByPrintArea(draftItems);
+    final createdJobs = <String, String>{};
+
+    for (final entry in itemsByArea.entries) {
+      final areaCode = entry.key;
+      final printers = await _readCachedOrderPrinters(
+        businessId: businessId,
+        areaCode: areaCode,
+      );
+      if (printers.isEmpty) {
+        await _offlinePos.enqueuePrintJob(
+          businessId: businessId,
+          job: {
+            'order_id': order.id,
+            'area_code': areaCode,
+            'reason': 'missing_cached_printer',
+            'items': entry.value.map((item) => item.productName).toList(),
+          },
+        );
+        throw Exception(
+          'No hay impresoras cacheadas para $areaCode. Abre online una vez para guardar configuración.',
+        );
+      }
+
+      final ticket = PrintTicketService.generateKitchenTicket(
+        order: order,
+        items: entry.value,
+        tableName: tableName,
+        waiterName: waiterName,
+        businessName: businessName,
+      );
+
+      final dispatchId = _createLocalDispatchId(areaCode);
+      createdJobs[areaCode] = dispatchId;
+
+      await _dispatchKitchenTicket(
+        printers: printers,
+        bytes: ticket.escPosCommands,
+        areaCode: areaCode,
+        fallbackData: {
+          'title': 'COMANDA $tableName',
+          'body':
+              'Orden local ${order.id}\n'
+              'Mesa: $tableName\n'
+              'Mesero: ${waiterName ?? 'N/A'}',
+        },
+      );
+    }
+
+    await _offlinePos.enqueueAction(
       businessId: businessId,
-      name: areaName,
-      code: areaCode,
+      action: {
+        'type': 'confirm_local_order',
+        'order_id': order.id,
+        'origin': localState.origin,
+        'item_count': draftItems.length,
+      },
     );
 
-    return area.id;
+    return createdJobs;
   }
 
   /// Reimprimir orden en un área específica
@@ -266,6 +458,11 @@ class PrintingService {
     required String areaCode,
   }) async {
     try {
+      final order = await _salesRepo.getOrder(orderId);
+      if (order == null) {
+        throw Exception('Orden no encontrada');
+      }
+
       // Obtener items de la orden
       final items = await _salesRepo.getOrderItems(
         orderId,
@@ -282,6 +479,7 @@ class PrintingService {
 
       // Obtener datos de la orden
       final orderData = await _getOrderDisplayData(orderId);
+      final businessName = await _getBusinessName(businessId);
 
       // Obtener área
       final areas = await _printingRepo.getPrintAreas(businessId);
@@ -291,19 +489,95 @@ class PrintingService {
         throw Exception('Área no encontrada: $areaCode');
       }
 
-      // Crear trabajo de impresión
-      final jobId = await _createKitchenPrintJob(
+      final printers = await _getOrderPrintersWithOfflineFallback(
         businessId: businessId,
         areaId: area.id,
-        orderId: orderId,
+        areaCode: areaCode,
+      );
+      if (printers.isEmpty) {
+        throw Exception('No hay impresoras asignadas al área $areaCode');
+      }
+
+      final ticket = PrintTicketService.generateKitchenTicket(
+        order: order,
         items: areaItems,
-        orderData: orderData,
+        tableName: orderData['tableName']?.toString() ?? 'N/A',
+        waiterName: orderData['waiterName']?.toString(),
+        businessName: businessName,
       );
 
-      return jobId;
+      final dispatchId = _createLocalDispatchId(areaCode);
+      await _dispatchKitchenTicket(
+        printers: printers,
+        bytes: ticket.escPosCommands,
+        areaCode: areaCode,
+        fallbackData: {
+          'title': 'COMANDA ${orderData['tableName'] ?? 'COCINA'}',
+          'body':
+              'Orden ${orderData['orderNumber'] ?? ''}\n'
+              'Mesa: ${orderData['tableName'] ?? 'N/A'}\n'
+              'Mesero: ${orderData['waiterName'] ?? 'N/A'}',
+        },
+      );
+
+      return dispatchId;
     } catch (e) {
       throw Exception('Error al reimprimir: $e');
     }
+  }
+
+  String _createLocalDispatchId(String areaCode) {
+    return 'LAN-$areaCode-${DateTime.now().microsecondsSinceEpoch}';
+  }
+
+  Future<List<PrinterConfig>> _getOrderPrintersWithOfflineFallback({
+    required String businessId,
+    required String areaId,
+    required String areaCode,
+  }) async {
+    try {
+      final printers = await _printingRepo.getOrderPrintersForArea(areaId);
+      await _cacheOrderPrinters(
+        businessId: businessId,
+        areaCode: areaCode,
+        printers: printers,
+      );
+      return printers;
+    } catch (e) {
+      debugPrint('⚠️ Usando cache local de impresoras para $areaCode: $e');
+      return _readCachedOrderPrinters(
+        businessId: businessId,
+        areaCode: areaCode,
+      );
+    }
+  }
+
+  Future<void> _cacheOrderPrinters({
+    required String businessId,
+    required String areaCode,
+    required List<PrinterConfig> printers,
+  }) async {
+    final storage = await StorageService.getInstance();
+    await storage.writeList(
+      'printing_cached_printers_${businessId}_$areaCode',
+      printers.map((printer) => printer.toMap()).toList(growable: false),
+    );
+  }
+
+  Future<List<PrinterConfig>> _readCachedOrderPrinters({
+    required String businessId,
+    required String areaCode,
+  }) async {
+    final storage = await StorageService.getInstance();
+    final cached = await storage.readList(
+      'printing_cached_printers_${businessId}_$areaCode',
+    );
+    if (cached == null) return const [];
+    return cached
+        .map(
+          (row) => PrinterConfig.fromMap(Map<String, dynamic>.from(row as Map)),
+        )
+        .toList(growable: false);
   }
 
   /// Obtener resumen de impresión de una orden

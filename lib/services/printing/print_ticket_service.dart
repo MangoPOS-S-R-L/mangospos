@@ -280,6 +280,9 @@ class PrintTicketService {
     String? businessName,
     String? businessAddress,
     String? businessPhone,
+    String? businessRnc,
+    String? fiscalNcf,
+    DateTime? issuedAt,
     String title = 'FACTURA',
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
@@ -298,6 +301,9 @@ class PrintTicketService {
     }
     if (businessPhone != null && businessPhone.isNotEmpty) {
       gen.textCentered('Tel: $businessPhone');
+    }
+    if (businessRnc != null && businessRnc.isNotEmpty) {
+      gen.textCentered('RNC: $businessRnc');
     }
 
     gen.lineFeed();
@@ -319,13 +325,17 @@ class PrintTicketService {
     gen.setBold(true);
     gen.textRow('ORDEN:', order.id.substring(0, 8).toUpperCase());
     gen.setBold(false);
+    if (fiscalNcf != null && fiscalNcf.isNotEmpty) {
+      gen.textRow('NCF:', fiscalNcf);
+    }
 
     if (tableName.isNotEmpty) {
       gen.textRow('MESA:', tableName);
     }
 
-    final dateStr = _formatDate(DateTime.now());
-    final timeStr = _formatTime(DateTime.now());
+    final effectiveIssuedAt = issuedAt ?? DateTime.now();
+    final dateStr = _formatDate(effectiveIssuedAt);
+    final timeStr = _formatTime(effectiveIssuedAt);
     gen.textRow('FECHA:', dateStr);
     gen.textRow('HORA:', timeStr);
 
@@ -406,7 +416,7 @@ class PrintTicketService {
       double totalChange = 0;
 
       for (final p in payments) {
-        final method = _getPaymentMethodName(p.paymentMethodId);
+        final method = _getPaymentMethodName(p);
         gen.textRow(method, 'RD\$ ${_formatMoney(p.amount)}');
         totalChange += p.changeAmount;
       }
@@ -428,10 +438,18 @@ class PrintTicketService {
     return PrintTicket(type: 'invoice', escPosCommands: gen.getCommands());
   }
 
-  static String _getPaymentMethodName(String id) {
-    if (id.contains('cash')) return 'EFECTIVO';
-    if (id.contains('card')) return 'TARJETA';
-    if (id.contains('transfer')) return 'TRANSFERENCIA';
+  static String _getPaymentMethodName(Payment payment) {
+    final explicitName = payment.paymentMethodName?.trim();
+    if (explicitName != null && explicitName.isNotEmpty) {
+      return explicitName.toUpperCase();
+    }
+
+    final explicitCode =
+        payment.paymentMethodCode?.toLowerCase().trim() ??
+        payment.paymentMethodId.toLowerCase().trim();
+    if (explicitCode.contains('cash')) return 'EFECTIVO';
+    if (explicitCode.contains('card')) return 'TARJETA';
+    if (explicitCode.contains('transfer')) return 'TRANSFERENCIA';
     return 'OTRO';
   }
 
@@ -657,11 +675,5 @@ class PrintTicketService {
   /// Separador grueso (líneas dobles)
   static void _thickSeparator(EscPosGenerator gen) {
     gen.textCentered('=' * 48);
-  }
-
-  /// Separador punteado
-  static void _dashedSeparator(EscPosGenerator gen) {
-    // Usando caracteres compatibles con impresoras térmicas
-    gen.textCentered('- - - - - - - - - - - - - - - - - - - - - - - -');
   }
 }

@@ -2235,12 +2235,15 @@ CREATE TABLE IF NOT EXISTS "public"."businesses" (
     "owner_id" "uuid" NOT NULL,
     "business_name" "text" NOT NULL,
     "branch_name" "text",
+    "business_type" "text",
     "country" "text",
     "address" "text",
+    "phone" "text",
     "status" "text" DEFAULT 'active'::"text" NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "domain" "text" NOT NULL,
+    CONSTRAINT "businesses_business_type_check" CHECK ((("business_type" IS NULL) OR ("business_type" = ANY (ARRAY['Restaurante'::"text", 'Comida Rapida'::"text", 'Cafeteria / Panaderia'::"text", 'Bar / Lounge'::"text", 'Heladeria / Postres'::"text", 'Solo Delivery'::"text", 'Tienda de Conveniencia'::"text", 'Bar de Jugos / Comida Saludable'::"text", 'Food Truck'::"text", 'Otro'::"text"])))),
     CONSTRAINT "businesses_domain_format" CHECK (("domain" ~ '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.mangopos\.do$'::"text")),
     CONSTRAINT "businesses_status_check" CHECK (("status" = ANY (ARRAY['active'::"text", 'inactive'::"text"])))
 );

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:io';
 import 'dart:async';
@@ -56,6 +57,7 @@ class PrintingRepository {
     String? ipAddress,
     int? port,
     String? devicePath,
+    String? mac,
     int paperWidth = 80,
   }) async {
     try {
@@ -68,6 +70,7 @@ class PrintingRepository {
             'ip_address': ipAddress,
             'port': port,
             'device_path': devicePath,
+            'mac': mac,
             'paper_width': paperWidth,
             'online': false,
           })
@@ -95,6 +98,7 @@ class PrintingRepository {
       if (port != null) updates['port'] = port;
       if (isActive != null) updates['online'] = isActive;
 
+      if (updates.isEmpty) return;
       await _client.from('printers').update(updates).eq('id', printerId);
     } catch (e) {
       throw Exception('Error al actualizar impresora: $e');
@@ -120,6 +124,54 @@ class PrintingRepository {
     }
   }
 
+  Future<PrintArea?> getPrintAreaByCode({
+    required String businessId,
+    required String code,
+  }) async {
+    try {
+      final data = await _client
+          .from('print_areas')
+          .select()
+          .eq('business_id', businessId)
+          .eq('code', code)
+          .maybeSingle();
+
+      if (data == null) return null;
+      return PrintArea.fromMap(data);
+    } catch (e) {
+      throw Exception('Error al obtener área por código: $e');
+    }
+  }
+
+  Future<PrintArea> ensurePrintArea({
+    required String businessId,
+    required String code,
+    required String name,
+  }) async {
+    try {
+      final existing = await getPrintAreaByCode(
+        businessId: businessId,
+        code: code,
+      );
+      if (existing != null) return existing;
+
+      final data = await _client
+          .from('print_areas')
+          .insert({
+            'business_id': businessId,
+            'name': name,
+            'code': code,
+            'is_active': true,
+          })
+          .select()
+          .single();
+
+      return PrintArea.fromMap(data);
+    } catch (e) {
+      throw Exception('Error al asegurar área de impresión: $e');
+    }
+  }
+
   /// Obtener impresoras asignadas a un área
   Future<List<PrinterConfig>> getPrintersForArea(String areaId) async {
     try {
@@ -134,6 +186,112 @@ class PrintingRepository {
           .toList();
     } catch (e) {
       throw Exception('Error al obtener impresoras del área: $e');
+    }
+  }
+
+  Future<List<PrinterConfig>> getOrderPrintersForArea(String areaId) async {
+    try {
+      final data = await _client
+          .from('print_area_printers')
+          .select('priority, printers(*)')
+          .eq('area_id', areaId)
+          .eq('enabled', true)
+          .eq('prints_orders', true)
+          .order('priority', ascending: true);
+
+      return data
+          .map((json) => PrinterConfig.fromMap(json['printers']))
+          .toList();
+    } catch (e) {
+      throw Exception('Error al obtener impresoras activas del área: $e');
+    }
+  }
+
+  Future<Map<String, String>> getOrderPrinterSelections(
+    String businessId,
+  ) async {
+    return getPrinterSelectionsByType(
+      businessId: businessId,
+      printsOrders: true,
+    );
+  }
+
+  Future<Map<String, String>> getPrinterSelectionsByType({
+    required String businessId,
+    bool printsOrders = false,
+    bool printsPrebills = false,
+    bool printsReceipts = false,
+  }) async {
+    try {
+      var query = _client
+          .from('print_area_printers')
+          .select('area_id, printer_id, priority')
+          .eq('business_id', businessId)
+          .eq('enabled', true);
+
+      if (printsOrders) query = query.eq('prints_orders', true);
+      if (printsPrebills) query = query.eq('prints_prebills', true);
+      if (printsReceipts) query = query.eq('prints_receipts', true);
+
+      final data = await query.order('priority', ascending: true);
+
+      final selections = <String, String>{};
+      for (final row in data) {
+        final areaId = row['area_id']?.toString();
+        final printerId = row['printer_id']?.toString();
+        if (areaId == null ||
+            areaId.isEmpty ||
+            printerId == null ||
+            printerId.isEmpty ||
+            selections.containsKey(areaId)) {
+          continue;
+        }
+        selections[areaId] = printerId;
+      }
+      return selections;
+    } catch (e) {
+      throw Exception('Error al obtener asignaciones de áreas: $e');
+    }
+  }
+
+  Future<PrinterConfig?> getAssignedPrinterForType({
+    required String businessId,
+    required List<String> preferredAreaCodes,
+    bool printsOrders = false,
+    bool printsPrebills = false,
+    bool printsReceipts = false,
+  }) async {
+    try {
+      final areas = await getPrintAreas(businessId);
+      final areasByCode = {for (final area in areas) area.code: area};
+
+      for (final areaCode in preferredAreaCodes) {
+        final area = areasByCode[areaCode];
+        if (area == null) continue;
+
+        var query = _client
+            .from('print_area_printers')
+            .select('priority, printers(*)')
+            .eq('business_id', businessId)
+            .eq('area_id', area.id)
+            .eq('enabled', true);
+
+        if (printsOrders) query = query.eq('prints_orders', true);
+        if (printsPrebills) query = query.eq('prints_prebills', true);
+        if (printsReceipts) query = query.eq('prints_receipts', true);
+
+        final data = await query.order('priority', ascending: true).limit(1);
+        if (data.isEmpty) continue;
+
+        final printer = data.first['printers'];
+        if (printer != null) {
+          return PrinterConfig.fromMap(printer);
+        }
+      }
+
+      return null;
+    } catch (e) {
+      throw Exception('Error al obtener la impresora asignada: $e');
     }
   }
 
@@ -201,16 +359,22 @@ class PrintingRepository {
     String? checkId,
   }) async {
     try {
+      final payload = <String, dynamic>{
+        'area_id': areaId,
+        'type': type,
+        'order_id': orderId,
+        'check_id': checkId,
+        'data': data,
+      };
+
       final jobData = await _client
           .from('print_jobs')
           .insert({
             'business_id': businessId,
-            'area_id': areaId,
-            'order_id': orderId,
-            'check_id': checkId,
-            'type': type,
+            'ip': _extractJobIp(data),
+            'port': _extractJobPort(data),
+            'data_hex': _encodePrintJobPayload(payload),
             'status': 'pending',
-            'data': data,
           })
           .select()
           .single();
@@ -231,8 +395,7 @@ class PrintingRepository {
     try {
       final updates = <String, dynamic>{'status': status};
 
-      if (printerId != null) updates['printer_id'] = printerId;
-      if (errorMessage != null) updates['error_message'] = errorMessage;
+      if (errorMessage != null) updates['error'] = errorMessage;
       if (status == 'printed') {
         updates['printed_at'] = DateTime.now().toIso8601String();
       }
@@ -248,11 +411,7 @@ class PrintingRepository {
     try {
       await _client
           .from('print_jobs')
-          .update({
-            'status': 'pending',
-            'retry_count': 0,
-            'error_message': null,
-          })
+          .update({'status': 'pending', 'error': null})
           .eq('id', jobId);
     } catch (e) {
       throw Exception('Error al reintentar trabajo: $e');
@@ -291,7 +450,11 @@ class PrintingRepository {
 
   /// Eliminar impresora (compatibilidad)
   Future<void> deletePrinter(String printerId) async {
-    await updatePrinter(printerId: printerId, isActive: false);
+    try {
+      await _client.from('printers').delete().eq('id', printerId);
+    } catch (e) {
+      throw Exception('Error al eliminar impresora: $e');
+    }
   }
 
   /// Crear trabajo de test (compatibilidad)
@@ -453,5 +616,101 @@ class PrintingRepository {
     } catch (e) {
       throw Exception('Error al vincular impresora a area: $e');
     }
+  }
+
+  Future<void> setAreaPrinterAssignment({
+    required String businessId,
+    required String areaId,
+    required String printerId,
+    bool printsOrders = false,
+    bool printsPrebills = false,
+    bool printsReceipts = false,
+    int priority = 1,
+  }) async {
+    try {
+      if (!printsOrders && !printsPrebills && !printsReceipts) {
+        throw Exception('Debes indicar al menos un tipo de impresión.');
+      }
+
+      final rows = await _client
+          .from('print_area_printers')
+          .select(
+            'area_id, printer_id, prints_orders, prints_prebills, prints_receipts',
+          )
+          .eq('business_id', businessId)
+          .eq('area_id', areaId);
+
+      for (final row in rows) {
+        final rowPrinterId = row['printer_id']?.toString();
+        if (rowPrinterId == null || rowPrinterId.isEmpty) continue;
+
+        final nextOrders = (row['prints_orders'] == true) && !printsOrders;
+        final nextPrebills =
+            (row['prints_prebills'] == true) && !printsPrebills;
+        final nextReceipts =
+            (row['prints_receipts'] == true) && !printsReceipts;
+
+        final touchesSameType =
+            (printsOrders && row['prints_orders'] == true) ||
+            (printsPrebills && row['prints_prebills'] == true) ||
+            (printsReceipts && row['prints_receipts'] == true);
+
+        if (!touchesSameType || rowPrinterId == printerId) continue;
+
+        if (!nextOrders && !nextPrebills && !nextReceipts) {
+          await _client
+              .from('print_area_printers')
+              .delete()
+              .eq('business_id', businessId)
+              .eq('area_id', areaId)
+              .eq('printer_id', rowPrinterId);
+        } else {
+          await _client
+              .from('print_area_printers')
+              .update({
+                'prints_orders': nextOrders,
+                'prints_prebills': nextPrebills,
+                'prints_receipts': nextReceipts,
+                'enabled': nextOrders || nextPrebills || nextReceipts,
+              })
+              .eq('business_id', businessId)
+              .eq('area_id', areaId)
+              .eq('printer_id', rowPrinterId);
+        }
+      }
+
+      await _client.from('print_area_printers').upsert({
+        'business_id': businessId,
+        'area_id': areaId,
+        'printer_id': printerId,
+        'priority': priority,
+        'enabled': true,
+        'prints_orders': printsOrders,
+        'prints_prebills': printsPrebills,
+        'prints_receipts': printsReceipts,
+      }, onConflict: 'area_id,printer_id');
+    } catch (e) {
+      throw Exception('Error al asignar impresora al área: $e');
+    }
+  }
+
+  String _extractJobIp(Map<String, dynamic> data) {
+    final value = data['ip'];
+    if (value is String && value.trim().isNotEmpty) {
+      return value.trim();
+    }
+    return '127.0.0.1';
+  }
+
+  int _extractJobPort(Map<String, dynamic> data) {
+    final value = data['port'];
+    if (value is int) return value;
+    if (value is String) return int.tryParse(value) ?? 9100;
+    return 9100;
+  }
+
+  String _encodePrintJobPayload(Map<String, dynamic> payload) {
+    final bytes = utf8.encode(jsonEncode(payload));
+    return bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
   }
 }

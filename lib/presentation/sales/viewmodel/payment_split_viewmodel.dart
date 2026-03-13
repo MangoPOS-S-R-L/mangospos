@@ -346,7 +346,12 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
             });
 
         debugPrint('✅ Payment Processed: ${payment.id}');
-        createdPayments.add(payment);
+        createdPayments.add(
+          payment.copyWith(
+            paymentMethodCode: methodId,
+            paymentMethodName: tx.methodLabel,
+          ),
+        );
       }
 
       // Si se pagó un check parcial, limpiar también en backend y local

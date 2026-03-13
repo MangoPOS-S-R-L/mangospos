@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/data/models/sales_models.dart';
+import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
@@ -13,12 +14,12 @@ import 'package:mangopos/presentation/split_bill/widgets/split_bill_modal.dart';
 import 'package:mangopos/presentation/customers/viewmodel/customers_viewmodel.dart';
 
 import 'package:mangopos/presentation/sales/widgets/precheck/pre_check_dialog.dart';
-import 'package:mangopos/presentation/sales/widgets/printer_selection_dialog.dart';
-import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
+import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
 import 'package:mangopos/data/models/table_status.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:mangopos/presentation/sales/view/widgets/product_detail_modal.dart';
 import 'payment_split_screen.dart';
@@ -41,6 +42,151 @@ const double _salesRadiusTab = 12;
 const List<BoxShadow> _salesSoftShadow = [
   BoxShadow(color: Color(0x10000000), blurRadius: 6, offset: Offset(0, 2)),
 ];
+
+class _BusinessReceiptProfile {
+  final String name;
+  final String? legalName;
+  final String? address;
+  final String? phone;
+  final String? rnc;
+
+  const _BusinessReceiptProfile({
+    required this.name,
+    this.legalName,
+    this.address,
+    this.phone,
+    this.rnc,
+  });
+}
+
+Future<_BusinessReceiptProfile> _loadBusinessReceiptProfile(
+  WidgetRef ref,
+) async {
+  final session = ref.read(sessionProvider);
+  final businessId = session.activeBusinessId;
+  final fallbackName = (session.activeBusinessName?.trim().isNotEmpty ?? false)
+      ? session.activeBusinessName!.trim()
+      : 'Negocio';
+
+  if (businessId == null || businessId.isEmpty) {
+    return _BusinessReceiptProfile(name: fallbackName, phone: null);
+  }
+
+  final client = Supabase.instance.client;
+  String? name = fallbackName;
+  String? address;
+  String? phone;
+  String? rnc;
+  String? legalName;
+
+  try {
+    final business = await client
+        .from('businesses')
+        .select('business_name, branch_name, address, phone')
+        .eq('id', businessId)
+        .maybeSingle();
+
+    final branchName = business?['branch_name']?.toString().trim();
+    final businessName = business?['business_name']?.toString().trim();
+    name = branchName?.isNotEmpty == true
+        ? branchName
+        : (businessName?.isNotEmpty == true ? businessName : fallbackName);
+    address = business?['address']?.toString().trim();
+    phone = business?['phone']?.toString().trim();
+  } catch (_) {}
+
+  try {
+    final fiscal = await client
+        .from('fiscal_settings')
+        .select('rnc, business_legal_name')
+        .eq('business_id', businessId)
+        .maybeSingle();
+    rnc = fiscal?['rnc']?.toString().trim();
+    legalName = fiscal?['business_legal_name']?.toString().trim();
+  } catch (_) {}
+
+  return _BusinessReceiptProfile(
+    name: name ?? fallbackName,
+    legalName: legalName,
+    address: address,
+    phone: phone,
+    rnc: rnc,
+  );
+}
+
+Future<String?> _loadWaiterName(WidgetRef ref, String orderId) async {
+  final fallback = ref.read(sessionProvider).userName;
+
+  try {
+    final data = await Supabase.instance.client
+        .from('orders')
+        .select('table_sessions(users(full_name))')
+        .eq('id', orderId)
+        .maybeSingle();
+
+    final tableSession = data?['table_sessions'] as Map<String, dynamic>?;
+    final user = tableSession?['users'] as Map<String, dynamic>?;
+    final fullName = user?['full_name']?.toString().trim();
+    if (fullName != null && fullName.isNotEmpty) {
+      return fullName;
+    }
+  } catch (_) {}
+
+  return fallback;
+}
+
+Future<FiscalDocument?> _loadFiscalDocument(
+  WidgetRef ref,
+  String orderId,
+) async {
+  try {
+    return await ref
+        .read(salesRepositoryProvider)
+        .getOrderFiscalDocument(orderId);
+  } catch (_) {
+    return null;
+  }
+}
+
+Future<void> _showMissingKitchenPrinterDialog(
+  BuildContext context,
+  NoAssignedKitchenPrinterException error,
+) {
+  final areas = error.areaCodes.isEmpty
+      ? 'cocina'
+      : error.areaCodes.join(', ').replaceAll('_', ' ').toUpperCase();
+
+  return showDialog<void>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Row(
+        children: [
+          Icon(Icons.print_disabled_outlined, color: Colors.orange),
+          SizedBox(width: 10),
+          Expanded(child: Text('Impresora no configurada')),
+        ],
+      ),
+      content: Text(
+        'No hay una impresora asignada para $areas.\n\nConfigura una impresora en Ajustes > Impresion de comandas antes de enviar esta orden a cocina.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(),
+          child: const Text('Cerrar'),
+        ),
+        FilledButton.icon(
+          onPressed: () {
+            Navigator.of(dialogContext).pop();
+            context.go(AppRoutes.printingOrders);
+          },
+          icon: const Icon(Icons.settings_outlined, size: 18),
+          label: const Text('Configurar ahora'),
+        ),
+      ],
+    ),
+  );
+}
 
 double _effectiveItemTotal(OrderItem item) {
   return _effectiveItemAmounts(item).total;
@@ -134,33 +280,75 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   }
 
   Future<void> _handleReleaseTable(BuildContext context) async {
+    await _handleVoidCurrentOrder(
+      context,
+      title: 'Liberar mesa',
+      content:
+          'Esto anulará la orden actual y liberará la mesa. ¿Deseas continuar?',
+      confirmLabel: 'Liberar',
+      goToZonesOnSuccess: true,
+    );
+  }
+
+  Future<void> _handleVoidCurrentOrder(
+    BuildContext context, {
+    required String title,
+    required String content,
+    required String confirmLabel,
+    bool goToZonesOnSuccess = false,
+  }) async {
     final orderState = ref.read(currentOrderProvider);
     if (orderState.order == null) return;
 
-    final confirmed = await showDialog<bool>(
+    final sessionCtrl = ref.read(sessionProvider.notifier);
+    final hasDirectPermission = sessionCtrl.hasPermission('ventas.orden.anular');
+    if (!hasDirectPermission) {
+      final authorized = await showPinVerificationModal(
+        context,
+        ref,
+        level: PinAccessLevel.supervisor,
+        title: 'Autorización para anular',
+        subtitle:
+            'Se requiere PIN de Supervisor o Administrador para anular esta orden.',
+      );
+      if (!authorized) return;
+      if (!context.mounted) return;
+    }
+
+    final openItems = orderState.items.where(_isOpenItem).toList(growable: false);
+    final dialogResult = await showDialog<_VoidOrderDialogResult>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Liberar mesa'),
-        content: const Text(
-          'Esto anulará la orden actual y liberará la mesa. ¿Deseas continuar?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Liberar'),
-          ),
-        ],
+      builder: (dialogContext) => _VoidOrderDialog(
+        title: title,
+        content: content,
+        confirmLabel: confirmLabel,
+        openItemsCount: openItems.length,
+        openItemsQty: openItems.fold<double>(0, (sum, item) => sum + item.quantity),
+        totalAmount: openItems.fold<double>(0, (sum, item) => sum + item.total),
       ),
     );
 
-    if (confirmed != true) return;
-    await ref.read(currentOrderProvider.notifier).cancelCurrentOrder();
+    if (dialogResult == null) return;
+
+    await ref
+        .read(currentOrderProvider.notifier)
+        .cancelCurrentOrder(reason: dialogResult.reason);
     if (!context.mounted) return;
-    context.go(AppRoutes.salesByZone);
+
+    final reasonText = dialogResult.reason.trim();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          reasonText.isEmpty
+              ? 'Orden anulada correctamente.'
+              : 'Orden anulada. Motivo: $reasonText',
+        ),
+      ),
+    );
+
+    if (goToZonesOnSuccess) {
+      context.go(AppRoutes.salesByZone);
+    }
   }
 
   Future<void> _handleAssignClient(BuildContext context) async {
@@ -401,6 +589,13 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                   onBack: () => _handleBack(context),
                   showTableActions: widget.origin == OrderOrigin.table,
                   onReleaseTable: () => _handleReleaseTable(context),
+                  onVoidOrder: () => _handleVoidCurrentOrder(
+                    context,
+                    title: 'Anular orden',
+                    content:
+                        'Esta acción anulará la orden actual. Si la mesa no tiene más órdenes activas, también quedará liberada. ¿Deseas continuar?',
+                    confirmLabel: 'Anular',
+                  ),
                   onApplyDiscount: () => _handleApplyDiscount(context),
                   onApplyCourtesy: () => _handleCourtesyByProduct(context),
                 ),
@@ -415,6 +610,131 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       ),
     );
   }
+}
+
+class _VoidOrderDialogResult {
+  final String reason;
+
+  const _VoidOrderDialogResult({required this.reason});
+}
+
+class _VoidOrderDialog extends StatefulWidget {
+  final String title;
+  final String content;
+  final String confirmLabel;
+  final int openItemsCount;
+  final double openItemsQty;
+  final double totalAmount;
+
+  const _VoidOrderDialog({
+    required this.title,
+    required this.content,
+    required this.confirmLabel,
+    required this.openItemsCount,
+    required this.openItemsQty,
+    required this.totalAmount,
+  });
+
+  @override
+  State<_VoidOrderDialog> createState() => _VoidOrderDialogState();
+}
+
+class _VoidOrderDialogState extends State<_VoidOrderDialog> {
+  final TextEditingController _reasonCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _reasonCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final currency = NumberFormat('#,##0.00', 'en_US');
+
+    return AlertDialog(
+      title: Text(widget.title),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(widget.content),
+            const SizedBox(height: 16),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF7ED),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFFED7AA)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Impacto de la anulación',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 8),
+                  Text('Líneas abiertas: ${widget.openItemsCount}'),
+                  Text('Cantidad abierta: ${widget.openItemsQty.toStringAsFixed(widget.openItemsQty % 1 == 0 ? 0 : 2)}'),
+                  Text('Total abierto: RD\$ ${currency.format(widget.totalAmount)}'),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _reasonCtrl,
+              maxLines: 3,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(
+                labelText: 'Motivo de anulación *',
+                hintText: 'Ej: cliente desistió, error de captura, duplicada...',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'El motivo se guardará en la nota de la sesión para dejar rastro operativo.',
+              style: TextStyle(fontSize: 12, color: _salesTextSecondary),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final reason = _reasonCtrl.text.trim();
+            if (reason.isEmpty) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Indica el motivo de la anulación.')),
+              );
+              return;
+            }
+            Navigator.pop(context, _VoidOrderDialogResult(reason: reason));
+          },
+          child: Text(widget.confirmLabel),
+        ),
+      ],
+    );
+  }
+}
+
+String? _extractLatestVoidAudit(String? note) {
+  if (note == null || note.trim().isEmpty) return null;
+  final lines = note
+      .split('\n')
+      .map((line) => line.trim())
+      .where((line) => line.startsWith('[ANULACION]'))
+      .toList(growable: false);
+  if (lines.isEmpty) return null;
+  return lines.last;
 }
 
 // -----------------------------------------------------------------------------
@@ -480,6 +800,18 @@ class _CartView extends ConsumerWidget {
         // INSTANT LOAD: Use data from result + local state
         final payments = result;
         final items = ref.read(currentOrderProvider).items;
+        final businessProfile = await _loadBusinessReceiptProfile(ref);
+        final fiscalDoc = await _loadFiscalDocument(ref, order.id);
+        final waiterName =
+            await _loadWaiterName(ref, order.id) ??
+            ref.read(sessionProvider).userName;
+        final issuedAt =
+            fiscalDoc?.issuedAt ??
+            (payments.isNotEmpty
+                ? payments
+                      .map((payment) => payment.createdAt)
+                      .reduce((a, b) => a.isAfter(b) ? a : b)
+                : order.createdAt);
         // Optional: Filter items if paying a specific check (though strictly we show all items on invoice or filter inside modal)
 
         double totalChange = 0;
@@ -497,6 +829,13 @@ class _CartView extends ConsumerWidget {
               items: items,
               payments: payments,
               tableName: tableName,
+              serverName: waiterName,
+              businessName: businessProfile.name,
+              businessAddress: businessProfile.address,
+              businessPhone: businessProfile.phone,
+              businessRnc: businessProfile.rnc,
+              fiscalNcf: fiscalDoc?.ncfNumber,
+              issuedAt: issuedAt,
               checkId: checkId,
               change: totalChange,
               onNewSale: () {
@@ -511,11 +850,15 @@ class _CartView extends ConsumerWidget {
               onPrint: () {
                 final invoiceData = {
                   'title': '*** FACTURA ***',
-                  'restaurantName': 'MANGO POS RESTAURANT',
-                  'rnc': '101-00000-1',
-                  'phone': '809-555-0101',
+                  'restaurantName': businessProfile.name,
+                  'legalName': businessProfile.legalName,
+                  'rnc': businessProfile.rnc,
+                  'phone': businessProfile.phone,
+                  'address': businessProfile.address,
+                  'ncf': fiscalDoc?.ncfNumber,
+                  'issuedAt': issuedAt.toIso8601String(),
                   'tableName': tableName,
-                  'waiterName': 'Juan Pérez',
+                  'waiterName': waiterName,
                   'items': items
                       .map(
                         (i) => {
@@ -539,7 +882,7 @@ class _CartView extends ConsumerWidget {
                   orderItems: items,
                   payments: payments,
                   tableName: tableName,
-                  waiterName: 'Juan Pérez',
+                  waiterName: waiterName,
                 );
               },
             ),
@@ -736,6 +1079,7 @@ class _CartView extends ConsumerWidget {
       }
     }
     final groupedSentItems = groupedSent.values.toList();
+    final latestVoidAudit = _extractLatestVoidAudit(orderState.sessionNote);
 
     return Column(
       children: [
@@ -831,6 +1175,105 @@ class _CartView extends ConsumerWidget {
                     ),
                   ],
                 ),
+              ],
+            ),
+          ),
+
+        if (orderState.order != null || (orderState.sessionNote?.trim().isNotEmpty ?? false))
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: Column(
+              children: [
+                if (orderState.order != null)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF3F4F6),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: const Color(0xFFE5E7EB)),
+                          ),
+                          child: Text(
+                            'Estado: ${orderState.order!.status.toUpperCase()}',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: _salesTextPrimary,
+                            ),
+                          ),
+                        ),
+                        if (orderState.order!.closedAt != null)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFEFF6FF),
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(color: const Color(0xFFBFDBFE)),
+                            ),
+                            child: Text(
+                              'Cerrada ${DateFormat('dd/MM HH:mm').format(orderState.order!.closedAt!.toLocal())}',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF1D4ED8),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                if (latestVoidAudit != null) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFEF2F2),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFFECACA)),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(Icons.history_toggle_off, color: Color(0xFFDC2626), size: 18),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Última anulación registrada',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF991B1B),
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                latestVoidAudit,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xFF7F1D1D),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -1112,6 +1555,9 @@ class _CartView extends ConsumerWidget {
                             content: Text('Orden enviada a cocina'),
                           ),
                         );
+                      } on NoAssignedKitchenPrinterException catch (e) {
+                        if (!context.mounted) return;
+                        await _showMissingKitchenPrinterDialog(context, e);
                       } catch (e) {
                         if (!context.mounted) return;
                         ScaffoldMessenger.of(context).showSnackBar(
@@ -1161,15 +1607,25 @@ class _CartView extends ConsumerWidget {
                       Expanded(
                         child: _SecondaryActionButton(
                           label: 'Pre-Cuenta',
-                          onPressed: () {
+                          onPressed: () async {
                             if (orderState.order != null) {
+                              final businessProfile =
+                                  await _loadBusinessReceiptProfile(ref);
+                              final waiterName =
+                                  await _loadWaiterName(
+                                    ref,
+                                    orderState.order!.id,
+                                  ) ??
+                                  ref.read(sessionProvider).userName;
+                              if (!context.mounted) return;
                               final preCheckData = {
-                                'restaurantName': 'MANGO POS RESTAURANT',
-                                'rnc': '101-00000-1',
-                                'phone': '809-555-0101',
+                                'restaurantName': businessProfile.name,
+                                'rnc': businessProfile.rnc,
+                                'phone': businessProfile.phone,
+                                'address': businessProfile.address,
                                 'tableName':
                                     '$tableCode ${selectedCheckId != null ? "(Cuentas Separadas)" : ""}',
-                                'waiterName': 'Juan Pérez',
+                                'waiterName': waiterName,
                                 'items': displayedItems
                                     .map(
                                       (i) => {
@@ -1269,51 +1725,36 @@ class _CartView extends ConsumerWidget {
     String? waiterName,
   }) async {
     try {
-      // 1. Obtener repositorio
+      // 1. Obtener repositorio y negocio activo
       final printRepo = ref.read(printingPrintersRepositoryProvider);
-
-      // 2. Cargar impresoras disponibles
-      final printersVm = ref.read(printingPrintersViewModelProvider.notifier);
-      var printers = ref.read(printingPrintersViewModelProvider).items;
-
-      if (printers.isEmpty) {
-        await printersVm.load(businessId: '');
-        printers = ref.read(printingPrintersViewModelProvider).items;
+      final session = ref.read(sessionProvider);
+      final businessId = session.activeBusinessId;
+      if (businessId == null || businessId.isEmpty) {
+        throw Exception('No se pudo resolver el negocio activo para imprimir.');
       }
 
-      // Filtrar impresoras válidas con IP
-      final validPrinters = printers
-          .where((p) => (p.ip?.isNotEmpty ?? false))
-          .toList();
-
-      if (validPrinters.isEmpty) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('No hay impresoras configuradas'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
-        return;
-      }
-
-      // 3. Mostrar diálogo de selección
-      if (!context.mounted) return;
-
-      final PrinterDevice? selected = await showDialog<PrinterDevice>(
-        context: context,
-        builder: (context) => PrinterSelectionDialog(printers: validPrinters),
+      final assignedPrinter = await printRepo.getAssignedPrinterForType(
+        businessId: businessId,
+        preferredAreaCodes: type == 'invoice'
+            ? const ['fiscal', 'cashier']
+            : const ['cashier', 'fiscal'],
+        printsPrebills: type == 'precheck',
+        printsReceipts: type == 'invoice',
       );
 
-      if (selected == null) return; // Cancelado por usuario
-
-      // 4. Enviar al Agente Local
-      final ip = selected.ip?.split('/').first;
-      if (ip == null || ip.isEmpty) {
-        throw Exception('La impresora seleccionada no tiene IP configurada.');
+      if (assignedPrinter == null) {
+        throw Exception(
+          type == 'invoice'
+              ? 'No hay una impresora configurada para recibos/facturas. Ve a Ajustes > Impresión > Comprobantes.'
+              : 'No hay una impresora configurada para precuentas. Ve a Ajustes > Impresión > Comprobantes.',
+        );
       }
-      const fallbackPort = 9100;
+
+      final ip = assignedPrinter.ipAddress?.trim();
+      if (ip == null || ip.isEmpty) {
+        throw Exception('La impresora asignada no tiene IP configurada.');
+      }
+      final port = assignedPrinter.port ?? 9100;
 
       // Si es precuenta y tenemos los objetos, generamos los bytes en Flutter
       if ((type == 'precheck' || type == 'invoice') &&
@@ -1333,6 +1774,11 @@ class _CartView extends ConsumerWidget {
                 businessName: data['restaurantName'] as String?,
                 businessAddress: data['address'] as String?,
                 businessPhone: data['phone'] as String?,
+                businessRnc: data['rnc'] as String?,
+                fiscalNcf: data['ncf'] as String?,
+                issuedAt: data['issuedAt'] == null
+                    ? null
+                    : DateTime.tryParse(data['issuedAt'].toString()),
                 title: title,
               )
             : PrintTicketService.generatePrecheck(
@@ -1354,14 +1800,14 @@ class _CartView extends ConsumerWidget {
           }
           await printRepo.printRawViaAgent(
             ip: ip,
-            port: fallbackPort,
+            port: port,
             data: ticket.escPosCommands,
           );
         } else {
           // En nativo: imprimir directo por TCP
           await printRepo.printRawDirectTcp(
             ip: ip,
-            port: fallbackPort,
+            port: port,
             data: ticket.escPosCommands,
           );
         }
@@ -1370,7 +1816,7 @@ class _CartView extends ConsumerWidget {
         final jobPayload = {
           'id':
               '${type.toUpperCase()}-${DateTime.now().millisecondsSinceEpoch}',
-          'printer': {'type': 'network', 'ip': ip, 'port': fallbackPort},
+          'printer': {'type': 'network', 'ip': ip, 'port': port},
           'content': {
             'type': type, // 'precheck' o 'invoice'
             'data': data,
@@ -1382,7 +1828,7 @@ class _CartView extends ConsumerWidget {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Imprimiendo en ${selected.name}...'),
+            content: Text('Imprimiendo en ${assignedPrinter.name}...'),
             backgroundColor: const Color(0xFF22C55E),
           ),
         );
@@ -1537,6 +1983,7 @@ class _SalesToolsRail extends StatelessWidget {
   final VoidCallback onBack;
   final bool showTableActions;
   final VoidCallback onReleaseTable;
+  final VoidCallback onVoidOrder;
   final VoidCallback onApplyDiscount;
   final VoidCallback onApplyCourtesy;
 
@@ -1544,6 +1991,7 @@ class _SalesToolsRail extends StatelessWidget {
     required this.onBack,
     required this.showTableActions,
     required this.onReleaseTable,
+    required this.onVoidOrder,
     required this.onApplyDiscount,
     required this.onApplyCourtesy,
   });
@@ -1586,6 +2034,11 @@ class _SalesToolsRail extends StatelessWidget {
                     icon: Icons.logout_rounded,
                     label: 'Liberar\nmesa',
                     onTap: onReleaseTable,
+                  ),
+                  _RailButton(
+                    icon: Icons.block_rounded,
+                    label: 'Anular\norden',
+                    onTap: onVoidOrder,
                   ),
                   _RailButton(
                     icon: Icons.percent_rounded,

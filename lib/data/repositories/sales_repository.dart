@@ -115,19 +115,20 @@ class SalesRepository {
     }
   }
 
-  Future<({String? customerId, String? customerName})> getSessionCustomer(
+  Future<({String? customerId, String? customerName, String? note})> getSessionCustomer(
     String sessionId,
   ) async {
     try {
       final data = await _client
           .from('table_sessions')
-          .select('customer_id, customer_name')
+          .select('customer_id, customer_name, note')
           .eq('id', sessionId)
           .maybeSingle();
 
       return (
         customerId: data?['customer_id'] as String?,
         customerName: data?['customer_name'] as String?,
+        note: data?['note'] as String?,
       );
     } catch (e) {
       throw Exception('Error al obtener cliente de la sesión: $e');
@@ -152,6 +153,20 @@ class SalesRepository {
       );
     } catch (e) {
       throw Exception('Error al asignar cliente: $e');
+    }
+  }
+
+  Future<void> updateSessionNote({
+    required String sessionId,
+    String? note,
+  }) async {
+    try {
+      await _client
+          .from('table_sessions')
+          .update({'note': note?.trim().isEmpty == true ? null : note?.trim()})
+          .eq('id', sessionId);
+    } catch (e) {
+      throw Exception('Error al actualizar nota de la sesión: $e');
     }
   }
 

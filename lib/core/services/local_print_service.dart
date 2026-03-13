@@ -3,24 +3,65 @@ import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 
 class LocalPrintService {
-  static const String _baseUrl = 'http://localhost:3000';
+  static const List<String> _baseUrls = [
+    'http://127.0.0.1:4000',
+    'http://localhost:4000',
+    'http://127.0.0.1:3000',
+    'http://localhost:3000',
+    'http://127.0.0.1:9100',
+    'http://localhost:9100',
+    'http://127.0.0.1:9105',
+    'http://localhost:9105',
+  ];
+
+  String? _resolvedBaseUrl;
+
+  Future<String?> _resolveBaseUrl() async {
+    final cached = _resolvedBaseUrl;
+    if (cached != null && await _isHealthy(cached)) {
+      return cached;
+    }
+
+    for (final candidate in _baseUrls) {
+      if (await _isHealthy(candidate)) {
+        _resolvedBaseUrl = candidate;
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  Future<bool> _isHealthy(String baseUrl) async {
+    try {
+      final statusResponse = await http
+          .get(Uri.parse('$baseUrl/status'))
+          .timeout(const Duration(seconds: 2));
+      if (statusResponse.statusCode == 200) {
+        return true;
+      }
+    } catch (_) {}
+
+    try {
+      final healthResponse = await http
+          .get(Uri.parse('$baseUrl/health'))
+          .timeout(const Duration(seconds: 2));
+      if (healthResponse.statusCode != 200) return false;
+
+      final data = json.decode(healthResponse.body);
+      return data['status'] == 'ok' || data['status'] == 'online';
+    } catch (_) {
+      return false;
+    }
+  }
 
   /// Verificar si el agente local está corriendo
   Future<bool> isAgentAvailable() async {
-    try {
-      final response = await http
-          .get(Uri.parse('$_baseUrl/health'))
-          .timeout(const Duration(seconds: 2));
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        return data['status'] == 'ok';
-      }
-      return false;
-    } catch (e) {
-      debugPrint('Local Agent not available: $e');
-      return false;
+    final baseUrl = await _resolveBaseUrl();
+    final available = baseUrl != null;
+    if (!available) {
+      debugPrint('Local Agent not available on known local ports.');
     }
+    return available;
   }
 
   /// Verificar salud de múltiples impresoras
@@ -29,12 +70,12 @@ class LocalPrintService {
   Future<Map<String, bool>> checkConnectivity(
     List<Map<String, dynamic>> printers,
   ) async {
-    return <String, bool>{};
-    /*
-    // Legacy implementation
     try {
+      final baseUrl = await _resolveBaseUrl();
+      if (baseUrl == null) return <String, bool>{};
+
       final response = await http.post(
-        Uri.parse('$_baseUrl/check-connectivity'),
+        Uri.parse('$baseUrl/check-connectivity'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({'printers': printers}),
       );
@@ -48,12 +89,18 @@ class LocalPrintService {
       debugPrint('Error checking connectivity: $e');
       return {};
     }
-    */
   }
 
   /// Enviar trabajo de impresión directo
   /// NOTA: El agente nuevo usa /api/printers/raw o /api/printers/test
   Future<bool> printJob(Map<String, dynamic> jobData) async {
+    final baseUrl = await _resolveBaseUrl();
+    if (baseUrl == null) {
+      throw Exception(
+        'No se puede conectar con el Agente Local. Asegurate de que esté ejecutándose.',
+      );
+    }
+
     // Si es un test, usamos el endpoint de test
     if (jobData['id'] != null && jobData['id'].toString().startsWith('TEST-')) {
       final printer = jobData['printer'] as Map<String, dynamic>?;
@@ -69,7 +116,7 @@ class LocalPrintService {
     // pero muy probablemente falle si el agente no la tiene.
     try {
       final response = await http.post(
-        Uri.parse('$_baseUrl/print'),
+        Uri.parse('$baseUrl/print'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode(jobData),
       );
@@ -88,14 +135,26 @@ class LocalPrintService {
 
   Future<bool> testPrint({required String ip, int port = 9100}) async {
     try {
+      final baseUrl = await _resolveBaseUrl();
+      if (baseUrl == null) return false;
       final response = await http.post(
-        Uri.parse('$_baseUrl/api/printers/test'),
+        Uri.parse('$baseUrl/api/printers/test'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({'ip': ip, 'port': port}),
       );
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         return data['ok'] == true;
+      }
+      if (response.statusCode == 404 || response.statusCode == 405) {
+        return await printJob({
+          'id': 'TEST-${DateTime.now().millisecondsSinceEpoch}',
+          'printer': {'type': 'network', 'ip': ip, 'port': port},
+          'content': {
+            'title': 'Test de Impresión',
+            'body': 'Si lees esto, el Agente Local funciona correctamente.',
+          },
+        });
       }
       return false;
     } catch (e) {
@@ -111,6 +170,13 @@ class LocalPrintService {
     required List<int> data,
   }) async {
     try {
+      final baseUrl = await _resolveBaseUrl();
+      if (baseUrl == null) {
+        throw Exception(
+          'No se puede conectar con el Agente Local. Asegurate de que esté ejecutándose.',
+        );
+      }
+
       final payload = {
         'ip': ip,
         'port': port,
@@ -118,7 +184,7 @@ class LocalPrintService {
       };
 
       final response = await http.post(
-        Uri.parse('$_baseUrl/api/printers/raw'),
+        Uri.parse('$baseUrl/api/printers/raw'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode(payload),
       );
@@ -159,7 +225,7 @@ class LocalPrintService {
       if (e.toString().contains('SocketException') ||
           e.toString().contains('ClientException')) {
         throw Exception(
-          'No se puede conectar con el Agente Local (Puerto 3000). Asegúrate de que esté ejecutándose.',
+          'No se puede conectar con el Agente Local. Asegúrate de que esté ejecutándose.',
         );
       }
       rethrow;
@@ -169,13 +235,24 @@ class LocalPrintService {
   /// Descubrir impresoras en la red
   Future<List<dynamic>> discoverPrinters() async {
     try {
+      final baseUrl = await _resolveBaseUrl();
+      if (baseUrl == null) return [];
+
       final response = await http
-          .get(Uri.parse('$_baseUrl/api/printers/discover'))
+          .get(Uri.parse('$baseUrl/api/printers/discover'))
           .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        return data['items'] as List<dynamic>;
+        if (data is Map<String, dynamic> && data['items'] is List) {
+          return data['items'] as List<dynamic>;
+        }
+        if (data is Map<String, dynamic> && data['discovered'] is List) {
+          return data['discovered'] as List<dynamic>;
+        }
+        if (data is List) {
+          return data;
+        }
       }
       return [];
     } catch (e) {

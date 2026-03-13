@@ -430,6 +430,8 @@ class Payment extends Equatable {
   final String? checkId;
   final String? fiscalDocumentId;
   final String paymentMethodId;
+  final String? paymentMethodCode;
+  final String? paymentMethodName;
   final double amount;
   final String? reference;
   final double changeAmount;
@@ -445,6 +447,8 @@ class Payment extends Equatable {
     this.checkId,
     this.fiscalDocumentId,
     required this.paymentMethodId,
+    this.paymentMethodCode,
+    this.paymentMethodName,
     required this.amount,
     this.reference,
     required this.changeAmount,
@@ -462,6 +466,8 @@ class Payment extends Equatable {
       checkId: map['check_id'],
       fiscalDocumentId: map['fiscal_document_id'],
       paymentMethodId: map['payment_method_id'] ?? '',
+      paymentMethodCode: map['payment_method_code'],
+      paymentMethodName: map['payment_method_name'],
       amount: (map['amount'] ?? 0).toDouble(),
       reference: map['reference'],
       changeAmount: (map['change_amount'] ?? 0).toDouble(),
@@ -480,6 +486,8 @@ class Payment extends Equatable {
     checkId,
     fiscalDocumentId,
     paymentMethodId,
+    paymentMethodCode,
+    paymentMethodName,
     amount,
     reference,
     changeAmount,
@@ -488,6 +496,29 @@ class Payment extends Equatable {
     sessionId,
     createdAt,
   ];
+
+  Payment copyWith({
+    String? paymentMethodCode,
+    String? paymentMethodName,
+  }) {
+    return Payment(
+      id: id,
+      businessId: businessId,
+      orderId: orderId,
+      checkId: checkId,
+      fiscalDocumentId: fiscalDocumentId,
+      paymentMethodId: paymentMethodId,
+      paymentMethodCode: paymentMethodCode ?? this.paymentMethodCode,
+      paymentMethodName: paymentMethodName ?? this.paymentMethodName,
+      amount: amount,
+      reference: reference,
+      changeAmount: changeAmount,
+      status: status,
+      processedBy: processedBy,
+      sessionId: sessionId,
+      createdAt: createdAt,
+    );
+  }
 }
 
 /// 🧾 Documento Fiscal

@@ -60,6 +60,7 @@ class CashierRepository {
     required String sessionId,
     required double endAmount,
     String? notes,
+    bool forceWithOpenTables = false,
   }) async {
     final response = await _client.rpc(
       'fn_close_cash_session',
@@ -67,6 +68,7 @@ class CashierRepository {
         'p_session_id': sessionId,
         'p_end_amount': endAmount,
         'p_notes': notes,
+        'p_force_with_open_tables': forceWithOpenTables,
       },
     );
     return Map<String, dynamic>.from(response);

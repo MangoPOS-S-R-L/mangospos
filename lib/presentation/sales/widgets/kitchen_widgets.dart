@@ -1,7 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:go_router/go_router.dart';
+import 'package:mangopos/app/router/routes.dart';
+import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
+import 'package:mangopos/services/session/session_controller.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 // === SEND TO KITCHEN BUTTON WITH STATE MACHINE ===
 
@@ -19,6 +24,45 @@ class _SendToKitchenButton extends ConsumerStatefulWidget {
 
 class _SendToKitchenButtonState extends ConsumerState<_SendToKitchenButton> {
   KitchenButtonState _state = KitchenButtonState.idle;
+
+  Future<void> _showMissingPrinterDialog(
+    NoAssignedKitchenPrinterException error,
+  ) {
+    final areas = error.areaCodes.isEmpty
+        ? 'cocina'
+        : error.areaCodes.join(', ').replaceAll('_', ' ').toUpperCase();
+
+    return showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.print_disabled_outlined, color: Color(0xFFF97316)),
+            SizedBox(width: 10),
+            Expanded(child: Text('Impresora no configurada')),
+          ],
+        ),
+        content: Text(
+          'No hay una impresora asignada para $areas.\n\nConfigura la impresion de comandas antes de enviar esta orden a cocina.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Cerrar'),
+          ),
+          FilledButton.icon(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              context.go(AppRoutes.printingOrders);
+            },
+            icon: const Icon(Icons.settings_outlined, size: 18),
+            label: const Text('Configurar ahora'),
+          ),
+        ],
+      ),
+    );
+  }
 
   Future<void> _handleSendToKitchen() async {
     final orderNotifier = ref.read(currentOrderProvider.notifier);
@@ -56,6 +100,17 @@ class _SendToKitchenButtonState extends ConsumerState<_SendToKitchenButton> {
       }
 
       // Keep success state for 2 seconds
+      await Future.delayed(const Duration(seconds: 2));
+      if (mounted) {
+        setState(() => _state = KitchenButtonState.idle);
+      }
+    } on NoAssignedKitchenPrinterException catch (e) {
+      setState(() => _state = KitchenButtonState.error);
+
+      if (mounted) {
+        await _showMissingPrinterDialog(e);
+      }
+
       await Future.delayed(const Duration(seconds: 2));
       if (mounted) {
         setState(() => _state = KitchenButtonState.idle);
@@ -171,6 +226,49 @@ void _showPreBillModal(BuildContext context, WidgetRef ref) {
 class _PreBillModal extends ConsumerWidget {
   const _PreBillModal();
 
+  Future<Map<String, String?>> _loadBusinessInfo(WidgetRef ref) async {
+    final session = ref.read(sessionProvider);
+    final businessId = session.activeBusinessId;
+    final fallbackName =
+        (session.activeBusinessName?.trim().isNotEmpty ?? false)
+        ? session.activeBusinessName!.trim()
+        : 'Negocio';
+
+    if (businessId == null || businessId.isEmpty) {
+      return {'name': fallbackName, 'rnc': null};
+    }
+
+    final client = Supabase.instance.client;
+    String? name = fallbackName;
+    String? rnc;
+
+    try {
+      final business = await client
+          .from('businesses')
+          .select('business_name, branch_name')
+          .eq('id', businessId)
+          .maybeSingle();
+      final branchName = business?['branch_name']?.toString().trim();
+      final businessName = business?['business_name']?.toString().trim();
+      if (branchName != null && branchName.isNotEmpty) {
+        name = branchName;
+      } else if (businessName != null && businessName.isNotEmpty) {
+        name = businessName;
+      }
+    } catch (_) {}
+
+    try {
+      final fiscal = await client
+          .from('fiscal_settings')
+          .select('rnc')
+          .eq('business_id', businessId)
+          .maybeSingle();
+      rnc = fiscal?['rnc']?.toString().trim();
+    } catch (_) {}
+
+    return {'name': name, 'rnc': rnc};
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final orderState = ref.watch(currentOrderProvider);
@@ -180,199 +278,215 @@ class _PreBillModal extends ConsumerWidget {
     final tax = total - subtotal;
     final suggestedTip = subtotal * 0.10;
 
-    return Dialog(
-      backgroundColor: Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 480),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Header
-            Container(
-              padding: const EdgeInsets.all(24),
-              decoration: const BoxDecoration(
-                border: Border(bottom: BorderSide(color: Color(0xFFE0DBD9))),
-              ),
-              child: Column(
-                children: [
-                  Text(
-                    'MANGO POS',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'RNC: 123-45678-9',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 12,
-                      color: const Color(0xFF7D726D),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+    return FutureBuilder<Map<String, String?>>(
+      future: _loadBusinessInfo(ref),
+      builder: (context, snapshot) {
+        final businessName = snapshot.data?['name'] ?? 'Negocio';
+        final businessRnc = snapshot.data?['rnc'];
 
-            // Order Info
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: const BoxDecoration(
-                color: Color(0xFFF5F5F4),
-                border: Border(
-                  bottom: BorderSide(
-                    color: Color(0xFFE0DBD9),
-                    style: BorderStyle.solid,
-                    width: 1,
+        return Dialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 480),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Header
+                Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: const BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(color: Color(0xFFE0DBD9)),
+                    ),
                   ),
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  child: Column(
                     children: [
                       Text(
-                        'Fecha:',
-                        style: GoogleFonts.plusJakartaSans(fontSize: 12),
-                      ),
-                      Text(
-                        DateTime.now().toString().substring(0, 16),
-                        style: GoogleFonts.plusJakartaSans(fontSize: 12),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-
-            // Items List
-            Container(
-              constraints: const BoxConstraints(maxHeight: 300),
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    ...items.map(
-                      (item) => Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '${(item.quantity as num).toInt()}x',
-                              style: GoogleFonts.plusJakartaSans(fontSize: 14),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Text(
-                                item.productName,
-                                style: GoogleFonts.plusJakartaSans(
-                                  fontSize: 14,
-                                ),
-                              ),
-                            ),
-                            Text(
-                              'RD\$ ${(item.total as num).toDouble().toStringAsFixed(2)}',
-                              style: GoogleFonts.plusJakartaSans(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-
-            // Totals
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: const BoxDecoration(
-                border: Border(top: BorderSide(color: Color(0xFFE0DBD9))),
-              ),
-              child: Column(
-                children: [
-                  _buildTotalRow('Subtotal:', subtotal),
-                  const SizedBox(height: 8),
-                  _buildTotalRow('ITBIS (18%):', tax),
-                  const SizedBox(height: 8),
-                  _buildTotalRow(
-                    'Propina Sugerida (10%):',
-                    suggestedTip,
-                    isSuccess: true,
-                  ),
-                  const Divider(height: 24),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'TOTAL:',
+                        businessName,
                         style: GoogleFonts.plusJakartaSans(
                           fontSize: 18,
                           fontWeight: FontWeight.w700,
                         ),
                       ),
-                      Text(
-                        'RD\$ ${total.toStringAsFixed(2)}',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 24,
-                          fontWeight: FontWeight.w800,
-                          color: const Color(0xFFF97316),
+                      if (businessRnc != null && businessRnc.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          'RNC: $businessRnc',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 12,
+                            color: const Color(0xFF7D726D),
+                          ),
                         ),
+                      ],
+                    ],
+                  ),
+                ),
+
+                // Order Info
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFF5F5F4),
+                    border: Border(
+                      bottom: BorderSide(
+                        color: Color(0xFFE0DBD9),
+                        style: BorderStyle.solid,
+                        width: 1,
+                      ),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Fecha:',
+                            style: GoogleFonts.plusJakartaSans(fontSize: 12),
+                          ),
+                          Text(
+                            DateTime.now().toString().substring(0, 16),
+                            style: GoogleFonts.plusJakartaSans(fontSize: 12),
+                          ),
+                        ],
                       ),
                     ],
                   ),
-                ],
-              ),
-            ),
-
-            // Disclaimer
-            Container(
-              padding: const EdgeInsets.all(12),
-              color: const Color(0xFFFEF3C7),
-              child: Text(
-                'Esta no es una factura válida\nSolicite su comprobante al pagar',
-                textAlign: TextAlign.center,
-                style: GoogleFonts.plusJakartaSans(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: const Color(0xFF92400E),
                 ),
-              ),
-            ),
 
-            // Close Button
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFF97316),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                  ),
-                  child: Text(
-                    'Cerrar',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white,
+                // Items List
+                Container(
+                  constraints: const BoxConstraints(maxHeight: 300),
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        ...items.map(
+                          (item) => Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '${(item.quantity as num).toInt()}x',
+                                  style: GoogleFonts.plusJakartaSans(
+                                    fontSize: 14,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Text(
+                                    item.productName,
+                                    style: GoogleFonts.plusJakartaSans(
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                ),
+                                Text(
+                                  'RD\$ ${(item.total as num).toDouble().toStringAsFixed(2)}',
+                                  style: GoogleFonts.plusJakartaSans(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
-              ),
+
+                // Totals
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: const BoxDecoration(
+                    border: Border(top: BorderSide(color: Color(0xFFE0DBD9))),
+                  ),
+                  child: Column(
+                    children: [
+                      _buildTotalRow('Subtotal:', subtotal),
+                      const SizedBox(height: 8),
+                      _buildTotalRow('ITBIS (18%):', tax),
+                      const SizedBox(height: 8),
+                      _buildTotalRow(
+                        'Propina Sugerida (10%):',
+                        suggestedTip,
+                        isSuccess: true,
+                      ),
+                      const Divider(height: 24),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'TOTAL:',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          Text(
+                            'RD\$ ${total.toStringAsFixed(2)}',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 24,
+                              fontWeight: FontWeight.w800,
+                              color: const Color(0xFFF97316),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Disclaimer
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  color: const Color(0xFFFEF3C7),
+                  child: Text(
+                    'Esta no es una factura válida\nSolicite su comprobante al pagar',
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: const Color(0xFF92400E),
+                    ),
+                  ),
+                ),
+
+                // Close Button
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFF97316),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      child: Text(
+                        'Cerrar',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 

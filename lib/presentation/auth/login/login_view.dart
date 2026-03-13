@@ -10,23 +10,18 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'login_viewmodel.dart';
 
-// --- Colores MangoPOS ---
 const _orange = Color(0xFFF97316);
 const _white = Color(0xFFFFFFFF);
 const _dark = Color(0xFF32363F);
 
 class LoginView extends ConsumerStatefulWidget {
   const LoginView({super.key});
+
   @override
   ConsumerState<LoginView> createState() => _LoginViewState();
 }
 
 class _LoginViewState extends ConsumerState<LoginView> {
-  @override
-  void dispose() {
-    super.dispose();
-  }
-
   @override
   Widget build(BuildContext context) {
     ref.listen<SessionState>(sessionProvider, (prev, next) {
@@ -35,7 +30,6 @@ class _LoginViewState extends ConsumerState<LoginView> {
       }
     });
 
-    // Listen for errors to show SnackBar
     ref.listen(loginVmProvider, (prev, next) {
       if (prev?.isLoading == true &&
           next.isLoading == false &&
@@ -56,8 +50,6 @@ class _LoginViewState extends ConsumerState<LoginView> {
 
     final state = ref.watch(loginVmProvider);
     final vm = ref.read(loginVmProvider.notifier);
-
-    final data = state;
     final isLoading = state.isLoading;
     final isWide = MediaQuery.of(context).size.width >= 980;
 
@@ -69,7 +61,7 @@ class _LoginViewState extends ConsumerState<LoginView> {
           elevation: 0,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
-            side: BorderSide(color: _dark.withOpacity(.08)),
+            side: BorderSide(color: _dark.withValues(alpha: .08)),
           ),
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -77,7 +69,6 @@ class _LoginViewState extends ConsumerState<LoginView> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Branding
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -128,7 +119,8 @@ class _LoginViewState extends ConsumerState<LoginView> {
                 _label('Contraseña'),
                 const SizedBox(height: 8),
                 _PasswordField(
-                  initial: data.password,
+                  initial: state.password,
+                  enabled: !isLoading,
                   onChanged: vm.setPassword,
                 ),
                 const SizedBox(height: 24),
@@ -158,6 +150,20 @@ class _LoginViewState extends ConsumerState<LoginView> {
                   ),
                 ),
 
+                const SizedBox(height: 12),
+                TextButton(
+                  onPressed: isLoading ? null : () => context.go(AppRoutes.register),
+                  style: TextButton.styleFrom(
+                    foregroundColor: _orange,
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                  child: const Text(
+                    '¿No tienes cuenta? Registra tu negocio',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+
                 if (state.error != null) ...[
                   const SizedBox(height: 12),
                   Text(
@@ -169,16 +175,15 @@ class _LoginViewState extends ConsumerState<LoginView> {
 
                 const SizedBox(height: 8),
                 Text(
-                  'Si no tienes cuenta, contacta al administrador.',
-                  style: TextStyle(color: _dark.withOpacity(.65), fontSize: 11),
+                  'Ingresa desde app.mangopos.do y luego podras conectar la redirección al subdominio de cada negocio.',
+                  style: TextStyle(color: _dark.withValues(alpha: .65), fontSize: 11),
                   textAlign: TextAlign.center,
                 ),
 
-                // DEBUG INFO
                 if (kDebugMode || kIsWeb) ...[
                   const SizedBox(height: 20),
                   const Divider(),
-                  Center(
+                  const Center(
                     child: Text(
                       'WASM Build - Debug Mode\nRev: 1.0.1',
                       textAlign: TextAlign.center,
@@ -244,11 +249,11 @@ class _LoginViewState extends ConsumerState<LoginView> {
 
   InputDecoration _inputDecoration(String hint) => InputDecoration(
     hintText: hint,
-    hintStyle: TextStyle(color: _dark.withOpacity(.45)),
+    hintStyle: TextStyle(color: _dark.withValues(alpha: .45)),
     filled: true,
     fillColor: _white,
     focusedBorder: _border(_orange),
-    enabledBorder: _border(_dark.withOpacity(.25)),
+    enabledBorder: _border(_dark.withValues(alpha: .25)),
     errorBorder: _border(Colors.redAccent),
     focusedErrorBorder: _border(Colors.redAccent),
     contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
@@ -260,7 +265,6 @@ class _LoginViewState extends ConsumerState<LoginView> {
   );
 }
 
-// --------------------- VIDEO PANE ---------------------
 class _VideoPane extends StatefulWidget {
   final double? height;
   const _VideoPane({this.height});
@@ -293,13 +297,9 @@ class _VideoPaneState extends State<_VideoPane> {
   }
 
   void _initializeWebVideo() {
-    // For web, we'll use a simple placeholder that can be enhanced later
     _webViewType =
         'mangopos-login-video-${DateTime.now().microsecondsSinceEpoch}';
-
-    // Register a basic HTML video element using a workaround
     _registerWebVideo();
-
     if (mounted) {
       setState(() {
         _isInitialized = true;
@@ -308,12 +308,8 @@ class _VideoPaneState extends State<_VideoPane> {
   }
 
   void _registerWebVideo() {
-    // This is a simplified approach that avoids compile-time issues
-    // In a real scenario, you might want to create separate web/native implementations
     if (kIsWeb && _webViewType != null) {
-      // For now, we'll just mark as initialized
-      // The actual web video implementation would go in a separate web-specific file
-      print('Web video initialization for $_webViewType');
+      debugPrint('Web video initialization for $_webViewType');
     }
   }
 
@@ -332,10 +328,10 @@ class _VideoPaneState extends State<_VideoPane> {
         });
       }
     } catch (e) {
-      print('Error initializing native video: $e');
+      debugPrint('Error initializing native video: $e');
       if (mounted) {
         setState(() {
-          _isInitialized = true; // Show placeholder instead
+          _isInitialized = true;
         });
       }
     }
@@ -354,7 +350,7 @@ class _VideoPaneState extends State<_VideoPane> {
   Widget build(BuildContext context) {
     if (!_isInitialized) {
       return Container(
-        color: _dark.withOpacity(.06),
+        color: _dark.withValues(alpha: .06),
         child: const Center(child: CircularProgressIndicator()),
       );
     }
@@ -362,12 +358,11 @@ class _VideoPaneState extends State<_VideoPane> {
     Widget videoWidget;
 
     if (!_useNativeVideo) {
-      // For web/Windows builds, show a placeholder.
       final placeholderText = kIsWeb
           ? 'Video no disponible en Web'
           : 'Video no disponible en Windows';
       videoWidget = Container(
-        color: _dark.withOpacity(.06),
+        color: _dark.withValues(alpha: .06),
         child: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -388,10 +383,9 @@ class _VideoPaneState extends State<_VideoPane> {
         ),
       );
     } else {
-      // Desktop/mobile implementation with media_kit
       videoWidget = _controller == null
           ? Container(
-              color: _dark.withOpacity(.06),
+              color: _dark.withValues(alpha: .06),
               child: const Center(
                 child: Text(
                   'Video not available',
@@ -413,11 +407,16 @@ class _VideoPaneState extends State<_VideoPane> {
   }
 }
 
-// ---------------- PASSWORD FIELD ----------------
 class _PasswordField extends StatefulWidget {
   final String initial;
+  final bool enabled;
   final ValueChanged<String> onChanged;
-  const _PasswordField({required this.initial, required this.onChanged});
+
+  const _PasswordField({
+    required this.initial,
+    required this.enabled,
+    required this.onChanged,
+  });
 
   @override
   State<_PasswordField> createState() => _PasswordFieldState();
@@ -430,6 +429,7 @@ class _PasswordFieldState extends State<_PasswordField> {
   Widget build(BuildContext context) {
     return TextFormField(
       initialValue: widget.initial,
+      enabled: widget.enabled,
       style: const TextStyle(color: _dark),
       obscureText: _obscure,
       onChanged: widget.onChanged,
@@ -437,18 +437,18 @@ class _PasswordFieldState extends State<_PasswordField> {
           (v == null || v.length < 6) ? 'Minimo 6 caracteres' : null,
       decoration: InputDecoration(
         hintText: '********',
-        hintStyle: TextStyle(color: _dark.withOpacity(.45)),
+        hintStyle: TextStyle(color: _dark.withValues(alpha: .45)),
         filled: true,
         fillColor: _white,
         focusedBorder: _b(_orange),
-        enabledBorder: _b(_dark.withOpacity(.25)),
+        enabledBorder: _b(_dark.withValues(alpha: .25)),
         errorBorder: _b(Colors.redAccent),
         focusedErrorBorder: _b(Colors.redAccent),
         suffixIcon: IconButton(
           onPressed: () => setState(() => _obscure = !_obscure),
           icon: Icon(
             _obscure ? Icons.visibility_off : Icons.visibility,
-            color: _dark.withOpacity(.7),
+            color: _dark.withValues(alpha: .7),
           ),
         ),
         contentPadding: const EdgeInsets.symmetric(

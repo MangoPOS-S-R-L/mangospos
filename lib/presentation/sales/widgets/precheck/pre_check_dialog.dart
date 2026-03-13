@@ -63,7 +63,10 @@ class PreCheckDialog extends StatelessWidget {
                   children: [
                     // Restaurant Info
                     Text(
-                      data['restaurantName'] ?? 'REST. MANGO POS',
+                      (data['restaurantName']?.toString().trim().isNotEmpty ??
+                              false)
+                          ? data['restaurantName'].toString().trim()
+                          : 'Negocio',
                       textAlign: TextAlign.center,
                       style: GoogleFonts.inter(
                         fontWeight: FontWeight.bold,
@@ -72,22 +75,24 @@ class PreCheckDialog extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      'RNC: ${data['rnc'] ?? '000-00000-0'}',
-                      textAlign: TextAlign.center,
-                      style: GoogleFonts.inter(
-                        fontSize: 12,
-                        color: Colors.grey[600],
+                    if (data['rnc']?.toString().trim().isNotEmpty ?? false)
+                      Text(
+                        'RNC: ${data['rnc'].toString().trim()}',
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                        ),
                       ),
-                    ),
-                    Text(
-                      'Tel: ${data['phone'] ?? '809-555-0000'}',
-                      textAlign: TextAlign.center,
-                      style: GoogleFonts.inter(
-                        fontSize: 12,
-                        color: Colors.grey[600],
+                    if (data['phone']?.toString().trim().isNotEmpty ?? false)
+                      Text(
+                        'Tel: ${data['phone'].toString().trim()}',
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                        ),
                       ),
-                    ),
 
                     const Padding(
                       padding: EdgeInsets.symmetric(vertical: 16),

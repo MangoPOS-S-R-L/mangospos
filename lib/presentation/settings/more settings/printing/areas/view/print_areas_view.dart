@@ -735,7 +735,7 @@ class _EditPrinterDialog extends StatefulWidget {
 }
 
 class _EditPrinterDialogState extends State<_EditPrinterDialog> {
-  Set<String> selectedPrinterIds = {};
+  String? selectedPrinterId;
 
   @override
   Widget build(BuildContext context) {
@@ -801,20 +801,14 @@ class _EditPrinterDialogState extends State<_EditPrinterDialog> {
                       itemBuilder: (context, index) {
                         final printer = widget.printers[index];
                         final printerId = printer.id;
-                        final isSelected = selectedPrinterIds.contains(
-                          printerId,
-                        );
+                        final isSelected = selectedPrinterId == printerId;
 
                         return _PrinterListItem(
                           printer: printer,
                           isSelected: isSelected,
                           onTap: () {
                             setState(() {
-                              if (isSelected) {
-                                selectedPrinterIds.remove(printerId);
-                              } else {
-                                selectedPrinterIds.add(printerId);
-                              }
+                              selectedPrinterId = isSelected ? null : printerId;
                             });
                           },
                         );
@@ -848,22 +842,16 @@ class _EditPrinterDialogState extends State<_EditPrinterDialog> {
                     ),
                   ),
                   FilledButton.icon(
-                    onPressed: selectedPrinterIds.isEmpty
+                    onPressed: selectedPrinterId == null
                         ? null
                         : () async {
-                            // Asignar impresoras seleccionadas
-                            bool allSuccess = true;
-                            for (final printerId in selectedPrinterIds) {
-                              final success = await widget.vmCtrl
-                                  .linkAreaPrinter(
-                                    areaId: widget.area.id,
-                                    printerId: printerId,
-                                  );
-                              if (!success) allSuccess = false;
-                            }
+                            final success = await widget.vmCtrl.linkAreaPrinter(
+                              areaId: widget.area.id,
+                              printerId: selectedPrinterId!,
+                            );
 
                             if (context.mounted) {
-                              Navigator.of(context).pop(allSuccess);
+                              Navigator.of(context).pop(success);
                             }
                           },
                     icon: const Icon(Icons.add_circle, size: 20),

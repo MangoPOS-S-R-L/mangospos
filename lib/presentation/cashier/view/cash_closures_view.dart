@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/data/models/payment_models.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class CashClosuresView extends ConsumerStatefulWidget {
   const CashClosuresView({super.key});
@@ -14,6 +17,31 @@ class CashClosuresView extends ConsumerStatefulWidget {
 
 class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
   late Future<List<CashRegisterSession>> _future;
+  Map<String, String> _cashierNames = const {};
+
+  ({double cash, double card, double transfer, double total}) _reportedBreakdown(
+    CashRegisterSession session,
+  ) {
+    final notes = session.notes ?? '';
+
+    double extract(String label) {
+      final match = RegExp('$label:\\s*([0-9]+(?:\\.[0-9]+)?)').firstMatch(notes);
+      if (match == null) return 0;
+      return double.tryParse(match.group(1) ?? '') ?? 0;
+    }
+
+    final cash = extract('Efectivo');
+    final card = extract('Tarjetas');
+    final transfer = extract('Transferencias');
+    final total = extract('Total reportado');
+
+    return (
+      cash: cash,
+      card: card,
+      transfer: transfer,
+      total: total > 0 ? total : cash + card + transfer,
+    );
+  }
 
   @override
   void initState() {
@@ -25,11 +53,57 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
     final vm = ref.read(cashierViewModelProvider);
     final registerId = vm.currentRegisterId;
     if (registerId == null || registerId.isEmpty) {
+      if (mounted) {
+        setState(() => _cashierNames = const {});
+      }
       return [];
     }
-    return ref
+
+    final sessions = await ref
         .read(cashierRepositoryProvider)
         .getSessionsByRegister(registerId);
+    final names = await _loadCashierNames(sessions);
+    if (mounted) {
+      setState(() => _cashierNames = names);
+    }
+    return sessions;
+  }
+
+  Future<Map<String, String>> _loadCashierNames(
+    List<CashRegisterSession> sessions,
+  ) async {
+    final userIds = sessions
+        .map((session) => session.userId.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (userIds.isEmpty) return const {};
+
+    try {
+      final rows = await Supabase.instance.client
+          .from('profiles')
+          .select('id, full_name')
+          .inFilter('id', userIds);
+
+      final map = <String, String>{};
+      for (final row in List<Map<String, dynamic>>.from(rows)) {
+        final id = row['id']?.toString();
+        final name = row['full_name']?.toString().trim();
+        if (id == null || id.isEmpty) continue;
+        if (name == null || name.isEmpty) continue;
+        map[id] = name;
+      }
+      return map;
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  String _resolveCashierName(CashRegisterSession session) {
+    final resolved = _cashierNames[session.userId]?.trim();
+    if (resolved != null && resolved.isNotEmpty) return resolved;
+    if (session.userId.trim().isEmpty) return 'No identificado';
+    return 'Usuario ${session.userId.substring(0, 8).toUpperCase()}';
   }
 
   Future<void> _reload() async {
@@ -58,6 +132,13 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
       final expectedAmount =
           (summary["expected_amount"] as num?)?.toDouble() ??
           (totalSales + totalDeposits - totalWithdrawals - totalExpenses);
+      final expectedCash =
+          (summary["expected_cash"] as num?)?.toDouble() ?? expectedAmount;
+      final expectedCard = (summary["expected_card"] as num?)?.toDouble() ?? 0;
+      final expectedTransfer =
+          (summary["expected_transfer"] as num?)?.toDouble() ?? 0;
+      final reported = _reportedBreakdown(session);
+      final cashierName = _resolveCashierName(session);
       showDialog<void>(
         context: context,
         builder: (context) => AlertDialog(
@@ -66,6 +147,8 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Text('Cajero: $cashierName'),
+              const SizedBox(height: 4),
               Text(
                 'Monto inicial: ${currency.format((summary["start_amount"] as num?)?.toDouble() ?? 0)}',
               ),
@@ -73,8 +156,20 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
               Text('Depósitos: ${currency.format(totalDeposits)}'),
               Text('Retiros: ${currency.format(totalWithdrawals)}'),
               Text('Gastos: ${currency.format(totalExpenses)}'),
+              const SizedBox(height: 8),
+              Text('Esperado efectivo: ${currency.format(expectedCash)}'),
+              Text('Esperado tarjeta: ${currency.format(expectedCard)}'),
+              Text(
+                'Esperado transferencia: ${currency.format(expectedTransfer)}',
+              ),
+              const SizedBox(height: 8),
+              Text('Reportado efectivo: ${currency.format(reported.cash)}'),
+              Text('Reportado tarjeta: ${currency.format(reported.card)}'),
+              Text(
+                'Reportado transferencia: ${currency.format(reported.transfer)}',
+              ),
               Text('Esperado: ${currency.format(expectedAmount)}'),
-              Text('Monto final: ${currency.format(session.endAmount ?? 0)}'),
+              Text('Monto final: ${currency.format(reported.total)}'),
               Text('Diferencia: ${currency.format(session.difference)}'),
             ],
           ),
@@ -106,6 +201,10 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
         backgroundColor: Colors.white,
         foregroundColor: Colors.black87,
         elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => context.go(AppRoutes.cashier),
+        ),
       ),
       body: RefreshIndicator(
         onRefresh: _reload,
@@ -147,11 +246,16 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
                 final color = isOpen
                     ? MangoColors.successGreen
                     : MangoColors.primaryOrange;
+                final reported = _reportedBreakdown(session);
+                final reportedTotal = reported.total > 0
+                    ? reported.total
+                    : (session.endAmount ?? 0);
                 final closedAt = session.closedAt != null
                     ? DateFormat(
                         'dd/MM/yyyy HH:mm',
                       ).format(session.closedAt!.toLocal())
                     : 'Pendiente';
+                final cashierName = _resolveCashierName(session);
 
                 return Container(
                   decoration: BoxDecoration(
@@ -180,9 +284,14 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
                           'Apertura: ${DateFormat('dd/MM/yyyy HH:mm').format(session.openedAt.toLocal())}',
                         ),
                         Text('Cierre: $closedAt'),
+                        Text('Cajero: $cashierName'),
                         Text(
-                          'Inicio: RD\$ ${session.startAmount.toStringAsFixed(2)} · Final: RD\$ ${(session.endAmount ?? 0).toStringAsFixed(2)}',
+                          'Inicio: RD\$ ${session.startAmount.toStringAsFixed(2)} · Final: RD\$ ${reportedTotal.toStringAsFixed(2)}',
                         ),
+                        if (!isOpen)
+                          Text(
+                            'Efectivo: RD\$ ${reported.cash.toStringAsFixed(2)} · Tarjeta: RD\$ ${reported.card.toStringAsFixed(2)} · Transferencia: RD\$ ${reported.transfer.toStringAsFixed(2)}',
+                          ),
                         if (!isOpen)
                           Text(
                             'Diferencia: RD\$ ${session.difference.toStringAsFixed(2)}',

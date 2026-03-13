@@ -1,15 +1,25 @@
-import 'package:meta/meta.dart';
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
 
 /// Connection types supported by the printing service.
 enum PrinterType { network, bluetooth, usb }
 
 extension PrinterTypeX on PrinterType {
   static PrinterType fromName(String? value) {
-    if (value == null) return PrinterType.network;
-    return PrinterType.values.firstWhere(
-      (type) => type.name == value,
-      orElse: () => PrinterType.network,
-    );
+    final normalized = value?.trim().toLowerCase();
+    switch (normalized) {
+      case 'bluetooth':
+      case 'bt':
+        return PrinterType.bluetooth;
+      case 'usb':
+        return PrinterType.usb;
+      case 'network':
+      case 'tcp':
+      case 'lan':
+      default:
+        return PrinterType.network;
+    }
   }
 
   String get label {
@@ -49,20 +59,31 @@ class PrinterDevice {
   final DateTime createdAt;
 
   factory PrinterDevice.fromMap(Map<String, dynamic> map) {
+    final normalized = PrinterFieldMapper.normalize(map);
     return PrinterDevice(
-      id: map['id'] as String,
-      businessId: map['business_id'] as String,
-      name: (map['name'] as String?) ?? 'Printer',
-      ip: map['ip']?.toString(),
-      mac: map['mac'] as String?,
-      type: PrinterTypeX.fromName(map['type'] as String?),
-      online: (map['online'] as bool?) ?? false,
-      lastSeen: map['last_seen'] == null
-          ? null
-          : DateTime.parse(map['last_seen'] as String),
-      createdAt: map['created_at'] == null
-          ? DateTime.now()
-          : DateTime.parse(map['created_at'] as String),
+      id: normalized['id'] as String,
+      businessId: normalized['business_id'] as String,
+      name: normalized['name'] as String,
+      ip: normalized['ip'] as String?,
+      mac: normalized['mac'] as String?,
+      type: PrinterTypeX.fromName(normalized['type'] as String?),
+      online: normalized['online'] as bool,
+      lastSeen: normalized['last_seen'] as DateTime?,
+      createdAt: normalized['created_at'] as DateTime,
+    );
+  }
+
+  factory PrinterDevice.fromConfig(PrinterConfig config) {
+    return PrinterDevice(
+      id: config.id,
+      businessId: config.businessId,
+      name: config.name,
+      ip: config.ipAddress,
+      mac: config.mac,
+      type: config.printerType,
+      online: config.online,
+      lastSeen: config.lastSeen,
+      createdAt: config.createdAt,
     );
   }
 
@@ -74,11 +95,38 @@ class PrinterDevice {
       'business_id': businessId,
       'name': name,
       'ip': ipValue == null || ipValue.isEmpty ? null : ipValue,
+      'ip_address': ipValue == null || ipValue.isEmpty ? null : ipValue,
       'mac': macValue == null || macValue.isEmpty ? null : macValue,
       'type': type.name,
       'online': online,
+      'is_active': online,
       'last_seen': lastSeen?.toIso8601String(),
+      'created_at': createdAt.toIso8601String(),
     };
+  }
+
+  PrinterDevice copyWith({
+    String? id,
+    String? businessId,
+    String? name,
+    String? ip,
+    String? mac,
+    PrinterType? type,
+    bool? online,
+    DateTime? lastSeen,
+    DateTime? createdAt,
+  }) {
+    return PrinterDevice(
+      id: id ?? this.id,
+      businessId: businessId ?? this.businessId,
+      name: name ?? this.name,
+      ip: ip ?? this.ip,
+      mac: mac ?? this.mac,
+      type: type ?? this.type,
+      online: online ?? this.online,
+      lastSeen: lastSeen ?? this.lastSeen,
+      createdAt: createdAt ?? this.createdAt,
+    );
   }
 }
 
@@ -170,9 +218,12 @@ class PrinterConfig {
   final String? ipAddress;
   final int? port;
   final String? devicePath;
+  final String? mac;
   final bool isActive;
   final int paperWidth; // 58mm, 80mm
   final String encoding; // 'CP437', 'CP850', 'UTF-8'
+  final DateTime? lastSeen;
+  final DateTime createdAt;
 
   const PrinterConfig({
     required this.id,
@@ -182,29 +233,61 @@ class PrinterConfig {
     this.ipAddress,
     this.port,
     this.devicePath,
+    this.mac,
     required this.isActive,
     this.paperWidth = 80,
     this.encoding = 'CP437',
+    this.lastSeen,
+    required this.createdAt,
   });
 
   factory PrinterConfig.fromMap(Map<String, dynamic> map) {
+    final normalized = PrinterFieldMapper.normalize(map);
     return PrinterConfig(
-      id: map['id'] ?? '',
-      businessId: map['business_id'] ?? '',
-      name: map['name'] ?? '',
-      type: map['type'] ?? 'network',
-      ipAddress: map['ip_address'],
-      port: map['port'],
-      devicePath: map['device_path'],
-      isActive: map['is_active'] ?? true,
-      paperWidth: map['paper_width'] ?? 80,
-      encoding: map['encoding'] ?? 'CP437',
+      id: normalized['id'] as String,
+      businessId: normalized['business_id'] as String,
+      name: normalized['name'] as String,
+      type: (normalized['type'] as String?) ?? PrinterType.network.name,
+      ipAddress: normalized['ip'] as String?,
+      port: normalized['port'] as int?,
+      devicePath: normalized['device_path'] as String?,
+      mac: normalized['mac'] as String?,
+      isActive: normalized['online'] as bool,
+      paperWidth: normalized['paper_width'] as int,
+      encoding: normalized['encoding'] as String,
+      lastSeen: normalized['last_seen'] as DateTime?,
+      createdAt: normalized['created_at'] as DateTime,
     );
   }
 
-  bool get isNetwork => type == 'network';
-  bool get isUSB => type == 'usb';
-  bool get isBluetooth => type == 'bluetooth';
+  bool get isNetwork => printerType == PrinterType.network;
+  bool get isUSB => printerType == PrinterType.usb;
+  bool get isBluetooth => printerType == PrinterType.bluetooth;
+  PrinterType get printerType => PrinterTypeX.fromName(type);
+  bool get online => isActive;
+  String? get ip => ipAddress;
+
+  Map<String, dynamic> toMap() {
+    final ipValue = ipAddress?.trim();
+    final macValue = mac?.trim();
+    return {
+      'id': id,
+      'business_id': businessId,
+      'name': name,
+      'type': printerType.name,
+      'ip': ipValue == null || ipValue.isEmpty ? null : ipValue,
+      'ip_address': ipValue == null || ipValue.isEmpty ? null : ipValue,
+      'port': port,
+      'device_path': devicePath,
+      'mac': macValue == null || macValue.isEmpty ? null : macValue,
+      'online': isActive,
+      'is_active': isActive,
+      'paper_width': paperWidth,
+      'encoding': encoding,
+      'last_seen': lastSeen?.toIso8601String(),
+      'created_at': createdAt.toIso8601String(),
+    };
+  }
 }
 
 /// 📄 Trabajo de impresión
@@ -215,8 +298,7 @@ class PrintJob {
   final String areaId;
   final String? orderId;
   final String? checkId;
-  final String
-  type; // 'kitchen_order', 'precheck', 'fiscal_invoice', 'cash_close'
+  final String type; // 'kitchen_order', 'precheck', 'fiscal_invoice', 'cash_close'
   final String status; // 'pending', 'printing', 'printed', 'failed'
   final Map<String, dynamic> data;
   final String? printerId;
@@ -242,18 +324,25 @@ class PrintJob {
   });
 
   factory PrintJob.fromMap(Map<String, dynamic> map) {
+    final payload = _decodePrintJobPayload(map['data_hex']);
+    final payloadData = payload['data'];
+
     return PrintJob(
       id: map['id'] ?? '',
       businessId: map['business_id'] ?? '',
-      areaId: map['area_id'] ?? '',
-      orderId: map['order_id'],
-      checkId: map['check_id'],
-      type: map['type'] ?? '',
+      areaId: map['area_id'] ?? payload['area_id'] ?? '',
+      orderId: map['order_id'] ?? payload['order_id'],
+      checkId: map['check_id'] ?? payload['check_id'],
+      type: map['type'] ?? payload['type'] ?? '',
       status: map['status'] ?? 'pending',
-      data: Map<String, dynamic>.from(map['data'] ?? {}),
+      data: map['data'] is Map<String, dynamic>
+          ? Map<String, dynamic>.from(map['data'])
+          : payloadData is Map<String, dynamic>
+          ? Map<String, dynamic>.from(payloadData)
+          : {},
       printerId: map['printer_id'],
       retryCount: map['retry_count'] ?? 0,
-      errorMessage: map['error_message'],
+      errorMessage: map['error_message'] ?? map['error'],
       createdAt: DateTime.tryParse(map['created_at'] ?? '') ?? DateTime.now(),
       printedAt: map['printed_at'] != null
           ? DateTime.tryParse(map['printed_at'])
@@ -279,4 +368,90 @@ class PrintTicket {
     required this.escPosCommands,
     this.rawText,
   });
+}
+
+final class PrinterFieldMapper {
+  const PrinterFieldMapper._();
+
+  static Map<String, dynamic> normalize(Map<String, dynamic> map) {
+    final ip = _readString(map, const ['ip', 'ip_address']);
+    final rawType = _readString(map, const ['type']);
+    final printerType = PrinterTypeX.fromName(rawType);
+
+    return {
+      'id': _readString(map, const ['id']) ?? '',
+      'business_id': _readString(map, const ['business_id']) ?? '',
+      'name': _readString(map, const ['name']) ?? 'Printer',
+      'ip': ip,
+      'mac': _readString(map, const ['mac']),
+      'type': printerType.name,
+      'online': _readBool(map, const ['online', 'is_active']) ?? false,
+      'last_seen': _readDateTime(map, const ['last_seen']),
+      'created_at': _readDateTime(map, const ['created_at']) ?? DateTime.now(),
+      'port': _readInt(map, const ['port']),
+      'device_path': _readString(map, const ['device_path']),
+      'paper_width': _readInt(map, const ['paper_width']) ?? 80,
+      'encoding': _readString(map, const ['encoding']) ?? 'CP437',
+    };
+  }
+
+  static String? _readString(Map<String, dynamic> map, List<String> keys) {
+    for (final key in keys) {
+      final value = map[key];
+      if (value == null) continue;
+      final text = value.toString().trim();
+      if (text.isNotEmpty) return text;
+    }
+    return null;
+  }
+
+  static bool? _readBool(Map<String, dynamic> map, List<String> keys) {
+    for (final key in keys) {
+      final value = map[key];
+      if (value == null) continue;
+      if (value is bool) return value;
+      if (value is num) return value != 0;
+      final normalized = value.toString().trim().toLowerCase();
+      if (normalized == 'true' || normalized == '1') return true;
+      if (normalized == 'false' || normalized == '0') return false;
+    }
+    return null;
+  }
+
+  static int? _readInt(Map<String, dynamic> map, List<String> keys) {
+    for (final key in keys) {
+      final value = map[key];
+      if (value == null) continue;
+      if (value is int) return value;
+      if (value is num) return value.toInt();
+      final parsed = int.tryParse(value.toString().trim());
+      if (parsed != null) return parsed;
+    }
+    return null;
+  }
+
+  static DateTime? _readDateTime(Map<String, dynamic> map, List<String> keys) {
+    for (final key in keys) {
+      final value = map[key];
+      if (value == null) continue;
+      if (value is DateTime) return value;
+      final parsed = DateTime.tryParse(value.toString());
+      if (parsed != null) return parsed;
+    }
+    return null;
+  }
+}
+
+Map<String, dynamic> _decodePrintJobPayload(dynamic rawHex) {
+  if (rawHex is! String || rawHex.isEmpty) return const {};
+  try {
+    final bytes = <int>[];
+    for (var i = 0; i < rawHex.length; i += 2) {
+      bytes.add(int.parse(rawHex.substring(i, i + 2), radix: 16));
+    }
+    final decoded = jsonDecode(utf8.decode(bytes));
+    return decoded is Map<String, dynamic> ? decoded : const {};
+  } catch (_) {
+    return const {};
+  }
 }

@@ -20,6 +20,7 @@ class AgentStatus {
 class PrintAgentDetector {
   static const _cacheKey = 'print_agent_url';
   static const _cacheTtlSeconds = 300;
+  static const _candidatePorts = [4000, 3000, 9100, 9105];
 
   Future<String?> _getCached() async {
     final prefs = await SharedPreferences.getInstance();
@@ -39,32 +40,58 @@ class PrintAgentDetector {
 
   Future<AgentStatus> testAgent(String baseUrl) async {
     try {
-      final statusRes = await http
-          .get(Uri.parse('$baseUrl/status'))
-          .timeout(const Duration(seconds: 3));
-      if (statusRes.statusCode != 200) {
+      final statusRes = await _probe(baseUrl, '/status');
+      final healthRes = statusRes ?? await _probe(baseUrl, '/health');
+      if (healthRes == null || healthRes.statusCode != 200) {
         return AgentStatus(baseUrl: baseUrl, ok: false);
       }
 
-      final printersRes = await http
-          .get(Uri.parse('$baseUrl/printers'))
-          .timeout(const Duration(seconds: 3));
+      final printersRes =
+          await _probe(baseUrl, '/api/printers/discover') ??
+          await _probe(baseUrl, '/printers');
 
-      final printers = printersRes.statusCode == 200
-          ? (jsonDecode(printersRes.body) as List)
-          : const [];
+      final printers = printersRes == null
+          ? const []
+          : _extractPrinters(printersRes.body);
       return AgentStatus(baseUrl: baseUrl, ok: true, printers: printers);
     } catch (_) {
       return AgentStatus(baseUrl: baseUrl, ok: false);
     }
   }
 
-  /// 1) 127.0.0.1:9105  2) cache  3) escaneo LAN (192/10/172)
+  Future<http.Response?> _probe(String baseUrl, String path) async {
+    try {
+      return await http
+          .get(Uri.parse('$baseUrl$path'))
+          .timeout(const Duration(seconds: 3));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  List<dynamic> _extractPrinters(String body) {
+    final decoded = jsonDecode(body);
+    if (decoded is List) return decoded;
+    if (decoded is Map<String, dynamic>) {
+      if (decoded['items'] is List) return decoded['items'] as List<dynamic>;
+      if (decoded['discovered'] is List) {
+        return decoded['discovered'] as List<dynamic>;
+      }
+      if (decoded['printers'] is List) {
+        return decoded['printers'] as List<dynamic>;
+      }
+    }
+    return const [];
+  }
+
+  /// 1) localhost en puertos conocidos 2) cache 3) escaneo LAN
   Future<String?> scanLocalFirst() async {
-    final local = await testAgent('http://127.0.0.1:9105');
-    if (local.ok) {
-      await _setCached(local.baseUrl);
-      return local.baseUrl;
+    for (final port in _candidatePorts) {
+      final local = await testAgent('http://127.0.0.1:$port');
+      if (local.ok) {
+        await _setCached(local.baseUrl);
+        return local.baseUrl;
+      }
     }
 
     final cached = await _getCached();
@@ -87,7 +114,12 @@ class PrintAgentDetector {
 
     // disparamos en lotes para evitar saturar
     const batch = 40;
-    final urls = List<String>.generate(254, (i) => 'http://$subnet.${i + 1}:9105');
+    final urls = <String>[];
+    for (var i = 1; i <= 254; i++) {
+      for (final port in _candidatePorts) {
+        urls.add('http://$subnet.$i:$port');
+      }
+    }
     for (var i = 0; i < urls.length; i += batch) {
       final slice = urls.skip(i).take(batch);
       final results = await Future.wait(slice.map(testAgent));
