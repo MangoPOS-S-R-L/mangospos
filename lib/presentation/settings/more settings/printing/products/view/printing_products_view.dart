@@ -47,7 +47,7 @@ class _PrintingProductsViewState extends ConsumerState<PrintingProductsView> {
                 foregroundColor: MangoColors.darkGray,
                 padding: const EdgeInsets.symmetric(horizontal: 0),
               ),
-              onPressed: () => context.go(AppRoutes.printingBase),
+              onPressed: () => context.go(AppRoutes.settings),
               icon: const Icon(Icons.arrow_back),
               label: const Text('Regresar'),
             ),

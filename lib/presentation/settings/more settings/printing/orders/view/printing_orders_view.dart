@@ -69,7 +69,7 @@ class _PrintingOrdersViewState extends ConsumerState<PrintingOrdersView> {
                 foregroundColor: MangoColors.darkGray,
                 padding: const EdgeInsets.symmetric(horizontal: 0),
               ),
-              onPressed: () => context.go(AppRoutes.printingBase),
+              onPressed: () => context.go(AppRoutes.settings),
               icon: const Icon(Icons.arrow_back),
               label: const Text('Regresar'),
             ),
@@ -536,7 +536,9 @@ class _KitchenAreaCard extends StatelessWidget {
                         Icon(
                           Icons.print,
                           size: 16,
-                          color: printer.online ? const Color(0xFF22C55E) : Colors.grey,
+                          color: printer.online
+                              ? const Color(0xFF22C55E)
+                              : Colors.grey,
                         ),
                         const SizedBox(width: 8),
                         Expanded(child: Text(printer.name)),

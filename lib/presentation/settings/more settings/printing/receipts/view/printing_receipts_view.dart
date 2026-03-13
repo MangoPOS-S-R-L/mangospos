@@ -144,7 +144,7 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
                 foregroundColor: MangoColors.darkGray,
                 padding: const EdgeInsets.symmetric(horizontal: 0),
               ),
-              onPressed: () => context.go(AppRoutes.printingBase),
+              onPressed: () => context.go(AppRoutes.settings),
               icon: const Icon(Icons.arrow_back),
               label: const Text('Regresar'),
             ),
