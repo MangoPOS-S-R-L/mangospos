@@ -89,19 +89,93 @@ class PrintingRepository {
     String? name,
     String? ipAddress,
     int? port,
+    String? type,
+    String? devicePath,
+    String? mac,
     bool? isActive,
+    int? paperWidth,
+    String? encoding,
   }) async {
     try {
       final updates = <String, dynamic>{};
       if (name != null) updates['name'] = name;
       if (ipAddress != null) updates['ip_address'] = ipAddress;
       if (port != null) updates['port'] = port;
+      if (type != null) updates['type'] = type;
+      if (devicePath != null) updates['device_path'] = devicePath;
+      if (mac != null) updates['mac'] = mac;
       if (isActive != null) updates['online'] = isActive;
+      if (paperWidth != null) updates['paper_width'] = paperWidth;
+      if (encoding != null) updates['encoding'] = encoding;
 
       if (updates.isEmpty) return;
       await _client.from('printers').update(updates).eq('id', printerId);
     } catch (e) {
       throw Exception('Error al actualizar impresora: $e');
+    }
+  }
+
+  Future<Map<String, PrinterUsageSummary>> getPrinterUsageSummaries(
+    String businessId,
+  ) async {
+    try {
+      final data = await _client
+          .from('print_area_printers')
+          .select(
+            'printer_id, area_id, enabled, prints_orders, prints_prebills, prints_receipts',
+          )
+          .eq('business_id', businessId)
+          .eq('enabled', true);
+
+      final areaIdsByPrinter = <String, Set<String>>{};
+      final ordersByPrinter = <String, int>{};
+      final prebillsByPrinter = <String, int>{};
+      final receiptsByPrinter = <String, int>{};
+
+      for (final row in data) {
+        final printerId = row['printer_id']?.toString();
+        final areaId = row['area_id']?.toString();
+        if (printerId == null ||
+            printerId.isEmpty ||
+            areaId == null ||
+            areaId.isEmpty) {
+          continue;
+        }
+
+        areaIdsByPrinter.putIfAbsent(printerId, () => <String>{}).add(areaId);
+        if (row['prints_orders'] == true) {
+          ordersByPrinter[printerId] = (ordersByPrinter[printerId] ?? 0) + 1;
+        }
+        if (row['prints_prebills'] == true) {
+          prebillsByPrinter[printerId] =
+              (prebillsByPrinter[printerId] ?? 0) + 1;
+        }
+        if (row['prints_receipts'] == true) {
+          receiptsByPrinter[printerId] =
+              (receiptsByPrinter[printerId] ?? 0) + 1;
+        }
+      }
+
+      final summaries = <String, PrinterUsageSummary>{};
+      final printerIds = <String>{
+        ...areaIdsByPrinter.keys,
+        ...ordersByPrinter.keys,
+        ...prebillsByPrinter.keys,
+        ...receiptsByPrinter.keys,
+      };
+
+      for (final printerId in printerIds) {
+        summaries[printerId] = PrinterUsageSummary(
+          assignedAreas: areaIdsByPrinter[printerId]?.length ?? 0,
+          ordersAssignments: ordersByPrinter[printerId] ?? 0,
+          prebillAssignments: prebillsByPrinter[printerId] ?? 0,
+          receiptAssignments: receiptsByPrinter[printerId] ?? 0,
+        );
+      }
+
+      return summaries;
+    } catch (e) {
+      throw Exception('Error al obtener uso de impresoras: $e');
     }
   }
 
@@ -316,11 +390,41 @@ class PrintingRepository {
   Future<void> removePrinterFromArea({
     required String areaId,
     required String printerId,
+    bool removeOrders = true,
+    bool removePrebills = true,
+    bool removeReceipts = true,
   }) async {
     try {
+      final row = await _client
+          .from('print_area_printers')
+          .select('prints_orders, prints_prebills, prints_receipts')
+          .eq('area_id', areaId)
+          .eq('printer_id', printerId)
+          .maybeSingle();
+
+      if (row == null) return;
+
+      final nextOrders = (row['prints_orders'] == true) && !removeOrders;
+      final nextPrebills = (row['prints_prebills'] == true) && !removePrebills;
+      final nextReceipts = (row['prints_receipts'] == true) && !removeReceipts;
+
+      if (!nextOrders && !nextPrebills && !nextReceipts) {
+        await _client
+            .from('print_area_printers')
+            .delete()
+            .eq('area_id', areaId)
+            .eq('printer_id', printerId);
+        return;
+      }
+
       await _client
           .from('print_area_printers')
-          .delete()
+          .update({
+            'prints_orders': nextOrders,
+            'prints_prebills': nextPrebills,
+            'prints_receipts': nextReceipts,
+            'enabled': nextOrders || nextPrebills || nextReceipts,
+          })
           .eq('area_id', areaId)
           .eq('printer_id', printerId);
     } catch (e) {

@@ -42,9 +42,12 @@ class PrinterDevice {
     required this.name,
     this.ip,
     this.mac,
+    this.devicePath,
     required this.type,
     required this.online,
     this.lastSeen,
+    this.paperWidth = 80,
+    this.encoding = 'CP437',
     required this.createdAt,
   });
 
@@ -53,9 +56,12 @@ class PrinterDevice {
   final String name;
   final String? ip;
   final String? mac;
+  final String? devicePath;
   final PrinterType type;
   final bool online;
   final DateTime? lastSeen;
+  final int paperWidth;
+  final String encoding;
   final DateTime createdAt;
 
   factory PrinterDevice.fromMap(Map<String, dynamic> map) {
@@ -66,9 +72,12 @@ class PrinterDevice {
       name: normalized['name'] as String,
       ip: normalized['ip'] as String?,
       mac: normalized['mac'] as String?,
+      devicePath: normalized['device_path'] as String?,
       type: PrinterTypeX.fromName(normalized['type'] as String?),
       online: normalized['online'] as bool,
       lastSeen: normalized['last_seen'] as DateTime?,
+      paperWidth: normalized['paper_width'] as int,
+      encoding: normalized['encoding'] as String,
       createdAt: normalized['created_at'] as DateTime,
     );
   }
@@ -80,9 +89,12 @@ class PrinterDevice {
       name: config.name,
       ip: config.ipAddress,
       mac: config.mac,
+      devicePath: config.devicePath,
       type: config.printerType,
       online: config.online,
       lastSeen: config.lastSeen,
+      paperWidth: config.paperWidth,
+      encoding: config.encoding,
       createdAt: config.createdAt,
     );
   }
@@ -97,9 +109,12 @@ class PrinterDevice {
       'ip': ipValue == null || ipValue.isEmpty ? null : ipValue,
       'ip_address': ipValue == null || ipValue.isEmpty ? null : ipValue,
       'mac': macValue == null || macValue.isEmpty ? null : macValue,
+      'device_path': devicePath,
       'type': type.name,
       'online': online,
       'is_active': online,
+      'paper_width': paperWidth,
+      'encoding': encoding,
       'last_seen': lastSeen?.toIso8601String(),
       'created_at': createdAt.toIso8601String(),
     };
@@ -111,9 +126,12 @@ class PrinterDevice {
     String? name,
     String? ip,
     String? mac,
+    String? devicePath,
     PrinterType? type,
     bool? online,
     DateTime? lastSeen,
+    int? paperWidth,
+    String? encoding,
     DateTime? createdAt,
   }) {
     return PrinterDevice(
@@ -122,9 +140,12 @@ class PrinterDevice {
       name: name ?? this.name,
       ip: ip ?? this.ip,
       mac: mac ?? this.mac,
+      devicePath: devicePath ?? this.devicePath,
       type: type ?? this.type,
       online: online ?? this.online,
       lastSeen: lastSeen ?? this.lastSeen,
+      paperWidth: paperWidth ?? this.paperWidth,
+      encoding: encoding ?? this.encoding,
       createdAt: createdAt ?? this.createdAt,
     );
   }
@@ -206,6 +227,21 @@ class PrintAreaPrinter {
       'prints_receipts': printsReceipts,
     };
   }
+}
+
+@immutable
+class PrinterUsageSummary {
+  const PrinterUsageSummary({
+    this.assignedAreas = 0,
+    this.ordersAssignments = 0,
+    this.prebillAssignments = 0,
+    this.receiptAssignments = 0,
+  });
+
+  final int assignedAreas;
+  final int ordersAssignments;
+  final int prebillAssignments;
+  final int receiptAssignments;
 }
 
 /// 🖨️ Configuración de impresora (legacy support)
@@ -298,7 +334,8 @@ class PrintJob {
   final String areaId;
   final String? orderId;
   final String? checkId;
-  final String type; // 'kitchen_order', 'precheck', 'fiscal_invoice', 'cash_close'
+  final String
+  type; // 'kitchen_order', 'precheck', 'fiscal_invoice', 'cash_close'
   final String status; // 'pending', 'printing', 'printed', 'failed'
   final Map<String, dynamic> data;
   final String? printerId;

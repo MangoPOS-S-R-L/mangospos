@@ -11,6 +11,7 @@ class ConnectivityService {
       StreamController<bool>.broadcast();
 
   bool _isConnected = true;
+  bool _initialized = false;
   StreamSubscription<List<ConnectivityResult>>? _subscription;
 
   ConnectivityService._();
@@ -29,6 +30,9 @@ class ConnectivityService {
 
   /// Inicializar monitoreo de conectividad
   Future<void> initialize() async {
+    if (_initialized) return;
+    _initialized = true;
+
     // Verificar estado inicial
     await _checkConnectivity();
 

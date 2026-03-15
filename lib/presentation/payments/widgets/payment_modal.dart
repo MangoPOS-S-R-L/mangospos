@@ -82,7 +82,9 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Pago procesado exitosamente${state.fiscalDocument != null ? " - NCF: ${state.fiscalDocument!.ncfNumber}" : ""}',
+              state.offlineQueued
+                  ? 'Pago guardado offline. Queda pendiente de sincronizar.'
+                  : 'Pago procesado exitosamente${state.fiscalDocument != null ? " - NCF: ${state.fiscalDocument!.ncfNumber}" : ""}',
             ),
             backgroundColor: const Color(0xFF22C55E),
             behavior: SnackBarBehavior.floating,
@@ -129,7 +131,32 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
                   const SizedBox(height: 24),
 
                   // Mensajes de Error
-                  if (state.error != null)
+                  if (state.offlineQueued)
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      margin: const EdgeInsets.only(bottom: 16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF7ED),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFFF59E0B)),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.cloud_off_rounded, color: Color(0xFFF59E0B)),
+                          SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              'Pago guardado localmente. Se sincronizará cuando vuelva la conexión.',
+                              style: TextStyle(
+                                color: Color(0xFF92400E),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  if (state.error != null && !state.offlineQueued)
                     Container(
                       padding: const EdgeInsets.all(12),
                       margin: const EdgeInsets.only(bottom: 20),

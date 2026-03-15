@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../core/network/connectivity_service.dart';
+import '../../../core/offline/offline_pos_service.dart';
 import '../../../data/models/payment_models.dart';
 import '../../../data/models/sales_models.dart';
 import '../../../data/repositories/cashier_repository.dart';
@@ -29,9 +31,13 @@ final paymentViewModelProvider =
 class PaymentViewModel extends StateNotifier<PaymentState> {
   final CashierRepository _cashierRepo;
   final SalesRepository _salesRepo;
+  final ConnectivityService _connectivity = ConnectivityService();
+  final OfflinePosService _offlinePos = OfflinePosService();
 
   PaymentViewModel(this._cashierRepo, this._salesRepo)
-    : super(const PaymentState());
+    : super(const PaymentState()) {
+    unawaited(_connectivity.initialize());
+  }
 
   String _cleanError(Object e) {
     if (e is TimeoutException || e is SocketException) {
@@ -64,67 +70,34 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
 
   /// Inicializar pago para una orden completa
   Future<void> initializeForOrder(Order order) async {
-    state = state.copyWith(
-      loading: true,
-      error: null,
-      order: order,
-      totalToPay: order.total,
-    );
-
-    try {
-      // Validar sesión de caja
-      final cashSession = await _cashierRepo.requireActiveSession();
-
-      // Obtener métodos de pago
-      final businessId = await resolveBusinessIdOrNull(
-        Supabase.instance.client,
-        'auto',
-      );
-
-      if (businessId == null) {
-        throw Exception('No se pudo identificar el negocio');
-      }
-
-      var methods = await _cashierRepo.getPaymentMethods(businessId);
-
-      // Combinar con métodos fijos si no están presentes
-      final fixedMethods = _getFixedPaymentMethods(businessId);
-      for (final fixed in fixedMethods) {
-        if (!methods.any((m) => m.code == fixed.code)) {
-          methods = [...methods, fixed];
-        }
-      }
-
-      // Ordenar por posición
-      methods.sort((a, b) => a.position.compareTo(b.position));
-
-      state = state.copyWith(
-        loading: false,
-        order: order,
-        totalToPay: order.total,
-        paymentMethods: methods,
-        cashSession: cashSession,
-      );
-    } catch (e) {
-      state = state.copyWith(loading: false, error: _cleanError(e));
-    }
+    await _initializePayment(order: order, totalToPay: order.total);
   }
 
   /// Inicializar pago para un check específico (split bill)
   Future<void> initializeForCheck(Order order, OrderCheck check) async {
+    await _initializePayment(order: order, check: check, totalToPay: check.total);
+  }
+
+  Future<void> _initializePayment({
+    required Order order,
+    OrderCheck? check,
+    required double totalToPay,
+  }) async {
     state = state.copyWith(
       loading: true,
       error: null,
       order: order,
       check: check,
-      totalToPay: check.total,
+      totalToPay: totalToPay,
+      offlineQueued: false,
     );
 
     try {
-      // Validar sesión de caja
-      final cashSession = await _cashierRepo.requireActiveSession();
+      CashRegisterSession? cashSession;
+      if (_connectivity.isConnected) {
+        cashSession = await _cashierRepo.requireActiveSession();
+      }
 
-      // Obtener métodos de pago
       final businessId = await resolveBusinessIdOrNull(
         Supabase.instance.client,
         'auto',
@@ -134,9 +107,11 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         throw Exception('No se pudo identificar el negocio');
       }
 
-      var methods = await _cashierRepo.getPaymentMethods(businessId);
+      var methods = <PaymentMethod>[];
+      if (_connectivity.isConnected) {
+        methods = await _cashierRepo.getPaymentMethods(businessId);
+      }
 
-      // Combinar con métodos fijos si no están presentes
       final fixedMethods = _getFixedPaymentMethods(businessId);
       for (final fixed in fixedMethods) {
         if (!methods.any((m) => m.code == fixed.code)) {
@@ -144,16 +119,18 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         }
       }
 
-      // Ordenar por posición
       methods.sort((a, b) => a.position.compareTo(b.position));
 
       state = state.copyWith(
         loading: false,
         order: order,
         check: check,
-        totalToPay: check.total,
+        totalToPay: totalToPay,
         paymentMethods: methods,
         cashSession: cashSession,
+        error: _connectivity.isConnected
+            ? null
+            : 'Modo offline: el pago se guardará para sincronizar luego.',
       );
     } catch (e) {
       state = state.copyWith(loading: false, error: _cleanError(e));
@@ -231,18 +208,17 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
 
     state = state.copyWith(loading: true, error: null);
 
-    try {
-      final orderId = state.order!.id;
-      final checkId = state.check?.id;
-      final methodId = state.selectedMethod!.id;
-      final amount = state.amountReceived > 0
-          ? state.amountReceived
-          : state.totalToPay;
-      final reference = state.reference;
-      final customerId = state.customerId;
-      final customerRnc = state.customerRnc;
+    final orderId = state.order!.id;
+    final checkId = state.check?.id;
+    final methodId = state.selectedMethod!.id;
+    final amount = state.amountReceived > 0
+        ? state.amountReceived
+        : state.totalToPay;
+    final reference = state.reference;
+    final customerId = state.customerId;
+    final customerRnc = state.customerRnc;
 
-      // Procesar pago en el backend
+    try {
       final payment = await _salesRepo.processPayment(
         orderId: orderId,
         checkId: checkId,
@@ -255,25 +231,92 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         changeAmount: state.change,
       );
 
-      // Obtener documento fiscal generado
       FiscalDocument? fiscalDoc;
       try {
         fiscalDoc = await _salesRepo.getOrderFiscalDocument(orderId);
-      } catch (e) {
-        // Si no se generó documento fiscal, continuar
-      }
+      } catch (_) {}
 
       state = state.copyWith(
         loading: false,
         paymentProcessed: true,
         processedPayment: payment,
         fiscalDocument: fiscalDoc,
+        offlineQueued: false,
       );
     } catch (e) {
-      state = state.copyWith(
-        loading: false,
-        error: 'Error al procesar pago: ${_cleanError(e)}',
-      );
+      final shouldQueueOffline = !_connectivity.isConnected ||
+          orderId.startsWith('local-order-') ||
+          e is TimeoutException ||
+          e is SocketException;
+      if (!shouldQueueOffline) {
+        state = state.copyWith(
+          loading: false,
+          error: 'Error al procesar pago: ${_cleanError(e)}',
+        );
+        return;
+      }
+
+      try {
+        final businessId = await resolveBusinessIdOrNull(
+          Supabase.instance.client,
+          'auto',
+        );
+        if (businessId == null || businessId.isEmpty) {
+          throw Exception('No se pudo identificar el negocio');
+        }
+
+        await _offlinePos.enqueueAction(
+          businessId: businessId,
+          action: {
+            'type': 'process_payment',
+            'origin': state.order?.id.startsWith('local-order-') == true
+                ? 'offline'
+                : 'remote',
+            'order_id': orderId,
+            'check_id': checkId,
+            'payment_method_id': methodId,
+            'payment_method_code': state.selectedMethod?.code,
+            'payment_method_name': state.selectedMethod?.name,
+            'amount': amount,
+            'reference': reference,
+            'customer_id': customerId,
+            'customer_rnc': customerRnc,
+            'cashier_session_id': state.cashSession?.id,
+            'change_amount': state.change,
+          },
+        );
+
+        final businessPaymentId = 'local-payment-${DateTime.now().millisecondsSinceEpoch}';
+        final localPayment = Payment(
+          id: businessPaymentId,
+          businessId: businessId,
+          orderId: orderId,
+          checkId: checkId,
+          paymentMethodId: methodId,
+          paymentMethodCode: state.selectedMethod?.code,
+          paymentMethodName: state.selectedMethod?.name,
+          amount: amount,
+          reference: reference,
+          changeAmount: state.change,
+          status: 'pending',
+          sessionId: state.cashSession?.id,
+          createdAt: DateTime.now(),
+        );
+
+        state = state.copyWith(
+          loading: false,
+          paymentProcessed: true,
+          processedPayment: localPayment,
+          fiscalDocument: null,
+          offlineQueued: true,
+          error: 'Pago guardado en local. Pendiente de sincronizar.',
+        );
+      } catch (offlineError) {
+        state = state.copyWith(
+          loading: false,
+          error: 'Error al guardar pago offline: ${_cleanError(offlineError)}',
+        );
+      }
     }
   }
 

@@ -1,17 +1,18 @@
-// lib/presentation/settings/more settings/printing/printers/view/printers_view.dart
 import 'dart:io' show Platform;
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
-import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/data/models/printing_models.dart';
-import 'package:mangopos/presentation/settings/more settings/printing/printers/viewmodel/printers_viewmodel.dart';
+import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
+import 'package:mangopos/presentation/settings/more%20settings/printing/widgets/printer_configuration_dialog.dart';
+import 'package:mangopos/presentation/settings/more%20settings/printing/widgets/printing_ui.dart';
 
 class PrintingPrintersView extends ConsumerStatefulWidget {
-  final String businessId;
   const PrintingPrintersView({super.key, this.businessId = 'auto'});
+
+  final String businessId;
 
   @override
   ConsumerState<PrintingPrintersView> createState() =>
@@ -20,26 +21,104 @@ class PrintingPrintersView extends ConsumerStatefulWidget {
 
 class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
   bool get _isWindows => !kIsWeb && Platform.isWindows;
+  Map<String, PrinterUsageSummary> _usageSummaries = const {};
 
   @override
   void initState() {
     super.initState();
-    Future.microtask(() {
-      ref
-          .read(printingPrintersViewModelProvider.notifier)
-          .load(businessId: widget.businessId);
-    });
+    Future.microtask(() => _bootstrap(force: true));
   }
 
   @override
   void didUpdateWidget(covariant PrintingPrintersView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.businessId != widget.businessId) {
-      Future.microtask(() {
-        ref
-            .read(printingPrintersViewModelProvider.notifier)
-            .load(businessId: widget.businessId, force: true);
-      });
+      Future.microtask(() => _bootstrap(force: true));
+    }
+  }
+
+  Future<void> _bootstrap({bool force = false}) async {
+    final vmCtrl = ref.read(printingPrintersViewModelProvider.notifier);
+    await vmCtrl.load(businessId: widget.businessId, force: force);
+    final summaries = await vmCtrl.loadUsageSummaries();
+    if (!mounted) return;
+    setState(() => _usageSummaries = summaries);
+  }
+
+  Future<void> _showAddPrinterDialog(
+    BuildContext context,
+    PrintingPrintersViewModel vmCtrl,
+  ) async {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) =>
+          _AddPrinterDialog(vmCtrl: vmCtrl, isWindows: _isWindows),
+    );
+    await _bootstrap(force: true);
+  }
+
+  Future<void> _confirmDeletePrinter(
+    BuildContext context, {
+    required PrinterDevice printer,
+    required Future<bool> Function() onConfirm,
+  }) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: MangoColors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          'Desvincular impresora',
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            color: MangoColors.darkGray,
+          ),
+        ),
+        content: Text(
+          'Se eliminará ${printer.name} de la configuración de impresión.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Desvincular'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+    if (!context.mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final ok = await onConfirm();
+    if (!mounted) return;
+    await _bootstrap(force: true);
+    final state = ref.read(printingPrintersViewModelProvider);
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          ok
+              ? 'Impresora desvinculada.'
+              : (state.errorMessage ?? 'No se pudo desvincular la impresora.'),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openPrinterConfiguration(PrinterDevice printer) async {
+    final vmCtrl = ref.read(printingPrintersViewModelProvider.notifier);
+    final changed = await showPrinterConfigurationDialog(
+      context,
+      printer: printer,
+      vmCtrl: vmCtrl,
+    );
+    if (changed == true) {
+      await _bootstrap(force: true);
     }
   }
 
@@ -47,7 +126,6 @@ class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
   Widget build(BuildContext context) {
     final vm = ref.watch(printingPrintersViewModelProvider);
     final vmCtrl = ref.read(printingPrintersViewModelProvider.notifier);
-    final activePrinters = vm.items.where((printer) => printer.online).toList();
 
     if (vm.isLoading && vm.items.isEmpty) {
       return const Center(
@@ -58,142 +136,76 @@ class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
     if (vm.errorMessage != null && vm.items.isEmpty) {
       return _ErrorBox(
         message: vm.errorMessage!,
-        onRetry: () => vmCtrl.refresh(),
+        onRetry: () => _bootstrap(force: true),
       );
     }
 
-    final errorMessage = vm.errorMessage;
-
     return Stack(
       children: [
-        Container(
-          color: Colors.white,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
-                child: TextButton.icon(
-                  style: TextButton.styleFrom(
-                    foregroundColor: Colors.black87,
-                    padding: EdgeInsets.zero,
-                  ),
-                  onPressed: () => context.go(AppRoutes.settings),
-                  icon: const Icon(Icons.arrow_back),
-                  label: const Text('Regresar'),
-                ),
-              ),
-              if (errorMessage != null && vm.items.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
-                  child: _InlineError(message: errorMessage),
-                ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: const [
-                          Text(
-                            'Impresoras disponibles',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.black87,
-                            ),
-                          ),
-                          SizedBox(height: 6),
-                          Text(
-                            'Consulta las impresoras activas y disponibles en este momento.',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: Colors.black54,
-                              height: 1.3,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    FilledButton.icon(
-                      onPressed: vm.isDiscovering
-                          ? null
-                          : () => _showAddPrinterDialog(context, vmCtrl),
-                      icon: const Icon(Icons.add_circle, size: 20),
-                      label: const Text('Agregar impresora'),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF2196F3),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 14,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 8),
-              Expanded(
-                child: activePrinters.isEmpty
-                    ? const _EmptyActivePrintersState()
-                    : SingleChildScrollView(
-                        padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                        child: Wrap(
-                          spacing: 16,
-                          runSpacing: 16,
-                          children: activePrinters.map((p) {
-                            final ip = p.ip ?? '';
-                            final mac = p.mac ?? '';
-                            final typeLabel = p.type.label.toUpperCase();
-
-                            return SizedBox(
-                              width: 360,
-                              child: _PrinterCard(
-                                printer: p,
-                                ip: ip,
-                                mac: mac,
-                                typeLabel: typeLabel,
-                                onPrintSample: () async {
-                                  final ok = await vmCtrl.testPrint(p.id);
-                                  final state = ref.read(
-                                    printingPrintersViewModelProvider,
-                                  );
-                                  final msg = ok
-                                      ? 'Muestra enviada a la impresora'
-                                      : (state.errorMessage ??
-                                            'No se pudo imprimir la muestra');
-                                  if (context.mounted) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(content: Text(msg)),
-                                    );
-                                  }
-                                },
-                                onConfigure: () => _showPrinterInfo(
-                                  context,
-                                  p.name,
-                                  ip,
-                                  mac,
-                                  typeLabel,
-                                ),
-                                onDelete: () => _confirmDeletePrinter(
-                                  context,
-                                  onConfirm: () => vmCtrl.deletePrinter(p.id),
-                                ),
-                              ),
-                            );
-                          }).toList(),
-                        ),
-                      ),
-              ),
-            ],
+        PrintingPageShell(
+          title: 'Impresoras',
+          icon: Icons.print_outlined,
+          listTitle: 'Lista de impresoras vinculadas',
+          action: PrintingPrimaryButton(
+            label: 'Agregar impresora',
+            icon: Icons.add_circle,
+            onPressed: vm.isDiscovering
+                ? null
+                : () => _showAddPrinterDialog(context, vmCtrl),
           ),
+          child: vm.items.isEmpty
+              ? const PrintingEmptyState(
+                  label:
+                      'No hay impresoras vinculadas todavia.\nAgrega una para comenzar.',
+                )
+              : LayoutBuilder(
+                  builder: (context, constraints) {
+                    final cardWidth = constraints.maxWidth < 480
+                        ? constraints.maxWidth
+                        : 380.0;
+                    return Wrap(
+                      spacing: 20,
+                      runSpacing: 20,
+                      children: vm.items.map((printer) {
+                        final summary =
+                            _usageSummaries[printer.id] ??
+                            const PrinterUsageSummary();
+                        return SizedBox(
+                          width: cardWidth,
+                          child: _PrinterOverviewCard(
+                            printer: printer,
+                            usageSummary: summary,
+                            onPrintSample: () async {
+                              final messenger = ScaffoldMessenger.of(context);
+                              final ok = await vmCtrl.testPrint(printer.id);
+                              if (!mounted) return;
+                              final state = ref.read(
+                                printingPrintersViewModelProvider,
+                              );
+                              messenger.showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    ok
+                                        ? 'Muestra enviada a ${printer.name}.'
+                                        : (state.errorMessage ??
+                                              'No se pudo imprimir la muestra.'),
+                                  ),
+                                ),
+                              );
+                            },
+                            onConfigure: () =>
+                                _openPrinterConfiguration(printer),
+                            onDelete: () => _confirmDeletePrinter(
+                              context,
+                              printer: printer,
+                              onConfirm: () => vmCtrl.deletePrinter(printer.id),
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    );
+                  },
+                ),
         ),
         if (vm.isDiscovering)
           Container(
@@ -241,7 +253,7 @@ class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
                     const SizedBox(height: 24),
                     ClipRRect(
                       borderRadius: BorderRadius.circular(8),
-                      child: LinearProgressIndicator(
+                      child: const LinearProgressIndicator(
                         minHeight: 8,
                         backgroundColor: MangoColors.bgLight,
                         color: MangoColors.primaryOrange,
@@ -255,175 +267,37 @@ class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
       ],
     );
   }
-
-  void _showAddPrinterDialog(
-    BuildContext context,
-    PrintingPrintersViewModel vmCtrl,
-  ) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) =>
-          _AddPrinterDialog(vmCtrl: vmCtrl, isWindows: _isWindows),
-    );
-  }
-
-  Future<void> _confirmDeletePrinter(
-    BuildContext context, {
-    required Future<bool> Function() onConfirm,
-  }) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: MangoColors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text(
-          'Eliminar impresora',
-          style: TextStyle(
-            fontWeight: FontWeight.w700,
-            color: MangoColors.darkGray,
-          ),
-        ),
-        content: const Text(
-          'Esta acción no se puede deshacer. ¿Deseas continuar?',
-        ),
-        actions: [
-          TextButton(
-            style: TextButton.styleFrom(
-              foregroundColor: MangoColors.darkGray,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancelar'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-              foregroundColor: MangoColors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Eliminar'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true || !context.mounted) return;
-
-    final ok = await onConfirm();
-    if (!context.mounted) return;
-
-    final state = ref.read(printingPrintersViewModelProvider);
-    final message = ok
-        ? 'Impresora eliminada'
-        : (state.errorMessage ?? 'No se pudo eliminar la impresora');
-
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
-  }
-
-  void _showPrinterInfo(
-    BuildContext context,
-    String name,
-    String ip,
-    String mac,
-    String type,
-  ) {
-    showDialog(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: MangoColors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text(
-          name,
-          style: const TextStyle(
-            fontWeight: FontWeight.w700,
-            color: MangoColors.darkGray,
-          ),
-        ),
-        content: Text(
-          'IP: ${ip.isEmpty ? "—" : ip}\nMAC: ${mac.isEmpty ? "—" : mac}\nTipo: $type',
-        ),
-        actions: [
-          TextButton(
-            style: TextButton.styleFrom(
-              foregroundColor: MangoColors.darkGray,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cerrar'),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
-class _PrinterCard extends StatelessWidget {
-  final dynamic printer;
-  final String ip;
-  final String mac;
-  final String typeLabel;
-  final VoidCallback onPrintSample;
-  final VoidCallback onConfigure;
-  final VoidCallback onDelete;
-
-  const _PrinterCard({
+class _PrinterOverviewCard extends StatelessWidget {
+  const _PrinterOverviewCard({
     required this.printer,
-    required this.ip,
-    required this.mac,
-    required this.typeLabel,
+    required this.usageSummary,
     required this.onPrintSample,
     required this.onConfigure,
     required this.onDelete,
   });
 
+  final PrinterDevice printer;
+  final PrinterUsageSummary usageSummary;
+  final VoidCallback onPrintSample;
+  final VoidCallback onConfigure;
+  final VoidCallback onDelete;
+
   @override
   Widget build(BuildContext context) {
-    final statusColor = printer.online
-        ? const Color(0xFF2BAA3D)
-        : Colors.redAccent;
-    final statusText = printer.online ? 'En linea' : 'Desconectada';
+    final ip = printer.ip?.isNotEmpty == true ? printer.ip! : 'No configurada';
+    final mac = printer.mac?.isNotEmpty == true
+        ? printer.mac!
+        : 'No disponible';
 
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE0E0E0)),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x0A000000),
-            blurRadius: 8,
-            offset: Offset(0, 2),
-          ),
-        ],
-      ),
-      padding: const EdgeInsets.all(16),
+    return PrintingCardFrame(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF5F5F5),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(
-                  Icons.print_rounded,
-                  size: 22,
-                  color: MangoColors.darkGray,
-                ),
-              ),
+              const Icon(Icons.print_outlined, color: MangoColors.darkGray),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -433,161 +307,83 @@ class _PrinterCard extends StatelessWidget {
                       printer.name,
                       style: const TextStyle(
                         fontSize: 17,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w800,
                         color: MangoColors.darkGray,
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    const Text(
-                      'Impresora activa',
-                      style: TextStyle(fontSize: 13, color: Colors.black54),
-                    ),
-                  ],
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFE8F5E9),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.check_circle,
-                      size: 16,
-                      color: Color(0xFF2BAA3D),
-                    ),
-                    SizedBox(width: 6),
                     Text(
-                      'Disponible',
-                      style: TextStyle(
+                      'IP: $ip   MAC: $mac',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
                         fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF2BAA3D),
+                        color: MangoColors.muted,
                       ),
                     ),
                   ],
                 ),
               ),
+              PrintingStatusCluster(online: printer.online),
             ],
           ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 12,
-            runSpacing: 8,
-            children: [
-              _InfoChip(
-                icon: Icons.wifi,
-                label: ip.isEmpty ? 'Sin IP' : 'IP: $ip',
-              ),
-              if (mac.isNotEmpty)
-                _InfoChip(icon: Icons.bluetooth, label: 'MAC: $mac'),
-              _InfoChip(
-                icon: Icons.settings_ethernet,
-                label: typeLabel.toUpperCase(),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF8FBFF),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: const Color(0xFFE0E0E0)),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  printer.online ? Icons.cloud_done : Icons.cloud_off,
-                  size: 18,
-                  color: statusColor,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    statusText,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: statusColor,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 16),
           Row(
             children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: onPrintSample,
-                  icon: const Icon(Icons.receipt_long_outlined, size: 18),
-                  label: const Text('Imprimir prueba'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF2196F3),
-                    side: const BorderSide(color: Color(0xFF2196F3)),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: onConfigure,
-                  icon: const Icon(Icons.info_outline, size: 18),
-                  label: const Text('Ver datos'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.black87,
-                    side: const BorderSide(color: Color(0xFFE0E0E0)),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              IconButton(
-                onPressed: onDelete,
-                icon: const Icon(Icons.delete_outline, color: Colors.red),
-                tooltip: 'Eliminar impresora',
+              PrintingMetricBadge(
+                label:
+                    '${usageSummary.assignedAreas.toString().padLeft(2, '0')} Areas asignadas',
+                background: const Color(0xFFEAF1FB),
+                foreground: const Color(0xFF4280E9),
               ),
             ],
           ),
-        ],
-      ),
-    );
-  }
-}
-
-class _InfoChip extends StatelessWidget {
-  final IconData icon;
-  final String label;
-
-  const _InfoChip({required this.icon, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF5F5F5),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFE0E0E0)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 16, color: MangoColors.darkGray),
-          const SizedBox(width: 6),
-          Text(
-            label,
-            style: const TextStyle(fontSize: 12, color: Colors.black87),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              PrintingMetricBadge(
+                label:
+                    '${usageSummary.receiptAssignments.toString().padLeft(2, '0')} Comprobantes',
+                background: const Color(0xFFF6F0DD),
+                foreground: const Color(0xFFE4A928),
+              ),
+              const SizedBox(width: 8),
+              PrintingMetricBadge(
+                label:
+                    '${usageSummary.prebillAssignments.toString().padLeft(2, '0')} Precuentas',
+                background: const Color(0xFFEDF4EC),
+                foreground: const Color(0xFF68C35B),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          const Divider(height: 1, color: Color(0xFFD4D4D4)),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              PrintingActionButton(
+                label: 'Imprimir muestra',
+                icon: Icons.print_outlined,
+                foreground: MangoColors.darkGray,
+                background: Colors.transparent,
+                onPressed: onPrintSample,
+              ),
+              const SizedBox(width: 8),
+              PrintingActionButton(
+                label: 'Conf. impresora',
+                icon: Icons.settings_outlined,
+                foreground: MangoColors.darkGray,
+                background: Colors.transparent,
+                onPressed: onConfigure,
+              ),
+              const SizedBox(width: 8),
+              PrintingActionButton(
+                label: 'Desvincular',
+                icon: Icons.not_interested_outlined,
+                foreground: const Color(0xFFEF5350),
+                background: Colors.transparent,
+                onPressed: onDelete,
+              ),
+            ],
           ),
         ],
       ),
@@ -596,16 +392,15 @@ class _InfoChip extends StatelessWidget {
 }
 
 class _AddPrinterDialog extends ConsumerStatefulWidget {
+  const _AddPrinterDialog({required this.vmCtrl, required this.isWindows});
+
   final PrintingPrintersViewModel vmCtrl;
   final bool isWindows;
-
-  const _AddPrinterDialog({required this.vmCtrl, required this.isWindows});
 
   @override
   ConsumerState<_AddPrinterDialog> createState() => _AddPrinterDialogState();
 }
 
-// ←— AHORA ES ConsumerState, por eso existe `ref`
 class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
   int _step = 1;
   String _selectedType = '';
@@ -632,8 +427,7 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
     });
 
     try {
-      final results = await widget.vmCtrl
-          .scanOnLANUnified(); // ← NO guarda en BD
+      final results = await widget.vmCtrl.scanOnLANUnified();
       _foundPrinters = results
           .map(
             (d) => {
@@ -641,7 +435,7 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
               'mac': d.mac,
               'name': d.name,
               'id': d.idHint,
-              'type': d.type.name, // Add type
+              'type': d.type.name,
               'devicePath': d.idHint,
             },
           )
@@ -665,7 +459,7 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
     });
 
     try {
-      final results = await widget.vmCtrl.scanBluetooth(); // ← NO guarda
+      final results = await widget.vmCtrl.scanBluetooth();
       _foundPrinters = results
           .map(
             (d) => {
@@ -690,11 +484,8 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
   }
 
   Future<void> _savePrinter() async {
-    // Si hay una impresora detectada, usar sus datos; si no, tomar los campos manuales
     final ip = _selectedPrinter?['ip'] as String? ?? _ipCtrl.text.trim();
     final mac = _selectedPrinter?['mac'] as String? ?? _macCtrl.text.trim();
-
-    // Prefer the type from the selected printer (e.g. 'usb'), fallback to selected group ('network'/'bluetooth')
     final type = _selectedPrinter?['type'] as String? ?? _selectedType;
 
     final created = await widget.vmCtrl.createPrinter(
@@ -740,8 +531,6 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
               ],
             ),
             const SizedBox(height: 32),
-
-            // Indicador de pasos
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
@@ -772,22 +561,18 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
                 _StepIndicator(number: 3, active: _step == 3, completed: false),
               ],
             ),
-
             const SizedBox(height: 32),
-
             if (_step == 1) _buildStep1(),
             if (_step == 2) _buildStep2(),
             if (_step == 3) _buildStep3(),
-
             const SizedBox(height: 32),
-
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
                 if (_step > 1)
                   TextButton(
                     onPressed: () => setState(() => _step--),
-                    child: const Text('Atrás'),
+                    child: const Text('Atras'),
                   ),
                 const SizedBox(width: 12),
                 ElevatedButton(
@@ -849,7 +634,7 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
         ),
         const SizedBox(height: 8),
         const Text(
-          '¿Cómo deseas sincronizar tu dispositivo?',
+          'Como deseas sincronizar tu dispositivo?',
           style: TextStyle(color: MangoColors.muted),
         ),
         const SizedBox(height: 24),
@@ -869,7 +654,7 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
             Expanded(
               child: _ConnectionOption(
                 iconPath: 'assets/images/impresion_bluetooth.png',
-                title: 'Por Bluetooth', // Keep Bluetooth as is
+                title: 'Por Bluetooth',
                 subtitle:
                     'Activa Bluetooth y mantén visible tu dispositivo para sincronizar',
                 selected: _selectedType == 'bluetooth',
@@ -930,7 +715,9 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
                 borderRadius: BorderRadius.circular(12),
               ),
             ),
-            onPressed: _searchNetwork,
+            onPressed: _selectedType == 'bluetooth'
+                ? _searchBluetooth
+                : _searchNetwork,
             child: const Text('Buscar nuevamente'),
           ),
         ] else ...[
@@ -968,7 +755,7 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'Información de la impresora',
+          'Informacion de la impresora',
           style: TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.w600,
@@ -1027,7 +814,7 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
           TextField(
             controller: _ipCtrl,
             decoration: InputDecoration(
-              labelText: 'Dirección IP',
+              labelText: 'Direccion IP',
               hintText: 'Ej: 192.168.0.10',
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -1069,15 +856,15 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
 }
 
 class _StepIndicator extends StatelessWidget {
-  final int number;
-  final bool active;
-  final bool completed;
-
   const _StepIndicator({
     required this.number,
     required this.active,
     required this.completed,
   });
+
+  final int number;
+  final bool active;
+  final bool completed;
 
   @override
   Widget build(BuildContext context) {
@@ -1104,12 +891,6 @@ class _StepIndicator extends StatelessWidget {
 }
 
 class _ConnectionOption extends StatelessWidget {
-  final String iconPath;
-  final String title;
-  final String subtitle;
-  final bool selected;
-  final VoidCallback onTap;
-
   const _ConnectionOption({
     required this.iconPath,
     required this.title,
@@ -1117,6 +898,12 @@ class _ConnectionOption extends StatelessWidget {
     required this.selected,
     required this.onTap,
   });
+
+  final String iconPath;
+  final String title;
+  final String subtitle;
+  final bool selected;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -1158,38 +945,12 @@ class _ConnectionOption extends StatelessWidget {
   }
 }
 
-class _EmptyActivePrintersState extends StatelessWidget {
-  const _EmptyActivePrintersState();
-  @override
-  Widget build(BuildContext context) {
-    return const Center(
-      child: Padding(
-        padding: EdgeInsets.all(28),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.print_disabled_outlined,
-              size: 56,
-              color: MangoColors.muted,
-            ),
-            SizedBox(height: 10),
-            Text(
-              'No hay impresoras activas disponibles.\nActiva o agrega una impresora para verla aqui.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: MangoColors.muted),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _ErrorBox extends StatelessWidget {
+  const _ErrorBox({required this.message, required this.onRetry});
+
   final String message;
   final VoidCallback onRetry;
-  const _ErrorBox({required this.message, required this.onRetry});
+
   @override
   Widget build(BuildContext context) {
     return Center(
@@ -1221,40 +982,16 @@ class _ErrorBox extends StatelessWidget {
   }
 }
 
-class _InlineError extends StatelessWidget {
-  const _InlineError({required this.message});
-  final String message;
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFE5E5),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.redAccent.withValues(alpha: 0.3)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.error_outline, color: Colors.redAccent),
-          const SizedBox(width: 8),
-          Expanded(child: Text(message)),
-        ],
-      ),
-    );
-  }
-}
-
 class _PrinterFoundCard extends StatelessWidget {
-  final Map<String, dynamic> printer;
-  final bool selected;
-  final VoidCallback onTap;
-
   const _PrinterFoundCard({
     required this.printer,
     required this.selected,
     required this.onTap,
   });
+
+  final Map<String, dynamic> printer;
+  final bool selected;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -1299,7 +1036,7 @@ class _PrinterFoundCard extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    isUsb ? 'Conexión USB (Local)' : 'MAC: $mac',
+                    isUsb ? 'Conexion USB (Local)' : 'MAC: $mac',
                     style: const TextStyle(
                       fontSize: 12,
                       color: MangoColors.muted,

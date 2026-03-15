@@ -197,7 +197,21 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
 
           // ======= CONTENIDO PRINCIPAL =======
           Expanded(
-            child: Container(color: SalesTheme.background, child: widget.child),
+            child: Column(
+              children: [
+                if (orderState.isOfflineMode ||
+                    orderState.syncInFlight ||
+                    orderState.pendingOfflineActions > 0 ||
+                    (orderState.syncStatus?.isNotEmpty ?? false))
+                  _SalesSyncBanner(state: orderState),
+                Expanded(
+                  child: Container(
+                    color: SalesTheme.background,
+                    child: widget.child,
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -282,6 +296,109 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
               backgroundColor: SalesTheme.destructive,
             ),
             child: const Text('Salir'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SalesSyncBanner extends ConsumerWidget {
+  final CurrentOrderState state;
+
+  const _SalesSyncBanner({required this.state});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final isWarning = state.isOfflineMode || state.pendingOfflineActions > 0;
+    final background = isWarning
+        ? const Color(0xFFFFF7ED)
+        : const Color(0xFFECFDF3);
+    final border = isWarning
+        ? const Color(0xFFF59E0B)
+        : const Color(0xFF10B981);
+    final icon = state.syncInFlight
+        ? Icons.sync
+        : state.isOfflineMode
+        ? Icons.cloud_off_rounded
+        : state.pendingOfflineActions > 0
+        ? Icons.schedule_rounded
+        : Icons.cloud_done_rounded;
+    final text = state.syncStatus?.trim().isNotEmpty == true
+        ? state.syncStatus!.trim()
+        : state.isOfflineMode
+        ? 'Modo offline activo.'
+        : state.pendingOfflineActions > 0
+        ? 'Hay operaciones pendientes por sincronizar.'
+        : 'Sincronización al día.';
+
+    final lastSyncLabel = state.lastSyncAt == null
+        ? null
+        : 'Última sync ${state.lastSyncAt!.hour.toString().padLeft(2, '0')}:${state.lastSyncAt!.minute.toString().padLeft(2, '0')}';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: background,
+        border: Border(bottom: BorderSide(color: border, width: 1)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: border),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  text,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF111827),
+                  ),
+                ),
+                if (lastSyncLabel != null)
+                  Text(
+                    lastSyncLabel,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF6B7280),
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          if (state.pendingOfflineActions > 0)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: border.withValues(alpha: 0.35)),
+              ),
+              child: Text(
+                '${state.pendingOfflineActions} pendientes',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: border,
+                ),
+              ),
+            ),
+          const SizedBox(width: 8),
+          TextButton.icon(
+            onPressed: state.syncInFlight
+                ? null
+                : () async {
+                    await ref
+                        .read(currentOrderProvider.notifier)
+                        .syncPendingOfflineActions(force: true);
+                  },
+            icon: const Icon(Icons.sync_rounded, size: 16),
+            label: const Text('Sync ahora'),
           ),
         ],
       ),

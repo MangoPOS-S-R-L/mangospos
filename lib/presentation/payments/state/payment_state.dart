@@ -35,6 +35,7 @@ class PaymentState extends Equatable {
   final bool paymentProcessed;
   final Payment? processedPayment;
   final FiscalDocument? fiscalDocument;
+  final bool offlineQueued;
 
   const PaymentState({
     this.loading = false,
@@ -54,6 +55,7 @@ class PaymentState extends Equatable {
     this.paymentProcessed = false,
     this.processedPayment,
     this.fiscalDocument,
+    this.offlineQueued = false,
   });
 
   PaymentState copyWith({
@@ -74,6 +76,7 @@ class PaymentState extends Equatable {
     bool? paymentProcessed,
     Payment? processedPayment,
     FiscalDocument? fiscalDocument,
+    bool? offlineQueued,
   }) {
     return PaymentState(
       loading: loading ?? this.loading,
@@ -93,6 +96,7 @@ class PaymentState extends Equatable {
       paymentProcessed: paymentProcessed ?? this.paymentProcessed,
       processedPayment: processedPayment ?? this.processedPayment,
       fiscalDocument: fiscalDocument ?? this.fiscalDocument,
+      offlineQueued: offlineQueued ?? this.offlineQueued,
     );
   }
 
@@ -140,5 +144,6 @@ class PaymentState extends Equatable {
     paymentProcessed,
     processedPayment,
     fiscalDocument,
+    offlineQueued,
   ];
 }

@@ -30,9 +30,26 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   final OfflinePosService _offlinePos = OfflinePosService();
   final ConnectivityService _connectivity = ConnectivityService();
   Timer? _refreshOrderDebounceTimer;
+  StreamSubscription<bool>? _connectivitySubscription;
   String? _queuedRefreshOrderId;
   bool _queuedClearIfPaid = false;
   bool _refreshOrderInFlight = false;
+  bool _syncInFlight = false;
+
+  Future<void> refreshOfflineMonitor() => _refreshOfflineMonitor();
+
+  Future<void> _refreshOfflineMonitor({String? syncStatus, bool? syncInFlight}) async {
+    final businessId = _activeBusinessId;
+    final pending = businessId == null || businessId.isEmpty
+        ? 0
+        : await _offlinePos.pendingActionsCount(businessId);
+    state = state.copyWith(
+      isOfflineMode: !_connectivity.isConnected,
+      syncInFlight: syncInFlight ?? _syncInFlight,
+      pendingOfflineActions: pending,
+      syncStatus: syncStatus ?? state.syncStatus,
+    );
+  }
 
   static const _refreshOrderDebounce = Duration(milliseconds: 250);
 
@@ -41,12 +58,29 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
   @override
   CurrentOrderState build() {
+    unawaited(_connectivity.initialize());
+    unawaited(_refreshOfflineMonitor());
+    _connectivitySubscription ??= _connectivity.connectionStream.listen((isConnected) {
+      unawaited(
+        _refreshOfflineMonitor(
+          syncStatus: isConnected
+              ? 'Conexión restaurada. Revisando sincronización...'
+              : 'Sin conexión. Trabajando en modo offline.',
+        ),
+      );
+      if (isConnected) {
+        unawaited(syncPendingOfflineActions());
+      }
+    });
+
     ref.onDispose(() {
       _realtimeChannel?.unsubscribe();
       _realtimeChannel = null;
       _subscribedOrderId = null;
       _refreshOrderDebounceTimer?.cancel();
       _refreshOrderDebounceTimer = null;
+      _connectivitySubscription?.cancel();
+      _connectivitySubscription = null;
     });
     return const CurrentOrderState();
   }
@@ -418,7 +452,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           businessId: businessId,
           action: {
             'type': 'add_item',
+            'origin': state.origin,
             'order_id': orderId,
+            'item_id': optimisticItem.id,
             'menu_item_id': menuItemId,
             'qty': qty,
             'check_pos': effectiveCheckPos,
@@ -476,16 +512,55 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   Future<void> toggleTakeout(bool value) async {
     final orderId = state.order?.id;
     if (orderId == null) return;
-    await ref
-        .read(salesRepositoryProvider)
-        .markOrderTakeout(orderId: orderId, takeout: value);
-    state = state.copyWith(takeout: value);
-    await _loadOrderDetail(orderId);
+
+    final previousTakeout = state.takeout;
+    state = state.copyWith(takeout: value, error: null);
+
+    try {
+      await ref
+          .read(salesRepositoryProvider)
+          .markOrderTakeout(orderId: orderId, takeout: value);
+      await _loadOrderDetail(orderId);
+    } catch (e) {
+      final businessId = _activeBusinessId;
+      final isOffline =
+          !_connectivity.isConnected || orderId.startsWith('local-order-');
+      if (isOffline && businessId != null && businessId.isNotEmpty) {
+        await _offlinePos.enqueueAction(
+          businessId: businessId,
+          action: {
+            'type': 'mark_order_takeout',
+            'origin': state.origin,
+            'order_id': orderId,
+            'takeout': value,
+          },
+        );
+        await _persistCurrentState(localOnly: true);
+        state = state.copyWith(
+          takeout: value,
+          error: 'Takeout actualizado en local. Pendiente de sincronizar.',
+        );
+        return;
+      }
+
+      state = state.copyWith(
+        takeout: previousTakeout,
+        error: 'Error al actualizar takeout: $e',
+      );
+    }
   }
 
   Future<void> deleteItem(String itemId) async {
     final orderId = state.order?.id;
     if (orderId == null) return;
+
+    OrderItem? targetItem;
+    for (final item in state.items) {
+      if (item.id == itemId) {
+        targetItem = item;
+        break;
+      }
+    }
 
     // 1. Snapshot for rollback
     final previousItems = state.items;
@@ -494,7 +569,6 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // 2. Optimistic Local Update
     final updatedItems = state.items.where((i) => i.id != itemId).toList();
 
-    // Calculate simple totals for immediate feedback
     final newTotal = updatedItems.fold(0.0, (sum, i) => sum + i.total);
     final newSubtotal = updatedItems.fold(0.0, (sum, i) => sum + i.subtotal);
     final newTax = updatedItems.fold(0.0, (sum, i) => sum + i.tax);
@@ -505,16 +579,36 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       tax: newTax,
     );
 
-    state = state.copyWith(items: updatedItems, order: updatedOrder);
+    state = state.copyWith(items: updatedItems, order: updatedOrder, error: null);
 
     try {
-      // 3. Perform Backend Operation
       await ref.read(salesRepositoryProvider).deleteItem(itemId: itemId);
-
-      // 4. Sync State (to ensure server calculations/triggers are reflected)
       await _loadOrderDetail(orderId);
     } catch (e) {
-      // 5. Revert on Error
+      final businessId = _activeBusinessId;
+      final isOffline =
+          !_connectivity.isConnected || orderId.startsWith('local-order-');
+      if (isOffline && businessId != null && businessId.isNotEmpty) {
+        await _offlinePos.enqueueAction(
+          businessId: businessId,
+          action: {
+            'type': 'delete_item',
+            'origin': state.origin,
+            'order_id': orderId,
+            'item_id': itemId,
+            'product_id': targetItem?.productId,
+            'product_name': targetItem?.productName,
+            'notes': targetItem?.notes,
+            'is_takeout': targetItem?.isTakeout,
+          },
+        );
+        await _persistCurrentState(localOnly: true);
+        state = state.copyWith(
+          error: 'Producto eliminado en local. Pendiente de sincronizar.',
+        );
+        return;
+      }
+
       state = state.copyWith(
         items: previousItems,
         order: previousOrder,
@@ -526,28 +620,167 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   Future<void> updateItemQuantity(String itemId, double quantity) async {
     final orderId = state.order?.id;
     if (orderId == null) return;
-    await ref
-        .read(salesRepositoryProvider)
-        .updateItemQuantity(itemId: itemId, quantity: quantity);
-    await _loadOrderDetail(orderId);
+
+    OrderItem? targetItem;
+    for (final item in state.items) {
+      if (item.id == itemId) {
+        targetItem = item;
+        break;
+      }
+    }
+
+    try {
+      await ref
+          .read(salesRepositoryProvider)
+          .updateItemQuantity(itemId: itemId, quantity: quantity);
+      await _loadOrderDetail(orderId);
+    } catch (e) {
+      final businessId = _activeBusinessId;
+      final isOffline =
+          !_connectivity.isConnected || orderId.startsWith('local-order-');
+      if (isOffline && businessId != null && businessId.isNotEmpty) {
+        final updatedItems = state.items.map((item) {
+          if (item.id != itemId) return item;
+          final subtotal = item.unitPrice * quantity;
+          final taxRate = item.subtotal > 0 ? (item.tax / item.subtotal) : 0.0;
+          final tax = subtotal * taxRate;
+          final total = subtotal + tax;
+          return item.copyWith(
+            quantity: quantity,
+            subtotal: double.parse(subtotal.toStringAsFixed(2)),
+            tax: double.parse(tax.toStringAsFixed(2)),
+            total: double.parse(total.toStringAsFixed(2)),
+          );
+        }).toList(growable: false);
+
+        state = state.copyWith(items: updatedItems);
+        await _offlinePos.enqueueAction(
+          businessId: businessId,
+          action: {
+            'type': 'update_item_quantity',
+            'origin': state.origin,
+            'order_id': orderId,
+            'item_id': itemId,
+            'quantity': quantity,
+            'product_id': targetItem?.productId,
+            'product_name': targetItem?.productName,
+            'notes': targetItem?.notes,
+            'is_takeout': targetItem?.isTakeout,
+          },
+        );
+        await _persistCurrentState(localOnly: true);
+        state = state.copyWith(
+          error: 'Cantidad actualizada en local. Pendiente de sincronizar.',
+        );
+        return;
+      }
+
+      state = state.copyWith(error: 'Error al actualizar cantidad: $e');
+    }
   }
 
   Future<void> updateItemNotes(String itemId, String notes) async {
     final orderId = state.order?.id;
     if (orderId == null) return;
-    await ref
-        .read(salesRepositoryProvider)
-        .updateItemNotes(itemId: itemId, notes: notes);
-    await _loadOrderDetail(orderId);
+
+    OrderItem? targetItem;
+    for (final item in state.items) {
+      if (item.id == itemId) {
+        targetItem = item;
+        break;
+      }
+    }
+
+    try {
+      await ref
+          .read(salesRepositoryProvider)
+          .updateItemNotes(itemId: itemId, notes: notes);
+      await _loadOrderDetail(orderId);
+    } catch (e) {
+      final businessId = _activeBusinessId;
+      final isOffline =
+          !_connectivity.isConnected || orderId.startsWith('local-order-');
+      if (isOffline && businessId != null && businessId.isNotEmpty) {
+        state = state.copyWith(
+          items: state.items.map((item) {
+            return item.id == itemId ? item.copyWith(notes: notes) : item;
+          }).toList(growable: false),
+        );
+        await _offlinePos.enqueueAction(
+          businessId: businessId,
+          action: {
+            'type': 'update_item_notes',
+            'origin': state.origin,
+            'order_id': orderId,
+            'item_id': itemId,
+            'notes': notes,
+            'product_id': targetItem?.productId,
+            'product_name': targetItem?.productName,
+            'is_takeout': targetItem?.isTakeout,
+          },
+        );
+        await _persistCurrentState(localOnly: true);
+        state = state.copyWith(
+          error: 'Notas actualizadas en local. Pendiente de sincronizar.',
+        );
+        return;
+      }
+
+      state = state.copyWith(error: 'Error al actualizar notas: $e');
+    }
   }
 
   Future<void> toggleItemTakeout(String itemId, bool isTakeout) async {
     final orderId = state.order?.id;
     if (orderId == null) return;
-    await ref
-        .read(salesRepositoryProvider)
-        .toggleItemTakeout(itemId: itemId, isTakeout: isTakeout);
-    await _loadOrderDetail(orderId);
+
+    OrderItem? targetItem;
+    for (final item in state.items) {
+      if (item.id == itemId) {
+        targetItem = item;
+        break;
+      }
+    }
+
+    try {
+      await ref
+          .read(salesRepositoryProvider)
+          .toggleItemTakeout(itemId: itemId, isTakeout: isTakeout);
+      await _loadOrderDetail(orderId);
+    } catch (e) {
+      final businessId = _activeBusinessId;
+      final isOffline =
+          !_connectivity.isConnected || orderId.startsWith('local-order-');
+      if (isOffline && businessId != null && businessId.isNotEmpty) {
+        state = state.copyWith(
+          items: state.items.map((item) {
+            return item.id == itemId
+                ? item.copyWith(isTakeout: isTakeout)
+                : item;
+          }).toList(growable: false),
+        );
+        await _offlinePos.enqueueAction(
+          businessId: businessId,
+          action: {
+            'type': 'toggle_item_takeout',
+            'origin': state.origin,
+            'order_id': orderId,
+            'item_id': itemId,
+            'is_takeout': isTakeout,
+            'product_id': targetItem?.productId,
+            'product_name': targetItem?.productName,
+            'notes': targetItem?.notes,
+          },
+        );
+        await _persistCurrentState(localOnly: true);
+        state = state.copyWith(
+          error: 'Takeout del item actualizado en local. Pendiente de sincronizar.',
+        );
+        return;
+      }
+
+      state = state.copyWith(error: 'Error al cambiar takeout del item: $e');
+    }
   }
 
   Future<void> updateItem(String itemId, OrderItem updatedItem) async {
@@ -689,11 +922,50 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }
 
   Future<void> moveItemToCheck(String itemId, int pos) async {
-    await ref
-        .read(salesRepositoryProvider)
-        .moveItemToCheck(itemId: itemId, checkPosition: pos);
     final orderId = state.order?.id;
-    if (orderId != null) await _loadOrderDetail(orderId);
+    if (orderId == null) return;
+
+    OrderItem? targetItem;
+    for (final item in state.items) {
+      if (item.id == itemId) {
+        targetItem = item;
+        break;
+      }
+    }
+
+    try {
+      await ref
+          .read(salesRepositoryProvider)
+          .moveItemToCheck(itemId: itemId, checkPosition: pos);
+      await _loadOrderDetail(orderId);
+    } catch (e) {
+      final businessId = _activeBusinessId;
+      final isOffline =
+          !_connectivity.isConnected || orderId.startsWith('local-order-');
+      if (isOffline && businessId != null && businessId.isNotEmpty) {
+        await _offlinePos.enqueueAction(
+          businessId: businessId,
+          action: {
+            'type': 'move_item_to_check',
+            'origin': state.origin,
+            'order_id': orderId,
+            'item_id': itemId,
+            'check_pos': pos,
+            'product_id': targetItem?.productId,
+            'product_name': targetItem?.productName,
+            'notes': targetItem?.notes,
+            'is_takeout': targetItem?.isTakeout,
+          },
+        );
+        await _persistCurrentState(localOnly: true);
+        state = state.copyWith(
+          error: 'Movimiento a subcuenta guardado en local. Pendiente de sincronizar.',
+        );
+        return;
+      }
+
+      state = state.copyWith(error: 'Error moviendo item a subcuenta: $e');
+    }
   }
 
   /// Remueve localmente un check (subcuenta) y sus items, ajustando totales.
@@ -813,8 +1085,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           businessId: businessId,
           action: {
             'type': 'send_to_kitchen',
-            'order_id': orderId,
             'origin': state.origin,
+            'order_id': orderId,
           },
         );
         await _persistCurrentState(localOnly: true);
@@ -839,6 +1111,73 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     final orderId = state.order?.id;
     if (orderId == null) return;
     _scheduleOrderRefresh(orderId, clearIfPaid: clearIfPaid);
+  }
+
+  Future<void> syncPendingOfflineActions({bool force = false}) async {
+    if (_syncInFlight) return;
+    final businessId = _activeBusinessId;
+    if (businessId == null || businessId.isEmpty) return;
+    if (!_connectivity.isConnected) {
+      await _refreshOfflineMonitor(
+        syncStatus: 'Sin conexión. Sync pausada.',
+        syncInFlight: false,
+      );
+      return;
+    }
+
+    _syncInFlight = true;
+    await _refreshOfflineMonitor(
+      syncStatus: 'Sincronizando operaciones offline...',
+      syncInFlight: true,
+    );
+    try {
+      final result = await _offlinePos.syncPendingActions(
+        businessId: businessId,
+        salesRepository: ref.read(salesRepositoryProvider),
+        printingService: ref.read(printingServiceProvider),
+        force: force,
+      );
+
+      if (result.completed > 0 &&
+          state.order != null &&
+          state.order!.id.startsWith('local-order-') &&
+          result.lastMappedOrderId != null) {
+        await _loadOrderDetail(
+          result.lastMappedOrderId!,
+          origin: state.origin,
+        );
+      } else if (state.order != null && !state.order!.id.startsWith('local-order-')) {
+        await _loadOrderDetail(state.order!.id, origin: state.origin);
+      }
+
+      final syncMessage = !result.didWork
+          ? (result.pending > 0
+                ? 'Sync pendiente. Operaciones en espera.'
+                : 'Todo sincronizado.')
+          : result.hasFailures
+          ? 'Sync offline parcial: ${result.completed} ok, ${result.failed} con error.'
+          : result.pending > 0
+          ? 'Sync offline en progreso. Pendientes: ${result.pending}.'
+          : 'Sync offline completada (${result.completed}).';
+
+      state = state.copyWith(error: result.hasFailures ? syncMessage : state.error);
+      await _refreshOfflineMonitor(
+        syncStatus: syncMessage,
+        syncInFlight: false,
+      );
+      if (!result.hasFailures && result.pending == 0) {
+        state = state.copyWith(lastSyncAt: DateTime.now());
+      }
+    } catch (e) {
+      state = state.copyWith(error: 'Error sincronizando offline: $e');
+      await _refreshOfflineMonitor(
+        syncStatus: 'Error sincronizando offline.',
+        syncInFlight: false,
+      );
+    } finally {
+      _syncInFlight = false;
+      await _refreshOfflineMonitor(syncInFlight: false);
+    }
   }
 
   void _scheduleOrderRefresh(String orderId, {bool clearIfPaid = false}) {

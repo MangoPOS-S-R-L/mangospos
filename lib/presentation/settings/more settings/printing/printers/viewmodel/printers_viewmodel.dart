@@ -212,6 +212,55 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
     }
   }
 
+  Future<bool> updatePrinter({
+    required String printerId,
+    required String name,
+    String? ipAddress,
+    String? mac,
+    String? type,
+    String? devicePath,
+    bool? isActive,
+    int? paperWidth,
+    String? encoding,
+  }) async {
+    final trimmedName = name.trim();
+    if (trimmedName.isEmpty) {
+      state = state.copyWith(
+        errorMessage: 'El nombre de la impresora es obligatorio.',
+      );
+      return false;
+    }
+
+    try {
+      state = state.copyWith(isLoading: true, errorMessage: null);
+      final b = await _ensureOrResolveBusiness();
+      await _repo.updatePrinter(
+        printerId: printerId,
+        name: trimmedName,
+        ipAddress: ipAddress?.trim().isEmpty == true ? null : ipAddress?.trim(),
+        mac: mac?.trim().isEmpty == true ? null : mac?.trim(),
+        type: type?.trim().isEmpty == true ? null : type?.trim(),
+        devicePath: devicePath?.trim().isEmpty == true
+            ? null
+            : devicePath?.trim(),
+        isActive: isActive,
+        paperWidth: paperWidth,
+        encoding: encoding?.trim().isEmpty == true ? null : encoding?.trim(),
+      );
+      await load(businessId: b, force: true);
+      return true;
+    } catch (e, st) {
+      _log('updatePrinter() ERROR: $e\n$st');
+      state = state.copyWith(isLoading: false, errorMessage: e.toString());
+      return false;
+    }
+  }
+
+  Future<Map<String, PrinterUsageSummary>> loadUsageSummaries() async {
+    final b = await _ensureOrResolveBusiness();
+    return _repo.getPrinterUsageSummaries(b);
+  }
+
   // ✅ No intentes sockets en Web. En Desktop/Mobile sí.
   Future<bool> printSampleDirect(String printerId) async {
     if (kIsWeb) {
@@ -353,28 +402,31 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
 
     final results = <DiscoveredPrinter>[];
     try {
-      String? deviceIp = await NetworkInfo().getWifiIP();
-      if (deviceIp == null || deviceIp.isEmpty) {
-        deviceIp = await _getLocalIPv4Fallback();
-      }
-      final gatewayIp = await NetworkInfo().getWifiGatewayIP();
+      final gateways = await _getGatewayLastOctets();
+      final localIps = await _getLocalIPv4Candidates();
 
-      if (deviceIp == null) {
-        throw Exception('No hay IP local. Conéctate a la red.');
+      if (localIps.isEmpty) {
+        throw Exception('No hay IP local válida. Conéctate a la red.');
       }
 
-      final base = _subnetBaseFromIp(deviceIp);
-      final myLast = int.parse(deviceIp.split('.').last);
-      final gwLast = (gatewayIp != null && gatewayIp.contains('.'))
-          ? int.tryParse(gatewayIp.split('.').last)
-          : null;
+      final subnets = localIps.map(_subnetBaseFromIp).toSet().toList()..sort();
+      final ownLastOctets = localIps
+          .map((ip) => int.tryParse(ip.split('.').last))
+          .whereType<int>()
+          .toSet();
 
       final hosts = <String>[];
-      for (int i = 1; i <= 254; i++) {
-        if (i == myLast) continue;
-        if (gwLast != null && i == gwLast) continue;
-        hosts.add('$base.$i');
+      for (final base in subnets) {
+        for (int i = 1; i <= 254; i++) {
+          if (ownLastOctets.contains(i)) continue;
+          if (gateways.contains(i)) continue;
+          hosts.add('$base.$i');
+        }
       }
+
+      _log(
+        'scanOnLAN() -> subnets=${subnets.join(', ')} hosts=${hosts.length}',
+      );
 
       final found = <String, Set<int>>{};
       for (int offset = 0; offset < hosts.length; offset += maxConcurrent) {
@@ -723,32 +775,35 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
     state = state.copyWith(isDiscovering: true, errorMessage: null);
 
     try {
-      String? deviceIp = await NetworkInfo().getWifiIP();
-      if (deviceIp == null || deviceIp.isEmpty) {
-        deviceIp = await _getLocalIPv4Fallback();
-      }
-      final gatewayIp = await NetworkInfo().getWifiGatewayIP();
+      final gateways = await _getGatewayLastOctets();
+      final localIps = await _getLocalIPv4Candidates();
 
-      if (deviceIp == null) {
-        throw Exception('No hay IP local. Conéctate a la red.');
+      if (localIps.isEmpty) {
+        throw Exception('No hay IP local válida. Conéctate a la red.');
       }
 
-      final base = _subnetBaseFromIp(deviceIp);
-      final myLast = int.parse(deviceIp.split('.').last);
-      final gwLast = (gatewayIp != null && gatewayIp.contains('.'))
-          ? int.tryParse(gatewayIp.split('.').last)
-          : null;
+      final subnets = localIps.map(_subnetBaseFromIp).toSet().toList()..sort();
+      final ownLastOctets = localIps
+          .map((ip) => int.tryParse(ip.split('.').last))
+          .whereType<int>()
+          .toSet();
 
       const ports = [9100, 631, 515];
       const timeout = Duration(milliseconds: 350);
       const int maxConcurrent = 96;
 
       final hosts = <String>[];
-      for (int i = 1; i <= 254; i++) {
-        if (i == myLast) continue;
-        if (gwLast != null && i == gwLast) continue;
-        hosts.add('$base.$i');
+      for (final base in subnets) {
+        for (int i = 1; i <= 254; i++) {
+          if (ownLastOctets.contains(i)) continue;
+          if (gateways.contains(i)) continue;
+          hosts.add('$base.$i');
+        }
       }
+
+      _log(
+        'discoverOnLAN() -> subnets=${subnets.join(', ')} hosts=${hosts.length}',
+      );
 
       final found = <String, Set<int>>{};
       for (int offset = 0; offset < hosts.length; offset += maxConcurrent) {
@@ -887,27 +942,82 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
     return '${parts[0]}.${parts[1]}.${parts[2]}';
   }
 
-  Future<String?> _getLocalIPv4Fallback() async {
+  Future<List<String>> _getLocalIPv4Candidates() async {
+    final out = <String>[];
+
+    try {
+      final wifiIp = await NetworkInfo().getWifiIP();
+      if (wifiIp != null && wifiIp.isNotEmpty && _isPrivateIPv4(wifiIp)) {
+        out.add(wifiIp);
+      }
+    } catch (e) {
+      _log('_getLocalIPv4Candidates() wifi ERROR: $e');
+    }
+
     try {
       final interfaces = await NetworkInterface.list(
         includeLoopback: false,
         type: InternetAddressType.IPv4,
       );
+
+      final preferred = <String>[];
+      final others = <String>[];
+
       for (final ni in interfaces) {
+        final name = ni.name.toLowerCase();
+        final looksVirtual =
+            name.contains('virtual') ||
+            name.contains('vmware') ||
+            name.contains('vbox') ||
+            name.contains('hyper-v') ||
+            name.contains('tailscale') ||
+            name.contains('zerotier') ||
+            name.contains('loopback') ||
+            name.contains('awdl') ||
+            name.contains('bridge');
+
         for (final addr in ni.addresses) {
           final ip = addr.address;
-          if (ip.startsWith('127.') || ip.startsWith('169.254.')) continue;
-          if (ip.startsWith('10.') ||
-              ip.startsWith('172.') ||
-              ip.startsWith('192.168.')) {
-            return ip;
+          if (!_isPrivateIPv4(ip)) continue;
+          if (looksVirtual) {
+            others.add(ip);
+          } else {
+            preferred.add(ip);
           }
         }
       }
+
+      out
+        ..addAll(preferred)
+        ..addAll(others);
     } catch (e) {
-      _log('_getLocalIPv4Fallback() ERROR: $e');
+      _log('_getLocalIPv4Candidates() interfaces ERROR: $e');
     }
-    return null;
+
+    final seen = <String>{};
+    return out.where((ip) => seen.add(ip)).toList(growable: false);
+  }
+
+  Future<Set<int>> _getGatewayLastOctets() async {
+    final out = <int>{};
+    try {
+      final gatewayIp = await NetworkInfo().getWifiGatewayIP();
+      if (gatewayIp != null && gatewayIp.contains('.')) {
+        final last = int.tryParse(gatewayIp.split('.').last);
+        if (last != null) out.add(last);
+      }
+    } catch (e) {
+      _log('_getGatewayLastOctets() ERROR: $e');
+    }
+    return out;
+  }
+
+  bool _isPrivateIPv4(String ip) {
+    if (ip.isEmpty || !ip.contains('.')) return false;
+    if (ip.startsWith('127.') || ip.startsWith('169.254.')) return false;
+    return ip.startsWith('10.') ||
+        ip.startsWith('192.168.') ||
+        ip.startsWith('172.');
   }
 
   Future<Set<int>> _scanHostPorts(

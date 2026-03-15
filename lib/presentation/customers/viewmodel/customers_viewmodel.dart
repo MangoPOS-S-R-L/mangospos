@@ -48,13 +48,14 @@ class CustomersViewModel extends ChangeNotifier {
     _customers = await _repository.getCustomers(_businessId!);
   }
 
-  Future<void> addCustomer(Map<String, dynamic> data) async {
-    if (_businessId == null) return;
+  Future<Map<String, dynamic>?> addCustomer(Map<String, dynamic> data) async {
+    if (_businessId == null) return null;
     try {
       final payload = {...data, 'business_id': _businessId};
-      await _repository.createCustomer(payload);
+      final created = await _repository.createCustomer(payload);
       await _fetchCustomers();
       notifyListeners();
+      return created;
     } catch (e) {
       rethrow;
     }

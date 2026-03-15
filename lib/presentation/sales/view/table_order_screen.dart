@@ -7,6 +7,7 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dart';
+import 'package:mangopos/presentation/sales/state/sales_state.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
 import 'package:mangopos/presentation/sales/view/invoice_modal.dart';
@@ -301,7 +302,9 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     if (orderState.order == null) return;
 
     final sessionCtrl = ref.read(sessionProvider.notifier);
-    final hasDirectPermission = sessionCtrl.hasPermission('ventas.orden.anular');
+    final hasDirectPermission = sessionCtrl.hasPermission(
+      'ventas.orden.anular',
+    );
     if (!hasDirectPermission) {
       final authorized = await showPinVerificationModal(
         context,
@@ -315,7 +318,9 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       if (!context.mounted) return;
     }
 
-    final openItems = orderState.items.where(_isOpenItem).toList(growable: false);
+    final openItems = orderState.items
+        .where(_isOpenItem)
+        .toList(growable: false);
     final dialogResult = await showDialog<_VoidOrderDialogResult>(
       context: context,
       builder: (dialogContext) => _VoidOrderDialog(
@@ -323,7 +328,10 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         content: content,
         confirmLabel: confirmLabel,
         openItemsCount: openItems.length,
-        openItemsQty: openItems.fold<double>(0, (sum, item) => sum + item.quantity),
+        openItemsQty: openItems.fold<double>(
+          0,
+          (sum, item) => sum + item.quantity,
+        ),
         totalAmount: openItems.fold<double>(0, (sum, item) => sum + item.total),
       ),
     );
@@ -679,8 +687,12 @@ class _VoidOrderDialogState extends State<_VoidOrderDialog> {
                   ),
                   const SizedBox(height: 8),
                   Text('Líneas abiertas: ${widget.openItemsCount}'),
-                  Text('Cantidad abierta: ${widget.openItemsQty.toStringAsFixed(widget.openItemsQty % 1 == 0 ? 0 : 2)}'),
-                  Text('Total abierto: RD\$ ${currency.format(widget.totalAmount)}'),
+                  Text(
+                    'Cantidad abierta: ${widget.openItemsQty.toStringAsFixed(widget.openItemsQty % 1 == 0 ? 0 : 2)}',
+                  ),
+                  Text(
+                    'Total abierto: RD\$ ${currency.format(widget.totalAmount)}',
+                  ),
                 ],
               ),
             ),
@@ -691,7 +703,8 @@ class _VoidOrderDialogState extends State<_VoidOrderDialog> {
               textCapitalization: TextCapitalization.sentences,
               decoration: const InputDecoration(
                 labelText: 'Motivo de anulación *',
-                hintText: 'Ej: cliente desistió, error de captura, duplicada...',
+                hintText:
+                    'Ej: cliente desistió, error de captura, duplicada...',
                 border: OutlineInputBorder(),
               ),
             ),
@@ -713,7 +726,9 @@ class _VoidOrderDialogState extends State<_VoidOrderDialog> {
             final reason = _reasonCtrl.text.trim();
             if (reason.isEmpty) {
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Indica el motivo de la anulación.')),
+                const SnackBar(
+                  content: Text('Indica el motivo de la anulación.'),
+                ),
               );
               return;
             }
@@ -1143,6 +1158,13 @@ class _CartView extends ConsumerWidget {
                             ),
                           ),
                         const SizedBox(height: 8),
+                        if (orderState.isOfflineMode ||
+                            orderState.syncInFlight ||
+                            orderState.pendingOfflineActions > 0)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: _OrderSyncStatusChip(orderState: orderState),
+                          ),
                         OutlinedButton.icon(
                           onPressed: onAssignClient,
                           icon: const Icon(Icons.person_outline, size: 16),
@@ -1179,7 +1201,8 @@ class _CartView extends ConsumerWidget {
             ),
           ),
 
-        if (orderState.order != null || (orderState.sessionNote?.trim().isNotEmpty ?? false))
+        if (orderState.order != null ||
+            (orderState.sessionNote?.trim().isNotEmpty ?? false))
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
             child: Column(
@@ -1219,7 +1242,9 @@ class _CartView extends ConsumerWidget {
                             decoration: BoxDecoration(
                               color: const Color(0xFFEFF6FF),
                               borderRadius: BorderRadius.circular(999),
-                              border: Border.all(color: const Color(0xFFBFDBFE)),
+                              border: Border.all(
+                                color: const Color(0xFFBFDBFE),
+                              ),
                             ),
                             child: Text(
                               'Cerrada ${DateFormat('dd/MM HH:mm').format(orderState.order!.closedAt!.toLocal())}',
@@ -1246,7 +1271,11 @@ class _CartView extends ConsumerWidget {
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Icon(Icons.history_toggle_off, color: Color(0xFFDC2626), size: 18),
+                        const Icon(
+                          Icons.history_toggle_off,
+                          color: Color(0xFFDC2626),
+                          size: 18,
+                        ),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Column(
@@ -2465,6 +2494,96 @@ class _SentLineItem extends StatelessWidget {
   }
 }
 
+class _OrderSyncStatusChip extends ConsumerWidget {
+  final CurrentOrderState orderState;
+
+  const _OrderSyncStatusChip({required this.orderState});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final Color color = orderState.isOfflineMode
+        ? const Color(0xFFF59E0B)
+        : orderState.syncInFlight
+        ? const Color(0xFF2563EB)
+        : const Color(0xFF10B981);
+    final IconData icon = orderState.isOfflineMode
+        ? Icons.cloud_off_rounded
+        : orderState.syncInFlight
+        ? Icons.sync
+        : Icons.cloud_done_rounded;
+    final String text = orderState.isOfflineMode
+        ? 'Offline'
+        : orderState.syncInFlight
+        ? 'Sincronizando'
+        : orderState.pendingOfflineActions > 0
+        ? 'Pendiente sync'
+        : 'Al día';
+
+    final lastSyncLabel = orderState.lastSyncAt == null
+        ? null
+        : '${orderState.lastSyncAt!.hour.toString().padLeft(2, '0')}:${orderState.lastSyncAt!.minute.toString().padLeft(2, '0')}';
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.10),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: color.withValues(alpha: 0.30)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 14, color: color),
+              const SizedBox(width: 6),
+              Text(
+                orderState.pendingOfflineActions > 0
+                    ? '$text • ${orderState.pendingOfflineActions}'
+                    : text,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: color,
+                ),
+              ),
+              if (lastSyncLabel != null) ...[
+                const SizedBox(width: 6),
+                Text(
+                  '• $lastSyncLabel',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: color.withValues(alpha: 0.9),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        OutlinedButton.icon(
+          onPressed: orderState.syncInFlight
+              ? null
+              : () async {
+                  await ref
+                      .read(currentOrderProvider.notifier)
+                      .syncPendingOfflineActions(force: true);
+                },
+          icon: const Icon(Icons.sync_rounded, size: 15),
+          label: const Text('Sync'),
+          style: OutlinedButton.styleFrom(
+            minimumSize: const Size(0, 32),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _GroupedSentItem {
   final String name;
   final double qty;
@@ -2687,87 +2806,957 @@ class _AssignCustomerDialogState extends ConsumerState<_AssignCustomerDialog> {
     super.dispose();
   }
 
+  Future<void> _openCreateCustomerFlow() async {
+    final created = await showDialog<Map<String, dynamic>>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const _CreateCustomerDialog(),
+    );
+
+    if (!mounted || created == null) return;
+    Navigator.of(context).pop(created);
+  }
+
   @override
   Widget build(BuildContext context) {
     final vm = ref.watch(customersViewModelProvider);
+    final media = MediaQuery.of(context);
+    final dialogWidth = media.size.width < 980 ? media.size.width - 32 : 920.0;
+    final dialogHeight = media.size.height < 760
+        ? media.size.height - 32
+        : 680.0;
 
     return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      insetPadding: const EdgeInsets.all(16),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       child: SizedBox(
-        width: 520,
-        height: 560,
+        width: dialogWidth,
+        height: dialogHeight,
         child: Padding(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.all(24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'Asignar cliente',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: _salesTabActiveBg,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: const Icon(
+                      Icons.person_search_rounded,
+                      color: _salesTotalColor,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Cliente de la venta',
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w700,
+                            color: _salesTextPrimary,
+                          ),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          'Busca y asigna un cliente. Si no existe, créalo con el botón + sin salir del flujo.',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: _salesTextSecondary,
+                            height: 1.35,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
               ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _searchController,
-                onChanged: (value) =>
-                    ref.read(customersViewModelProvider).search(value),
-                decoration: InputDecoration(
-                  hintText: 'Buscar por nombre, teléfono o correo',
-                  prefixIcon: const Icon(Icons.search),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
+              const SizedBox(height: 20),
+              Expanded(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: _salesSurface,
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(color: _salesDivider),
+                    boxShadow: _salesSoftShadow,
+                  ),
+                  child: Column(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    'Clientes guardados',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700,
+                                      color: _salesTextPrimary,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  const Text(
+                                    'Vista limpia para ventas rápidas: buscador, lista y alta en un paso.',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: _salesTextSecondary,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 14),
+                                  TextField(
+                                    controller: _searchController,
+                                    onChanged: (value) => ref
+                                        .read(customersViewModelProvider)
+                                        .search(value),
+                                    decoration: InputDecoration(
+                                      hintText:
+                                          'Buscar por nombre, teléfono o correo',
+                                      prefixIcon: const Icon(Icons.search),
+                                      filled: true,
+                                      fillColor: _salesSurface,
+                                      border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(
+                                          _salesRadiusField,
+                                        ),
+                                        borderSide: const BorderSide(
+                                          color: _salesDivider,
+                                        ),
+                                      ),
+                                      enabledBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(
+                                          _salesRadiusField,
+                                        ),
+                                        borderSide: const BorderSide(
+                                          color: _salesDivider,
+                                        ),
+                                      ),
+                                      focusedBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(
+                                          _salesRadiusField,
+                                        ),
+                                        borderSide: const BorderSide(
+                                          color: _salesTotalColor,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Tooltip(
+                              message: 'Crear cliente',
+                              child: SizedBox(
+                                width: 54,
+                                height: 54,
+                                child: FilledButton(
+                                  onPressed: _openCreateCustomerFlow,
+                                  style: FilledButton.styleFrom(
+                                    backgroundColor: _salesTotalColor,
+                                    foregroundColor: Colors.white,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(18),
+                                    ),
+                                    padding: EdgeInsets.zero,
+                                  ),
+                                  child: const Icon(
+                                    Icons.add_rounded,
+                                    size: 28,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Divider(height: 1, color: _salesDivider),
+                      Expanded(
+                        child: vm.isLoading
+                            ? const Center(
+                                child: CircularProgressIndicator(
+                                  color: _salesTotalColor,
+                                ),
+                              )
+                            : vm.customers.isEmpty
+                            ? Center(
+                                child: Padding(
+                                  padding: const EdgeInsets.all(24),
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Container(
+                                        width: 72,
+                                        height: 72,
+                                        decoration: BoxDecoration(
+                                          color: _salesTabActiveBg,
+                                          borderRadius: BorderRadius.circular(
+                                            22,
+                                          ),
+                                        ),
+                                        child: const Icon(
+                                          Icons.people_alt_outlined,
+                                          color: _salesTotalColor,
+                                          size: 34,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 14),
+                                      const Text(
+                                        'No se encontraron clientes',
+                                        style: TextStyle(
+                                          color: _salesTextPrimary,
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 16,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      const Text(
+                                        'Prueba con otra búsqueda o crea uno nuevo con el botón +.',
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          color: _salesTextSecondary,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              )
+                            : Scrollbar(
+                                child: ListView.separated(
+                                  padding: const EdgeInsets.all(14),
+                                  itemCount: vm.customers.length,
+                                  separatorBuilder: (context, index) =>
+                                      const SizedBox(height: 10),
+                                  itemBuilder: (context, index) {
+                                    final customer = vm.customers[index];
+                                    final name =
+                                        customer['name']?.toString() ??
+                                        'Cliente';
+                                    final phone = customer['phone']?.toString();
+                                    final email = customer['email']?.toString();
+                                    final address = customer['address']
+                                        ?.toString();
+                                    final subtitleParts =
+                                        [phone, email, address]
+                                            .where(
+                                              (value) =>
+                                                  value != null &&
+                                                  value.trim().isNotEmpty,
+                                            )
+                                            .cast<String>()
+                                            .toList();
+
+                                    return InkWell(
+                                      borderRadius: BorderRadius.circular(16),
+                                      onTap: () =>
+                                          Navigator.of(context).pop(customer),
+                                      child: Container(
+                                        padding: const EdgeInsets.all(14),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFFFFBF6),
+                                          borderRadius: BorderRadius.circular(
+                                            16,
+                                          ),
+                                          border: Border.all(
+                                            color: _salesDivider,
+                                          ),
+                                        ),
+                                        child: Row(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            CircleAvatar(
+                                              radius: 22,
+                                              backgroundColor:
+                                                  _salesTabActiveBg,
+                                              child: Text(
+                                                name.isNotEmpty
+                                                    ? name[0].toUpperCase()
+                                                    : 'C',
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.w700,
+                                                  color: _salesTextPrimary,
+                                                ),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 12),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    name,
+                                                    style: const TextStyle(
+                                                      fontSize: 14,
+                                                      fontWeight:
+                                                          FontWeight.w700,
+                                                      color: _salesTextPrimary,
+                                                    ),
+                                                  ),
+                                                  if (subtitleParts
+                                                      .isNotEmpty) ...[
+                                                    const SizedBox(height: 4),
+                                                    Text(
+                                                      subtitleParts.join(' • '),
+                                                      maxLines: 2,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                      style: const TextStyle(
+                                                        fontSize: 12,
+                                                        color:
+                                                            _salesTextSecondary,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ],
+                                              ),
+                                            ),
+                                            const SizedBox(width: 12),
+                                            Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 10,
+                                                    vertical: 6,
+                                                  ),
+                                              decoration: BoxDecoration(
+                                                color: _salesTabActiveBg,
+                                                borderRadius:
+                                                    BorderRadius.circular(999),
+                                              ),
+                                              child: const Text(
+                                                'Seleccionar',
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w700,
+                                                  color: _salesTextPrimary,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CreateCustomerDialog extends ConsumerStatefulWidget {
+  const _CreateCustomerDialog();
+
+  @override
+  ConsumerState<_CreateCustomerDialog> createState() =>
+      _CreateCustomerDialogState();
+}
+
+class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
+  final TextEditingController _firstNameController = TextEditingController();
+  final TextEditingController _lastNameController = TextEditingController();
+  final TextEditingController _phoneController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _addressController = TextEditingController();
+  final TextEditingController _companyController = TextEditingController();
+  final TextEditingController _creditLimitController = TextEditingController();
+  final TextEditingController _maxCreditController = TextEditingController();
+
+  bool _isSaving = false;
+  bool _isAdvancedMode = false;
+  String _customerType = 'General';
+  String _documentType = 'Cédula';
+  DateTime? _birthDate;
+
+  @override
+  void dispose() {
+    _firstNameController.dispose();
+    _lastNameController.dispose();
+    _phoneController.dispose();
+    _emailController.dispose();
+    _addressController.dispose();
+    _companyController.dispose();
+    _creditLimitController.dispose();
+    _maxCreditController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickBirthDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _birthDate ?? DateTime(1995),
+      firstDate: DateTime(1900),
+      lastDate: DateTime.now(),
+    );
+
+    if (picked != null) {
+      setState(() => _birthDate = picked);
+    }
+  }
+
+  Widget _buildCreateField({
+    required String label,
+    required String hint,
+    required TextEditingController controller,
+    TextInputType? keyboardType,
+    int maxLines = 1,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: _salesTextPrimary,
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: controller,
+          keyboardType: keyboardType,
+          maxLines: maxLines,
+          decoration: InputDecoration(
+            hintText: hint,
+            hintStyle: const TextStyle(color: _salesTextHint, fontSize: 13),
+            filled: true,
+            fillColor: _salesSurface,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 14,
+              vertical: 14,
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(_salesRadiusField),
+              borderSide: const BorderSide(color: _salesDivider),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(_salesRadiusField),
+              borderSide: const BorderSide(color: _salesTotalColor),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDropdownField({
+    required String label,
+    required String value,
+    required List<String> items,
+    required ValueChanged<String?> onChanged,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: _salesTextPrimary,
+          ),
+        ),
+        const SizedBox(height: 8),
+        DropdownButtonFormField<String>(
+          initialValue: value,
+          items: items
+              .map(
+                (item) =>
+                    DropdownMenuItem<String>(value: item, child: Text(item)),
+              )
+              .toList(),
+          onChanged: onChanged,
+          decoration: InputDecoration(
+            filled: true,
+            fillColor: _salesSurface,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 14,
+              vertical: 14,
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(_salesRadiusField),
+              borderSide: const BorderSide(color: _salesDivider),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(_salesRadiusField),
+              borderSide: const BorderSide(color: _salesTotalColor),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Map<String, dynamic> _buildPayload() {
+    final firstName = _firstNameController.text.trim();
+    final lastName = _lastNameController.text.trim();
+    final fullName = [
+      firstName,
+      lastName,
+    ].where((value) => value.isNotEmpty).join(' ').trim();
+
+    final advancedNotes = <String, dynamic>{
+      'first_name': firstName,
+      'last_name': lastName,
+      'customer_type': _customerType,
+      'document_type': _documentType,
+      'business_name': _companyController.text.trim(),
+      'birth_date': _birthDate == null
+          ? null
+          : DateFormat('yyyy-MM-dd').format(_birthDate!),
+      'credit_limit': _creditLimitController.text.trim(),
+      'max_credit': _maxCreditController.text.trim(),
+      'mode': _isAdvancedMode ? 'advanced' : 'normal',
+    };
+
+    advancedNotes.removeWhere(
+      (key, value) => value == null || value.toString().trim().isEmpty,
+    );
+
+    return {
+      'name': fullName,
+      'phone': _phoneController.text.trim(),
+      'email': _emailController.text.trim(),
+      'address': _addressController.text.trim(),
+      'tax_id': '',
+      'notes': advancedNotes.entries
+          .map((entry) => '${entry.key}: ${entry.value}')
+          .join(' | '),
+    };
+  }
+
+  Future<void> _createCustomer() async {
+    final payload = _buildPayload();
+    if ((payload['name'] as String).isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('El nombre y apellido del cliente son obligatorios.'),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _isSaving = true);
+    try {
+      final created = await ref
+          .read(customersViewModelProvider)
+          .addCustomer(payload);
+      if (!mounted || created == null) return;
+      Navigator.of(context).pop(created);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo crear el cliente: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final dialogWidth = media.size.width < 900 ? media.size.width - 32 : 820.0;
+    final dialogHeight = media.size.height < 860
+        ? media.size.height - 32
+        : 760.0;
+
+    return Dialog(
+      insetPadding: const EdgeInsets.all(16),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      child: SizedBox(
+        width: dialogWidth,
+        height: dialogHeight,
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFEDD5),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: const Icon(
+                      Icons.person_add_alt_1_rounded,
+                      color: _salesTotalColor,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Nuevo cliente',
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w700,
+                            color: _salesTextPrimary,
+                          ),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          'Crea el cliente sin salir de ventas. Puedes usar modo normal o avanzado.',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: _salesTextSecondary,
+                            height: 1.35,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: _isSaving
+                        ? null
+                        : () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: _salesTabActiveBg,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: _salesDivider),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: InkWell(
+                        onTap: _isSaving
+                            ? null
+                            : () => setState(() => _isAdvancedMode = false),
+                        borderRadius: BorderRadius.circular(12),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          decoration: BoxDecoration(
+                            color: !_isAdvancedMode
+                                ? _salesSurface
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          alignment: Alignment.center,
+                          child: Text(
+                            'Normal',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: !_isAdvancedMode
+                                  ? _salesTextPrimary
+                                  : _salesTextSecondary,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: InkWell(
+                        onTap: _isSaving
+                            ? null
+                            : () => setState(() => _isAdvancedMode = true),
+                        borderRadius: BorderRadius.circular(12),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          decoration: BoxDecoration(
+                            color: _isAdvancedMode
+                                ? _salesSurface
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          alignment: Alignment.center,
+                          child: Text(
+                            'Avanzado',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: _isAdvancedMode
+                                  ? _salesTextPrimary
+                                  : _salesTextSecondary,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 18),
+              Expanded(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFFBF6),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: _salesDivider),
+                  ),
+                  child: Scrollbar(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(18),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _buildCreateField(
+                                  label: 'Nombre',
+                                  hint: 'Ej. María',
+                                  controller: _firstNameController,
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: _buildCreateField(
+                                  label: 'Apellido',
+                                  hint: 'Ej. Pérez',
+                                  controller: _lastNameController,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 14),
+                          _buildCreateField(
+                            label: 'Teléfono',
+                            hint: '809...',
+                            controller: _phoneController,
+                            keyboardType: TextInputType.phone,
+                          ),
+                          if (_isAdvancedMode) ...[
+                            const SizedBox(height: 14),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: _buildDropdownField(
+                                    label: 'Tipo de cliente',
+                                    value: _customerType,
+                                    items: const [
+                                      'General',
+                                      'Frecuente',
+                                      'Empresa',
+                                      'Crédito',
+                                    ],
+                                    onChanged: (value) {
+                                      if (value != null) {
+                                        setState(() => _customerType = value);
+                                      }
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: _buildDropdownField(
+                                    label: 'Tipo de documento',
+                                    value: _documentType,
+                                    items: const [
+                                      'Cédula',
+                                      'RNC',
+                                      'Pasaporte',
+                                      'Otro',
+                                    ],
+                                    onChanged: (value) {
+                                      if (value != null) {
+                                        setState(() => _documentType = value);
+                                      }
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+                            _buildCreateField(
+                              label: 'Razón social',
+                              hint: 'Nombre comercial o empresa',
+                              controller: _companyController,
+                            ),
+                            const SizedBox(height: 14),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      const Text(
+                                        'Fecha de nacimiento',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                          color: _salesTextPrimary,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      OutlinedButton.icon(
+                                        onPressed: _pickBirthDate,
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor: _salesTextPrimary,
+                                          backgroundColor: _salesSurface,
+                                          side: const BorderSide(
+                                            color: _salesDivider,
+                                          ),
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 14,
+                                            vertical: 16,
+                                          ),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              _salesRadiusField,
+                                            ),
+                                          ),
+                                        ),
+                                        icon: const Icon(Icons.cake_outlined),
+                                        label: Text(
+                                          _birthDate == null
+                                              ? 'Seleccionar fecha (opcional)'
+                                              : DateFormat(
+                                                  'dd/MM/yyyy',
+                                                ).format(_birthDate!),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: _buildCreateField(
+                                    label: 'Correo',
+                                    hint: 'cliente@correo.com',
+                                    controller: _emailController,
+                                    keyboardType: TextInputType.emailAddress,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+                            _buildCreateField(
+                              label: 'Dirección',
+                              hint: 'Dirección del cliente',
+                              controller: _addressController,
+                              maxLines: 2,
+                            ),
+                            const SizedBox(height: 14),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: _buildCreateField(
+                                    label: 'Límite de crédito',
+                                    hint: '0.00',
+                                    controller: _creditLimitController,
+                                    keyboardType:
+                                        const TextInputType.numberWithOptions(
+                                          decimal: true,
+                                        ),
+                                  ),
+                                ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: _buildCreateField(
+                                    label: 'Máximo de crédito',
+                                    hint: '0.00',
+                                    controller: _maxCreditController,
+                                    keyboardType:
+                                        const TextInputType.numberWithOptions(
+                                          decimal: true,
+                                        ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ] else ...[
+                            const SizedBox(height: 14),
+                            const Text(
+                              'Modo normal: alta rápida con los datos mínimos para seguir la venta sin fricción.',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: _salesTextSecondary,
+                                height: 1.4,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ),
               const SizedBox(height: 16),
-              Expanded(
-                child: vm.isLoading
-                    ? const Center(child: CircularProgressIndicator())
-                    : vm.customers.isEmpty
-                    ? const Center(child: Text('No se encontraron clientes'))
-                    : ListView.separated(
-                        itemCount: vm.customers.length,
-                        separatorBuilder: (_, index) =>
-                            const Divider(height: 1),
-                        itemBuilder: (context, index) {
-                          final customer = vm.customers[index];
-                          final name =
-                              customer['name']?.toString() ?? 'Cliente';
-                          final phone = customer['phone']?.toString();
-                          final email = customer['email']?.toString();
-                          final subtitleParts = [phone, email]
-                              .where(
-                                (value) =>
-                                    value != null && value.trim().isNotEmpty,
-                              )
-                              .cast<String>()
-                              .toList();
-
-                          return ListTile(
-                            leading: CircleAvatar(
-                              backgroundColor: _salesTabActiveBg,
-                              child: Text(
-                                name.isNotEmpty ? name[0].toUpperCase() : 'C',
-                                style: const TextStyle(
-                                  color: _salesTextPrimary,
-                                ),
-                              ),
-                            ),
-                            title: Text(name),
-                            subtitle: subtitleParts.isEmpty
-                                ? null
-                                : Text(subtitleParts.join(' • ')),
-                            onTap: () => Navigator.of(context).pop(customer),
-                          );
-                        },
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: _isSaving
+                          ? null
+                          : () => Navigator.of(context).pop(),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: _salesTextPrimary,
+                        side: const BorderSide(color: _salesDivider),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(
+                            _salesRadiusButton,
+                          ),
+                        ),
                       ),
-              ),
-              const SizedBox(height: 16),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Cancelar'),
-                ),
+                      child: const Text('Cancelar'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: _isSaving ? null : _createCustomer,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: _salesTotalColor,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(
+                            _salesRadiusButton,
+                          ),
+                        ),
+                      ),
+                      icon: _isSaving
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(Icons.check_circle_outline_rounded),
+                      label: Text(
+                        _isSaving ? 'Guardando...' : 'Crear y asignar cliente',
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),

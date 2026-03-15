@@ -6,10 +6,13 @@ import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/areas/viewmodel/print_areas_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
+import 'package:mangopos/presentation/settings/more%20settings/printing/widgets/printer_configuration_dialog.dart';
+import 'package:mangopos/presentation/settings/more%20settings/printing/widgets/printing_ui.dart';
 
 class PrintingReceiptsView extends ConsumerStatefulWidget {
-  final String businessId;
   const PrintingReceiptsView({super.key, this.businessId = 'auto'});
+
+  final String businessId;
 
   @override
   ConsumerState<PrintingReceiptsView> createState() =>
@@ -21,8 +24,7 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
   PrintArea? _fiscalArea;
   String? _selectedPrebillPrinter;
   String? _selectedReceiptPrinter;
-  bool _savingPrebill = false;
-  bool _savingReceipt = false;
+  bool _busy = false;
 
   @override
   void initState() {
@@ -33,12 +35,10 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
   Future<void> _bootstrap() async {
     final areasCtrl = ref.read(printingAreasViewModelProvider.notifier);
     final printersCtrl = ref.read(printingPrintersViewModelProvider.notifier);
-
-    await printersCtrl.load(businessId: widget.businessId);
+    await printersCtrl.load(businessId: widget.businessId, force: true);
     final bootstrap = await areasCtrl.bootstrapReceiptAssignments(
       businessId: widget.businessId,
     );
-
     if (!mounted) return;
     setState(() {
       _cashierArea = bootstrap.cashierArea;
@@ -48,288 +48,479 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
     });
   }
 
-  Future<void> _savePrebillPrinter() async {
-    final areasCtrl = ref.read(printingAreasViewModelProvider.notifier);
-    final messenger = ScaffoldMessenger.of(context);
-    final area = _cashierArea;
-    final printerId = _selectedPrebillPrinter;
-
-    if (area == null || printerId == null || printerId.isEmpty) {
-      messenger.showSnackBar(
-        const SnackBar(
-          content: Text('Selecciona una impresora para precuenta.'),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
-
-    setState(() => _savingPrebill = true);
-    final ok = await areasCtrl.linkAreaPrinter(
-      areaId: area.id,
-      printerId: printerId,
-      printsOrders: false,
-      printsPrebills: true,
-      printsReceipts: false,
-    );
+  Future<void> _saveAssignment({
+    required PrintArea area,
+    required String printerId,
+    required bool printsPrebills,
+    required bool printsReceipts,
+  }) async {
+    setState(() => _busy = true);
+    final ok = await ref
+        .read(printingAreasViewModelProvider.notifier)
+        .linkAreaPrinter(
+          areaId: area.id,
+          printerId: printerId,
+          printsOrders: false,
+          printsPrebills: printsPrebills,
+          printsReceipts: printsReceipts,
+        );
     if (!mounted) return;
-    setState(() => _savingPrebill = false);
-
-    messenger.showSnackBar(
+    setState(() => _busy = false);
+    if (ok) {
+      await _bootstrap();
+      if (!mounted) return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          ok
-              ? 'Impresora de precuenta guardada.'
-              : 'No se pudo guardar la impresora de precuenta.',
+          ok ? 'Asignación guardada.' : 'No se pudo guardar la asignación.',
         ),
-        backgroundColor: ok ? const Color(0xFF22C55E) : Colors.red,
       ),
     );
   }
 
-  Future<void> _saveReceiptPrinter() async {
-    final areasCtrl = ref.read(printingAreasViewModelProvider.notifier);
-    final messenger = ScaffoldMessenger.of(context);
-    final area = _fiscalArea;
-    final printerId = _selectedReceiptPrinter;
-
-    if (area == null || printerId == null || printerId.isEmpty) {
-      messenger.showSnackBar(
-        const SnackBar(
-          content: Text('Selecciona una impresora para recibo/factura.'),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
-
-    setState(() => _savingReceipt = true);
-    final ok = await areasCtrl.linkAreaPrinter(
-      areaId: area.id,
-      printerId: printerId,
-      printsOrders: false,
-      printsPrebills: false,
-      printsReceipts: true,
-    );
+  Future<void> _removeAssignment({
+    required PrintArea area,
+    required String printerId,
+    required bool prebill,
+  }) async {
+    setState(() => _busy = true);
+    final ok = await ref
+        .read(printingAreasViewModelProvider.notifier)
+        .unlinkAreaPrinter(
+          areaId: area.id,
+          printerId: printerId,
+          removeOrders: false,
+          removePrebills: prebill,
+          removeReceipts: !prebill,
+        );
     if (!mounted) return;
-    setState(() => _savingReceipt = false);
-
-    messenger.showSnackBar(
+    setState(() {
+      _busy = false;
+      if (prebill) {
+        _selectedPrebillPrinter = null;
+      } else {
+        _selectedReceiptPrinter = null;
+      }
+    });
+    if (ok) {
+      await _bootstrap();
+      if (!mounted) return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          ok
-              ? 'Impresora de recibo/factura guardada.'
-              : 'No se pudo guardar la impresora de recibo/factura.',
+          ok ? 'Asignación eliminada.' : 'No se pudo eliminar la asignación.',
         ),
-        backgroundColor: ok ? const Color(0xFF22C55E) : Colors.red,
       ),
     );
+  }
+
+  Future<void> _configurePrinter(PrinterDevice printer) async {
+    final vmCtrl = ref.read(printingPrintersViewModelProvider.notifier);
+    final changed = await showPrinterConfigurationDialog(
+      context,
+      printer: printer,
+      vmCtrl: vmCtrl,
+    );
+    if (changed == true) {
+      await _bootstrap();
+    }
+  }
+
+  Future<void> _replacePrinter({
+    required PrintArea area,
+    required bool prebill,
+  }) async {
+    final printers =
+        List<PrinterDevice>.from(
+          ref.read(printingPrintersViewModelProvider).items,
+        )..sort((a, b) {
+          if (a.online == b.online) return a.name.compareTo(b.name);
+          return a.online ? -1 : 1;
+        });
+
+    final selected = await showDialog<PrinterDevice>(
+      context: context,
+      builder: (dialogContext) => _ReceiptPrinterPickerDialog(
+        title: prebill
+            ? 'Selecciona impresora para prefactura'
+            : 'Selecciona impresora para comprobante final',
+        printers: printers,
+      ),
+    );
+    if (selected == null) return;
+
+    await _saveAssignment(
+      area: area,
+      printerId: selected.id,
+      printsPrebills: prebill,
+      printsReceipts: !prebill,
+    );
+    if (!mounted) return;
+    setState(() {
+      if (prebill) {
+        _selectedPrebillPrinter = selected.id;
+      } else {
+        _selectedReceiptPrinter = selected.id;
+      }
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     final printersState = ref.watch(printingPrintersViewModelProvider);
     final printers = printersState.items;
-    final loading = _cashierArea == null || _fiscalArea == null;
+    final loading =
+        printersState.isLoading || _cashierArea == null || _fiscalArea == null;
 
-    return Container(
-      color: const Color(0xFFF7F7F7),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextButton.icon(
-              style: TextButton.styleFrom(
-                foregroundColor: MangoColors.darkGray,
-                padding: const EdgeInsets.symmetric(horizontal: 0),
-              ),
-              onPressed: () => context.go(AppRoutes.settings),
-              icon: const Icon(Icons.arrow_back),
-              label: const Text('Regresar'),
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'Asignar Impresión de Comprobantes',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w800,
-                color: MangoColors.darkGray,
-              ),
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              'Configura una impresora para precuenta y otra para recibos/facturas. Igual de limpio que comandas, sin duplicar áreas innecesarias.',
-              style: TextStyle(fontSize: 14, color: Colors.black54),
-            ),
-            const SizedBox(height: 24),
-            if (loading || printersState.isLoading)
-              const Expanded(child: Center(child: CircularProgressIndicator()))
-            else if (printers.isEmpty)
-              const Expanded(
-                child: Center(
-                  child: Text(
-                    'Primero crea al menos una impresora.',
-                    style: TextStyle(color: Colors.black54),
-                  ),
-                ),
-              )
-            else
-              Expanded(
-                child: GridView.count(
-                  crossAxisCount: 2,
-                  crossAxisSpacing: 24,
-                  mainAxisSpacing: 24,
-                  childAspectRatio: 1.7,
+    PrinterDevice? prebillPrinter;
+    PrinterDevice? receiptPrinter;
+    for (final printer in printers) {
+      if (printer.id == _selectedPrebillPrinter) {
+        prebillPrinter = printer;
+      }
+      if (printer.id == _selectedReceiptPrinter) {
+        receiptPrinter = printer;
+      }
+    }
+
+    return PrintingPageShell(
+      title: 'Asignar impresora por comprobantes',
+      icon: Icons.print_outlined,
+      listTitle: 'Lista de comprobantes',
+      action: PrintingPrimaryButton(
+        label: 'Agregar impresora',
+        icon: Icons.add_circle,
+        onPressed: () => context.go(AppRoutes.printingPrinters),
+      ),
+      child: loading
+          ? const Center(child: CircularProgressIndicator())
+          : printers.isEmpty
+          ? const PrintingEmptyState(
+              label: 'Primero agrega una impresora para poder asignarla.',
+            )
+          : LayoutBuilder(
+              builder: (context, constraints) {
+                final cardWidth = constraints.maxWidth < 560
+                    ? constraints.maxWidth
+                    : 560.0;
+                return Wrap(
+                  spacing: 22,
+                  runSpacing: 22,
                   children: [
-                    _ReceiptAssignmentCard(
-                      title: 'Precuenta',
-                      subtitle:
-                          'Se usa cuando el cliente pide ver la cuenta antes de pagar.',
-                      areaName: _cashierArea?.name ?? 'Caja',
-                      printers: printers,
-                      selectedPrinter: _selectedPrebillPrinter,
-                      saving: _savingPrebill,
-                      onChanged: (value) {
-                        setState(() => _selectedPrebillPrinter = value);
-                      },
-                      onSave: _savePrebillPrinter,
+                    SizedBox(
+                      width: cardWidth,
+                      child: _DocumentAssignmentCard(
+                        title: 'C.Final',
+                        trailingLabel: 'Area fiscal',
+                        printer: receiptPrinter,
+                        busy: _busy,
+                        onAddOrReplace: () =>
+                            _replacePrinter(area: _fiscalArea!, prebill: false),
+                        onDelete: receiptPrinter == null
+                            ? null
+                            : () => _removeAssignment(
+                                area: _fiscalArea!,
+                                printerId: receiptPrinter!.id,
+                                prebill: false,
+                              ),
+                        onConfigure: receiptPrinter == null
+                            ? null
+                            : () => _configurePrinter(receiptPrinter!),
+                        replaceLabel: 'Reemplazar',
+                      ),
                     ),
-                    _ReceiptAssignmentCard(
-                      title: 'Recibo / Factura',
-                      subtitle:
-                          'Se usa al cobrar y emitir el comprobante final.',
-                      areaName: _fiscalArea?.name ?? 'Fiscal',
-                      printers: printers,
-                      selectedPrinter: _selectedReceiptPrinter,
-                      saving: _savingReceipt,
-                      onChanged: (value) {
-                        setState(() => _selectedReceiptPrinter = value);
-                      },
-                      onSave: _saveReceiptPrinter,
+                    SizedBox(
+                      width: cardWidth,
+                      child: _DocumentAssignmentCard(
+                        title: 'Prefactura',
+                        trailingLabel: 'Area caja',
+                        printer: prebillPrinter,
+                        busy: _busy,
+                        onAddOrReplace: () =>
+                            _replacePrinter(area: _cashierArea!, prebill: true),
+                        onDelete: prebillPrinter == null
+                            ? null
+                            : () => _removeAssignment(
+                                area: _cashierArea!,
+                                printerId: prebillPrinter!.id,
+                                prebill: true,
+                              ),
+                        onConfigure: prebillPrinter == null
+                            ? null
+                            : () => _configurePrinter(prebillPrinter!),
+                        replaceLabel: 'Reemplazar',
+                      ),
                     ),
                   ],
-                ),
+                );
+              },
+            ),
+    );
+  }
+}
+
+class _DocumentAssignmentCard extends StatelessWidget {
+  const _DocumentAssignmentCard({
+    required this.title,
+    required this.trailingLabel,
+    required this.printer,
+    required this.busy,
+    required this.onAddOrReplace,
+    required this.onDelete,
+    required this.onConfigure,
+    required this.replaceLabel,
+  });
+
+  final String title;
+  final String trailingLabel;
+  final PrinterDevice? printer;
+  final bool busy;
+  final VoidCallback onAddOrReplace;
+  final VoidCallback? onDelete;
+  final VoidCallback? onConfigure;
+  final String replaceLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    return PrintingCardFrame(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          PrintingSoftHeader(
+            leading: const Icon(
+              Icons.receipt_long_outlined,
+              color: MangoColors.darkGray,
+            ),
+            title: title,
+            trailing: Text(
+              trailingLabel,
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF4280E9),
               ),
-          ],
-        ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          if (printer == null)
+            SizedBox(
+              width: double.infinity,
+              child: TextButton.icon(
+                onPressed: busy ? null : onAddOrReplace,
+                style: TextButton.styleFrom(
+                  backgroundColor: const Color(0xFFEAF1FB),
+                  foregroundColor: const Color(0xFF4280E9),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+                icon: const Icon(Icons.add_circle_outline),
+                label: const Text('Agregar impresora'),
+              ),
+            )
+          else
+            PrintingDashedPanel(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.print_outlined,
+                        size: 22,
+                        color: MangoColors.darkGray,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              printer!.name,
+                              style: const TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w800,
+                                color: MangoColors.darkGray,
+                              ),
+                            ),
+                            const Text(
+                              'Generica',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: MangoColors.muted,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      PrintingStatusCluster(online: printer!.online),
+                      const SizedBox(width: 10),
+                      OutlinedButton(
+                        onPressed: onConfigure,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF4280E9),
+                          side: const BorderSide(color: Color(0xFF4280E9)),
+                          minimumSize: const Size(44, 38),
+                          padding: EdgeInsets.zero,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        child: const Icon(Icons.print_outlined),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  const Divider(height: 1, color: Color(0xFFD4D4D4)),
+                  const SizedBox(height: 12),
+                  Text(
+                    'IP: ${printer!.ip?.isNotEmpty == true ? printer!.ip! : 'No configurada'}',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: MangoColors.darkGray,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'MAC: ${printer!.mac?.isNotEmpty == true ? printer!.mac! : 'No disponible'}',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: MangoColors.darkGray,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      PrintingActionButton(
+                        label: 'Eliminar',
+                        icon: Icons.delete_outline,
+                        foreground: const Color(0xFFEF5350),
+                        background: const Color(0xFFFFF1F1),
+                        onPressed: busy ? null : onDelete,
+                      ),
+                      const SizedBox(width: 10),
+                      PrintingActionButton(
+                        label: 'Conf. imp.',
+                        icon: Icons.settings_outlined,
+                        foreground: const Color(0xFF376E86),
+                        background: const Color(0xFFE7EFF1),
+                        onPressed: busy ? null : onConfigure,
+                      ),
+                      const SizedBox(width: 10),
+                      PrintingActionButton(
+                        label: replaceLabel,
+                        icon: Icons.replay_outlined,
+                        foreground: const Color(0xFF4280E9),
+                        background: const Color(0xFFEAF1FB),
+                        onPressed: busy ? null : onAddOrReplace,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+        ],
       ),
     );
   }
 }
 
-class _ReceiptAssignmentCard extends StatelessWidget {
-  final String title;
-  final String subtitle;
-  final String areaName;
-  final List<PrinterDevice> printers;
-  final String? selectedPrinter;
-  final bool saving;
-  final ValueChanged<String?> onChanged;
-  final Future<void> Function() onSave;
-
-  const _ReceiptAssignmentCard({
+class _ReceiptPrinterPickerDialog extends StatelessWidget {
+  const _ReceiptPrinterPickerDialog({
     required this.title,
-    required this.subtitle,
-    required this.areaName,
     required this.printers,
-    required this.selectedPrinter,
-    required this.saving,
-    required this.onChanged,
-    required this.onSave,
   });
+
+  final String title;
+  final List<PrinterDevice> printers;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: MangoColors.cardBorder),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x0F000000),
-            blurRadius: 10,
-            offset: Offset(0, 4),
-          ),
-        ],
-      ),
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-              color: MangoColors.darkGray,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            subtitle,
-            style: const TextStyle(fontSize: 12, color: Colors.black54),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Área lógica: $areaName',
-            style: const TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: MangoColors.darkGray,
-            ),
-          ),
-          const SizedBox(height: 18),
-          DropdownButtonFormField<String>(
-            initialValue: selectedPrinter,
-            decoration: InputDecoration(
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 16,
-                vertical: 12,
-              ),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: const BorderSide(color: Color(0xFFE0E0E0)),
-              ),
-            ),
-            items: printers
-                .map(
-                  (printer) => DropdownMenuItem<String>(
-                    value: printer.id,
-                    child: Text(printer.name),
-                  ),
-                )
-                .toList(),
-            onChanged: saving ? null : onChanged,
-          ),
-          const Spacer(),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              onPressed: saving ? null : onSave,
-              icon: saving
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Icon(Icons.save_outlined, size: 18),
-              label: Text(saving ? 'Guardando...' : 'Guardar'),
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFF42A5F5),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      child: SizedBox(
+        width: 520,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                  color: MangoColors.darkGray,
                 ),
               ),
-            ),
+              const SizedBox(height: 14),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 420),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: printers.length,
+                  separatorBuilder: (_, index) => const SizedBox(height: 10),
+                  itemBuilder: (context, index) {
+                    final printer = printers[index];
+                    return InkWell(
+                      onTap: () => Navigator.of(context).pop(printer),
+                      borderRadius: BorderRadius.circular(12),
+                      child: Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFD4D4D4)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.print_outlined),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    printer.name,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      color: MangoColors.darkGray,
+                                    ),
+                                  ),
+                                  Text(
+                                    printer.ip?.isNotEmpty == true
+                                        ? 'IP: ${printer.ip}'
+                                        : 'Sin IP configurada',
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: MangoColors.muted,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            PrintingStatusCluster(online: printer.online),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 16),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Cerrar'),
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }

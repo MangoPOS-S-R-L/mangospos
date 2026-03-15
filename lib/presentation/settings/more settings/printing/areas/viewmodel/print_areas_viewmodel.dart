@@ -142,6 +142,28 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
     }
   }
 
+  Future<bool> unlinkAreaPrinter({
+    required String areaId,
+    required String printerId,
+    bool removeOrders = true,
+    bool removePrebills = true,
+    bool removeReceipts = true,
+  }) async {
+    try {
+      await _repo.removePrinterFromArea(
+        areaId: areaId,
+        printerId: printerId,
+        removeOrders: removeOrders,
+        removePrebills: removePrebills,
+        removeReceipts: removeReceipts,
+      );
+      return true;
+    } catch (e) {
+      state = state.copyWith(errorMessage: e.toString());
+      return false;
+    }
+  }
+
   Future<Map<String, String>> loadOrderPrinterSelections() async {
     final b = await _ensureBusiness();
     return _repo.getOrderPrinterSelections(b);
