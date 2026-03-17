@@ -86,13 +86,15 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
 
       final businessId = business['id'] as String;
 
+      final selectedPlan = (step1.selectedPlan ?? 'base').trim().toLowerCase();
+
       await supabase.from('memberships').insert({
         'user_id': userId,
         'business_id': businessId,
-        'plan_type': 'trial',
-        'status': 'active',
+        'plan_type': selectedPlan,
+        'status': 'trial',
         'start_date': DateTime.now().toIso8601String(),
-        'end_date': DateTime.now().add(const Duration(days: 30)).toIso8601String(),
+        'end_date': DateTime.now().add(const Duration(days: 14)).toIso8601String(),
         'created_at': DateTime.now().toIso8601String(),
       });
 

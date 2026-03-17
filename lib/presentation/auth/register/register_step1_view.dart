@@ -8,7 +8,9 @@ import 'package:mangopos/presentation/auth/widgets/auth_shell.dart';
 import 'register_step1_viewmodel.dart';
 
 class RegisterStep1View extends ConsumerStatefulWidget {
-  const RegisterStep1View({super.key});
+  final String? initialPlan;
+
+  const RegisterStep1View({super.key, this.initialPlan});
 
   @override
   ConsumerState<RegisterStep1View> createState() => _RegisterStep1ViewState();
@@ -29,6 +31,7 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
   @override
   void initState() {
     super.initState();
+    ref.read(registerStep1VmProvider.notifier).setSelectedPlan(widget.initialPlan);
     final state = ref.read(registerStep1VmProvider);
     _fullNameCtl = TextEditingController(text: state.fullName ?? '');
     _emailCtl = TextEditingController(text: state.email ?? '');
@@ -45,6 +48,10 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
 
   @override
   Widget build(BuildContext context) {
+    final state = ref.watch(registerStep1VmProvider);
+    final planLabel = _planLabel(state.selectedPlan);
+    final planPrice = _planPrice(state.selectedPlan);
+
     return AuthShell(
       brandSubtitle: 'Onboarding de negocios en MangoPOS',
       steps: _steps,
@@ -72,6 +79,47 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
                   fontSize: 15.5,
                   height: 1.6,
                   color: MangoTokens.mutedForeground,
+                ),
+              ),
+              const SizedBox(height: 20),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF7F1),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: const Color(0xFFFFE3CD)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Plan seleccionado',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: MangoTokens.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      planLabel,
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        color: MangoTokens.foreground,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '$planPrice · 14 días gratis',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w600,
+                        color: MangoTokens.secondaryForeground,
+                      ),
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(height: 30),
@@ -161,12 +209,13 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const AuthSummaryCard(
+            AuthSummaryCard(
               title: 'Resumen',
               children: [
+                AuthSummaryRow(label: 'Plan', value: planLabel),
+                AuthSummaryRow(label: 'Prueba', value: '14 días gratis'),
                 AuthSummaryRow(label: 'Acceso principal', value: 'Propietario'),
                 AuthSummaryRow(label: 'Subdominio', value: 'tunegocio.mangopos.do'),
-                AuthSummaryRow(label: 'Estado', value: 'Onboarding'),
                 AuthSummaryRow(
                   label: 'Permisos iniciales',
                   value: 'Administrador completo',
@@ -222,6 +271,28 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
           ),
         ),
       );
+
+  String _planLabel(String? plan) {
+    switch ((plan ?? 'base').toLowerCase()) {
+      case 'pro':
+        return 'Plan Pro';
+      case 'enterprise':
+        return 'Plan Enterprise';
+      default:
+        return 'Plan Base';
+    }
+  }
+
+  String _planPrice(String? plan) {
+    switch ((plan ?? 'base').toLowerCase()) {
+      case 'pro':
+        return 'US\$79.99/mes';
+      case 'enterprise':
+        return 'Precio personalizado';
+      default:
+        return 'US\$49.99/mes';
+    }
+  }
 }
 
 class _FieldLabel extends StatelessWidget {

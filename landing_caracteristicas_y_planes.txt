@@ -1,0 +1,308 @@
+MANGOPOS - CARACTERISTICAS Y PLANES PARA LANDING
+
+Nota:
+Este documento esta pensado como base comercial para la landing.
+Se apoya en los modulos reales del sistema y en una propuesta de planes
+que puedes ajustar despues con precios, limites y beneficios comerciales.
+
+========================================================================
+1. DESCRIPCION GENERAL DEL SISTEMA
+========================================================================
+
+MangoPOS es un sistema POS para restaurantes y negocios de comida que
+centraliza ventas, mesas, cocina, caja, productos, usuarios, impresion y
+configuracion operativa en una sola plataforma.
+
+Esta disenado para operar de forma rapida en pantalla tactil, reducir
+errores en la toma de pedidos y darle al negocio mas control sobre su
+operacion diaria.
+
+========================================================================
+2. PROPUESTA DE COPY GENERAL PARA LA LANDING
+========================================================================
+
+Texto corto:
+MangoPOS te ayuda a vender mas rapido, controlar tu caja, organizar la
+cocina y administrar tu restaurante desde un solo sistema.
+
+Texto mediano:
+Con MangoPOS puedes gestionar mesas, tomar pedidos, enviar comandas a
+cocina, cobrar con diferentes metodos de pago, controlar productos,
+configurar impuestos, administrar usuarios y organizar tu operacion diaria
+desde una plataforma moderna y facil de usar.
+
+========================================================================
+3. CARACTERISTICAS PRINCIPALES DEL SISTEMA
+========================================================================
+
+VENTAS Y OPERACION POS
+- Venta por zonas y mesas
+- Venta rapida para pedidos express
+- Venta manual
+- Base para modo delivery
+- Base para modo self service
+- Seleccion visual de mesas por zona
+- Estados de mesa
+- Apertura de orden por mesa
+- Carrito de compra con calculos automaticos
+- Busqueda de productos
+- Filtro por categorias
+- Catalogo visual de productos
+- Productos con modificadores
+- Notas por producto
+- Ajuste de cantidades
+- Eliminacion de productos del carrito
+- Envio de comandas a cocina
+- Precuenta
+- Division de cuenta manual
+- Division de cuenta equitativa
+- Manejo de subcuentas
+- Cobro desde la orden
+
+PAGOS Y CAJA
+- Pago en efectivo
+- Pago con tarjeta
+- Pago por transferencia
+- Pago por QR
+- Calculo de vuelto en efectivo
+- Apertura de caja
+- Cierre de caja
+- Arqueo o cierre a ciegas
+- Registro de ingresos y egresos
+- Historial operativo de caja
+- Resumen de sesion de caja
+- Registro de movimientos de efectivo
+
+COCINA Y COMANDAS
+- Envio de pedidos a cocina
+- Vista KDS para cocina
+- Estados de preparacion
+- Marcar pedido en preparacion
+- Marcar pedido listo
+- Flujo operativo para cocina en tiempo real
+- Control visual de productos agotados
+
+MESAS Y SALON
+- Gestion de zonas
+- Gestion de mesas
+- Estado en tiempo real de mesas
+- Control de ocupacion por mesa
+- Reapertura de ordenes activas
+- Flujo orientado a salon, terraza y areas VIP
+
+PRODUCTOS Y MENU
+- Gestion de productos
+- Gestion de categorias
+- Gestion de menus
+- Gestion de modificadores
+- Productos activos o inactivos
+- Asignacion de productos a menus
+- Configuracion de impuestos por producto/menu
+- Recetas
+- Base para combos
+- Preparado para insumos y costeo
+
+CLIENTES
+- Registro de clientes
+- Consulta de clientes
+- Busqueda por nombre, email o telefono
+- Base para historial de compras
+- Base para fidelizacion y beneficios
+
+USUARIOS, ROLES Y CONTROL
+- Login con usuario y clave
+- Registro de negocio y sucursal inicial
+- Gestion de empleados
+- Roles de usuario
+- Permisos por modulo
+- Overrides de permisos por usuario
+- Control de acceso por negocio
+
+IMPRESION
+- Configuracion de impresoras
+- Impresion termica
+- Asignacion de areas de impresion
+- Impresion de comandas
+- Impresion de recibos
+- Impresion de precuentas
+- Soporte para impresion distribuida
+
+CONFIGURACION DEL NEGOCIO
+- Configuracion de impuestos
+- Configuracion de cajas
+- Configuracion de zonas y mesas
+- Configuracion de usuarios
+- Configuracion de menus y recetas
+- Configuracion de impresion
+- Configuracion comercial del negocio
+- Base para multi-sucursal
+
+FISCAL Y ADMINISTRATIVO
+- Base para comprobantes fiscales
+- Base para NCF y e-CF
+- Base para reportes operativos
+- Base para compras e inventario
+- Base para promociones, cupones y gift cards
+- Base para creditos y fidelizacion
+
+========================================================================
+4. BENEFICIOS QUE PUEDES DESTACAR EN LA LANDING
+========================================================================
+
+- Agiliza la toma de pedidos
+- Reduce errores entre salon, caja y cocina
+- Mejora el control de mesas y comandas
+- Centraliza ventas y operacion en un solo sistema
+- Facilita el control de caja y movimientos de efectivo
+- Organiza productos, menus y recetas desde un solo lugar
+- Permite crecer a una operacion mas profesional
+- Preparado para escalar con mas usuarios, mas sucursales y mas modulos
+
+========================================================================
+5. PROPUESTA DE PLANES PARA LA LANDING
+========================================================================
+
+Importante:
+La siguiente estructura es una propuesta comercial basada en lo que hoy
+tiene MangoPOS y en los upgrades que el sistema puede vender mejor.
+
+PLAN 1 - BASE
+Ideal para negocios que quieren comenzar a operar con orden y velocidad.
+
+Incluye:
+- Punto de venta
+- Venta por mesas y zonas
+- Venta rapida
+- Venta manual
+- Base comercial para delivery y self service
+- Carrito con calculos automaticos
+- Busqueda y filtro de productos
+- Modificadores y notas por producto
+- Envio de comandas a cocina
+- Division de cuenta
+- Precuenta
+- Cobros en efectivo, tarjeta y transferencia
+- Apertura y cierre de caja
+- Ingresos y egresos
+- KDS de cocina
+- Gestion de productos
+- Gestion de categorias
+- Gestion de menus
+- Gestion de impuestos
+- Gestion de usuarios y roles base
+- Configuracion de zonas y mesas
+- Configuracion de impresion
+- 1 negocio / 1 sucursal
+- Soporte base
+
+Copy sugerido:
+Todo lo esencial para vender, cobrar y operar tu restaurante en un solo
+lugar.
+
+PLAN 2 - PRO
+Ideal para negocios que necesitan mas control operativo y administracion.
+
+Incluye todo lo del Plan Base, mas:
+- Gestion ampliada de empleados
+- Permisos avanzados por usuario
+- Recetas
+- Mayor control de impresion por areas
+- Configuracion operativa mas completa
+- Mayor organizacion del catalogo y del menu
+- Clientes y base para historial de compras
+- Acompanamiento de implementacion
+- Mas usuarios operativos
+- Soporte prioritario
+
+Copy sugerido:
+Mas control, mas orden y mas capacidad para crecer sin complicar la
+operacion.
+
+PLAN 3 - ENTERPRISE
+Ideal para marcas, cadenas o negocios que quieren una operacion mas
+robusta y escalable.
+
+Incluye todo lo del Plan Pro, mas:
+- Multi-sucursal
+- Mayor control administrativo por sede
+- Parametrizacion avanzada del sistema
+- Implementacion acompanada
+- Soporte premium
+- Prioridad en mejoras
+- Integraciones o adaptaciones a medida
+- Activacion de modulos avanzados segun alcance comercial
+- Preparacion para reportes avanzados
+- Preparacion para inventario, compras y promociones
+- Preparacion para fidelizacion, creditos y gift cards
+
+Copy sugerido:
+La version mas completa de MangoPOS para operaciones que necesitan
+control, escalabilidad y acompanamiento cercano.
+
+========================================================================
+6. VERSION RESUMIDA DE PLANES PARA TARJETAS DE PRICING
+========================================================================
+
+BASE
+- Ventas
+- Caja
+- Cocina
+- Productos
+- Impuestos
+- Impresion
+- 1 sucursal
+
+PRO
+- Todo en Base
+- Usuarios avanzados
+- Recetas
+- Clientes
+- Impresion por areas
+- Soporte prioritario
+
+ENTERPRISE
+- Todo en Pro
+- Multi-sucursal
+- Soporte premium
+- Implementacion acompanada
+- Escalado y modulos a medida
+
+========================================================================
+7. MODULOS QUE PUEDES VENDER COMO ADD-ONS O EXPANSIONES
+========================================================================
+
+- Multi-sucursal
+- Usuarios adicionales
+- Soporte premium
+- Implementacion y capacitacion
+- Impresion avanzada
+- Reportes avanzados
+- Inventario y compras
+- Fidelizacion
+- Promociones y cupones
+- Gift cards
+- Credito a clientes
+- Integraciones especiales
+
+========================================================================
+8. COPY EXTRA PARA SECCION "POR QUE ELEGIRNOS"
+========================================================================
+
+- Disenado para restaurantes y negocios de comida
+- Flujo rapido para ventas en mostrador y salon
+- Mejor comunicacion entre caja y cocina
+- Configuracion flexible para crecer por etapas
+- Base lista para operar hoy y escalar manana
+
+========================================================================
+9. RECOMENDACION COMERCIAL
+========================================================================
+
+Si quieres vender con mas claridad en la landing, lo mejor es separar:
+
+1. Lo que ya viene incluido desde el primer plan
+2. Lo que se ofrece como upgrade
+3. Lo que se activa como implementacion premium o empresarial
+
+Eso evita prometer de mas y te ayuda a presentar MangoPOS como un sistema
+que crece junto al negocio.

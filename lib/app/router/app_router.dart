@@ -107,7 +107,9 @@ class AppRouter {
       ),
       GoRoute(
         path: AppRoutes.register,
-        builder: (context, state) => const RegisterStep1View(),
+        builder: (context, state) => RegisterStep1View(
+          initialPlan: state.uri.queryParameters['plan'],
+        ),
       ),
       GoRoute(
         path: AppRoutes.registerStep2,
