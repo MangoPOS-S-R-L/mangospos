@@ -654,7 +654,13 @@ class _UserRow extends StatelessWidget {
                   _showResetPasswordDialog(context, user);
                   break;
                 case 'view_permissions':
-                  onEdit();
+                  if (user.userId != null) {
+                    context.push('${AppRoutes.settingsRoles}/${user.userId}/${user.id}');
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Este empleado no tiene un usuario de acceso vinculado.')),
+                    );
+                  }
                   break;
                 case 'deactivate':
                   _showDeactivateDialog(context, user);

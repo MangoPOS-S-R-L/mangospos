@@ -554,8 +554,12 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                   return;
                 }
                 if (orderState.order == null) {
+                  final errorMsg = orderState.error ?? 'No hay una orden activa.';
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('No hay una orden activa.')),
+                    SnackBar(content: Text(
+                      'Error: $errorMsg\nPor favor envíame una captura de este mensaje.',
+                      maxLines: 4,
+                    )),
                   );
                   return;
                 }

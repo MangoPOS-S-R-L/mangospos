@@ -23,6 +23,7 @@ class PermissionsRepository {
   Future<void> saveUserOverrides({
     required String businessId,
     required String userId,
+    required String employeeId,
     required Set<String> codes,
   }) async {
     // Nos aseguramos que existan los permisos
@@ -33,12 +34,11 @@ class PermissionsRepository {
       await _client.from('permissions').upsert(toUpsert, onConflict: 'code');
     }
 
-    // Limpiar overrides previos del usuario para este negocio
+    // Limpiar overrides previos del empleado para este negocio
     await _client
         .from('user_permission_overrides')
         .delete()
-        .eq('user_id', userId)
-        .eq('business_id', businessId);
+        .eq('employee_id', employeeId);
 
     if (codes.isEmpty) return;
 
@@ -53,6 +53,7 @@ class PermissionsRepository {
         .map(
           (p) => {
             'user_id': userId,
+            'employee_id': employeeId,
             'permission_id': p['id'],
             'business_id': businessId,
             'allow': true,

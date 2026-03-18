@@ -128,7 +128,17 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }
 
   Future<void> openTable(String tableId, {int peopleCount = 1}) async {
-    if (!await ensureCashSessionOpen()) return;
+    // Solo los roles con permisos de caja (cajero/admin/manager) necesitan
+    // una sesión de caja abierta. Los meseros pueden abrir mesas directamente.
+    final sessionCtrl = ref.read(sessionProvider.notifier);
+    final hasCashierAccess = sessionCtrl.hasAnyPermission([
+      'caja.apertura',
+      'caja.cierre',
+      'caja.movimientos_ver',
+    ]);
+    if (hasCashierAccess) {
+      if (!await ensureCashSessionOpen()) return;
+    }
 
     // Mostrar inmediatamente la última versión conocida si existe
     final cached = _tableCache[tableId];
@@ -1297,9 +1307,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
 
     if (order == null && items.isEmpty) {
+      // DUMP ERROR EN MODO DEBUG
+      print("===== _loadOrderDetail ERROR =====");
+      print("orderId: $orderId");
+      print("loadedByBundle: $loadedByBundle");
+      print("loadError: $loadError");
+      print("==================================");
+
       state = state.copyWith(
         loading: false,
-        error: loadError ?? 'Orden no encontrada',
+        error: loadError ?? 'Orden no encontrada (Probable error RLS o de permisos)',
       );
       return;
     }

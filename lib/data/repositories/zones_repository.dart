@@ -28,7 +28,8 @@ class ZonesRepository {
     final rows = await sb
         .from('v_zone_table_status')
         .select(
-          'table_id,zone_id,code,session_id,orders_count,minutes_open,items_count,total,people_count',
+          'table_id,zone_id,code,session_id,orders_count,minutes_open,'
+          'items_count,total,people_count,is_own,waiter_name,state',
         )
         .eq('zone_id', zoneId)
         .order('code', ascending: true);

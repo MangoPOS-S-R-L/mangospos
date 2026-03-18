@@ -616,6 +616,10 @@ final rolePresets = <String, RolePresetDefinition>{
     permissionCodes: {
       'ventas.mesas.acceso',
       'ventas.mesas.ver_estado',
+      'ventas.mesas.abrir',
+      'ventas.mesas.mover_unir',
+      'ventas.mesas.marcar_pagando',
+      'ventas.mesas.liberar',
       'ventas.orden.ver_total',
       'ventas_rapida.acceso',
       'ventas_rapida.crear_orden',

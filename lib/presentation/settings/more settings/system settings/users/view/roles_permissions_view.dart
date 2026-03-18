@@ -1,20 +1,30 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/data/repositories/permissions_repository.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
+import 'package:mangopos/services/session/session_controller.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-class SettingsRolesView extends StatefulWidget {
+class SettingsRolesView extends ConsumerStatefulWidget {
   final String businessId;
-  const SettingsRolesView({super.key, required this.businessId});
+  final String? targetUserId;
+  final String? targetEmployeeId;
+
+  const SettingsRolesView({
+    super.key,
+    required this.businessId,
+    this.targetUserId,
+    this.targetEmployeeId,
+  });
 
   @override
-  State<SettingsRolesView> createState() => _SettingsRolesViewState();
+  ConsumerState<SettingsRolesView> createState() => _SettingsRolesViewState();
 }
 
-class _SettingsRolesViewState extends State<SettingsRolesView> {
+class _SettingsRolesViewState extends ConsumerState<SettingsRolesView> {
   static const actions = [
     'acceso',
     'ver',
@@ -226,7 +236,8 @@ class _SettingsRolesViewState extends State<SettingsRolesView> {
       _error = null;
     });
     final sb = Supabase.instance.client;
-    final userId = sb.auth.currentUser?.id;
+    // Usar el usuario objetivo si se proporciona, de lo contrario el actual
+    final userId = widget.targetUserId ?? sb.auth.currentUser?.id;
     if (userId == null) {
       setState(() {
         _loading = false;
@@ -268,11 +279,17 @@ class _SettingsRolesViewState extends State<SettingsRolesView> {
   }
 
   Future<void> _persist() async {
-    final sb = Supabase.instance.client;
-    final userId = sb.auth.currentUser?.id;
-    if (userId == null || _businessId == null) {
+    final session = ref.read(sessionProvider);
+    
+    // Prioridad: 1) Parámetros del widget, 2) Sesión actual
+    final userId = widget.targetUserId ?? session.userId;
+    final employeeId = widget.targetEmployeeId ?? session.employeeId;
+
+    if (userId == null || _businessId == null || employeeId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Falta usuario o negocio para guardar.')),
+        const SnackBar(
+            content: Text(
+                'Falta usuario, negocio o ID de empleado para guardar.')),
       );
       return;
     }
@@ -286,6 +303,7 @@ class _SettingsRolesViewState extends State<SettingsRolesView> {
       await _repo.saveUserOverrides(
         businessId: _businessId!,
         userId: userId,
+        employeeId: employeeId,
         codes: desiredCodes,
       );
       if (!mounted) return;

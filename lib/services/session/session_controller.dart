@@ -121,11 +121,11 @@ bool _meetsPinAccess(PosRole role, PinAccessLevel level) {
       return role == PosRole.administrador;
   }
 }
-
 class SessionState {
   final AuthStatus status;
   final String? userId;
   final String? userName;
+  final String? employeeId;
   final String? activeBusinessId;
   final String? activeBusinessName;
   final PosRole? activeRole;
@@ -136,6 +136,7 @@ class SessionState {
     this.status = AuthStatus.unauthenticated,
     this.userId,
     this.userName,
+    this.employeeId,
     this.activeBusinessId,
     this.activeBusinessName,
     this.activeRole,
@@ -147,6 +148,7 @@ class SessionState {
     AuthStatus? status,
     String? userId,
     String? userName,
+    String? employeeId,
     String? activeBusinessId,
     String? activeBusinessName,
     PosRole? activeRole,
@@ -157,6 +159,7 @@ class SessionState {
       status: status ?? this.status,
       userId: userId ?? this.userId,
       userName: userName ?? this.userName,
+      employeeId: employeeId ?? this.employeeId,
       activeBusinessId: activeBusinessId ?? this.activeBusinessId,
       activeBusinessName: activeBusinessName ?? this.activeBusinessName,
       activeRole: activeRole ?? this.activeRole,
@@ -209,6 +212,7 @@ class SessionController extends Notifier<SessionState> {
 
   void setAuthenticated(
     String userId, {
+    String? employeeId,
     String? businessId,
     String? businessName,
     String? userName,
@@ -224,6 +228,7 @@ class SessionController extends Notifier<SessionState> {
     state = SessionState(
       status: AuthStatus.authenticated,
       userId: userId,
+      employeeId: employeeId,
       activeBusinessId: businessId,
       activeBusinessName: businessName,
       userName: userName,
@@ -280,6 +285,15 @@ class SessionController extends Notifier<SessionState> {
         setUnauthenticated();
         return false;
       }
+
+      // Cargar employee_id desde la tabla employees
+      final empResp = await client
+          .from('employees')
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('business_id', businessId)
+          .maybeSingle();
+      final employeeId = empResp?['id'] as String?;
 
       final businessResp = await client
           .from('businesses')

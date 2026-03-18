@@ -1892,11 +1892,18 @@ ALTER FUNCTION "public"."has_business_role"("_user_id" "uuid", "_business_id" "u
 CREATE OR REPLACE FUNCTION "public"."is_admin_of_business"("p_business" "uuid") RETURNS boolean
     LANGUAGE "sql" STABLE
     AS $$
-  select exists(
-    select 1 from public.memberships m
-    where m.business_id = p_business and m.user_id = auth.uid()
-      and m.role in ('owner','admin')
-  );
+  select
+    exists(
+      select 1 from public.memberships m
+      where m.business_id = p_business and m.user_id = auth.uid()
+        and m.role in ('owner', 'admin')
+    )
+    or
+    exists(
+      select 1 from public.user_businesses ub
+      where ub.business_id = p_business and ub.user_id = auth.uid()
+        and ub.role in ('owner', 'admin')
+    );
 $$;
 
 
@@ -1917,10 +1924,16 @@ ALTER FUNCTION "public"."is_business_owner"("biz" "uuid") OWNER TO "postgres";
 CREATE OR REPLACE FUNCTION "public"."is_member_of_business"("p_business" "uuid") RETURNS boolean
     LANGUAGE "sql" STABLE
     AS $$
-  select exists(
-    select 1 from public.memberships m
-    where m.business_id = p_business and m.user_id = auth.uid()
-  );
+  select
+    exists(
+      select 1 from public.memberships m
+      where m.business_id = p_business and m.user_id = auth.uid()
+    )
+    or
+    exists(
+      select 1 from public.user_businesses ub
+      where ub.business_id = p_business and ub.user_id = auth.uid()
+    );
 $$;
 
 

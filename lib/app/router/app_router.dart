@@ -295,6 +295,18 @@ class AppRouter {
                 const SettingsUsersView(businessId: 'auto'),
           ),
           GoRoute(
+            path: '${AppRoutes.settingsRoles}/:userId/:employeeId',
+            builder: (context, state) {
+              final userId = state.pathParameters['userId'];
+              final employeeId = state.pathParameters['employeeId'];
+              return SettingsRolesView(
+                businessId: 'auto',
+                targetUserId: userId,
+                targetEmployeeId: employeeId,
+              );
+            },
+          ),
+          GoRoute(
             path: AppRoutes.settingsRoles,
             builder: (context, state) =>
                 const SettingsRolesView(businessId: 'auto'),

@@ -350,12 +350,29 @@ class PrintingService {
     }
   }
 
-  Future<PrintArea> _ensureAreaForCode(String businessId, String areaCode) {
-    return _printingRepo.ensurePrintArea(
+  Future<PrintArea> _ensureAreaForCode(String businessId, String areaCode) async {
+    // Primero intentar GET (todos los miembros del negocio tienen SELECT).
+    final existing = await _printingRepo.getPrintAreaByCode(
       businessId: businessId,
       code: areaCode,
-      name: _friendlyAreaName(areaCode),
     );
+    if (existing != null) return existing;
+
+    // El área no existe: solo un admin puede crearla.
+    // Intentamos la inserción y capturamos el error RLS para dar un mensaje claro.
+    try {
+      return await _printingRepo.ensurePrintArea(
+        businessId: businessId,
+        code: areaCode,
+        name: _friendlyAreaName(areaCode),
+      );
+    } catch (_) {
+      throw Exception(
+        'El área de impresión "${_friendlyAreaName(areaCode)}" no está configurada. '
+        'Un administrador debe ir a Ajustes → Impresoras y crear el área "$areaCode" '
+        'antes de enviar a cocina.',
+      );
+    }
   }
 
   String _friendlyAreaName(String areaCode) {
