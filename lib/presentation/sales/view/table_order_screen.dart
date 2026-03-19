@@ -5,16 +5,15 @@ import 'package:intl/intl.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/data/models/sales_models.dart';
+import 'package:mangopos/data/models/fiscal_models.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dart';
 import 'package:mangopos/presentation/sales/state/sales_state.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
-import 'package:mangopos/presentation/sales/view/invoice_modal.dart';
 import 'package:mangopos/presentation/split_bill/widgets/split_bill_modal.dart';
 import 'package:mangopos/presentation/customers/viewmodel/customers_viewmodel.dart';
 
-import 'package:mangopos/presentation/sales/widgets/precheck/pre_check_dialog.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
@@ -83,27 +82,25 @@ Future<_BusinessReceiptProfile> _loadBusinessReceiptProfile(
   try {
     final business = await client
         .from('businesses')
-        .select('business_name, branch_name, address, phone')
+        .select('business_name, branch_name, address, phone, fiscal_rnc, fiscal_name')
         .eq('id', businessId)
         .maybeSingle();
 
     final branchName = business?['branch_name']?.toString().trim();
     final businessName = business?['business_name']?.toString().trim();
-    name = branchName?.isNotEmpty == true
-        ? branchName
-        : (businessName?.isNotEmpty == true ? businessName : fallbackName);
+    final fiscalNameVal = business?['fiscal_name']?.toString().trim();
+    
+    // Prefer fiscal_name if available for receipts
+    name = fiscalNameVal?.isNotEmpty == true
+        ? fiscalNameVal
+        : (branchName?.isNotEmpty == true
+            ? branchName
+            : (businessName?.isNotEmpty == true ? businessName : fallbackName));
+    
     address = business?['address']?.toString().trim();
     phone = business?['phone']?.toString().trim();
-  } catch (_) {}
-
-  try {
-    final fiscal = await client
-        .from('fiscal_settings')
-        .select('rnc, business_legal_name')
-        .eq('business_id', businessId)
-        .maybeSingle();
-    rnc = fiscal?['rnc']?.toString().trim();
-    legalName = fiscal?['business_legal_name']?.toString().trim();
+    rnc = business?['fiscal_rnc']?.toString().trim();
+    legalName = fiscalNameVal;
   } catch (_) {}
 
   return _BusinessReceiptProfile(
@@ -359,6 +356,17 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     }
   }
 
+  String? _parseLegalName(String? notes) {
+    if (notes == null) return null;
+    final parts = notes.split(' | ');
+    for (final part in parts) {
+      if (part.trim().startsWith('business_name: ')) {
+        return part.substring('business_name: '.length).trim();
+      }
+    }
+    return null;
+  }
+
   Future<void> _handleAssignClient(BuildContext context) async {
     final selected = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -369,6 +377,10 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
 
     final customerId = selected['id'] as String?;
     final customerName = (selected['name'] as String?)?.trim();
+    final customerTaxId = selected['tax_id'] as String?;
+    final notes = selected['notes'] as String?;
+    final customerLegalName = _parseLegalName(notes);
+
     if (customerId == null || customerId.isEmpty) return;
     if (customerName == null || customerName.isEmpty) return;
 
@@ -377,6 +389,8 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         .assignCustomerToCurrentOrder(
           customerId: customerId,
           customerName: customerName,
+          customerLegalName: customerLegalName,
+          customerTaxId: customerTaxId,
         );
 
     if (!context.mounted) return;
@@ -763,7 +777,7 @@ class _CartView extends ConsumerWidget {
   final OrderOrigin origin;
   final String tableCode;
   final bool isStacked;
-  final VoidCallback onAssignClient;
+  final Future<void> Function() onAssignClient;
   const _CartView({
     required this.origin,
     required this.tableCode,
@@ -797,7 +811,50 @@ class _CartView extends ConsumerWidget {
     String? checkId,
     String? customerId,
     String? customerName,
-  }) {
+  }) async {
+    var currentOrderState = ref.read(currentOrderProvider);
+    final isFiscal = currentOrderState.fiscalType == 'B01' ||
+        currentOrderState.fiscalType == '01' ||
+        currentOrderState.fiscalType == 'B14' ||
+        currentOrderState.fiscalType == '14' ||
+        currentOrderState.fiscalType == 'B15' ||
+        currentOrderState.fiscalType == '15' ||
+        currentOrderState.fiscalType == 'E31' ||
+        currentOrderState.fiscalType == '31';
+
+    if (isFiscal) {
+      // Usamos los valores del estado para la validación inicial
+      if (currentOrderState.customerId == null || 
+          currentOrderState.customerId!.isEmpty || 
+          currentOrderState.customerTaxId == null || 
+          currentOrderState.customerTaxId!.trim().isEmpty) {
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Para comprobante fiscal se requiere un cliente con RNC/Cédula.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        
+        await onAssignClient();
+        
+        // RE-LEER estado después de la asignación
+        currentOrderState = ref.read(currentOrderProvider);
+        if (currentOrderState.customerId == null || 
+            currentOrderState.customerId!.isEmpty || 
+            currentOrderState.customerTaxId == null || 
+            currentOrderState.customerTaxId!.trim().isEmpty) {
+          return; // Sigue sin cliente o sin RNC válido
+        }
+      }
+    }
+    
+    // Sincronizar estas variables con el estado más reciente
+    final finalCustomerId = currentOrderState.customerId;
+    final finalCustomerName = currentOrderState.customerName;
+    final finalFiscalType = currentOrderState.fiscalType;
+    final finalCustomerTaxId = currentOrderState.customerTaxId;
+
     // Usamos el tableCode disponible en la vista
     final tableName = tableCode;
 
@@ -809,8 +866,9 @@ class _CartView extends ConsumerWidget {
         totalAmount: total,
         tableName: tableName,
         checkId: checkId,
-        customerId: customerId,
-        customerName: customerName,
+        customerId: finalCustomerId,
+        customerName: finalCustomerName,
+        fiscalType: finalFiscalType,
       ),
     ).then((result) async {
       if (result is List<Payment>) {
@@ -833,79 +891,78 @@ class _CartView extends ConsumerWidget {
                 : order.createdAt);
         // Optional: Filter items if paying a specific check (though strictly we show all items on invoice or filter inside modal)
 
-        double totalChange = 0;
-        for (final p in payments) {
-          totalChange += p.changeAmount;
-        }
+        final ncfFromPayment = payments.isNotEmpty ? payments.last.reference : null;
 
         if (context.mounted) {
-          _showSmoothDialog(
-            context: context,
-            barrierDismissible: false,
-            builder: (ctx) => InvoiceModal(
-              order:
-                  order, // Nota: idealmente refrescar la orden para estado 'paid'
-              items: items,
+          final invoiceData = {
+            'title': '*** FACTURA ***',
+            'restaurantName': businessProfile.name,
+            'legalName': businessProfile.legalName,
+            'rnc': businessProfile.rnc,
+            'phone': businessProfile.phone,
+            'address': businessProfile.address,
+            'ncf': ncfFromPayment ?? fiscalDoc?.ncfNumber,
+            'fiscalType': finalFiscalType,
+            'customerName': finalCustomerName,
+            'customerLegalName': currentOrderState.customerLegalName,
+            'customerTaxId': finalCustomerTaxId,
+            'issuedAt': issuedAt.toIso8601String(),
+            'tableName': tableName,
+            'waiterName': waiterName,
+            'items': items
+                .map(
+                  (i) => {
+                    'quantity': i.quantity,
+                    'name': i.productName,
+                    'price': i.total,
+                  },
+                )
+                .toList(),
+            'subtotal': order.subtotal,
+            'tax': order.tax,
+            'total': order.total,
+          };
+
+          // Define completion logic
+          final onFinish = () {
+            if (checkId == null) {
+              if (context.mounted) context.go(AppRoutes.salesByZone);
+            } else {
+              ref.read(currentOrderProvider.notifier).refreshOrder();
+            }
+          };
+
+          try {
+            await _handlePrintFlow(
+              context,
+              ref,
+              'invoice',
+              invoiceData,
+              orderObj: order,
+              orderItems: items,
               payments: payments,
               tableName: tableName,
-              serverName: waiterName,
-              businessName: businessProfile.name,
-              businessAddress: businessProfile.address,
-              businessPhone: businessProfile.phone,
-              businessRnc: businessProfile.rnc,
-              fiscalNcf: fiscalDoc?.ncfNumber,
-              issuedAt: issuedAt,
-              checkId: checkId,
-              change: totalChange,
-              onNewSale: () {
-                Navigator.of(ctx).pop();
-                if (checkId == null) {
-                  context.go(AppRoutes.salesByZone);
-                } else {
-                  // Si solo se pagó una subcuenta, refrescamos y nos quedamos
-                  ref.read(currentOrderProvider.notifier).refreshOrder();
-                }
-              },
-              onPrint: () {
-                final invoiceData = {
-                  'title': '*** FACTURA ***',
-                  'restaurantName': businessProfile.name,
-                  'legalName': businessProfile.legalName,
-                  'rnc': businessProfile.rnc,
-                  'phone': businessProfile.phone,
-                  'address': businessProfile.address,
-                  'ncf': fiscalDoc?.ncfNumber,
-                  'issuedAt': issuedAt.toIso8601String(),
-                  'tableName': tableName,
-                  'waiterName': waiterName,
-                  'items': items
-                      .map(
-                        (i) => {
-                          'quantity': i.quantity,
-                          'name': i.productName,
-                          'price': i.total,
-                        },
-                      )
-                      .toList(),
-                  'subtotal': order.subtotal,
-                  'tax': order.tax,
-                  'total': order.total,
-                };
-
-                _handlePrintFlow(
-                  context,
-                  ref,
-                  'invoice',
-                  invoiceData,
-                  orderObj: order, // Use the order passed to the method
-                  orderItems: items,
-                  payments: payments,
-                  tableName: tableName,
-                  waiterName: waiterName,
-                );
-              },
-            ),
-          );
+              waiterName: waiterName,
+              showSnackBar: true,
+            );
+            onFinish();
+          } catch (e) {
+            if (context.mounted) {
+              _showReimpresionDialog(
+                context: context,
+                ref: ref,
+                type: 'invoice',
+                data: invoiceData,
+                orderObj: order,
+                orderItems: items,
+                payments: payments,
+                tableName: tableName,
+                waiterName: waiterName,
+                errorMsg: e.toString(),
+                onFinish: onFinish,
+              );
+            }
+          }
         }
       }
     }); // Close then and _showSmoothDialog
@@ -1177,7 +1234,7 @@ class _CartView extends ConsumerWidget {
                             child: Text(
                               orderState.customerName?.trim().isNotEmpty == true
                                   ? orderState.customerName!
-                                  : 'Asignar cliente',
+                                  : 'Cliente',
                               overflow: TextOverflow.ellipsis,
                               maxLines: 1,
                             ),
@@ -1195,6 +1252,63 @@ class _CartView extends ConsumerWidget {
                                 _salesRadiusButton,
                               ),
                             ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        // Dropdown de Comprobante
+                        Container(
+                          height: 36,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: _salesDivider),
+                            borderRadius: BorderRadius.circular(_salesRadiusButton),
+                          ),
+                          child: PopupMenuButton<String>(
+                            initialValue: orderState.fiscalType,
+                            onSelected: (String newValue) {
+                              ref.read(currentOrderProvider.notifier).updateFiscalType(newValue);
+                            },
+                            tooltip: 'Tipo de comprobante',
+                            padding: EdgeInsets.zero,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            offset: const Offset(0, 40),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    '${_getNcfLabel(orderState.fiscalType)} (${orderState.fiscalType})',
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: _salesTextPrimary,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  const Icon(Icons.arrow_drop_down, color: _salesTotalColor, size: 20),
+                                ],
+                              ),
+                            ),
+                            itemBuilder: (BuildContext context) {
+                              final sequences = orderState.fiscalSequences.isNotEmpty
+                                  ? orderState.fiscalSequences
+                                  : [
+                                      FiscalNcfSequence(tipo: 'B02', serie: 'B', ultimoSeq: 0, maximoSeq: 0),
+                                      FiscalNcfSequence(tipo: 'B01', serie: 'B', ultimoSeq: 0, maximoSeq: 0),
+                                      FiscalNcfSequence(tipo: 'B14', serie: 'B', ultimoSeq: 0, maximoSeq: 0),
+                                      FiscalNcfSequence(tipo: 'B15', serie: 'B', ultimoSeq: 0, maximoSeq: 0),
+                                    ];
+                              
+                              return sequences.map((seq) {
+                                return PopupMenuItem<String>(
+                                  value: seq.tipo,
+                                  child: Text('${_getNcfLabel(seq.tipo)} (${seq.tipo})'),
+                                );
+                              }).toList();
+                            },
                           ),
                         ),
                       ],
@@ -1218,25 +1332,6 @@ class _CartView extends ConsumerWidget {
                       spacing: 8,
                       runSpacing: 8,
                       children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 6,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF3F4F6),
-                            borderRadius: BorderRadius.circular(999),
-                            border: Border.all(color: const Color(0xFFE5E7EB)),
-                          ),
-                          child: Text(
-                            'Estado: ${orderState.order!.status.toUpperCase()}',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              color: _salesTextPrimary,
-                            ),
-                          ),
-                        ),
                         if (orderState.order!.closedAt != null)
                           Container(
                             padding: const EdgeInsets.symmetric(
@@ -1673,29 +1768,22 @@ class _CartView extends ConsumerWidget {
                                 'total': displayTotal,
                               };
 
-                              showDialog(
-                                context: context,
-                                barrierDismissible: true,
-                                builder: (ctx) => PreCheckDialog(
-                                  data: preCheckData,
-                                  onPrint: () async {
-                                    Navigator.pop(ctx);
-                                    await _handlePrintFlow(
-                                      context,
-                                      ref,
-                                      'precheck',
-                                      preCheckData,
-                                      orderObj: orderState.order!,
-                                      orderItems: displayedItems,
-                                      tableName:
-                                          preCheckData['tableName'] as String?,
-                                      waiterName:
-                                          preCheckData['waiterName'] as String?,
-                                    );
-                                  },
-                                  onCancel: () => Navigator.pop(ctx),
-                                ),
-                              );
+                              try {
+                                await _handlePrintFlow(
+                                  context,
+                                  ref,
+                                  'precheck',
+                                  preCheckData,
+                                  orderObj: orderState.order!,
+                                  orderItems: displayedItems,
+                                  tableName:
+                                      preCheckData['tableName'] as String?,
+                                  waiterName:
+                                      preCheckData['waiterName'] as String?,
+                                );
+                              } catch (e) {
+                                // Error is already handled inside _handlePrintFlow with a snackbar by default
+                              }
                             }
                           },
                           icon: Icons.receipt_long_outlined,
@@ -1756,6 +1844,7 @@ class _CartView extends ConsumerWidget {
     List<Payment>? payments,
     String? tableName,
     String? waiterName,
+    bool showSnackBar = true,
   }) async {
     try {
       // 1. Obtener repositorio y negocio activo
@@ -1805,10 +1894,15 @@ class _CartView extends ConsumerWidget {
                 tableName: tableName ?? 'Mesa',
                 waiterName: waiterName,
                 businessName: data['restaurantName'] as String?,
+                legalName: data['legalName'] as String?,
                 businessAddress: data['address'] as String?,
                 businessPhone: data['phone'] as String?,
                 businessRnc: data['rnc'] as String?,
                 fiscalNcf: data['ncf'] as String?,
+                fiscalType: data['fiscalType'] as String?,
+                customerName: data['customerName'] as String?,
+                customerLegalName: data['customerLegalName'] as String?,
+                customerTaxId: data['customerTaxId'] as String?,
                 issuedAt: data['issuedAt'] == null
                     ? null
                     : DateTime.tryParse(data['issuedAt'].toString()),
@@ -1820,6 +1914,7 @@ class _CartView extends ConsumerWidget {
                 tableName: tableName ?? 'Mesa',
                 waiterName: waiterName,
                 businessName: data['restaurantName'] as String?,
+                legalName: data['legalName'] as String?,
                 businessAddress: data['address'] as String?,
                 businessPhone: data['phone'] as String?,
                 title: title,
@@ -1858,7 +1953,7 @@ class _CartView extends ConsumerWidget {
         await printRepo.printJobViaAgent(jobPayload);
       }
 
-      if (context.mounted) {
+      if (showSnackBar && context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Imprimiendo en ${assignedPrinter.name}...'),
@@ -1867,7 +1962,7 @@ class _CartView extends ConsumerWidget {
         );
       }
     } catch (e) {
-      if (context.mounted) {
+      if (showSnackBar && context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error al imprimir: $e'),
@@ -1875,7 +1970,169 @@ class _CartView extends ConsumerWidget {
           ),
         );
       }
+      rethrow;
     }
+  }
+
+  String _getNcfLabel(String tipo) {
+    switch (tipo) {
+      case 'B01':
+      case '01':
+        return 'Crédito Fiscal';
+      case 'B02':
+      case '02':
+        return 'Consumo';
+      case 'B14':
+      case '14':
+        return 'Reg. Espec.';
+      case 'B15':
+      case '15':
+        return 'Gubernamental';
+      case 'E31':
+      case '31':
+        return 'Elect. Crédito Fiscal';
+      case 'E32':
+      case '32':
+        return 'Elect. Consumidor';
+      default:
+        return tipo;
+    }
+  }
+
+  void _showReimpresionDialog({
+    required BuildContext context,
+    required WidgetRef ref,
+    required String type,
+    required Map<String, dynamic> data,
+    Order? orderObj,
+    List<OrderItem>? orderItems,
+    List<Payment>? payments,
+    String? tableName,
+    String? waiterName,
+    required String errorMsg,
+    VoidCallback? onFinish,
+  }) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.red.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child:
+                    const Icon(Icons.close_rounded, color: Colors.red, size: 64),
+              ),
+              const SizedBox(height: 24),
+              const Text(
+                'Re-impresión',
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.w800,
+                  color: _salesTextPrimary,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Error al imprimir ¿Desea intentar nuevamente? $errorMsg',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 16,
+                  color: _salesTextSecondary,
+                  height: 1.5,
+                ),
+              ),
+              const SizedBox(height: 32),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        onFinish?.call();
+                      },
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        side: const BorderSide(color: _salesDivider),
+                      ),
+                      child: const Text('Cancelar',
+                          style: TextStyle(
+                            color: _salesTextSecondary,
+                            fontWeight: FontWeight.w700,
+                          )),
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () async {
+                        Navigator.pop(ctx);
+                        try {
+                          await _handlePrintFlow(
+                            context,
+                            ref,
+                            type,
+                            data,
+                            orderObj: orderObj,
+                            orderItems: orderItems,
+                            payments: payments,
+                            tableName: tableName,
+                            waiterName: waiterName,
+                            showSnackBar: true,
+                          );
+                          onFinish?.call();
+                        } catch (e) {
+                          _showReimpresionDialog(
+                            context: context,
+                            ref: ref,
+                            type: type,
+                            data: data,
+                            orderObj: orderObj,
+                            orderItems: orderItems,
+                            payments: payments,
+                            tableName: tableName,
+                            waiterName: waiterName,
+                            errorMsg: e.toString(),
+                            onFinish: onFinish,
+                          );
+                        }
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor:
+                            const Color(0xFF3B82F6), // blue in image
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        elevation: 0,
+                      ),
+                      child: const Text(
+                        'OK',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -3187,6 +3444,7 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
   final TextEditingController _companyController = TextEditingController();
   final TextEditingController _creditLimitController = TextEditingController();
   final TextEditingController _maxCreditController = TextEditingController();
+  final TextEditingController _taxIdController = TextEditingController();
 
   bool _isSaving = false;
   bool _isAdvancedMode = false;
@@ -3204,6 +3462,7 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
     _companyController.dispose();
     _creditLimitController.dispose();
     _maxCreditController.dispose();
+    _taxIdController.dispose();
     super.dispose();
   }
 
@@ -3345,7 +3604,7 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
       'phone': _phoneController.text.trim(),
       'email': _emailController.text.trim(),
       'address': _addressController.text.trim(),
-      'tax_id': '',
+      'tax_id': _taxIdController.text.trim(),
       'notes': advancedNotes.entries
           .map((entry) => '${entry.key}: ${entry.value}')
           .join(' | '),
@@ -3552,6 +3811,13 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
                             hint: '809...',
                             controller: _phoneController,
                             keyboardType: TextInputType.phone,
+                          ),
+                          const SizedBox(height: 14),
+                          _buildCreateField(
+                            label: 'RNC / Cédula',
+                            hint: 'Ej. 131234567',
+                            controller: _taxIdController,
+                            keyboardType: TextInputType.number,
                           ),
                           if (_isAdvancedMode) ...[
                             const SizedBox(height: 14),

@@ -85,6 +85,7 @@ class PrintTicketService {
     required String tableName,
     String? waiterName,
     String? businessName,
+    String? legalName,
     String? businessAddress,
     String? businessPhone,
     String title = 'PRECUENTA',
@@ -101,6 +102,9 @@ class PrintTicketService {
       gen.setBold(true);
       gen.textCentered(businessName.toUpperCase());
       gen.setBold(false);
+    }
+    if (legalName != null && legalName.isNotEmpty && legalName != businessName) {
+      gen.textCentered(legalName);
     }
 
     // Info de contacto centrada
@@ -278,10 +282,15 @@ class PrintTicketService {
     required String tableName,
     String? waiterName,
     String? businessName,
+    String? legalName,
     String? businessAddress,
     String? businessPhone,
     String? businessRnc,
     String? fiscalNcf,
+    String? fiscalType,
+    String? customerName,
+    String? customerLegalName,
+    String? customerTaxId,
     DateTime? issuedAt,
     String title = 'FACTURA',
   }) {
@@ -295,6 +304,9 @@ class PrintTicketService {
       gen.setBold(true);
       gen.textCentered(businessName.toUpperCase());
       gen.setBold(false);
+    }
+    if (legalName != null && legalName.isNotEmpty && legalName != businessName) {
+      gen.textCentered(legalName);
     }
     if (businessAddress != null && businessAddress.isNotEmpty) {
       gen.textCentered(businessAddress);
@@ -326,7 +338,22 @@ class PrintTicketService {
     gen.textRow('ORDEN:', order.id.substring(0, 8).toUpperCase());
     gen.setBold(false);
     if (fiscalNcf != null && fiscalNcf.isNotEmpty) {
+      if (fiscalType != null) {
+        gen.textRow('TIPO:', _getNcfTypeName(fiscalType));
+      }
       gen.textRow('NCF:', fiscalNcf);
+    } else if (fiscalType != null) {
+      gen.textRow('TIPO:', _getNcfTypeName(fiscalType));
+    }
+
+    if (customerName != null && customerName != 'Cliente') {
+      gen.textRow('CLIENTE:', customerName.toUpperCase());
+    }
+    if (customerLegalName != null && customerLegalName.isNotEmpty && customerLegalName != customerName) {
+      gen.textRow('RAZÓN SOCIAL:', customerLegalName.toUpperCase());
+    }
+    if (customerTaxId != null && customerTaxId.isNotEmpty) {
+      gen.textRow('RNC/CÉDULA:', customerTaxId);
     }
 
     if (tableName.isNotEmpty) {
@@ -619,13 +646,23 @@ class PrintTicketService {
   static String _getNcfTypeName(String code) {
     switch (code) {
       case 'B01':
+      case '01':
         return 'Crédito Fiscal';
       case 'B02':
+      case '02':
         return 'Consumidor Final';
       case 'B14':
+      case '14':
         return 'Régimen Especial';
       case 'B15':
+      case '15':
         return 'Gubernamental';
+      case 'E31':
+      case '31':
+        return 'e-Crédito Fiscal';
+      case 'E32':
+      case '32':
+        return 'e-Consumidor';
       default:
         return code;
     }

@@ -15,6 +15,7 @@ import 'package:mangopos/presentation/settings/more%20settings/system%20settings
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/zones_tables/view/zones_tables_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/users/view/roles_permissions_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/users/view/users_view.dart';
+import 'package:mangopos/presentation/settings/more%20settings/system%20settings/fiscal/view/fiscal_receipts_view.dart';
 import '../../presentation/auth/login/login_view.dart';
 import '../../tests/cache_test_page.dart';
 import '../../presentation/auth/register/register_step1_view.dart';
@@ -319,6 +320,10 @@ class AppRouter {
           GoRoute(
             path: AppRoutes.settingsTaxes,
             builder: (context, state) => const TaxesView(businessId: 'auto'),
+          ),
+          GoRoute(
+            path: AppRoutes.settingsFiscalReceipts,
+            builder: (context, state) => const FiscalReceiptsView(businessId: 'auto'),
           ),
           GoRoute(
             path: AppRoutes.inventoryKardex,

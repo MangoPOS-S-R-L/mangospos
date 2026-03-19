@@ -9,10 +9,15 @@ class InvoiceModal extends StatelessWidget {
   final String? tableName;
   final String? serverName;
   final String? businessName;
+  final String? legalName;
   final String? businessAddress;
   final String? businessPhone;
   final String? businessRnc;
   final String? fiscalNcf;
+  final String? fiscalTypeLabel;
+  final String? customerName;
+  final String? customerLegalName;
+  final String? customerTaxId;
   final DateTime? issuedAt;
   final double change;
   final VoidCallback onNewSale;
@@ -27,10 +32,15 @@ class InvoiceModal extends StatelessWidget {
     this.tableName,
     this.serverName,
     this.businessName,
+    this.legalName,
     this.businessAddress,
     this.businessPhone,
     this.businessRnc,
     this.fiscalNcf,
+    this.fiscalTypeLabel,
+    this.customerName,
+    this.customerLegalName,
+    this.customerTaxId,
     this.issuedAt,
     required this.change,
     required this.onNewSale,
@@ -106,11 +116,20 @@ class InvoiceModal extends StatelessWidget {
                       businessName?.trim().isNotEmpty == true
                           ? businessName!.trim()
                           : 'Negocio',
-                      style: TextStyle(
+                      style: const TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
+                    if (legalName?.trim().isNotEmpty == true &&
+                        legalName != businessName)
+                      Text(
+                        legalName!.trim(),
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey,
+                        ),
+                      ),
                     if (businessRnc?.trim().isNotEmpty == true)
                       Text('RNC: ${businessRnc!.trim()}'),
                     if (businessAddress?.trim().isNotEmpty == true)
@@ -124,8 +143,22 @@ class InvoiceModal extends StatelessWidget {
                       'No. Factura:',
                       'FAC-${order.id.substring(0, 8).toUpperCase()}',
                     ),
-                    if (fiscalNcf?.trim().isNotEmpty == true)
+                    if (fiscalNcf?.trim().isNotEmpty == true) ...[
+                      if (fiscalTypeLabel != null)
+                        _DetailRow('Tipo:', fiscalTypeLabel!),
                       _DetailRow('NCF:', fiscalNcf!.trim()),
+                    ] else ...[
+                      if (fiscalTypeLabel != null)
+                        _DetailRow('Tipo:', fiscalTypeLabel!),
+                    ],
+                    if (customerName != null && customerName != 'Cliente')
+                      _DetailRow('Cliente:', customerName!),
+                    if (customerLegalName != null && 
+                        customerLegalName!.isNotEmpty && 
+                        customerLegalName != customerName)
+                      _DetailRow('Razón Social:', customerLegalName!),
+                    if (customerTaxId != null && customerTaxId != null && customerTaxId!.isNotEmpty)
+                      _DetailRow('RNC/Cédula:', customerTaxId!),
                     _DetailRow('Fecha:', dateFormat.format(effectiveIssuedAt)),
                     if (tableName != null) _DetailRow('Mesa:', tableName!),
                     if (serverName != null)

@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 
 import '../state/inventory_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
+import '../../../app/theme/mango_colors.dart';
 
 class InventoryOutflowView extends ConsumerStatefulWidget {
   const InventoryOutflowView({super.key});
@@ -41,7 +42,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
     );
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: MangoColors.sidebarBg,
       body: state.loading && state.items.isEmpty
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
@@ -60,7 +61,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                             style: TextStyle(
                               fontSize: 28,
                               fontWeight: FontWeight.w800,
-                              color: Color(0xFF0F172A),
+                              color: MangoColors.darkGray,
                             ),
                           ),
                           SizedBox(height: 6),
@@ -68,7 +69,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                             'Insumos, stock actual y salidas manuales',
                             style: TextStyle(
                               fontSize: 14,
-                              color: Color(0xFF64748B),
+                              color: MangoColors.muted,
                             ),
                           ),
                         ],
@@ -83,6 +84,10 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                 : () => _showCreateItemDialog(context),
                             icon: const Icon(Icons.add_box_outlined),
                             label: const Text('Nuevo insumo'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: MangoColors.primaryOrange,
+                              side: const BorderSide(color: MangoColors.primaryOrange),
+                            ),
                           ),
                           FilledButton.icon(
                             onPressed: state.items.isEmpty || state.saving
@@ -93,6 +98,9 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                   ),
                             icon: const Icon(Icons.logout_rounded),
                             label: const Text('Registrar salida'),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: MangoColors.primaryOrange,
+                            ),
                           ),
                         ],
                       ),
@@ -175,6 +183,10 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                   .read(inventoryViewModelProvider)
                                   .refresh(),
                         icon: const Icon(Icons.refresh),
+                        style: IconButton.styleFrom(
+                          backgroundColor: MangoColors.primaryOrange.withValues(alpha: 0.1),
+                          foregroundColor: MangoColors.primaryOrange,
+                        ),
                       ),
                     ],
                   ),
@@ -187,7 +199,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                         title: 'Insumos activos',
                         value:
                             '${state.items.where((item) => item.isActive).length}',
-                        color: const Color(0xFF2563EB),
+                        color: MangoColors.primaryOrange,
                       ),
                       _SummaryCard(
                         title: 'Stock bajo',
@@ -227,7 +239,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                   style: TextStyle(
                                     fontSize: 12,
                                     fontWeight: FontWeight.w800,
-                                    color: Color(0xFF64748B),
+                                    color: MangoColors.muted,
                                   ),
                                 ),
                               ),
@@ -243,7 +255,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                               ),
                               Expanded(
                                 child: Text(
-                                  'MIN.',
+                                  'PRESENTACIÓN',
                                   style: TextStyle(
                                     fontSize: 12,
                                     fontWeight: FontWeight.w800,
@@ -300,7 +312,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                             style: const TextStyle(
                                               fontSize: 15,
                                               fontWeight: FontWeight.w700,
-                                              color: Color(0xFF0F172A),
+                                              color: MangoColors.darkGray,
                                             ),
                                           ),
                                           const SizedBox(height: 4),
@@ -315,7 +327,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                             overflow: TextOverflow.ellipsis,
                                             style: const TextStyle(
                                               fontSize: 13,
-                                              color: Color(0xFF64748B),
+                                              color: MangoColors.muted,
                                             ),
                                           ),
                                         ],
@@ -323,18 +335,18 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                     ),
                                     Expanded(
                                       child: Text(
-                                        '${item.stock.toStringAsFixed(2)} ${item.unit}',
+                                        '${item.stock.toStringAsFixed(2)}',
                                         style: TextStyle(
                                           fontWeight: FontWeight.w700,
                                           color: item.isLowStock
-                                              ? const Color(0xFFB45309)
-                                              : const Color(0xFF0F172A),
+                                              ? Colors.orange.shade700
+                                              : MangoColors.darkGray,
                                         ),
                                       ),
                                     ),
                                     Expanded(
                                       child: Text(
-                                        item.minStock.toStringAsFixed(2),
+                                        item.unit.toUpperCase(),
                                       ),
                                     ),
                                     Expanded(
@@ -366,6 +378,10 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                                     context,
                                                     initialItem: item,
                                                   ),
+                                            style: FilledButton.styleFrom(
+                                              backgroundColor: MangoColors.primaryOrange.withValues(alpha: 0.1),
+                                              foregroundColor: MangoColors.primaryOrange,
+                                            ),
                                             child: const Text('Salida'),
                                           ),
                                         ],
@@ -385,7 +401,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w700,
-                      color: Color(0xFF0F172A),
+                      color: MangoColors.darkGray,
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -537,9 +553,9 @@ class _SummaryCard extends StatelessWidget {
       width: 220,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: MangoColors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
+        border: Border.all(color: MangoColors.cardBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -549,7 +565,7 @@ class _SummaryCard extends StatelessWidget {
             style: const TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w600,
-              color: Color(0xFF64748B),
+              color: MangoColors.muted,
             ),
           ),
           const SizedBox(height: 8),
@@ -615,8 +631,27 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
   late final TextEditingController _minStockController;
   late final TextEditingController _maxStockController;
   late final TextEditingController _initialStockController;
+  String _selectedPresentation = 'unidad';
   bool _isActive = true;
   bool _saving = false;
+
+  final List<String> _presentationOptions = [
+    'unidad',
+    'lb',
+    'kg',
+    'oz',
+    'gr',
+    'gal',
+    'lt',
+    'ml',
+    'caja',
+    'paquete',
+    'botella',
+    'saco',
+    'lata',
+    'porcion',
+    'bandeja',
+  ];
 
   @override
   void initState() {
@@ -628,6 +663,13 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
       text: item?.description ?? '',
     );
     _unitController = TextEditingController(text: item?.unit ?? 'unidad');
+    _selectedPresentation = (item?.unit ?? 'unidad').toLowerCase();
+    
+    // Si la unidad actual no esta en las opciones, la agregamos temporalmente
+    if (!_presentationOptions.contains(_selectedPresentation)) {
+      _presentationOptions.add(_selectedPresentation);
+    }
+    
     _costController = TextEditingController(
       text: item == null ? '' : item.cost.toStringAsFixed(2),
     );
@@ -657,7 +699,18 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text(widget.title),
+      backgroundColor: MangoColors.white,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+      title: Text(
+        widget.title,
+        style: const TextStyle(
+          fontWeight: FontWeight.w800, 
+          fontSize: 22,
+          color: MangoColors.darkGray,
+        ),
+      ),
+      contentPadding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
       content: SizedBox(
         width: 460,
         child: SingleChildScrollView(
@@ -672,7 +725,39 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
               const SizedBox(height: 12),
               Row(
                 children: [
-                  Expanded(child: _field(_unitController, 'Unidad')),
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      value: _selectedPresentation,
+                      dropdownColor: MangoColors.white,
+                      decoration: InputDecoration(
+                        labelText: 'Presentacion',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: MangoColors.cardBorder),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: MangoColors.primaryOrange, width: 2),
+                        ),
+                      ),
+                      items: _presentationOptions
+                          .map(
+                            (opt) => DropdownMenuItem(
+                              value: opt,
+                              child: Text(opt),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setState(() => _selectedPresentation = val);
+                        }
+                      },
+                    ),
+                  ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: _field(
@@ -722,6 +807,7 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
                 const SizedBox(height: 12),
                 SwitchListTile(
                   value: _isActive,
+                  activeColor: MangoColors.primaryOrange,
                   contentPadding: EdgeInsets.zero,
                   title: const Text('Insumo activo'),
                   onChanged: (value) => setState(() => _isActive = value),
@@ -734,11 +820,22 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
       actions: [
         TextButton(
           onPressed: _saving ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancelar'),
+          child: const Text(
+            'Cancelar',
+            style: TextStyle(color: MangoColors.muted),
+          ),
         ),
         FilledButton(
           onPressed: _saving ? null : _submit,
-          child: Text(_saving ? 'Guardando...' : 'Guardar'),
+          style: FilledButton.styleFrom(
+            backgroundColor: MangoColors.primaryOrange,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+          ),
+          child: Text(
+            _saving ? 'Guardando...' : 'Guardar',
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
         ),
       ],
     );
@@ -754,7 +851,21 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
       keyboardType: keyboardType,
       decoration: InputDecoration(
         labelText: label,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        labelStyle: const TextStyle(color: MangoColors.muted),
+        filled: true,
+        fillColor: const Color(0xFFF9FAFB),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: MangoColors.cardBorder),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: MangoColors.cardBorder),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: MangoColors.primaryOrange, width: 2),
+        ),
       ),
     );
   }
@@ -777,9 +888,7 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
           description: _descriptionController.text.trim().isEmpty
               ? null
               : _descriptionController.text.trim(),
-          unit: _unitController.text.trim().isEmpty
-              ? 'unidad'
-              : _unitController.text.trim(),
+          unit: _selectedPresentation,
           cost: parse(_costController.text),
           minStock: parse(_minStockController.text),
           maxStock: maxStockRaw.isEmpty ? null : parse(maxStockRaw),

@@ -1,0 +1,1066 @@
+================================================================================
+   MODULO DE COMPROBANTES — GUIA COMPLETA DE DESARROLLO
+   Flutter | Supabase | DGII — Republica Dominicana
+   Version 1.0 — 2026
+================================================================================
+
+Proyecto    : Sistema de Facturacion
+Tecnologia  : Flutter (Dart) + Supabase (PostgreSQL)
+Normativa   : DGII - Direccion General de Impuestos Internos (RD)
+Comprobantes: Facturas, Notas de Credito/Debito, Comprobantes Fiscales
+Fuente      : dgii.gov.do — NG 06-2018 / NG 05-2019
+
+================================================================================
+TABLA DE CONTENIDO
+================================================================================
+
+  1.  Introduccion y Marco Normativo
+      1.1 Formato Antiguo (Serie B)
+      1.2 Formato Nuevo e-CF (Serie E)
+      1.3 Correspondencia entre formatos B y E
+      1.4 Consideraciones en la Base de Datos
+
+  2.  Arquitectura del Modulo
+      2.1 Modelo de Datos en Supabase
+      2.2 Row Level Security (RLS)
+
+  3.  Flujo de Trabajo del Comprobante
+      3.1 Ciclo de Vida de los Estados
+      3.2 Modelo Dart
+      3.3 Servicio de Comprobantes
+
+  4.  Calculo de Impuestos (ITBIS)
+      4.1 Tasas Vigentes
+      4.2 Clase CalculoImpuestos
+
+  5.  Notas de Credito y Debito
+      5.1 Nota de Credito (Tipo 34)
+      5.2 Nota de Debito (Tipo 33)
+
+  6.  Interfaz de Usuario en Flutter
+      6.1 Pantallas Recomendadas
+      6.2 Widget de Items Dinamicos
+
+  7.  Generacion de PDF
+      7.1 Dependencias
+      7.2 Servicio PdfService
+      7.3 Compartir el PDF
+
+  8.  Reportes para la DGII
+      8.1 Reporte 606 — Compras a Proveedores
+
+  9.  Seguridad y Validaciones
+      9.1 Validadores en Dart
+      9.2 Auditoria de Cambios en Supabase
+
+  10. Checklist de Implementacion
+
+  11. Referencias y Recursos
+
+
+================================================================================
+1. INTRODUCCION Y MARCO NORMATIVO
+================================================================================
+
+El modulo de comprobantes es el nucleo del sistema de facturacion. Gestiona la
+emision, control y reporte de todos los documentos fiscales exigidos por la DGII
+segun la normativa vigente de la Republica Dominicana.
+
+Fuente oficial: dgii.gov.do — Estructura y Tipos de Comprobantes (NG 06-2018,
+NG 05-2019)
+
+
+--------------------------------------------------------------------------------
+1.1 ESTRUCTURA DEL NCF — FORMATO ANTIGUO (SERIE B)
+--------------------------------------------------------------------------------
+
+Vigente hasta la transicion al e-CF. Establecido mediante la NG 06-2018 y el
+Aviso 13-18. Tiene 11 caracteres en total:
+
+  Posicion              Descripcion
+  --------------------  -------------------------------------------------------
+  1 caracter — Serie    Letra 'B' (indica el tipo de serie)
+  2 digitos — Tipo      Codigo numerico del tipo (ej. 01, 02, 03...)
+  8 digitos — Secuencia Numero secuencial con ceros (ej. 00000001)
+  --------------------  -------------------------------------------------------
+  Ejemplo completo:     B0100000001 = Serie B + Tipo 01 + Secuencia 00000001
+
+
+TIPOS DE COMPROBANTES — FORMATO ANTIGUO (SERIE B)
+(Fuente oficial: dgii.gov.do/cicloContribuyente/facturacion/comprobantesFiscales)
+
+  Tipo  Serie    Descripcion oficial DGII
+  ----  -------  ----------------------------------------------------------------
+  01    B01...   Factura de Credito Fiscal — registran transacciones de compra y
+                 venta de bienes/servicios. Permiten al comprador sustentar gastos
+                 y costos del ISR o creditos del ITBIS.
+
+  02    B02...   Factura de Consumo — acreditan la transferencia de bienes o
+                 servicios a consumidores finales. No poseen efectos tributarios
+                 (no sirven para creditos ITBIS ni reducir ISR).
+
+  03    B03...   Nota de Debito — documentos para recuperar costos y gastos como
+                 intereses por mora, fletes u otros, despues de emitido el
+                 comprobante. Solo al mismo adquiriente y para modificar
+                 comprobantes emitidos anteriormente.
+
+  04    B04...   Nota de Credito — para modificaciones posteriores a la venta:
+                 anular operaciones, efectuar devoluciones, conceder descuentos y
+                 bonificaciones, corregir errores o casos similares.
+
+  11    B11...   Comprobante de Compras — emitido al adquirir bienes/servicios de
+                 personas no registradas como contribuyentes o autorizados por
+                 norma general.
+
+  12    B12...   Registro Unico de Ingresos (RUI) — resumen de transacciones
+                 diarias a consumidores finales, especialmente para productos o
+                 servicios exentos del ITBIS.
+
+  13    B13...   Gastos Menores — sustenta pagos del personal: consumibles,
+                 pasajes, transporte publico, estacionamiento, peajes; en RD o
+                 en el extranjero por actividades laborales.
+
+  14    B14...   Regimenes Especiales — para facturar ventas exentas de ITBIS/ISC
+                 a personas acogidas a regimenes especiales por leyes o contratos
+                 ratificados por el Congreso Nacional.
+
+  15    B15...   Gubernamental — para facturar bienes/servicios al Gobierno
+                 Central, Instituciones Descentralizadas, Autonomas, Seguridad
+                 Social y cualquier entidad gubernamental no comercial.
+
+  16    B16...   Exportaciones — utilizado por exportadores nacionales y zonas
+                 francas (comerciales e industriales) para reportar ventas fuera
+                 del territorio nacional.
+
+  17    B17...   Pagos al Exterior — por pago de rentas de fuente dominicana a
+                 personas fisicas o juridicas no residentes fiscales. Exige
+                 retencion total del ISR (Arts. 297 y 305 del Codigo Tributario).
+
+[!] NOTA: El formato antiguo (Serie B) puede aparecer en sistemas legados o en
+    comprobantes historicos. Tu sistema debe poder leerlos y consultarlos, aunque
+    ya no los emita.
+
+
+--------------------------------------------------------------------------------
+1.2 ESTRUCTURA DEL NCF — FORMATO NUEVO (e-CF, SERIE E)
+--------------------------------------------------------------------------------
+
+Introducido por la NG 05-2019 (Aviso 24-19). Obligatorio desde 2024 para
+contribuyentes Grupo A y B. Hasta 13 caracteres:
+
+  Posicion              Descripcion
+  --------------------  -------------------------------------------------------
+  1 caracter — Serie    Letra 'E' (indica Comprobante Fiscal Electronico)
+  2 digitos — Tipo      Codigo numerico del tipo (ej. 31, 32, 33...)
+  8 digitos — Secuencia Numero secuencial con ceros (ej. 00000001)
+  --------------------  -------------------------------------------------------
+  Ejemplo completo:     E3100000001 = Serie E + Tipo 31 + Secuencia 00000001
+
+
+TIPOS DE COMPROBANTES — FORMATO NUEVO e-CF (SERIE E)
+
+  Tipo  Serie    Descripcion                               Equivalente B
+  ----  -------  ----------------------------------------  --------------
+  31    E31...   Factura de Credito Fiscal Electronica     Tipo 01
+  32    E32...   Factura de Consumidor Final Electronica   Tipo 02
+  33    E33...   Nota de Debito Electronica                Tipo 03
+  34    E34...   Nota de Credito Electronica               Tipo 04
+  41    E41...   Comprobante de Compras Electronico        Tipo 11
+  43    E43...   Gastos Menores Electronicos               Tipo 13
+  44    E44...   Regimenes Especiales Electronicos         Tipo 14
+  45    E45...   Gubernamental Electronico                 Tipo 15
+  46    E46...   Exportaciones Electronicas                Tipo 16
+  47    E47...   Pagos al Exterior Electronicos            Tipo 17
+
+[i] El e-CF es un documento electronico firmado digitalmente. Ademas de
+    almacenarlo en Supabase, debe enviarse al portal ecf.dgii.gov.do para
+    su validacion oficial.
+
+
+--------------------------------------------------------------------------------
+1.3 CORRESPONDENCIA ENTRE FORMATOS B Y E
+--------------------------------------------------------------------------------
+
+  Tipo Antiguo (B)   Tipo Nuevo (E)   Nombre del Comprobante
+  -----------------  ---------------  ----------------------------------------
+  B01...             E31...           Factura de Credito Fiscal
+  B02...             E32...           Factura de Consumidor Final
+  B03...             E33...           Nota de Debito
+  B04...             E34...           Nota de Credito
+  B11...             E41...           Comprobante de Compras
+  B12...             — (RUI)          Registro Unico de Ingresos (sin equiv. e-CF)
+  B13...             E43...           Gastos Menores
+  B14...             E44...           Regimenes Especiales
+  B15...             E45...           Gubernamental
+  B16...             E46...           Exportaciones
+  B17...             E47...           Pagos al Exterior
+
+
+--------------------------------------------------------------------------------
+1.4 CONSIDERACIONES EN LA BASE DE DATOS
+--------------------------------------------------------------------------------
+
+Para soportar ambos formatos, la columna 'serie' permite distinguirlos:
+
+  -- Consultar comprobantes por formato
+  SELECT * FROM comprobantes WHERE serie = 'B';   -- Historicos (formato antiguo)
+  SELECT * FROM comprobantes WHERE serie = 'E';   -- Actuales (e-CF)
+
+  -- Vista combinada con nombre del tipo
+  CREATE VIEW v_comprobantes AS
+  SELECT *,
+    CASE
+      WHEN serie = 'E' AND tipo = '31' THEN 'Factura Credito Fiscal (e-CF)'
+      WHEN serie = 'E' AND tipo = '32' THEN 'Factura Consumidor Final (e-CF)'
+      WHEN serie = 'E' AND tipo = '33' THEN 'Nota de Debito (e-CF)'
+      WHEN serie = 'E' AND tipo = '34' THEN 'Nota de Credito (e-CF)'
+      WHEN serie = 'E' AND tipo = '41' THEN 'Comprobante de Compras (e-CF)'
+      WHEN serie = 'E' AND tipo = '43' THEN 'Gastos Menores (e-CF)'
+      WHEN serie = 'E' AND tipo = '44' THEN 'Regimenes Especiales (e-CF)'
+      WHEN serie = 'E' AND tipo = '45' THEN 'Gubernamental (e-CF)'
+      WHEN serie = 'E' AND tipo = '46' THEN 'Exportaciones (e-CF)'
+      WHEN serie = 'B' AND tipo = '01' THEN 'Factura Credito Fiscal (NCF)'
+      WHEN serie = 'B' AND tipo = '02' THEN 'Factura Consumidor Final (NCF)'
+      WHEN serie = 'B' AND tipo = '03' THEN 'Nota de Debito (NCF)'
+      WHEN serie = 'B' AND tipo = '04' THEN 'Nota de Credito (NCF)'
+      WHEN serie = 'B' AND tipo = '11' THEN 'Comprobante de Compras (NCF)'
+      WHEN serie = 'B' AND tipo = '13' THEN 'Gastos Menores (NCF)'
+      ELSE 'Otro tipo (' || serie || tipo || ')'
+    END AS nombre_tipo
+  FROM comprobantes;
+
+[!!!] REGLA CRITICA: El secuencial NUNCA puede repetirse ni saltarse por tipo.
+      Supabase debe gestionar esto con la funcion atomica siguiente_ncf().
+      Los comprobantes historicos (Serie B) se almacenan tal como fueron emitidos,
+      sin generar nuevas secuencias.
+
+
+================================================================================
+2. ARQUITECTURA DEL MODULO
+================================================================================
+
+--------------------------------------------------------------------------------
+2.1 MODELO DE DATOS EN SUPABASE
+--------------------------------------------------------------------------------
+
+--- Tabla: comprobantes ---
+
+  CREATE TABLE comprobantes (
+    id                   UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    ncf                  VARCHAR(20) UNIQUE,               -- Asignado al emitir
+    tipo                 VARCHAR(5) NOT NULL,               -- '31','32','33','34'...
+    serie                VARCHAR(5) NOT NULL DEFAULT 'E',
+    secuencial           BIGINT,
+
+    -- Emisor
+    emisor_rnc           VARCHAR(11) NOT NULL,
+    emisor_nombre        TEXT NOT NULL,
+
+    -- Receptor
+    receptor_rnc         VARCHAR(11),
+    receptor_nombre      TEXT,
+    receptor_tipo        VARCHAR(2),                        -- '01' Fisica, '02' Juridica
+
+    -- Montos
+    subtotal             NUMERIC(15,2) NOT NULL DEFAULT 0,
+    descuento            NUMERIC(15,2) NOT NULL DEFAULT 0,
+    itbis                NUMERIC(15,2) NOT NULL DEFAULT 0,
+    total                NUMERIC(15,2) NOT NULL DEFAULT 0,
+    moneda               VARCHAR(3) NOT NULL DEFAULT 'DOP',
+    tasa_cambio          NUMERIC(10,4) DEFAULT 1.0,
+
+    -- Estado
+    estado               VARCHAR(20) NOT NULL DEFAULT 'borrador',
+    -- borrador | emitido | enviado_dgii | aceptado | rechazado | anulado
+
+    -- Referencias (para notas credito/debito)
+    ncf_modificado       VARCHAR(20),
+    fecha_ncf_modificado DATE,
+
+    -- Metadatos
+    fecha_emision        TIMESTAMPTZ,
+    notas                TEXT,
+    usuario_id           UUID REFERENCES auth.users(id),
+    created_at           TIMESTAMPTZ DEFAULT NOW(),
+    updated_at           TIMESTAMPTZ DEFAULT NOW()
+  );
+
+
+--- Tabla: comprobante_items ---
+
+  CREATE TABLE comprobante_items (
+    id               UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    comprobante_id   UUID REFERENCES comprobantes(id) ON DELETE CASCADE,
+    linea            INT NOT NULL,
+    descripcion      TEXT NOT NULL,
+    cantidad         NUMERIC(10,4) NOT NULL,
+    precio_unitario  NUMERIC(15,4) NOT NULL,
+    descuento        NUMERIC(15,2) DEFAULT 0,
+    itbis_rate       NUMERIC(5,2) DEFAULT 18.00,       -- 0, 16, 18
+    itbis_monto      NUMERIC(15,2) DEFAULT 0,
+    subtotal         NUMERIC(15,2) NOT NULL,
+    codigo_producto  VARCHAR(50),
+    unidad_medida    VARCHAR(20)
+  );
+
+
+--- Tabla: secuencias_ncf (funcion atomica) ---
+
+  CREATE TABLE secuencias_ncf (
+    tipo         VARCHAR(5) PRIMARY KEY,
+    serie        VARCHAR(5) NOT NULL DEFAULT 'E',
+    ultimo_seq   BIGINT NOT NULL DEFAULT 0,
+    maximo_seq   BIGINT NOT NULL DEFAULT 99999999,
+    activo       BOOLEAN DEFAULT TRUE,
+    updated_at   TIMESTAMPTZ DEFAULT NOW()
+  );
+
+  -- Insertar secuencias por tipo
+  INSERT INTO secuencias_ncf (tipo) VALUES ('31'),('32'),('33'),('34'),('41'),('43'),('46');
+
+  -- Funcion atomica para obtener el siguiente NCF
+  CREATE OR REPLACE FUNCTION siguiente_ncf(p_tipo VARCHAR)
+  RETURNS VARCHAR AS $$
+  DECLARE
+    v_serie  VARCHAR(5);
+    v_seq    BIGINT;
+  BEGIN
+    UPDATE secuencias_ncf
+    SET ultimo_seq = ultimo_seq + 1, updated_at = NOW()
+    WHERE tipo = p_tipo AND activo = TRUE
+    RETURNING serie, ultimo_seq INTO v_serie, v_seq;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Tipo NCF % no encontrado o inactivo', p_tipo;
+    END IF;
+
+    RETURN v_serie || p_tipo || LPAD(v_seq::TEXT, 8, '0');
+  END;
+  $$ LANGUAGE plpgsql;
+
+[i] Siempre usa la funcion siguiente_ncf() via Supabase RPC. Nunca calcules el
+    siguiente NCF en Flutter, ya que con usuarios simultaneos pueden generarse
+    duplicados.
+
+
+--------------------------------------------------------------------------------
+2.2 ROW LEVEL SECURITY (RLS)
+--------------------------------------------------------------------------------
+
+  ALTER TABLE comprobantes ENABLE ROW LEVEL SECURITY;
+  ALTER TABLE comprobante_items ENABLE ROW LEVEL SECURITY;
+
+  CREATE POLICY "Ver propios comprobantes"
+    ON comprobantes FOR SELECT
+    USING (auth.uid() = usuario_id);
+
+  CREATE POLICY "Insertar comprobantes"
+    ON comprobantes FOR INSERT
+    WITH CHECK (auth.uid() = usuario_id);
+
+  CREATE POLICY "Editar solo borradores"
+    ON comprobantes FOR UPDATE
+    USING (auth.uid() = usuario_id AND estado = 'borrador');
+
+  -- Items heredan seguridad del comprobante padre
+  CREATE POLICY "Items de mis comprobantes"
+    ON comprobante_items FOR ALL
+    USING (comprobante_id IN (
+      SELECT id FROM comprobantes WHERE usuario_id = auth.uid()
+    ));
+
+
+================================================================================
+3. FLUJO DE TRABAJO DEL COMPROBANTE
+================================================================================
+
+--------------------------------------------------------------------------------
+3.1 CICLO DE VIDA DE LOS ESTADOS
+--------------------------------------------------------------------------------
+
+  Estado          Descripcion                                  Acciones posibles
+  --------------  -------------------------------------------  -----------------
+  borrador        En construccion, sin NCF asignado            Editar / Cancelar
+  emitido         NCF asignado, listo para el cliente          Enviar / Anular
+  enviado_dgii    Enviado al portal e-CF de la DGII            Esperar respuesta
+  aceptado        DGII confirmo el comprobante                 PDF / Imprimir
+  rechazado       DGII rechazo por error de datos              Corregir / Reenviar
+  anulado         Comprobante invalidado                       Solo consulta
+
+[!!!] Un comprobante en estado 'emitido' o 'aceptado' NUNCA debe eliminarse.
+      Solo puede anularse emitiendo una Nota de Credito (tipo 34) que lo cancele.
+      Esto es requerimiento de la DGII.
+
+
+--------------------------------------------------------------------------------
+3.2 MODELO DART
+--------------------------------------------------------------------------------
+
+  // lib/models/comprobante.dart
+
+  class Comprobante {
+    final String? id;
+    final String? ncf;
+    final String tipo;
+    final String emisorRnc;
+    final String emisorNombre;
+    final String? receptorRnc;
+    final String? receptorNombre;
+    final double subtotal;
+    final double descuento;
+    final double itbis;
+    final double total;
+    final String estado;
+    final String? ncfModificado;         // Para notas credito/debito
+    final DateTime? fechaNcfModificado;
+    final List<ComprobanteItem> items;
+    final DateTime? fechaEmision;
+    final String? notas;
+
+    const Comprobante({
+      this.id, this.ncf, required this.tipo,
+      required this.emisorRnc, required this.emisorNombre,
+      this.receptorRnc, this.receptorNombre,
+      required this.subtotal, required this.descuento,
+      required this.itbis, required this.total,
+      this.estado = 'borrador',
+      this.ncfModificado, this.fechaNcfModificado,
+      this.items = const [], this.fechaEmision, this.notas,
+    });
+
+    factory Comprobante.fromJson(Map<String, dynamic> j) => Comprobante(
+      id: j['id'], ncf: j['ncf'], tipo: j['tipo'],
+      emisorRnc: j['emisor_rnc'], emisorNombre: j['emisor_nombre'],
+      receptorRnc: j['receptor_rnc'], receptorNombre: j['receptor_nombre'],
+      subtotal: (j['subtotal'] as num).toDouble(),
+      descuento: (j['descuento'] as num).toDouble(),
+      itbis: (j['itbis'] as num).toDouble(),
+      total: (j['total'] as num).toDouble(),
+      estado: j['estado'] ?? 'borrador',
+      ncfModificado: j['ncf_modificado'],
+      notas: j['notas'],
+    );
+
+    Map<String, dynamic> toJson() => {
+      'tipo': tipo,
+      'emisor_rnc': emisorRnc,
+      'emisor_nombre': emisorNombre,
+      'receptor_rnc': receptorRnc,
+      'receptor_nombre': receptorNombre,
+      'subtotal': subtotal,
+      'descuento': descuento,
+      'itbis': itbis,
+      'total': total,
+      'estado': estado,
+      'ncf_modificado': ncfModificado,
+      'fecha_ncf_modificado': fechaNcfModificado?.toIso8601String().substring(0, 10),
+      'notas': notas,
+    };
+  }
+
+
+--------------------------------------------------------------------------------
+3.3 SERVICIO DE COMPROBANTES
+--------------------------------------------------------------------------------
+
+  // lib/services/comprobante_service.dart
+  import 'package:supabase_flutter/supabase_flutter.dart';
+
+  class ComprobanteService {
+    final _db = Supabase.instance.client;
+
+    // Crear comprobante en borrador
+    Future<String> crearBorrador(
+      Comprobante comp, List<ComprobanteItem> items
+    ) async {
+      final res = await _db
+          .from('comprobantes')
+          .insert(comp.toJson())
+          .select('id')
+          .single();
+      final id = res['id'] as String;
+
+      if (items.isNotEmpty) {
+        await _db.from('comprobante_items').insert(
+          items.asMap().entries.map((e) => {
+            ...e.value.toJson(),
+            'comprobante_id': id,
+            'linea': e.key + 1,
+          }).toList(),
+        );
+      }
+      return id;
+    }
+
+    // Emitir comprobante (asigna NCF atomicamente)
+    Future<String> emitirComprobante(String id, String tipo) async {
+      final ncf = await _db.rpc('siguiente_ncf', params: {'p_tipo': tipo}) as String;
+
+      await _db.from('comprobantes').update({
+        'ncf': ncf,
+        'estado': 'emitido',
+        'fecha_emision': DateTime.now().toIso8601String(),
+      }).eq('id', id);
+
+      return ncf;
+    }
+
+    // Listar con filtros
+    Future<List<Map<String, dynamic>>> listar({
+      String? estado, String? tipo,
+      DateTime? desde, DateTime? hasta,
+    }) async {
+      var q = _db.from('comprobantes')
+          .select('*, comprobante_items(*)')
+          .order('created_at', ascending: false);
+
+      if (estado != null) q = q.eq('estado', estado);
+      if (tipo   != null) q = q.eq('tipo', tipo);
+      if (desde  != null) q = q.gte('fecha_emision', desde.toIso8601String());
+      if (hasta  != null) q = q.lte('fecha_emision', hasta.toIso8601String());
+
+      return await q;
+    }
+
+    // Anular
+    Future<void> anular(String id, String motivo) async {
+      await _db.from('comprobantes').update({
+        'estado': 'anulado',
+        'notas': 'ANULADO: ' + motivo,
+        'updated_at': DateTime.now().toIso8601String(),
+      }).eq('id', id).eq('usuario_id', _db.auth.currentUser!.id);
+    }
+  }
+
+
+================================================================================
+4. CALCULO DE IMPUESTOS (ITBIS)
+================================================================================
+
+--------------------------------------------------------------------------------
+4.1 TASAS VIGENTES
+--------------------------------------------------------------------------------
+
+  Tasa         Aplica a                              Ejemplo
+  -----------  ------------------------------------  ----------------------------
+  18%          Bienes y servicios generales          Electronicos, ropa, servicios
+  16%          Telecomunicaciones, seguros           Internet, planes celulares
+  0% (exento)  Productos de la canasta basica        Medicamentos, arroz, leche
+
+
+--------------------------------------------------------------------------------
+4.2 CLASE CALCULOIMPUESTOS
+--------------------------------------------------------------------------------
+
+  // lib/utils/calculo_impuestos.dart
+
+  class CalculoImpuestos {
+
+    /// Calcula los valores de una linea de item
+    static Map<String, double> calcularLinea({
+      required double cantidad,
+      required double precioUnitario,
+      double descuentoPct = 0,   // Porcentaje de descuento (0-100)
+      double tasaItbis = 18.0,   // 0, 16 o 18
+    }) {
+      final bruto        = cantidad * precioUnitario;
+      final descMonto    = bruto * (descuentoPct / 100);
+      final subtotalNeto = bruto - descMonto;
+      final itbis        = subtotalNeto * (tasaItbis / 100);
+      return {
+        'subtotal_bruto': _r(bruto),
+        'descuento':      _r(descMonto),
+        'subtotal_neto':  _r(subtotalNeto),
+        'itbis':          _r(itbis),
+        'total':          _r(subtotalNeto + itbis),
+      };
+    }
+
+    /// Suma los totales de todos los items
+    static Map<String, double> calcularTotalesComprobante(
+      List<ComprobanteItem> items
+    ) {
+      double sub = 0, desc = 0, itbis = 0;
+      for (final it in items) {
+        sub   += it.subtotal;
+        desc  += it.descuento;
+        itbis += it.itbisMonto;
+      }
+      return {
+        'subtotal':  _r(sub),
+        'descuento': _r(desc),
+        'itbis':     _r(itbis),
+        'total':     _r(sub - desc + itbis),
+      };
+    }
+
+    /// Redondeo a 2 decimales (la DGII exige exactitud)
+    static double _r(double v) => (v * 100).roundToDouble() / 100;
+  }
+
+
+================================================================================
+5. NOTAS DE CREDITO Y DEBITO
+================================================================================
+
+--------------------------------------------------------------------------------
+5.1 NOTA DE CREDITO (TIPO 34)
+--------------------------------------------------------------------------------
+
+Se emite para reducir o anular el valor de una factura ya emitida. Siempre debe
+referenciar el NCF del comprobante original y su fecha de emision.
+
+[!!!] La nota de credito reduce el valor del comprobante original. Los campos
+      ncf_modificado y fecha_ncf_modificado son OBLIGATORIOS para la DGII.
+
+Casos de uso:
+  - Devolucion total del producto o servicio
+  - Devolucion parcial de mercancia
+  - Correccion de precio cobrado en exceso
+  - Descuento otorgado despues de la facturacion
+
+Implementacion en Flutter:
+
+  Future<String> crearNotaCredito({
+    required String ncfOriginal,
+    required DateTime fechaOriginal,
+    required String receptorRnc,
+    required String receptorNombre,
+    required double montoSinItbis,
+    required double itbis,
+    required String motivo,
+  }) async {
+    final nota = Comprobante(
+      tipo: '34',                          // SIEMPRE tipo 34
+      emisorRnc:       _config.rnc,
+      emisorNombre:    _config.nombre,
+      receptorRnc:     receptorRnc,
+      receptorNombre:  receptorNombre,
+      subtotal:        montoSinItbis,
+      descuento:       0,
+      itbis:           itbis,
+      total:           montoSinItbis + itbis,
+      ncfModificado:       ncfOriginal,   // Obligatorio
+      fechaNcfModificado:  fechaOriginal, // Obligatorio
+      notas:           motivo,
+    );
+    final id  = await crearBorrador(nota, []);
+    final ncf = await emitirComprobante(id, '34');
+    return ncf;
+  }
+
+
+--------------------------------------------------------------------------------
+5.2 NOTA DE DEBITO (TIPO 33)
+--------------------------------------------------------------------------------
+
+Se emite para aumentar el valor de una factura ya emitida. Casos tipicos:
+  - Cargos por mora o intereses de financiamiento
+  - Ajuste de precio por diferencia de tasa de cambio
+  - Servicios adicionales no contemplados en la factura original
+
+[i] Las notas de debito aumentan el valor del comprobante original. Mismo
+    requisito: ncf_modificado y fecha_ncf_modificado son obligatorios.
+
+
+================================================================================
+6. INTERFAZ DE USUARIO EN FLUTTER
+================================================================================
+
+--------------------------------------------------------------------------------
+6.1 PANTALLAS RECOMENDADAS
+--------------------------------------------------------------------------------
+
+  Pantalla                    Descripcion y funcionalidades clave
+  --------------------------  -------------------------------------------------
+  Lista de Comprobantes       Tabla filtrable por NCF, fecha, estado, tipo.
+                              Paginacion incluida.
+  Nuevo Comprobante           Formulario: datos receptor + tabla de items
+                              dinamica + calculo en tiempo real.
+  Detalle del Comprobante     Vista completa. Botones: Emitir, Anular,
+                              Generar PDF, Compartir.
+  Nueva Nota Credito/Debito   Busqueda del NCF a modificar + formulario con
+                              monto a ajustar.
+  Reportes 606/607/608        Seleccion de periodo y descarga del archivo
+                              .txt para la DGII.
+  Configuracion NCF           Gestion de secuencias activas y maximo
+                              asignado por la DGII.
+
+
+--------------------------------------------------------------------------------
+6.2 WIDGET DE ITEMS DINAMICOS
+--------------------------------------------------------------------------------
+
+  // lib/widgets/items_table_widget.dart
+  class ItemsTableWidget extends StatefulWidget {
+    final List<ComprobanteItem> items;
+    final ValueChanged<List<ComprobanteItem>> onChanged;
+    const ItemsTableWidget({required this.items, required this.onChanged, super.key});
+    @override State<ItemsTableWidget> createState() => _State();
+  }
+
+  class _State extends State<ItemsTableWidget> {
+    late List<ComprobanteItem> _items;
+
+    @override void initState() {
+      super.initState();
+      _items = List.from(widget.items);
+    }
+
+    void _agregar() {
+      setState(() => _items.add(ComprobanteItem.empty()));
+      widget.onChanged(_items);
+    }
+
+    void _actualizar(int i, ComprobanteItem item) {
+      final c = CalculoImpuestos.calcularLinea(
+        cantidad: item.cantidad,
+        precioUnitario: item.precioUnitario,
+        descuentoPct: item.descuentoPct,
+        tasaItbis: item.itbisRate,
+      );
+      setState(() {
+        _items[i] = item.copyWith(
+          itbisMonto: c['itbis']!,
+          subtotal:   c['subtotal_neto']!,
+        );
+      });
+      widget.onChanged(_items);
+    }
+
+    void _eliminar(int i) {
+      setState(() => _items.removeAt(i));
+      widget.onChanged(_items);
+    }
+
+    @override
+    Widget build(BuildContext context) {
+      final totales = CalculoImpuestos.calcularTotalesComprobante(_items);
+      return Column(children: [
+        ..._items.asMap().entries.map(
+          (e) => ItemRowWidget(item: e.value,
+            onChanged: (v) => _actualizar(e.key, v),
+            onDelete:  ()  => _eliminar(e.key),
+          )
+        ),
+        TextButton.icon(
+          onPressed: _agregar,
+          icon: const Icon(Icons.add_circle_outline),
+          label: const Text('Agregar item'),
+        ),
+        _TotalesWidget(
+          subtotal: totales['subtotal']!,
+          itbis:    totales['itbis']!,
+          total:    totales['total']!,
+        ),
+      ]);
+    }
+  }
+
+
+================================================================================
+7. GENERACION DE PDF
+================================================================================
+
+--------------------------------------------------------------------------------
+7.1 DEPENDENCIAS
+--------------------------------------------------------------------------------
+
+  # pubspec.yaml
+  dependencies:
+    pdf:           ^3.10.8    # Generacion de PDF
+    printing:      ^5.12.0    # Preview e impresion
+    path_provider: ^2.1.3     # Directorio de archivos
+    share_plus:    ^9.0.0     # Compartir (WhatsApp, email, etc.)
+
+
+--------------------------------------------------------------------------------
+7.2 SERVICIO PDFSERVICE
+--------------------------------------------------------------------------------
+
+  // lib/services/pdf_service.dart
+  import 'package:pdf/pdf.dart';
+  import 'package:pdf/widgets.dart' as pw;
+  import 'package:printing/printing.dart';
+
+  class PdfService {
+
+    Future<Uint8List> generarPdf(
+      Comprobante comp, List<ComprobanteItem> items,
+    ) async {
+      final pdf  = pw.Document();
+      final font  = await PdfGoogleFonts.robotoRegular();
+      final fontB = await PdfGoogleFonts.robotoBold();
+
+      pdf.addPage(pw.MultiPage(
+        pageFormat: PdfPageFormat.letter,
+        header: (_) => _encabezado(comp, fontB),
+        footer: (_) => _pie(font),
+        build: (_) => [
+          _receptorInfo(comp, font, fontB),
+          pw.SizedBox(height: 12),
+          _tablaItems(items, font, fontB),
+          pw.SizedBox(height: 12),
+          _totales(comp, font, fontB),
+          if (comp.ncfModificado != null) ...[
+            pw.SizedBox(height: 8),
+            _referenciaModificado(comp, font),
+          ],
+        ],
+      ));
+
+      return pdf.save();
+    }
+
+    pw.Widget _encabezado(Comprobante c, pw.Font fontB) =>
+      pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
+        pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+          pw.Text(c.emisorNombre, style: pw.TextStyle(font: fontB, fontSize: 14)),
+          pw.Text('RNC: ' + c.emisorRnc),
+        ]),
+        pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
+          pw.Text(_nombreTipo(c.tipo), style: pw.TextStyle(font: fontB)),
+          pw.Text('NCF: ' + (c.ncf ?? 'BORRADOR')),
+          pw.Text('Fecha: ' + (c.fechaEmision?.toString().substring(0,10) ?? '')),
+        ]),
+      ]);
+
+    String _nombreTipo(String t) => const {
+      '31': 'FACTURA CREDITO FISCAL',
+      '32': 'FACTURA CONSUMIDOR FINAL',
+      '33': 'NOTA DE DEBITO',
+      '34': 'NOTA DE CREDITO',
+    }[t] ?? 'COMPROBANTE';
+  }
+
+
+--------------------------------------------------------------------------------
+7.3 COMPARTIR EL PDF
+--------------------------------------------------------------------------------
+
+  // Generar y compartir desde cualquier screen
+  Future<void> compartirPdf(Comprobante comp, List<ComprobanteItem> items) async {
+    final bytes = await PdfService().generarPdf(comp, items);
+    final dir   = await getTemporaryDirectory();
+    final file  = File(dir.path + '/comprobante_' + (comp.ncf ?? '') + '.pdf');
+    await file.writeAsBytes(bytes);
+
+    await Share.shareXFiles(
+      [XFile(file.path, mimeType: 'application/pdf')],
+      subject: 'Comprobante ' + (comp.ncf ?? ''),
+      text: 'Adjunto su comprobante fiscal.',
+    );
+  }
+
+
+================================================================================
+8. REPORTES PARA LA DGII
+================================================================================
+
+--------------------------------------------------------------------------------
+8.1 REPORTE 606 — COMPRAS A PROVEEDORES
+--------------------------------------------------------------------------------
+
+Detalla todas las compras del periodo. Se presenta mensualmente antes del dia 15
+del mes siguiente.
+
+  // lib/services/reporte_dgii_service.dart
+
+  class ReporteDgiiService {
+    final _db = Supabase.instance.client;
+    late String _miRnc;
+
+    Future<String> generar606(int anio, int mes) async {
+      final desde = DateTime(anio, mes, 1);
+      final hasta  = DateTime(anio, mes + 1, 0, 23, 59, 59);
+
+      final datos = await _db
+          .from('comprobantes')
+          .select()
+          .inFilter('tipo', ['41', '43', '44', '45', '47'])
+          .gte('fecha_emision', desde.toIso8601String())
+          .lte('fecha_emision', hasta.toIso8601String())
+          .neq('estado', 'anulado');
+
+      final buf    = StringBuffer();
+      final periodo = anio.toString() + mes.toString().padLeft(2, '0');
+      buf.writeln('606|' + _miRnc + '|' + periodo + '|' + datos.length.toString());
+
+      for (final c in datos) {
+        final rnc   = (c['receptor_rnc'] ?? '').padRight(11).substring(0, 11);
+        final ncf   = (c['ncf'] ?? '').padRight(19);
+        final fecha = (c['fecha_emision'] as String).substring(0, 10).replaceAll('-', '');
+        final sub   = (c['subtotal'] as num).toStringAsFixed(2);
+        final itbis = (c['itbis'] as num).toStringAsFixed(2);
+        final total = (c['total'] as num).toStringAsFixed(2);
+        buf.writeln(rnc + '|' + ncf + '|' + fecha + '|' + sub + '|' + itbis + '|' + total);
+      }
+      return buf.toString();
+    }
+
+    // 607 - Ventas a consumidores finales (tipo 32)
+    Future<String> generar607(int anio, int mes) async {
+      // Similar a 606 pero con tipo '32'
+      // Formato sin datos del receptor (anonimo)
+      return '';
+    }
+
+    // 608 - Anulaciones
+    Future<String> generar608(int anio, int mes) async {
+      // Comprobantes con estado 'anulado' en el periodo
+      return '';
+    }
+  }
+
+[!] Consulta siempre el Manual de Usuario del Formato 606/607/608 en dgii.gov.do
+    ya que las especificaciones tecnicas se actualizan con cada norma.
+
+
+================================================================================
+9. SEGURIDAD Y VALIDACIONES
+================================================================================
+
+--------------------------------------------------------------------------------
+9.1 VALIDADORES EN DART
+--------------------------------------------------------------------------------
+
+  // lib/utils/validadores.dart
+
+  class Validadores {
+
+    static String? rnc(String? v) {
+      if (v == null || v.trim().isEmpty) return 'RNC obligatorio';
+      final d = v.replaceAll(RegExp(r'[^0-9]'), '');
+      if (d.length != 9 && d.length != 11)
+        return 'RNC: 9 digitos | Cedula: 11 digitos';
+      return null;
+    }
+
+    static String? ncf(String? v) {
+      if (v == null || v.isEmpty) return null; // Vacio en borrador es valido
+      // Formato e-CF: E + 2 digitos tipo + 8 secuencial = 11 chars
+      if (!RegExp(r'^E[0-9]{10}$').hasMatch(v))
+        return 'Formato invalido. Debe ser E + 10 digitos';
+      return null;
+    }
+
+    static String? monto(String? v) {
+      if (v == null || v.isEmpty) return 'Monto obligatorio';
+      final m = double.tryParse(v.replaceAll(',', '.'));
+      if (m == null) return 'Ingrese un numero valido';
+      if (m < 0)     return 'El monto no puede ser negativo';
+      return null;
+    }
+
+    static String? descripcion(String? v) {
+      if (v == null || v.trim().isEmpty) return 'Descripcion obligatoria';
+      if (v.length > 250) return 'Maximo 250 caracteres';
+      return null;
+    }
+  }
+
+
+--------------------------------------------------------------------------------
+9.2 AUDITORIA DE CAMBIOS EN SUPABASE
+--------------------------------------------------------------------------------
+
+  CREATE TABLE auditoria_comprobantes (
+    id              UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    comprobante_id  UUID NOT NULL,
+    accion          VARCHAR(50) NOT NULL,
+    estado_anterior VARCHAR(20),
+    estado_nuevo    VARCHAR(20),
+    usuario_id      UUID REFERENCES auth.users(id),
+    detalles        JSONB,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+  );
+
+  -- Trigger automatico en cada cambio de estado
+  CREATE OR REPLACE FUNCTION fn_audit_comprobante()
+  RETURNS TRIGGER AS $$
+  BEGIN
+    IF OLD.estado IS DISTINCT FROM NEW.estado THEN
+      INSERT INTO auditoria_comprobantes
+        (comprobante_id, accion, estado_anterior, estado_nuevo, usuario_id)
+      VALUES
+        (NEW.id, 'cambio_estado', OLD.estado, NEW.estado, NEW.usuario_id);
+    END IF;
+    RETURN NEW;
+  END;
+  $$ LANGUAGE plpgsql;
+
+  CREATE TRIGGER trg_audit_comprobante
+    AFTER UPDATE ON comprobantes
+    FOR EACH ROW EXECUTE FUNCTION fn_audit_comprobante();
+
+
+================================================================================
+10. CHECKLIST DE IMPLEMENTACION
+================================================================================
+
+BASE DE DATOS (SUPABASE)
+  [ ] Crear tabla comprobantes con todos los campos
+  [ ] Crear tabla comprobante_items
+  [ ] Crear tabla secuencias_ncf e insertar registros por tipo
+  [ ] Crear funcion siguiente_ncf() atomica
+  [ ] Crear tabla auditoria_comprobantes
+  [ ] Configurar RLS en todas las tablas
+  [ ] Crear trigger de auditoria
+  [ ] Crear vista v_comprobantes con nombre_tipo (soporte B y E)
+
+FLUTTER — MODELOS Y LOGICA
+  [ ] Clase Comprobante con fromJson / toJson
+  [ ] Clase ComprobanteItem
+  [ ] Clase CalculoImpuestos con redondeo correcto
+  [ ] Validadores de RNC, NCF, montos
+  [ ] ComprobanteService con CRUD completo via Supabase
+  [ ] PdfService para generar PDF del comprobante
+  [ ] ReporteDgiiService para 606 / 607 / 608
+
+FLUTTER — INTERFAZ
+  [ ] Lista de comprobantes filtrable
+  [ ] Formulario nuevo comprobante con items dinamicos
+  [ ] Calculo de totales en tiempo real
+  [ ] Flujo de emision: borrador -> emitido
+  [ ] Pantalla de nota de credito/debito
+  [ ] Vista PDF con opcion compartir
+  [ ] Pantalla de reportes DGII con descarga
+  [ ] Configuracion de secuencias NCF
+
+
+[i] ANTES DE PRODUCCION: Registra tu empresa como emisor de e-CF en el portal
+    ecf.dgii.gov.do. Sin este registro, los comprobantes emitidos no seran
+    validos ante la DGII.
+
+
+================================================================================
+11. REFERENCIAS Y RECURSOS
+================================================================================
+
+  Recurso                   Descripcion
+  ------------------------  ---------------------------------------------------
+  Portal e-CF DGII          ecf.dgii.gov.do
+                            Registro y envio de comprobantes electronicos
+
+  Portal Principal DGII     dgii.gov.do
+                            Normas, formatos 606/607, consultas RNC
+
+  Tipos de Comprobantes     dgii.gov.do/cicloContribuyente/facturacion/
+                            comprobantesFiscales/Paginas/tiposComprobantes.aspx
+
+  Supabase Docs             supabase.com/docs
+                            RPC, RLS, funciones PostgreSQL
+
+  Flutter — pdf             pub.dev/packages/pdf
+                            Generacion de PDFs en Flutter/Dart
+
+  Norma 06-18 DGII          Norma general sobre Comprobantes Fiscales Electronicos
+
+  Flutter — share_plus      pub.dev/packages/share_plus
+                            Compartir archivos desde Flutter
+
+
+================================================================================
+                          — Fin del documento —
+         Sistema de Facturacion | Modulo de Comprobantes | v1.0 — 2026
+================================================================================

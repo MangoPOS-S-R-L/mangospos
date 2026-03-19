@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 import 'package:mangopos/data/models/sales_models.dart';
+import 'package:mangopos/data/models/fiscal_models.dart';
 
 class CurrentOrderState extends Equatable {
   final bool loading;
@@ -11,13 +12,18 @@ class CurrentOrderState extends Equatable {
   final String? origin; // 'table' | 'manual' | 'quick'
   final String? selectedCheckId;
   final String? customerId;
-  final String? customerName;
-  final String? sessionNote;
-  final bool isOfflineMode;
-  final bool syncInFlight;
-  final int pendingOfflineActions;
-  final String? syncStatus;
-  final DateTime? lastSyncAt;
+    final String? customerName;
+    final String? customerLegalName;
+    final String? sessionNote;
+    final bool isOfflineMode;
+    final bool syncInFlight;
+    final int pendingOfflineActions;
+    final String? syncStatus;
+    final DateTime? lastSyncAt;
+  
+    final String fiscalType; // 'B01', 'B02', etc.
+    final List<FiscalNcfSequence> fiscalSequences;
+    final String? customerTaxId;
 
   const CurrentOrderState({
     this.loading = false,
@@ -30,12 +36,16 @@ class CurrentOrderState extends Equatable {
     this.selectedCheckId,
     this.customerId,
     this.customerName,
+    this.customerLegalName,
     this.sessionNote,
     this.isOfflineMode = false,
     this.syncInFlight = false,
     this.pendingOfflineActions = 0,
     this.syncStatus,
     this.lastSyncAt,
+    this.fiscalType = '02',
+    this.fiscalSequences = const [],
+    this.customerTaxId,
   });
 
   CurrentOrderState copyWith({
@@ -51,6 +61,7 @@ class CurrentOrderState extends Equatable {
     bool clearSelectedCheck = false,
     String? customerId,
     String? customerName,
+    String? customerLegalName,
     bool clearCustomer = false,
     String? sessionNote,
     bool clearSessionNote = false,
@@ -59,6 +70,9 @@ class CurrentOrderState extends Equatable {
     int? pendingOfflineActions,
     String? syncStatus,
     DateTime? lastSyncAt,
+    String? fiscalType,
+    List<FiscalNcfSequence>? fiscalSequences,
+    String? customerTaxId,
   }) {
     return CurrentOrderState(
       loading: loading ?? this.loading,
@@ -73,12 +87,19 @@ class CurrentOrderState extends Equatable {
           : (selectedCheckId ?? this.selectedCheckId),
       customerId: clearCustomer ? null : (customerId ?? this.customerId),
       customerName: clearCustomer ? null : (customerName ?? this.customerName),
+      customerLegalName:
+          clearCustomer ? null : (customerLegalName ?? this.customerLegalName),
       sessionNote: clearSessionNote ? null : (sessionNote ?? this.sessionNote),
       isOfflineMode: isOfflineMode ?? this.isOfflineMode,
       syncInFlight: syncInFlight ?? this.syncInFlight,
-      pendingOfflineActions: pendingOfflineActions ?? this.pendingOfflineActions,
+      pendingOfflineActions:
+          pendingOfflineActions ?? this.pendingOfflineActions,
       syncStatus: syncStatus,
       lastSyncAt: lastSyncAt ?? this.lastSyncAt,
+      fiscalType: fiscalType ?? this.fiscalType,
+      fiscalSequences: fiscalSequences ?? this.fiscalSequences,
+      customerTaxId:
+          clearCustomer ? null : (customerTaxId ?? this.customerTaxId),
     );
   }
 
@@ -94,11 +115,15 @@ class CurrentOrderState extends Equatable {
     selectedCheckId,
     customerId,
     customerName,
+    customerLegalName,
     sessionNote,
     isOfflineMode,
     syncInFlight,
     pendingOfflineActions,
     syncStatus,
     lastSyncAt,
+    fiscalType,
+    fiscalSequences,
+    customerTaxId,
   ];
 }

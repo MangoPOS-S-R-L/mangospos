@@ -160,7 +160,7 @@ class CashierRepository {
     final paymentsRaw = await _client
         .from('payments')
         .select(
-          'id, order_id, check_id, payment_method_id, amount, change_amount, reference, status, session_id, created_at',
+          'id, order_id, check_id, payment_method_id, amount, change_amount, reference, status, session_id, created_at, fiscal_documents(ncf_number, ncf_type, customer_rnc, customer_name)',
         )
         .eq('session_id', sessionId)
         .eq('status', 'completed')
@@ -193,9 +193,7 @@ class CashierRepository {
                 .select('id, name, code')
                 .inFilter('id', methodIds),
           );
-    final methodsById = {
-      for (final m in methods) m['id']?.toString() ?? '': m,
-    };
+    final methodsById = {for (final m in methods) m['id']?.toString() ?? '': m};
 
     final orders = orderIds.isEmpty
         ? const <Map<String, dynamic>>[]
@@ -205,9 +203,7 @@ class CashierRepository {
                 .select('id, session_id')
                 .inFilter('id', orderIds),
           );
-    final ordersById = {
-      for (final o in orders) o['id']?.toString() ?? '': o,
-    };
+    final ordersById = {for (final o in orders) o['id']?.toString() ?? '': o};
 
     final checks = checkIds.isEmpty
         ? const <Map<String, dynamic>>[]
@@ -217,9 +213,7 @@ class CashierRepository {
                 .select('id, label, position')
                 .inFilter('id', checkIds),
           );
-    final checksById = {
-      for (final c in checks) c['id']?.toString() ?? '': c,
-    };
+    final checksById = {for (final c in checks) c['id']?.toString() ?? '': c};
 
     final tableSessionIds = orders
         .map((o) => o['session_id']?.toString())
@@ -232,7 +226,9 @@ class CashierRepository {
         : List<Map<String, dynamic>>.from(
             await _client
                 .from('table_sessions')
-                .select('id, customer_name, table_id')
+                .select(
+                  'id, customer_name, table_id, waiter:profiles!opened_by(full_name)',
+                )
                 .inFilter('id', tableSessionIds),
           );
     final tableSessionsById = {
@@ -253,36 +249,51 @@ class CashierRepository {
                 .select('id, code')
                 .inFilter('id', tableIds),
           );
-    final tablesById = {
-      for (final t in tables) t['id']?.toString() ?? '': t,
-    };
+    final tablesById = {for (final t in tables) t['id']?.toString() ?? '': t};
 
-    return payments.map((payment) {
-      final paymentMethodId = payment['payment_method_id']?.toString() ?? '';
-      final orderId = payment['order_id']?.toString();
-      final checkId = payment['check_id']?.toString();
+    return payments
+        .map((payment) {
+          final paymentMethodId =
+              payment['payment_method_id']?.toString() ?? '';
+          final orderId = payment['order_id']?.toString();
+          final checkId = payment['check_id']?.toString();
 
-      final method = methodsById[paymentMethodId];
-      final order = orderId == null ? null : ordersById[orderId];
-      final check = checkId == null ? null : checksById[checkId];
-      final sessionIdForOrder = order?['session_id']?.toString();
-      final tableSession = sessionIdForOrder == null
-          ? null
-          : tableSessionsById[sessionIdForOrder];
-      final table = tableSession == null
-          ? null
-          : tablesById[tableSession['table_id']?.toString() ?? ''];
+          final method = methodsById[paymentMethodId];
+          final order = orderId == null ? null : ordersById[orderId];
+          final check = checkId == null ? null : checksById[checkId];
+          final sessionIdForOrder = order?['session_id']?.toString();
+          final tableSession = sessionIdForOrder == null
+              ? null
+              : tableSessionsById[sessionIdForOrder];
+          final table = tableSession == null
+              ? null
+              : tablesById[tableSession['table_id']?.toString() ?? ''];
 
-      return <String, dynamic>{
-        ...payment,
-        'method_name': method?['name'],
-        'method_code': method?['code'],
-        'customer_name': tableSession?['customer_name'],
-        'table_code': table?['code'],
-        'check_label': check?['label'],
-        'check_position': check?['position'],
-      };
-    }).toList(growable: false);
+          final fiscal = payment['fiscal_documents'];
+          final fiscalData = fiscal is List && fiscal.isNotEmpty
+              ? fiscal.first
+              : (fiscal is Map ? fiscal : null);
+
+          final waiterName =
+              (tableSession?['waiter'] as Map?)?['full_name']?.toString() ??
+              'Servicio';
+
+          return <String, dynamic>{
+            ...payment,
+            'method_name': method?['name'],
+            'method_code': method?['code'],
+            'customer_name':
+                fiscalData?['customer_name'] ?? tableSession?['customer_name'],
+            'customer_tax_id': fiscalData?['customer_rnc'],
+            'ncf_number': fiscalData?['ncf_number'],
+            'ncf_type_name': fiscalData?['ncf_type'],
+            'waiter_name': waiterName,
+            'table_code': table?['code'],
+            'check_label': check?['label'],
+            'check_position': check?['position'],
+          };
+        })
+        .toList(growable: false);
   }
 
   Future<CashTransaction> createManualTransaction({

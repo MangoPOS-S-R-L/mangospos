@@ -12,6 +12,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../state/sales_state.dart';
 import '../../../data/models/sales_models.dart';
 import '../../cashier/viewmodel/cashier_viewmodel.dart';
+import '../../../services/fiscal/fiscal_service.dart';
+import '../../../data/models/fiscal_models.dart';
 
 final salesRepositoryProvider = Provider<SalesRepository>(
   (ref) => SalesRepository(Supabase.instance.client),
@@ -243,6 +245,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   Future<void> assignCustomerToCurrentOrder({
     required String customerId,
     required String customerName,
+    String? customerLegalName,
+    String? customerTaxId,
   }) async {
     final order = state.order;
     if (order == null) return;
@@ -258,11 +262,17 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       state = state.copyWith(
         customerId: customerId,
         customerName: customerName,
+        customerLegalName: customerLegalName,
+        customerTaxId: customerTaxId,
       );
       await _loadOrderDetail(order.id, origin: state.origin);
     } catch (e) {
       state = state.copyWith(error: 'Error al asignar cliente: $e');
     }
+  }
+
+  void updateFiscalType(String type) {
+    state = state.copyWith(fiscalType: type);
   }
 
   Future<void> updateCurrentSessionNote(String? note) async {
@@ -1332,6 +1342,17 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
     }
 
+    // Fetch fiscal sequences if not loaded for this business
+    List<FiscalNcfSequence> fiscalSequences = state.fiscalSequences;
+    if (fiscalSequences.isEmpty && _activeBusinessId != null) {
+      try {
+        fiscalSequences =
+            await ref.read(fiscalServiceProvider).getSequences(_activeBusinessId!);
+      } catch (e) {
+        debugPrint('Error loading fiscal sequences: $e');
+      }
+    }
+
     state = state.copyWith(
       loading: false,
       order: order ?? state.order,
@@ -1347,6 +1368,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       clearCustomer: customerId == null && customerName == null,
       sessionNote: sessionNote,
       clearSessionNote: sessionNote == null,
+      fiscalSequences: fiscalSequences,
     );
 
     // Cachear última versión por mesa para apertura optimista

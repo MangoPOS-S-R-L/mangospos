@@ -18,6 +18,7 @@ class PaymentSplitDialog extends ConsumerStatefulWidget {
   final String? checkId;
   final String? customerId;
   final String? customerName;
+  final String? fiscalType;
 
   const PaymentSplitDialog({
     super.key,
@@ -27,6 +28,7 @@ class PaymentSplitDialog extends ConsumerStatefulWidget {
     this.checkId,
     this.customerId,
     this.customerName,
+    this.fiscalType,
   });
 
   @override
@@ -80,6 +82,7 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
       widget.totalAmount,
       widget.checkId,
       widget.customerId,
+      widget.fiscalType,
     ));
     final state = ref.watch(provider);
     final vm = ref.read(provider.notifier);
