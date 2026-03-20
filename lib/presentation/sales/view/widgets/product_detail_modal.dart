@@ -4,8 +4,9 @@ import '../../../../data/models/sales_models.dart';
 class ProductDetailModal extends StatefulWidget {
   final OrderItem item;
   final Future<void> Function(OrderItem updatedItem) onSave;
-  final VoidCallback onDelete;
+  final Future<void> Function(String reason) onDelete;
   final Future<void> Function()? onMarkSoldOut;
+  final VoidCallback? onReprint;
 
   const ProductDetailModal({
     super.key,
@@ -13,6 +14,7 @@ class ProductDetailModal extends StatefulWidget {
     required this.onSave,
     required this.onDelete,
     this.onMarkSoldOut,
+    this.onReprint,
   });
 
   @override
@@ -75,6 +77,100 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
       setState(() {
         _quantity--;
       });
+    }
+  }
+
+  Future<void> _handleDelete() async {
+    final reasonController = TextEditingController();
+
+    final reason = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.red.withOpacity(0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.delete_outline, color: Colors.red, size: 24),
+            ),
+            const SizedBox(width: 12),
+            const Text(
+              'Motivo de eliminación',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Por favor, indica la razón por la que estás eliminando este producto de la cuenta:',
+              style: TextStyle(fontSize: 14, color: Color(0xFF64748B)),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: reasonController,
+              maxLines: 3,
+              autofocus: true,
+              decoration: InputDecoration(
+                filled: true,
+                fillColor: const Color(0xFFF8FAFC),
+                hintText: 'Ej: Error de digitación, Cliente cambió de opinión...',
+                hintStyle: const TextStyle(color: Color(0xFF94A3B8)),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                ),
+              ),
+            ),
+          ],
+        ),
+        actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text(
+              'CANCELAR',
+              style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.bold),
+            ),
+          ),
+          const SizedBox(width: 8),
+          ElevatedButton(
+            onPressed: () {
+              if (reasonController.text.trim().isEmpty) return;
+              Navigator.of(context).pop(reasonController.text.trim());
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFEF4444),
+              foregroundColor: Colors.white,
+              elevation: 0,
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            child: const Text(
+              'ELIMINAR PRODUCTO',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (reason != null && reason.isNotEmpty) {
+      await widget.onDelete(reason);
+      if (mounted) Navigator.of(context).pop();
     }
   }
 
@@ -189,27 +285,26 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: ConstrainedBox(
         constraints: BoxConstraints(
-          maxWidth: 1100,
-          maxHeight: MediaQuery.of(context).size.height * 0.9,
+          maxWidth: 950,
+          maxHeight: MediaQuery.of(context).size.height * 0.95,
         ),
         child: Container(
           width: double.maxFinite,
-          padding: const EdgeInsets.all(24),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
                 // Header
                 Row(
                   children: [
-                    const Icon(Icons.restaurant_menu, color: kPrimary),
-                    const SizedBox(width: 10),
+                    const Icon(Icons.restaurant_menu, color: kPrimary, size: 28),
+                    const SizedBox(width: 12),
                     Expanded(
                       child: Text(
                         widget.item.productName,
                         style: const TextStyle(
-                          fontSize: 20,
+                          fontSize: 24,
                           fontWeight: FontWeight.bold,
                           color: kTextPrimary,
                         ),
@@ -217,30 +312,30 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                     ),
                     IconButton(
                       onPressed: () => Navigator.of(context).pop(),
-                      icon: const Icon(Icons.close, color: kTextSecondary),
+                      icon: const Icon(Icons.close, color: kTextSecondary, size: 24),
                     ),
                   ],
                 ),
-                const Divider(height: 32, color: kBorder),
+                const Divider(height: 20, color: kBorder),
 
                 // Content Scrollable if needed, but Dialog fits.
                 // Detalle del pedido
                 const Text(
                   'Detalle del pedido',
                   style: TextStyle(
-                    fontSize: 18,
+                    fontSize: 16,
                     fontWeight: FontWeight.bold,
                     color: kTextPrimary,
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 8),
 
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
                     // Nombre de reemplazo
                     Expanded(
-                      flex: 5,
+                      flex: 4,
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -255,8 +350,15 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                           const SizedBox(height: 8),
                           TextField(
                             controller: _nameController,
+                            style: const TextStyle(fontWeight: FontWeight.bold),
                             decoration: InputDecoration(
+                              filled: true,
+                              fillColor: const Color(0xFFF9FAFB),
                               border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8),
+                                borderSide: const BorderSide(color: kBorder),
+                              ),
+                              enabledBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(8),
                                 borderSide: const BorderSide(color: kBorder),
                               ),
@@ -290,27 +392,30 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: Row(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
                               IconButton(
                                 onPressed: _decrementQty,
-                                icon: const Icon(Icons.remove, size: 18),
+                                icon: const Icon(Icons.remove, size: 20),
                                 color: kTextSecondary,
                               ),
                               Container(
                                 color: Colors.white,
-                                width: 40,
+                                width: 45,
+                                height: 40,
+                                margin: const EdgeInsets.symmetric(vertical: 4),
                                 alignment: Alignment.center,
                                 child: Text(
                                   _quantity.toStringAsFixed(0),
                                   style: const TextStyle(
-                                    fontSize: 16,
+                                    fontSize: 18,
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
                               ),
                               IconButton(
                                 onPressed: _incrementQty,
-                                icon: const Icon(Icons.add, size: 18),
+                                icon: const Icon(Icons.add, size: 20),
                                 color: kPrimary,
                               ),
                             ],
@@ -331,22 +436,36 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                             fontWeight: FontWeight.w500,
                           ),
                         ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'RD\$${widget.item.unitPrice.toStringAsFixed(2)}',
-                          style: const TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                            color: kTextPrimary,
-                          ),
+                        const SizedBox(height: 4),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.baseline,
+                          textBaseline: TextBaseline.alphabetic,
+                          children: [
+                            Text(
+                              'RD\$',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: kTextPrimary.withOpacity(0.8),
+                              ),
+                            ),
+                            Text(
+                              widget.item.unitPrice.toStringAsFixed(2),
+                              style: const TextStyle(
+                                fontSize: 36,
+                                fontWeight: FontWeight.w900,
+                                color: kTextPrimary,
+                                letterSpacing: -1,
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: 4), // Visual alignment
-                        Container(height: 2, width: 100, color: kBorder),
+                        Container(height: 1, width: 140, color: kBorder),
                       ],
                     ),
                   ],
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 12),
 
                 // Notas y switch takeout
                 Row(
@@ -412,7 +531,7 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 12),
 
                 // Cortesía
                 Row(
@@ -452,9 +571,9 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                     ),
                   ),
                 ],
-                const SizedBox(height: 20),
+                const SizedBox(height: 12), // Reduced from 20 to 12
 
-                // Descuento
+                const SizedBox(height: 8), // Reduced from 16 to 8
                 const Text(
                   'Descuento aplicado al pedido',
                   style: TextStyle(
@@ -466,56 +585,21 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                 const SizedBox(height: 8),
                 Row(
                   children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _discountController,
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
-                        ),
-                        enabled: !_isCourtesy,
-                        onChanged: (_) => setState(() {}),
-                        decoration: InputDecoration(
-                          hintText: '0.00',
-                          prefixText: 'RD\$ ',
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: kBorder),
-                          ),
-                        ),
+                    TextButton.icon(
+                      onPressed: () {}, // TODO: Implementar selección de descuento
+                      icon: const Icon(Icons.add_circle_outline, size: 18),
+                      label: const Text('Aplicar descuento a producto'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: kPrimary,
+                        padding: EdgeInsets.zero,
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    Wrap(
-                      spacing: 8,
-                      children: [
-                        _DiscountQuickButton(
-                          label: '10%',
-                          enabled: !_isCourtesy,
-                          onTap: () => _setDiscountPercentage(10),
-                        ),
-                        _DiscountQuickButton(
-                          label: '15%',
-                          enabled: !_isCourtesy,
-                          onTap: () => _setDiscountPercentage(15),
-                        ),
-                        _DiscountQuickButton(
-                          label: '25%',
-                          enabled: !_isCourtesy,
-                          onTap: () => _setDiscountPercentage(25),
-                        ),
-                        _DiscountQuickButton(
-                          label: 'Limpiar',
-                          enabled: !_isCourtesy,
-                          onTap: _clearDiscount,
-                        ),
-                      ],
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 4),
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   decoration: BoxDecoration(
                     color: const Color(0xFFF8FAFC),
                     borderRadius: BorderRadius.circular(8),
@@ -550,64 +634,77 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                   ),
                 ),
 
-                const SizedBox(height: 16),
-                const Divider(color: kBorder),
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
+                const Divider(color: kBorder, height: 1),
 
                 // Footer Actions
-                Row(
-                  children: [
-                    _ModalButton(
-                      icon: Icons.close,
-                      label: 'Cancelar',
-                      color: kTextPrimary,
-                      onTap: () => Navigator.of(context).pop(),
-                    ),
-                    const Spacer(),
-                    _ModalButton(
-                      icon: Icons.warning_amber_rounded,
-                      label: 'Agotar producto',
-                      color: widget.item.productId == null
-                          ? kTextSecondary
-                          : kDangerRed,
-                      onTap: widget.item.productId == null
-                          ? null
-                          : _handleMarkSoldOut,
-                    ),
-                    const Spacer(),
-                    _ModalButton(
-                      icon: Icons.delete_outline,
-                      label: 'Eliminar pedido',
-                      color: kDangerRed,
-                      onTap: () {
-                        widget.onDelete();
-                        Navigator.of(context).pop();
-                      },
-                    ),
-                    const Spacer(),
-                    ElevatedButton.icon(
-                      onPressed: _isSaving ? null : _handleSave,
-                      icon: const Icon(Icons.save_rounded, size: 18),
-                      label: Text(
-                        _isSaving ? 'Guardando...' : 'Guardar cambios',
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: kPrimary,
-                        elevation: 0,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 16,
+                Container(
+                  padding: const EdgeInsets.only(top: 0),
+                  child: IntrinsicHeight(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(
+                          child: _ModalButton(
+                            icon: Icons.close,
+                            label: 'Cancelar',
+                            color: kTextPrimary,
+                            onTap: () => Navigator.of(context).pop(),
+                          ),
                         ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
+                        const VerticalDivider(width: 1, color: kBorder),
+                        Expanded(
+                          child: _ModalButton(
+                            icon: Icons.warning_amber_rounded,
+                            label: 'Agotar producto',
+                            color: widget.item.productId == null
+                                ? kTextSecondary
+                                : kDangerRed,
+                            onTap: widget.item.productId == null
+                                ? null
+                                : _handleMarkSoldOut,
+                          ),
+                        ),
+                        const VerticalDivider(width: 1, color: kBorder),
+                      Expanded(
+                        child: _ModalButton(
+                          icon: Icons.delete_outline,
+                          label: 'Eliminar pedido',
+                          color: kDangerRed,
+                          onTap: _handleDelete,
                         ),
                       ),
+                      const VerticalDivider(width: 1, color: kBorder),
+                      Expanded(
+                        child: Container(
+                          height: double.infinity,
+                          padding: const EdgeInsets.all(8),
+                          child: ElevatedButton.icon(
+                            onPressed: _isSaving ? null : _handleSave,
+                            icon: const Icon(Icons.check_circle_outline, size: 24),
+                            label: Text(
+                              _isSaving ? 'Guardando...' : 'Guardar cambios',
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: kPrimary,
+                              elevation: 0,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
-              ],
-            ),
+            ],
           ),
         ),
       ),
@@ -670,20 +767,7 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     return _enteredDiscount().clamp(0, _estimatedSubtotal());
   }
 
-  void _setDiscountPercentage(double percentage) {
-    final discount = _estimatedSubtotal() * (percentage / 100);
-    _discountController.text = discount.toStringAsFixed(2);
-    setState(() {
-      _isCourtesy = false;
-    });
-  }
 
-  void _clearDiscount() {
-    _discountController.text = '0.00';
-    setState(() {
-      _isCourtesy = false;
-    });
-  }
 
   ({String notes, String? courtesyReason}) _splitStoredNotes(String? rawNotes) {
     if (rawNotes == null || rawNotes.trim().isEmpty) {
@@ -730,24 +814,25 @@ class _ModalButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
         child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
               icon,
               color: onTap == null ? const Color(0xFF9CA3AF) : color,
-              size: 20,
+              size: 24,
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 6),
             Text(
               label,
+              textAlign: TextAlign.center,
               style: TextStyle(
                 color: onTap == null ? const Color(0xFF9CA3AF) : color,
                 fontSize: 12,
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.bold,
               ),
             ),
           ],
@@ -757,30 +842,7 @@ class _ModalButton extends StatelessWidget {
   }
 }
 
-class _DiscountQuickButton extends StatelessWidget {
-  final String label;
-  final VoidCallback onTap;
-  final bool enabled;
 
-  const _DiscountQuickButton({
-    required this.label,
-    required this.onTap,
-    this.enabled = true,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return OutlinedButton(
-      onPressed: enabled ? onTap : null,
-      style: OutlinedButton.styleFrom(
-        foregroundColor: const Color(0xFFF97316),
-        side: const BorderSide(color: Color(0xFFF97316)),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-      ),
-      child: Text(label),
-    );
-  }
-}
 
 class _PreviewRow extends StatelessWidget {
   final String label;

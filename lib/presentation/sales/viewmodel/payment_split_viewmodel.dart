@@ -9,8 +9,6 @@ import '../../../data/models/sales_models.dart';
 import '../../../data/repositories/sales_repository_improved.dart';
 import '../../cashier/viewmodel/cashier_viewmodel.dart';
 import '../viewmodel/sales_viewmodel.dart';
-import '../../../services/fiscal/fiscal_service.dart';
-import '../../../services/session/session_controller.dart';
 
 // ==============================================================================
 // 📦 MODELS
@@ -114,7 +112,6 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   final String? _checkId;
   final String? _customerId;
   final String? _cashierSessionId;
-  final String? _fiscalType;
   final Ref _ref;
 
   PaymentSplitViewModel(
@@ -128,7 +125,6 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     required Ref ref,
   }) : _checkId = checkId,
        _customerId = customerId,
-       _fiscalType = fiscalType,
        _cashierSessionId = cashierSessionId,
        _ref = ref,
        super(PaymentSplitState(totalAmount: total)) {
@@ -334,21 +330,6 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
           'Processing Tx $i: method=$methodId, amount=${tx.amount}, checkId=$_checkId',
         );
 
-        String? ncf;
-        if (isLast && _fiscalType != null && _fiscalType.isNotEmpty) {
-          try {
-            final businessId = _ref.read(sessionProvider).activeBusinessId;
-            if (businessId != null) {
-              ncf = await _ref.read(fiscalServiceProvider).getNextNcf(
-                businessId,
-                _fiscalType,
-              );
-            }
-          } catch (e) {
-            debugPrint('Error generating NCF: $e');
-          }
-        }
-
         final payment = await _salesRepo
             .processPayment(
               orderId: _orderId,
@@ -358,9 +339,11 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
               changeAmount: isLast ? state.change : 0,
               closeOrder: isLast && _checkId == null,
               customerId: _customerId,
-              customerRnc: isLast ? _ref.read(currentOrderProvider).customerTaxId : null,
+              customerRnc: isLast
+                  ? _ref.read(currentOrderProvider).customerTaxId
+                  : null,
               cashierSessionId: cashierSessionId,
-              reference: isLast ? ncf : null,
+              reference: null,
             )
             .catchError((e) {
               debugPrint('❌ Error in processPayment: $e');

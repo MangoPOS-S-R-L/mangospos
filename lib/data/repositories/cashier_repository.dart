@@ -163,7 +163,7 @@ class CashierRepository {
           'id, order_id, check_id, payment_method_id, amount, change_amount, reference, status, session_id, created_at, fiscal_documents(ncf_number, ncf_type, customer_rnc, customer_name)',
         )
         .eq('session_id', sessionId)
-        .eq('status', 'completed')
+        .inFilter('status', ['completed', 'void', 'cancelled'])
         .order('created_at', ascending: false);
 
     final payments = List<Map<String, dynamic>>.from(paymentsRaw);

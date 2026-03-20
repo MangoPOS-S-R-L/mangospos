@@ -8,10 +8,15 @@ import '../../../data/utils/business_id_resolver.dart';
 class MenuCategory {
   final String id;
   final String name;
-  const MenuCategory({required this.id, required this.name});
+  final String? color;
+  const MenuCategory({required this.id, required this.name, this.color});
 
   factory MenuCategory.fromMap(Map<String, dynamic> m) =>
-      MenuCategory(id: m['id'] as String, name: (m['name'] ?? '') as String);
+      MenuCategory(
+        id: m['id'] as String,
+        name: (m['name'] ?? '') as String,
+        color: m['color'] as String?,
+      );
 }
 
 @immutable
@@ -199,7 +204,7 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
 
       final cats = await _client
           .from('categories')
-          .select('id,name')
+          .select('id,name,color')
           .eq('business_id', businessId)
           .eq('is_active', true)
           .order('position', ascending: true);

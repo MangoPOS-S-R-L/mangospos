@@ -43,8 +43,21 @@ const List<BoxShadow> _salesSoftShadow = [
   BoxShadow(color: Color(0x10000000), blurRadius: 6, offset: Offset(0, 2)),
 ];
 
+Color _parseHexColor(String? hex, {Color fallback = _salesDivider}) {
+  if (hex == null || hex.isEmpty) return fallback;
+  try {
+    final buffer = StringBuffer();
+    if (hex.length == 6 || hex.length == 7) buffer.write('ff');
+    buffer.write(hex.replaceFirst('#', ''));
+    return Color(int.parse(buffer.toString(), radix: 16));
+  } catch (_) {
+    return fallback;
+  }
+}
+
 class _BusinessReceiptProfile {
-  final String name;
+  final String name; 
+  final String? businessName;
   final String? legalName;
   final String? address;
   final String? phone;
@@ -52,6 +65,7 @@ class _BusinessReceiptProfile {
 
   const _BusinessReceiptProfile({
     required this.name,
+    this.businessName,
     this.legalName,
     this.address,
     this.phone,
@@ -74,6 +88,7 @@ Future<_BusinessReceiptProfile> _loadBusinessReceiptProfile(
 
   final client = Supabase.instance.client;
   String? name = fallbackName;
+  String? businessName;
   String? address;
   String? phone;
   String? rnc;
@@ -105,6 +120,7 @@ Future<_BusinessReceiptProfile> _loadBusinessReceiptProfile(
 
   return _BusinessReceiptProfile(
     name: name ?? fallbackName,
+    businessName: businessName,
     legalName: legalName,
     address: address,
     phone: phone,
@@ -995,8 +1011,8 @@ class _CartView extends ConsumerWidget {
               .read(currentOrderProvider.notifier)
               .updateItem(item.id, updatedItem);
         },
-        onDelete: () {
-          ref.read(currentOrderProvider.notifier).deleteItem(item.id);
+        onDelete: (reason) async {
+          await ref.read(currentOrderProvider.notifier).deleteItem(item.id, reason: reason);
         },
         onMarkSoldOut: item.productId == null
             ? null
@@ -1023,6 +1039,17 @@ class _CartView extends ConsumerWidget {
                   ),
                 );
               },
+        onReprint: (item.status != 'draft')
+            ? () {
+                final order = ref.read(currentOrderProvider).order;
+                if (order != null) {
+                  ref.read(currentOrderProvider.notifier).reprintKitchenTicket(
+                        orderId: order.id,
+                        items: [item],
+                      );
+                }
+              }
+            : null,
       ),
     );
   }
@@ -1140,17 +1167,19 @@ class _CartView extends ConsumerWidget {
       final name = item.productName;
       final qty = item.quantity.toDouble();
       final totalItem = _effectiveItemTotal(item);
-      final key = name.toLowerCase().trim();
-      if (groupedSent.containsKey(key)) {
-        groupedSent[key] = groupedSent[key]!.copyWith(
-          qty: groupedSent[key]!.qty + qty,
-          total: groupedSent[key]!.total + totalItem,
+      final groupKey = name.toLowerCase().trim();
+      if (groupedSent.containsKey(groupKey)) {
+        groupedSent[groupKey] = groupedSent[groupKey]!.copyWith(
+          qty: groupedSent[groupKey]!.qty + qty,
+          total: groupedSent[groupKey]!.total + totalItem,
+          items: [...groupedSent[groupKey]!.items, item],
         );
       } else {
-        groupedSent[key] = _GroupedSentItem(
+        groupedSent[groupKey] = _GroupedSentItem(
           name: name,
           qty: qty,
           total: totalItem,
+          items: [item],
         );
       }
     }
@@ -1552,6 +1581,11 @@ class _CartView extends ConsumerWidget {
                               name: groupedSentItems[i].name,
                               qty: groupedSentItems[i].qty,
                               total: groupedSentItems[i].total,
+                              onTap: () => _openProductDetailModal(
+                                context,
+                                ref,
+                                groupedSentItems[i].items.first,
+                              ),
                             ),
                             if (i < groupedSentItems.length - 1)
                               const Divider(
@@ -1748,6 +1782,8 @@ class _CartView extends ConsumerWidget {
                               if (!context.mounted) return;
                               final preCheckData = {
                                 'restaurantName': businessProfile.name,
+                                'businessName': businessProfile.businessName,
+                                'legalName': businessProfile.legalName,
                                 'rnc': businessProfile.rnc,
                                 'phone': businessProfile.phone,
                                 'address': businessProfile.address,
@@ -1782,7 +1818,21 @@ class _CartView extends ConsumerWidget {
                                       preCheckData['waiterName'] as String?,
                                 );
                               } catch (e) {
-                                // Error is already handled inside _handlePrintFlow with a snackbar by default
+                                if (context.mounted) {
+                                  _showReimpresionDialog(
+                                    context: context,
+                                    ref: ref,
+                                    type: 'precheck',
+                                    data: preCheckData,
+                                    orderObj: orderState.order!,
+                                    orderItems: displayedItems,
+                                    tableName:
+                                        preCheckData['tableName'] as String?,
+                                    waiterName:
+                                        preCheckData['waiterName'] as String?,
+                                    errorMsg: e.toString(),
+                                  );
+                                }
                               }
                             }
                           },
@@ -1847,12 +1897,11 @@ class _CartView extends ConsumerWidget {
     bool showSnackBar = true,
   }) async {
     try {
-      // 1. Obtener repositorio y negocio activo
       final printRepo = ref.read(printingPrintersRepositoryProvider);
       final session = ref.read(sessionProvider);
       final businessId = session.activeBusinessId;
       if (businessId == null || businessId.isEmpty) {
-        throw Exception('No se pudo resolver el negocio activo para imprimir.');
+        throw Exception('Negocio no resuelto.');
       }
 
       final assignedPrinter = await printRepo.getAssignedPrinterForType(
@@ -1865,28 +1914,25 @@ class _CartView extends ConsumerWidget {
       );
 
       if (assignedPrinter == null) {
-        throw Exception(
-          type == 'invoice'
-              ? 'No hay una impresora configurada para recibos/facturas. Ve a Ajustes > Impresión > Comprobantes.'
-              : 'No hay una impresora configurada para precuentas. Ve a Ajustes > Impresión > Comprobantes.',
-        );
+        throw Exception('Impresora no configurada.');
       }
 
       final ip = assignedPrinter.ipAddress?.trim();
-      if (ip == null || ip.isEmpty) {
-        throw Exception('La impresora asignada no tiene IP configurada.');
-      }
       final port = assignedPrinter.port ?? 9100;
 
-      // Si es precuenta y tenemos los objetos, generamos los bytes en Flutter
+      if (ip == null || ip.isEmpty) {
+        throw Exception('IP de impresora no configurada.');
+      }
+
+      // Preparación de datos (fuera del timeout para no penalizar generación)
+      dynamic ticket;
       if ((type == 'precheck' || type == 'invoice') &&
           orderObj != null &&
           orderItems != null) {
-        final title =
-            data['title'] as String? ??
+        final title = data['title'] as String? ??
             (type == 'invoice' ? 'FACTURA' : 'PRECUENTA');
 
-        final ticket = type == 'invoice'
+        ticket = type == 'invoice'
             ? PrintTicketService.generateInvoice(
                 order: orderObj,
                 items: orderItems,
@@ -1913,45 +1959,45 @@ class _CartView extends ConsumerWidget {
                 items: orderItems,
                 tableName: tableName ?? 'Mesa',
                 waiterName: waiterName,
-                businessName: data['restaurantName'] as String?,
+                businessName: (data['businessName'] as String?) ?? (data['restaurantName'] as String?),
                 legalName: data['legalName'] as String?,
                 businessAddress: data['address'] as String?,
                 businessPhone: data['phone'] as String?,
+                businessRnc: data['rnc'] as String?,
                 title: title,
               );
-        if (kIsWeb) {
-          final up = await printRepo.isAgentUp();
-          if (!up) {
-            throw Exception(
-              'Para imprimir desde la Web necesitas el Agente LAN activo en tu PC.',
+      }
+
+      // Ejecución con Timeout de 3 segundos
+      await Future(() async {
+        if (ticket != null) {
+          if (kIsWeb) {
+            final up = await printRepo.isAgentUp();
+            if (!up) throw Exception('Agente LAN no detectado.');
+            await printRepo.printRawViaAgent(
+              ip: ip,
+              port: port,
+              data: ticket.escPosCommands,
+            );
+          } else {
+            await printRepo.printRawDirectTcp(
+              ip: ip,
+              port: port,
+              data: ticket.escPosCommands,
             );
           }
-          await printRepo.printRawViaAgent(
-            ip: ip,
-            port: port,
-            data: ticket.escPosCommands,
-          );
         } else {
-          // En nativo: imprimir directo por TCP
-          await printRepo.printRawDirectTcp(
-            ip: ip,
-            port: port,
-            data: ticket.escPosCommands,
-          );
+          await printRepo.printJobViaAgent({
+            'id':
+                '${type.toUpperCase()}-${DateTime.now().millisecondsSinceEpoch}',
+            'printer': {'type': 'network', 'ip': ip, 'port': port},
+            'content': {'type': type, 'data': data},
+          });
         }
-      } else {
-        // Fallback: payload clásico
-        final jobPayload = {
-          'id':
-              '${type.toUpperCase()}-${DateTime.now().millisecondsSinceEpoch}',
-          'printer': {'type': 'network', 'ip': ip, 'port': port},
-          'content': {
-            'type': type, // 'precheck' o 'invoice'
-            'data': data,
-          },
-        };
-        await printRepo.printJobViaAgent(jobPayload);
-      }
+      }).timeout(
+        const Duration(seconds: 3),
+        onTimeout: () => throw Exception('Timeout'),
+      );
 
       if (showSnackBar && context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1962,14 +2008,6 @@ class _CartView extends ConsumerWidget {
         );
       }
     } catch (e) {
-      if (showSnackBar && context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al imprimir: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
       rethrow;
     }
   }
@@ -2016,66 +2054,85 @@ class _CartView extends ConsumerWidget {
       context: context,
       barrierDismissible: false,
       builder: (ctx) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: Container(
+          width: 440,
+          padding: const EdgeInsets.all(32.0),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // Icon Container
               Container(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
-                  color: Colors.red.withOpacity(0.1),
+                  color: const Color(0xFFFEF2F2),
                   shape: BoxShape.circle,
+                  border: Border.all(color: const Color(0xFFFEE2E2), width: 2),
                 ),
-                child:
-                    const Icon(Icons.close_rounded, color: Colors.red, size: 64),
+                child: const Icon(
+                  Icons.print_disabled_rounded,
+                  color: Color(0xFFEF4444),
+                  size: 48,
+                ),
               ),
               const SizedBox(height: 24),
+              
+              // Title
               const Text(
-                'Re-impresión',
+                'Fallo de Impresión',
                 style: TextStyle(
-                  fontSize: 28,
+                  fontSize: 24,
                   fontWeight: FontWeight.w800,
                   color: _salesTextPrimary,
+                  letterSpacing: -0.5,
+                ),
+              ),
+              const SizedBox(height: 12),
+              
+              // Message
+              const Text(
+                'No pudimos procesar la impresión. ¿Deseas intentar enviar el trabajo nuevamente?',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 15,
+                  color: _salesTextSecondary,
+                  height: 1.4,
                 ),
               ),
               const SizedBox(height: 16),
-              Text(
-                'Error al imprimir ¿Desea intentar nuevamente? $errorMsg',
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 16,
-                  color: _salesTextSecondary,
-                  height: 1.5,
-                ),
-              ),
+              
               const SizedBox(height: 32),
+              
+              // Actions
               Row(
                 children: [
                   Expanded(
-                    child: OutlinedButton(
+                    child: TextButton(
                       onPressed: () {
                         Navigator.pop(ctx);
                         onFinish?.call();
                       },
-                      style: OutlinedButton.styleFrom(
+                      style: TextButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 16),
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(14),
                         ),
-                        side: const BorderSide(color: _salesDivider),
                       ),
-                      child: const Text('Cancelar',
-                          style: TextStyle(
-                            color: _salesTextSecondary,
-                            fontWeight: FontWeight.w700,
-                          )),
+                      child: const Text(
+                        'Cancelar',
+                        style: TextStyle(
+                          color: _salesTextSecondary,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 16,
+                        ),
+                      ),
                     ),
                   ),
                   const SizedBox(width: 16),
                   Expanded(
-                    child: ElevatedButton(
+                    child: FilledButton(
                       onPressed: () async {
                         Navigator.pop(ctx);
                         try {
@@ -2108,20 +2165,20 @@ class _CartView extends ConsumerWidget {
                           );
                         }
                       },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor:
-                            const Color(0xFF3B82F6), // blue in image
+                      style: FilledButton.styleFrom(
+                        backgroundColor: _salesTotalColor,
                         padding: const EdgeInsets.symmetric(vertical: 16),
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(14),
                         ),
                         elevation: 0,
                       ),
                       child: const Text(
-                        'OK',
+                        'Reintentar',
                         style: TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w700,
+                          fontSize: 16,
                         ),
                       ),
                     ),
@@ -2668,17 +2725,22 @@ class _SentLineItem extends StatelessWidget {
   final String name;
   final double qty;
   final double total;
+  final VoidCallback? onTap;
 
   const _SentLineItem({
     required this.name,
     required this.qty,
     required this.total,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
       child: Row(
         children: [
           // Cantidad
@@ -2751,7 +2813,8 @@ class _SentLineItem extends StatelessWidget {
           ),
         ],
       ),
-    );
+    ),
+   );
   }
 }
 
@@ -2849,18 +2912,26 @@ class _GroupedSentItem {
   final String name;
   final double qty;
   final double total;
+  final List<OrderItem> items;
 
   const _GroupedSentItem({
     required this.name,
     required this.qty,
     required this.total,
+    required this.items,
   });
 
-  _GroupedSentItem copyWith({String? name, double? qty, double? total}) {
+  _GroupedSentItem copyWith({
+    String? name,
+    double? qty,
+    double? total,
+    List<OrderItem>? items,
+  }) {
     return _GroupedSentItem(
       name: name ?? this.name,
       qty: qty ?? this.qty,
       total: total ?? this.total,
+      items: items ?? this.items,
     );
   }
 }
@@ -4181,7 +4252,10 @@ class _CategoriesGrid extends ConsumerWidget {
                     decoration: BoxDecoration(
                       color: _salesSurface,
                       borderRadius: BorderRadius.circular(_salesRadiusCard),
-                      border: Border.all(color: _salesDivider),
+                      border: Border.all(
+                        color: _parseHexColor(cat.color),
+                        width: cat.color != null ? 2.5 : 1,
+                      ),
                       boxShadow: _salesSoftShadow,
                     ),
                     padding: const EdgeInsets.symmetric(

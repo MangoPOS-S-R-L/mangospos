@@ -1949,6 +1949,7 @@ declare
   ncf text;
   doc_id uuid;
   v_business_id uuid;
+  v_ncf_type public.ncf_type;
 begin
   select * into o from public.orders where id = _order_id;
 
@@ -1972,7 +1973,15 @@ begin
 
   select * into fs from public.fiscal_settings where business_id = v_business_id;
 
-  ncf := public.generate_ncf(v_business_id, fs.default_ncf_type);
+  v_ncf_type := coalesce(
+    fs.default_ncf_type,
+    case
+      when coalesce(fs.ecf_enabled, false) then 'E32'::public.ncf_type
+      else 'B02'::public.ncf_type
+    end
+  );
+
+  ncf := public.generate_ncf(v_business_id, v_ncf_type);
 
   insert into public.fiscal_documents (
     business_id, order_id, payment_id,
@@ -1982,10 +1991,10 @@ begin
     is_electronic
   ) values (
     v_business_id, o.id, _payment_id,
-    fs.default_ncf_type, ncf,
+    v_ncf_type, ncf,
     'Consumidor Final',
     o.subtotal, o.tax, o.total,
-    fs.ecf_enabled
+    coalesce(fs.ecf_enabled, false)
   )
   returning id into doc_id;
 

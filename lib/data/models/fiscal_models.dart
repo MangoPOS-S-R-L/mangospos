@@ -17,24 +17,32 @@ class FiscalNcfSequence {
     this.activo = true,
   });
 
-  factory FiscalNcfSequence.fromJson(Map<String, dynamic> json) => FiscalNcfSequence(
-    id: json['id'],
-    businessId: json['business_id'],
-    tipo: json['tipo'],
-    serie: json['serie'],
-    ultimoSeq: json['ultimo_seq'],
-    maximoSeq: json['maximo_seq'],
-    activo: json['activo'] ?? true,
-  );
+  factory FiscalNcfSequence.fromJson(Map<String, dynamic> json) {
+    final rawType = (json['tipo'] ?? json['ncf_type'] ?? '').toString();
+    final normalizedType = rawType.length >= 3 ? rawType.substring(1) : rawType;
+    final derivedSerie = (json['serie'] ?? '').toString().isNotEmpty
+        ? json['serie'].toString()
+        : (rawType.isNotEmpty ? rawType.substring(0, 1) : 'B');
+
+    return FiscalNcfSequence(
+      id: json['id']?.toString(),
+      businessId: json['business_id']?.toString(),
+      tipo: normalizedType,
+      serie: derivedSerie,
+      ultimoSeq: (json['ultimo_seq'] ?? json['current_number'] ?? 0) as int,
+      maximoSeq: (json['maximo_seq'] ?? json['range_end'] ?? 0) as int,
+      activo: (json['activo'] ?? json['is_active'] ?? true) as bool,
+    );
+  }
 
   Map<String, dynamic> toJson() => {
     'id': id,
     'business_id': businessId,
-    'tipo': tipo,
+    'ncf_type': '$serie$tipo',
     'serie': serie,
-    'ultimo_seq': ultimoSeq,
-    'maximo_seq': maximoSeq,
-    'activo': activo,
+    'current_number': ultimoSeq,
+    'range_end': maximoSeq,
+    'is_active': activo,
   };
 
   FiscalNcfSequence copyWith({
@@ -57,12 +65,16 @@ class FiscalNcfSequence {
     );
   }
 
+  String get ncfType => '$serie$tipo';
+
   String get lastNcfFormatted {
-    // Serie E (e-CF) tiene 13 caracteres total: E + Tipo (2) + Secuencia (10)
-    // Serie B (Legacy) tiene 11 caracteres total: B + Tipo (2) + Secuencia (8)
-    // Nota: El usuario mostró 12 caracteres en screenshot (B + 2 + 9), ajustamos a lo que parece ser su preferencia o requerimiento.
-    final padding = serie == 'E' ? 10 : 8;
-    return '$serie$tipo${ultimoSeq.toString().padLeft(padding, '0')}';
+    return '$ncfType${ultimoSeq.toString().padLeft(8, '0')}';
   }
+
+  String get nextNcfFormatted {
+    final next = ultimoSeq + 1;
+    return '$ncfType${next.toString().padLeft(8, '0')}';
+  }
+
   int get remaining => maximoSeq - ultimoSeq;
 }

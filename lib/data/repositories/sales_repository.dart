@@ -883,6 +883,55 @@ class SalesRepository {
     }
   }
 
+  /// Anular orden y sus pagos
+  Future<void> annulOrder({
+    required String orderId,
+    String? reason,
+  }) async {
+    try {
+      // 1. Obtener pagos asociados
+      final paymentsRaw = await _client
+          .from('payments')
+          .select('id, amount, session_id')
+          .eq('order_id', orderId)
+          .eq('status', 'completed');
+      
+      final payments = List<Map<String, dynamic>>.from(paymentsRaw);
+
+      // 2. Anular la orden mediante RPC (cierra orden, sesión y libera mesa)
+      await _client.rpc(
+        SalesQueries.rpcCloseOrderAndTable,
+        params: {'p_order_id': orderId, 'p_status': 'void'},
+      );
+
+      // 3. Anular todos los ítems de la orden (Reportes usan 'void')
+      await _client
+          .from('order_items')
+          .update({'status': 'void'})
+          .eq('order_id', orderId);
+
+      // 4. Anular pagos asociados
+      // Nota: La restricción de tabla 'payments_status_check' no acepta 'void', 
+      // pero sí acepta 'cancelled'.
+      if (payments.isNotEmpty) {
+        final paymentIds = payments.map((p) => p['id'] as String).toList();
+        await _client
+            .from('payments')
+            .update({'status': 'cancelled'})
+            .inFilter('id', paymentIds);
+      }
+
+      // 5. Anular Documentos Fiscales asociados
+       await _client
+          .from('fiscal_documents')
+          .update({'status': 'cancelled'})
+          .eq('order_id', orderId);
+
+    } catch (e) {
+      throw Exception('Error al anular orden: $e');
+    }
+  }
+
   // ============================================================
   // 🔐 CERRAR ORDEN
   // ============================================================
