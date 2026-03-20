@@ -9,9 +9,11 @@ list(APPEND FLUTTER_PLUGIN_LIST
   media_kit_video
   permission_handler_windows
   printing
+  screen_retriever_windows
   universal_ble
   url_launcher_windows
   volume_controller
+  window_manager
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST

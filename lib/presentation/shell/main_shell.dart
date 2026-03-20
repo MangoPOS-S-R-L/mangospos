@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http; // ✅ check internet
 import 'package:google_fonts/google_fonts.dart';
 
+import 'package:mangopos/core/services/fullscreen/fullscreen_service.dart';
 import 'package:mangopos/utils/responsive_utils.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 
@@ -116,6 +117,11 @@ class MainShell extends ConsumerWidget {
                   // Sección derecha (Acciones)
                   Row(
                     children: [
+                      // Pantalla completa
+                      const _FullscreenButton(),
+
+                      const SizedBox(width: 12),
+
                       // Notificaciones
                       const _NotificationButton(),
 
@@ -233,6 +239,72 @@ class _TopNavItemState extends ConsumerState<_TopNavItem> {
                 const Icon(Icons.lock_outline, size: 14, color: Colors.grey),
               ],
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ===== FULLSCREEN BUTTON =====
+class _FullscreenButton extends StatefulWidget {
+  const _FullscreenButton();
+
+  @override
+  State<_FullscreenButton> createState() => _FullscreenButtonState();
+}
+
+class _FullscreenButtonState extends State<_FullscreenButton> {
+  final FullscreenService _service = createFullscreenService();
+  bool _supported = false;
+  bool _fullscreen = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadState();
+  }
+
+  Future<void> _loadState() async {
+    final supported = await _service.isSupported();
+    final fullscreen = supported ? await _service.isFullscreen() : false;
+    if (!mounted) return;
+    setState(() {
+      _supported = supported;
+      _fullscreen = fullscreen;
+    });
+  }
+
+  Future<void> _toggle() async {
+    if (!_supported) return;
+    await _service.toggleFullscreen();
+    await _loadState();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_supported) {
+      return const SizedBox.shrink();
+    }
+
+    return Tooltip(
+      message: _fullscreen ? 'Salir de pantalla completa' : 'Pantalla completa',
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: _toggle,
+          child: Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: Colors.grey[100],
+              shape: BoxShape.circle,
+            ),
+            alignment: Alignment.center,
+            child: Icon(
+              _fullscreen ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded,
+              color: Colors.grey[700],
+            ),
           ),
         ),
       ),
