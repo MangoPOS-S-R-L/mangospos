@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'package:flutter/scheduler.dart';
+import 'package:flutter/widgets.dart';
 
 import 'package:mangopos/core/security/access_control_catalog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -121,6 +123,7 @@ bool _meetsPinAccess(PosRole role, PinAccessLevel level) {
       return role == PosRole.administrador;
   }
 }
+
 class SessionState {
   final AuthStatus status;
   final String? userId;
@@ -181,24 +184,28 @@ class SessionController extends Notifier<SessionState> {
     final auth = Supabase.instance.client.auth;
 
     _authSub = auth.onAuthStateChange.listen((event) {
-      final authEvent = event.event;
-      final session = event.session;
+      // Usamos Future.delayed(Duration.zero) para asegurarnos de que la transición
+      // de estado ocurra después de que cualquier build actual haya terminado.
+      Future.delayed(Duration.zero, () {
+        final authEvent = event.event;
+        final session = event.session;
 
-      if (authEvent == AuthChangeEvent.signedOut) {
-        setUnauthenticated();
-        return;
-      }
+        if (authEvent == AuthChangeEvent.signedOut) {
+          setUnauthenticated();
+          return;
+        }
 
-      if (authEvent == AuthChangeEvent.signedIn ||
-          authEvent == AuthChangeEvent.tokenRefreshed ||
-          authEvent == AuthChangeEvent.userUpdated ||
-          authEvent == AuthChangeEvent.initialSession) {
-        restoreFromSupabaseSession(session: session);
-      }
+        if (authEvent == AuthChangeEvent.signedIn ||
+            authEvent == AuthChangeEvent.tokenRefreshed ||
+            authEvent == AuthChangeEvent.userUpdated ||
+            authEvent == AuthChangeEvent.initialSession) {
+          restoreFromSupabaseSession(session: session);
+        }
+      });
     });
 
     // Bootstrapping inicial para reload (web/desktop/mobile).
-    Future.microtask(() => restoreFromSupabaseSession());
+    Future.delayed(Duration.zero, () => restoreFromSupabaseSession());
 
     ref.onDispose(() {
       _authSub?.cancel();
@@ -208,7 +215,17 @@ class SessionController extends Notifier<SessionState> {
     return const SessionState(status: AuthStatus.loading);
   }
 
-  void setLoading() => state = state.copyWith(status: AuthStatus.loading);
+  void _safeSet(SessionState next) {
+    if (state == next) return;
+    final binding = WidgetsBinding.instance;
+    if (binding.schedulerPhase == SchedulerPhase.persistentCallbacks) {
+      binding.addPostFrameCallback((_) => state = next);
+    } else {
+      state = next;
+    }
+  }
+
+  void setLoading() => _safeSet(state.copyWith(status: AuthStatus.loading));
 
   void setAuthenticated(
     String userId, {
@@ -225,24 +242,28 @@ class SessionController extends Notifier<SessionState> {
     final perms =
         permissions ??
         (role == null ? <String>{} : _rolePermissions[role] ?? <String>{});
-    state = SessionState(
-      status: AuthStatus.authenticated,
-      userId: userId,
-      employeeId: employeeId,
-      activeBusinessId: businessId,
-      activeBusinessName: businessName,
-      userName: userName,
-      activeRole: role,
-      availableRoles: availableRoles,
-      permissions: perms,
+
+    _safeSet(
+      SessionState(
+        status: AuthStatus.authenticated,
+        userId: userId,
+        employeeId: employeeId,
+        activeBusinessId: businessId,
+        activeBusinessName: businessName,
+        userName: userName,
+        activeRole: role,
+        availableRoles: availableRoles,
+        permissions: perms,
+      ),
     );
   }
 
   void setActiveBusiness(String businessId) {
-    state = state.copyWith(activeBusinessId: businessId);
+    _safeSet(state.copyWith(activeBusinessId: businessId));
   }
 
   Future<bool> restoreFromSupabaseSession({Session? session}) async {
+    setLoading();
     final client = Supabase.instance.client;
     final currentSession = session ?? client.auth.currentSession;
     final user = currentSession?.user;
@@ -331,7 +352,10 @@ class SessionController extends Notifier<SessionState> {
     }
   }
 
-  bool authenticateWithPin({required String pin, String? userId}) {
+  Future<bool> authenticateWithPin({
+    required String pin,
+    String? userId,
+  }) async {
     PinLoginUser? found;
     if (userId != null && userId.isNotEmpty) {
       for (final candidate in pinLoginUsers) {
@@ -362,12 +386,17 @@ class SessionController extends Notifier<SessionState> {
     return true;
   }
 
-  void switchRole(PosRole role) {
+  Future<void> switchRole(PosRole role) async {
     if (!state.availableRoles.contains(role)) return;
-    state = state.copyWith(
-      activeRole: role,
-      permissions: _rolePermissions[role] ?? <String>{},
-    );
+    final completer = Completer<void>();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      state = state.copyWith(
+        activeRole: role,
+        permissions: _rolePermissions[role] ?? <String>{},
+      );
+      completer.complete();
+    });
+    return completer.future;
   }
 
   bool hasPermission(String permission) =>
@@ -443,7 +472,52 @@ class SessionController extends Notifier<SessionState> {
     return false;
   }
 
-  void setUnauthenticated() => state = const SessionState();
+  Future<bool> verifyCurrentUserPin({required String pin}) async {
+    final businessId = state.activeBusinessId;
+    final userId = state.userId;
+
+    if (businessId != null &&
+        businessId.isNotEmpty &&
+        userId != null &&
+        userId.isNotEmpty) {
+      try {
+        final row = await Supabase.instance.client
+            .from('employees')
+            .select('id')
+            .eq('business_id', businessId)
+            .eq('user_id', userId)
+            .eq('status', 'active')
+            .eq('pin', pin)
+            .maybeSingle();
+
+        if (row != null) {
+          return true;
+        }
+      } catch (_) {
+        // fallback demo below
+      }
+    }
+
+    final currentUserId = state.userId;
+    if (currentUserId != null && currentUserId.isNotEmpty) {
+      for (final user in pinLoginUsers) {
+        if (user.id == currentUserId && user.pin == pin) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  Future<void> setUnauthenticated() async {
+    final completer = Completer<void>();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      state = const SessionState();
+      completer.complete();
+    });
+    return completer.future;
+  }
 
   Future<void> signOut() async {
     try {

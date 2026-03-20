@@ -7,6 +7,7 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
+import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/data/models/table_status.dart';
@@ -590,7 +591,8 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
 
     byZone.setOpening(ts.tableId, true);
 
-    // Mesa ocupada por otro mesero: exigir PIN (excepto admin/supervisor)
+    // Mesa ocupada por otro mesero: exigir el PIN del usuario actual
+    // para dejar rastro de quién accedió (admin/supervisor pueden pasar sin PIN extra).
     final session = ref.read(sessionProvider);
     final isOtherWaiterTable = ts.sessionId != null && !ts.isOwn;
     final bypassPin =
@@ -601,17 +603,40 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
         byZone.setOpening(ts.tableId, false);
         return;
       }
-      final authorized = await showPinVerificationModal(
+      final authorized = await showCurrentUserPinVerificationModal(
         context,
         ref,
-        level: PinAccessLevel.supervisor,
         title: 'Mesa de otro mesero',
         subtitle:
-            'Se requiere autorización de Supervisor o Administrador para abrir esta mesa.',
+            'Ingresa tu PIN para abrir esta mesa. El acceso quedará registrado con tu usuario.',
       );
       if (!authorized) {
         byZone.setOpening(ts.tableId, false);
         return;
+      }
+
+      final sessionId = ts.sessionId;
+      if (sessionId != null && sessionId.isNotEmpty) {
+        try {
+          final repo = ref.read(salesRepositoryProvider);
+          final currentSession = await repo.getSessionCustomer(sessionId);
+          final currentNote = currentSession.note?.trim();
+          final actorName = session.userName?.trim().isNotEmpty == true
+              ? session.userName!.trim()
+              : 'Usuario';
+          final ownerName = ts.waiterName?.trim().isNotEmpty == true
+              ? ts.waiterName!.trim()
+              : 'otro mesero';
+          final stamp = DateTime.now().toLocal().toIso8601String();
+          final auditLine =
+              '[ACCESO_MESA][$stamp] $actorName accedió a la mesa ${ts.code} asignada a $ownerName';
+          final nextNote = (currentNote == null || currentNote.isEmpty)
+              ? auditLine
+              : '$currentNote\n$auditLine';
+          await repo.updateSessionNote(sessionId: sessionId, note: nextNote);
+        } catch (_) {
+          // No bloqueamos la operación si falla la auditoría.
+        }
       }
     }
 

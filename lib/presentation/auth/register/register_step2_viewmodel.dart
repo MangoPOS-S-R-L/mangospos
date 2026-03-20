@@ -1,3 +1,5 @@
+import 'package:flutter/scheduler.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/env/supabase_flutter.dart';
 import 'package:mangopos/presentation/auth/register/register_step1_viewmodel.dart';
@@ -5,19 +7,39 @@ import 'package:mangopos/services/session/session_controller.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'register_step2_state.dart';
 
+class RegisterSubmitResult {
+  final bool requiresEmailConfirmation;
+  final String message;
+
+  const RegisterSubmitResult({
+    required this.requiresEmailConfirmation,
+    required this.message,
+  });
+}
+
 class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
   @override
   RegisterStep2State build() => const RegisterStep2State();
 
-  void setBusinessName(String v) => state = state.copyWith(businessName: v);
-  void setBranch(String v) => state = state.copyWith(branchName: v);
-  void setBusinessType(String v) => state = state.copyWith(businessType: v);
-  void setCountry(String v) => state = state.copyWith(country: v);
-  void setAddress(String v) => state = state.copyWith(address: v);
-  void setPhone(String v) => state = state.copyWith(phone: v);
-  void setSubdomain(String v) => state = state.copyWith(subdomain: v);
+  void setBusinessName(String v) => _safeSet(state.copyWith(businessName: v));
+  void setBranch(String v) => _safeSet(state.copyWith(branchName: v));
+  void setBusinessType(String v) => _safeSet(state.copyWith(businessType: v));
+  void setCountry(String v) => _safeSet(state.copyWith(country: v));
+  void setAddress(String v) => _safeSet(state.copyWith(address: v));
+  void setPhone(String v) => _safeSet(state.copyWith(phone: v));
+  void setSubdomain(String v) => _safeSet(state.copyWith(subdomain: v));
 
-  Future<void> submitAll() async {
+  void _safeSet(RegisterStep2State next) {
+    if (state == next) return;
+    final binding = WidgetsBinding.instance;
+    if (binding.schedulerPhase == SchedulerPhase.persistentCallbacks) {
+      binding.addPostFrameCallback((_) => state = next);
+    } else {
+      state = next;
+    }
+  }
+
+  Future<RegisterSubmitResult> submitAll() async {
     final supabase = SupabaseConfig.client;
 
     try {
@@ -49,10 +71,8 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
       );
       final session = resp.session ?? supabase.auth.currentSession;
       final user = resp.user ?? session?.user ?? supabase.auth.currentUser;
-      if (session == null || user == null) {
-        throw Exception(
-          'La cuenta fue creada pero tu proyecto no devolvió una sesión activa todavía. Espera un momento y luego inicia sesión para terminar de entrar.',
-        );
+      if (user == null) {
+        throw Exception('No se pudo crear el usuario o la sesión.');
       }
       final userId = user.id;
 
@@ -85,20 +105,32 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
           .single();
 
       final businessId = business['id'] as String;
-
-      final selectedPlan = (step1.selectedPlan ?? 'base').trim().toLowerCase();
+      final normalizedPlan = _resolveMembershipPlan(step1.selectedPlan);
+      final now = DateTime.now();
 
       await supabase.from('memberships').insert({
         'user_id': userId,
         'business_id': businessId,
-        'plan_type': selectedPlan,
-        'status': 'trial',
-        'start_date': DateTime.now().toIso8601String(),
-        'end_date': DateTime.now().add(const Duration(days: 14)).toIso8601String(),
-        'created_at': DateTime.now().toIso8601String(),
+        'plan_type': normalizedPlan,
+        'status': 'active',
+        'start_date': now.toIso8601String(),
+        'end_date': now.add(const Duration(days: 14)).toIso8601String(),
+        'created_at': now.toIso8601String(),
       });
 
-      await ref.read(sessionProvider.notifier).restoreFromSupabaseSession();
+      if (session != null) {
+        await ref.read(sessionProvider.notifier).restoreFromSupabaseSession();
+        return const RegisterSubmitResult(
+          requiresEmailConfirmation: false,
+          message: 'Todo quedó creado correctamente. En unos segundos entrarás al panel principal.',
+        );
+      }
+
+      return const RegisterSubmitResult(
+        requiresEmailConfirmation: true,
+        message:
+            'Cuenta creada correctamente. Revisa tu correo para confirmar tu cuenta y luego inicia sesión.',
+      );
     } on PostgrestException catch (e) {
       throw Exception('No se pudo completar el registro: ${e.message}');
     } on AuthException catch (e) {
@@ -117,6 +149,15 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
     final normalizedSubdomain = _normalizeSubdomain(state.subdomain);
     if (normalizedSubdomain.isEmpty) return 'tunegocio.mangopos.do';
     return '$normalizedSubdomain.mangopos.do';
+  }
+
+  String _resolveMembershipPlan(String? rawPlan) {
+    const allowedPlans = {'starter', 'pro', 'enterprise', 'trial'};
+    final normalized = rawPlan?.trim().toLowerCase();
+    if (normalized != null && allowedPlans.contains(normalized)) {
+      return normalized;
+    }
+    return 'starter';
   }
 
   String _normalizeSubdomain(String raw) {
