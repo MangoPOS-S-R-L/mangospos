@@ -1,69 +1,75 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="$(var.ProductName)" Language="1033" Version="$(var.Version)" Manufacturer="$(var.Manufacturer)" UpgradeCode="8D0F13E8-6A4B-4B62-9700-A4B2EBAA7C51">
-    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" Description="MangoPOS Desktop + LAN Agent" />
-    <MajorUpgrade DowngradeErrorMessage="Ya hay una versión más reciente instalada." />
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package
+    Name="$(var.ProductName)"
+    Language="1033"
+    Version="$(var.Version)"
+    Manufacturer="$(var.Manufacturer)"
+    UpgradeCode="8D0F13E8-6A4B-4B62-9700-A4B2EBAA7C51"
+    InstallerVersion="500"
+    Scope="perMachine">
+
+    <MajorUpgrade DowngradeErrorMessage="Ya hay una version mas reciente instalada." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
-    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
-    <UIRef Id="WixUI_InstallDir" />
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLDIR" />
     <UIRef Id="WixUI_ErrorProgressText" />
 
-    <Icon Id="AppIcon.ico" SourceFile="$(var.SourceDir)\App\data\flutter_assets\assets\icon\app_icon.ico" />
-    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLDIR" Name="MangoPOS">
+        <Directory Id="APPDIR" Name="App" />
+        <Directory Id="AGENTDIR" Name="Agent" />
+      </Directory>
+    </StandardDirectory>
 
-    <Directory Id="TARGETDIR" Name="SourceDir">
-      <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLDIR" Name="MangoPOS">
-          <Directory Id="APPDIR" Name="App" />
-          <Directory Id="AGENTDIR" Name="Agent" />
-        </Directory>
-      </Directory>
-      <Directory Id="ProgramMenuFolder">
-        <Directory Id="ProgramMenuDir" Name="MangoPOS" />
-      </Directory>
-      <Directory Id="DesktopFolder" />
-    </Directory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ProgramMenuDir" Name="MangoPOS" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="DesktopFolder" />
 
     <DirectoryRef Id="APPDIR">
       <Component Id="cmpMainExe" Guid="A1111111-1111-4111-8111-111111111111" Win64="yes">
         <File Id="filMainExe" Source="$(var.SourceDir)\App\mangopos.exe" KeyPath="yes" Checksum="yes" />
-        <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuDir" Name="MangoPOS" WorkingDirectory="APPDIR" Icon="AppIcon.ico" Advertise="no" Target="[APPDIR]mangopos.exe" />
-        <Shortcut Id="DesktopShortcut" Directory="DesktopFolder" Name="MangoPOS" WorkingDirectory="APPDIR" Icon="AppIcon.ico" Advertise="no" Target="[APPDIR]mangopos.exe" />
-        <RemoveFolder Id="RemoveProgramMenuDir" Directory="ProgramMenuDir" On="uninstall" />
-        <RegistryValue Root="HKLM" Key="Software\MangoPOS" Name="Installed" Type="integer" Value="1" KeyPath="no" />
-      </Component>
-      <Component Id="cmpAppPayload" Guid="A2222222-2222-4222-8222-222222222222" Win64="yes">
-        <CreateFolder />
+        <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuDir" Name="MangoPOS" WorkingDirectory="APPDIR" Target="[APPDIR]mangopos.exe" Advertise="no" />
+        <Shortcut Id="DesktopShortcut" Directory="DesktopFolder" Name="MangoPOS" WorkingDirectory="APPDIR" Target="[APPDIR]mangopos.exe" Advertise="no" />
       </Component>
     </DirectoryRef>
 
     <DirectoryRef Id="AGENTDIR">
-      <Component Id="cmpAgentPayload" Guid="A3333333-3333-4333-8333-333333333333" Win64="yes">
-        <CreateFolder />
+      <Component Id="cmpAgentService" Guid="A3333333-3333-4333-8333-333333333334" Win64="yes">
+        <!-- Instalacion NATIVA del Servicio (Sin .bat) -->
+        <File Id="filAgentExe" Source="$(var.SourceDir)\Agent\mangopos-agent.exe" KeyPath="yes" Checksum="yes" />
+        <ServiceInstall Id="ServiceInstallation"
+          Type="ownProcess"
+          Name="MangoPOSAgent"
+          DisplayName="MangoPOS Print Agent"
+          Description="Servicio de impresión local para MangoPOS."
+          Start="auto"
+          Account="LocalSystem"
+          ErrorControl="normal" />
+        <ServiceControl Id="StartService" Start="install" Stop="both" Remove="uninstall" Name="MangoPOSAgent" Wait="yes" />
       </Component>
-    </DirectoryRef>
-
-    <Binary Id="AgentInstallScript" SourceFile="$(var.SourceDir)\Agent\setup.bat" />
-
-    <CustomAction Id="InstallAgent" Directory="AGENTDIR" ExeCommand="/c &quot;[AGENTDIR]setup.bat&quot;" Execute="deferred" Return="check" Impersonate="no" ExeCommandType="CommandLine" FileKey="filCmdExe" />
-
-    <Property Id="CMDLINE" Value="[SystemFolder]cmd.exe" />
-    <DirectoryRef Id="TARGETDIR">
-      <Component Id="cmpCmdShim" Guid="A4444444-4444-4444-8444-444444444444" Win64="yes">
-        <File Id="filCmdExe" Source="C:\Windows\System32\cmd.exe" KeyPath="yes" />
+      
+      <Component Id="cmpAgentConfig" Guid="A3333333-3333-4333-8333-333333333335" Win64="yes">
+        <File Id="filAgentEnv" Source="$(var.SourceDir)\Agent\.env" />
+        <File Id="filAgentYaml" Source="$(var.SourceDir)\Agent\config.yaml" />
       </Component>
     </DirectoryRef>
 
     <Feature Id="ProductFeature" Title="MangoPOS" Level="1">
       <ComponentRef Id="cmpMainExe" />
-      <ComponentRef Id="cmpAppPayload" />
-      <ComponentRef Id="cmpAgentPayload" />
-      <ComponentRef Id="cmpCmdShim" />
+      <ComponentRef Id="cmpAgentService" />
+      <ComponentRef Id="cmpAgentConfig" />
+      
+      <!-- Usamos el formato bulk de WiX v4/v7 que ya te funcionó antes -->
+      <Files Directory="APPDIR" Include="$(var.SourceDir)\App\**">
+        <Exclude Files="$(var.SourceDir)\App\mangopos.exe" />
+      </Files>
+      
+      <Files Directory="AGENTDIR" Include="$(var.SourceDir)\Agent\**">
+        <Exclude Files="$(var.SourceDir)\Agent\mangopos-agent.exe;$(var.SourceDir)\Agent\config.yaml;$(var.SourceDir)\Agent\.env" />
+      </Files>
     </Feature>
 
-    <InstallExecuteSequence>
-      <Custom Action="InstallAgent" After="InstallFiles">NOT Installed</Custom>
-    </InstallExecuteSequence>
-  </Product>
+  </Package>
 </Wix>

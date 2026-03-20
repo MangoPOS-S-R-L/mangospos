@@ -1,9 +1,10 @@
 // lib/main.dart
 import 'dart:async';
-import 'dart:io' show Platform, Process;
+import 'dart:io' show Platform, Process, File, Directory, ProcessStartMode;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // <-- NECESARIO para bloquear orientacion
+import 'package:path/path.dart' as p; // Necesitas agregar path a pubspec.yaml si no está
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/date_symbol_data_local.dart';
@@ -16,28 +17,11 @@ import 'core/cache/cache_manager.dart';
 import 'core/utils/logger.dart';
 
 /// === CONFIG DEL AGENTE ===
-/// Cambia estas rutas/puerto segun tu instalacion.
 const String agentHost = '127.0.0.1';
-const int agentPort = 3000;
-
-/// Si usas Node:
-///   - executable: 'node'
-///   - args: ['agent.js']
-const String agentExecutableWindows = 'node'; // o 'printer-service.exe'
-// Usa el agente local de MangoPOS (puerto 4000) ubicado en /agent/src/index.js
-const List<String> agentArgsWindows = ['src/index.js']; // [] si usas .exe
-const String agentWorkingDirWindows = r'D:\MangoPos\Dev\mangopos\agent';
-
-const String agentExecutableMac = 'node'; // o './printer-service'
-const List<String> agentArgsMac = ['agent.js']; // [] si usas binario
-const String agentWorkingDirMac = '/Users/tu-usuario/MangoPos/printer-service';
-
-const String agentExecutableLinux = 'node'; // o './printer-service'
-const List<String> agentArgsLinux = ['agent.js']; // [] si usas binario
-const String agentWorkingDirLinux = '/home/tu-usuario/MangoPos/printer-service';
+const int agentPort = 4000; // El agente local corre en 4000 por defecto en index.js
 
 Future<bool> _pingAgentOnce({
-  Duration timeout = const Duration(milliseconds: 800),
+  Duration timeout = const Duration(milliseconds: 1000),
 }) async {
   final uri = Uri.parse('http://$agentHost:$agentPort/health');
   try {
@@ -52,83 +36,76 @@ Future<bool> _pingAgentOnce({
 Future<void> _ensurePrinterAgentStarted() async {
   // 1) Si ya esta arriba, listo.
   if (await _pingAgentOnce()) {
-    // ignore: avoid_print
-    print('[Agent] Ya esta activo en http://$agentHost:$agentPort');
+    debugPrint('[Agent] Ya esta activo en http://$agentHost:$agentPort');
     return;
   }
 
   if (kIsWeb) {
-    // En Web no podemos lanzar procesos. Solo "precalienta" con varios /health.
-    // ignore: avoid_print
-    print(
-      '[Agent] Web: no se puede iniciar proceso; intentando precalentar /health...',
-    );
-    for (int i = 0; i < 4; i++) {
-      await Future.delayed(const Duration(milliseconds: 350));
-      if (await _pingAgentOnce(timeout: const Duration(milliseconds: 900))) {
-        // ignore: avoid_print
-        print('[Agent] Web: /health OK');
-        return;
-      }
-    }
-    // ignore: avoid_print
-    print(
-      '[Agent] Web: no respondio /health; asegurate de correr el agente como servicio.',
-    );
+    debugPrint('[Agent] Web: no se puede iniciar proceso local.');
     return;
   }
 
-  // 2) Desktop: intenta iniciar el agente localmente.
+  // 2) Desktop: intentar localizar el agente
   String exec;
   List<String> args;
   String workingDir;
 
-  if (Platform.isWindows) {
-    exec = agentExecutableWindows;
-    args = List<String>.from(agentArgsWindows);
-    workingDir = agentWorkingDirWindows;
-  } else if (Platform.isMacOS) {
-    exec = agentExecutableMac;
-    args = List<String>.from(agentArgsMac);
-    workingDir = agentWorkingDirMac;
-  } else if (Platform.isLinux) {
-    exec = agentExecutableLinux;
-    args = List<String>.from(agentArgsLinux);
-    workingDir = agentWorkingDirLinux;
+  // Ruta base de la aplicación (donde está el .exe de Flutter)
+  final String appDir = p.dirname(Platform.resolvedExecutable);
+  
+  // Ruta esperada del agente en PRODUCCIÓN: ../Agent/mangopos-agent.exe
+  final String prodAgentPath = p.normalize(p.join(appDir, '..', 'Agent', 'mangopos-agent.exe'));
+  final bool hasProdAgent = File(prodAgentPath).existsSync();
+
+  if (hasProdAgent) {
+    // MODO PRODUCCIÓN (Instalador)
+    exec = prodAgentPath;
+    args = [];
+    workingDir = p.dirname(prodAgentPath);
+    debugPrint('[Agent] Detectado agente en producción: $exec');
   } else {
-    // Otras plataformas: no hacer nada
-    return;
+    // MODO DESARROLLO (Vscode/Android Studio)
+    // Buscamos la carpeta /agent relativa al proyecto
+    // Asumimos que estamos corriendo desde el root del proyecto
+    workingDir = p.normalize(p.join(Directory.current.path, 'agent'));
+    
+    if (Platform.isWindows) {
+      exec = 'node';
+      args = ['src/index.js'];
+    } else {
+      exec = 'node';
+      args = ['src/index.js'];
+    }
+    
+    if (!Directory(workingDir).existsSync()) {
+      debugPrint('[Agent] Error: No se encontró la carpeta del agente en $workingDir');
+      return;
+    }
+    debugPrint('[Agent] Usando modo desarrollo (node src/index.js)');
   }
 
   try {
-    // ignore: avoid_print
-    print(
-      '[Agent] Iniciando agente: $exec ${args.join(' ')}  (wd: $workingDir)',
-    );
-    // runInShell:true permite resolver 'node' desde PATH en Windows.
+    debugPrint('[Agent] Lanzando: $exec ${args.join(' ')} (wd: $workingDir)');
     await Process.start(
       exec,
       args,
       workingDirectory: workingDir,
       runInShell: true,
+      mode: ProcessStartMode.detached, // Para que el agente siga vivo si la app se reinicia en hot reload
     );
   } catch (e) {
-    // ignore: avoid_print
-    print('[Agent] Error al iniciar el agente: $e');
-    // No devuelvas error para no bloquear la app; seguiremos intentando health abajo.
+    debugPrint('[Agent] Error al iniciar el agente: $e');
   }
 
-  // 3) Esperar a que responda /health (retry loop corto).
-  for (int i = 0; i < 12; i++) {
-    await Future.delayed(const Duration(milliseconds: 700));
-    if (await _pingAgentOnce(timeout: const Duration(milliseconds: 1000))) {
-      // ignore: avoid_print
-      print('[Agent] Arrancado correctamente. http://$agentHost:$agentPort');
+  // 3) Esperar a que responda /health (retry loop)
+  for (int i = 0; i < 10; i++) {
+    await Future.delayed(const Duration(milliseconds: 800));
+    if (await _pingAgentOnce()) {
+      debugPrint('[Agent] Arrancado correctamente.');
       return;
     }
   }
-  // ignore: avoid_print
-  print(
+  debugPrint(
     '[Agent] No se pudo confirmar el arranque del agente. Revisa logs o puerto ocupado.',
   );
 }

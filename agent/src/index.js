@@ -1,10 +1,12 @@
-﻿const path = require('path');
+const path = require('path');
 const io = require('socket.io-client');
 const winston = require('winston');
 const discoveryService = require('./core/discovery');
 
-// Cargar .env desde la carpeta del agente (no desde C:\Windows\System32 del servicio)
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+// Cargar .env: detectar si corremos como script o como binario pkg
+const isPkg = typeof process.pkg !== 'undefined';
+const baseDir = isPkg ? path.dirname(process.execPath) : path.join(__dirname, '..');
+require('dotenv').config({ path: path.join(baseDir, '.env') });
 
 
 // Configuración de Logging
@@ -18,8 +20,8 @@ const logger = winston.createLogger({
         new winston.transports.Console({
             format: winston.format.simple(),
         }),
-        // Guardar el log junto al agente, no en el directorio del servicio
-        new winston.transports.File({ filename: path.join(__dirname, '..', 'agent.log') }),
+        // Guardar el log junto al ejecutable o en la raiz del agente
+        new winston.transports.File({ filename: path.join(baseDir, 'agent.log') }),
     ],
 });
 
@@ -626,6 +628,9 @@ app.post('/print', async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 });
+
+// Endpoint para servir la UI estática (si existe)
+app.use(express.static(path.join(baseDir, 'public')));
 
 // 4. Endpoint de impresión RAW (base64/hex)
 // body: { ip, port=9100, dataBase64?, dataHex? }

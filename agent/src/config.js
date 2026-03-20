@@ -4,6 +4,16 @@ const yaml = require('js-yaml');
 const system = require('systeminformation');
 const winston = require('winston');
 
+const isPkg = typeof process.pkg !== 'undefined';
+const baseDir = isPkg ? path.dirname(process.execPath) : path.join(__dirname, '..');
+
+const CONFIG_PATH = path.join(baseDir, 'config.yaml');
+const LOGS_DIR = path.join(baseDir, 'logs');
+
+if (!fs.existsSync(LOGS_DIR)) {
+    fs.mkdirSync(LOGS_DIR, { recursive: true });
+}
+
 const logger = winston.createLogger({
     level: 'info',
     format: winston.format.combine(
@@ -12,11 +22,10 @@ const logger = winston.createLogger({
     ),
     transports: [
         new winston.transports.Console(),
-        new winston.transports.File({ filename: path.join(__dirname, '../logs/agent.log') })
+        new winston.transports.File({ filename: path.join(LOGS_DIR, 'agent.log') })
     ]
 });
 
-const CONFIG_PATH = path.join(__dirname, '../config.yaml');
 
 // Default Config Structure
 const DEFAULT_CONFIG = {
