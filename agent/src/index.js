@@ -746,8 +746,15 @@ function checkPrinterStatus(ip, port, timeout = 1500) {
 
 // Iniciar Servidor HTTP
 app.listen(LOCAL_PORT, () => {
-    logger.info(`?? Local API escuchando en http://localhost:${LOCAL_PORT}`);
+    logger.info(`🚀 Local API escuchando en http://localhost:${LOCAL_PORT}`);
+}).on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+        logger.error(`❌ El puerto ${LOCAL_PORT} ya está en uso. El agente seguirá operando vía Socket.io si es posible.`);
+    } else {
+        logger.error(`❌ Error iniciando servidor API: ${err.message}`);
+    }
 });
+
 
 
 // ==========================================

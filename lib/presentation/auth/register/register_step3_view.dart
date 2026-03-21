@@ -19,6 +19,8 @@ class RegisterStep3View extends ConsumerStatefulWidget {
 
 class _RegisterStep3ViewState extends ConsumerState<RegisterStep3View> {
   bool _completed = false;
+  bool _requiresEmailConfirmation = false;
+  String? _successMessage;
   String? _error;
   Timer? _redirectTimer;
 
@@ -31,7 +33,7 @@ class _RegisterStep3ViewState extends ConsumerState<RegisterStep3View> {
   @override
   void initState() {
     super.initState();
-    Future.microtask(_runSetup);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _runSetup());
   }
 
   @override
@@ -68,7 +70,9 @@ class _RegisterStep3ViewState extends ConsumerState<RegisterStep3View> {
                 ),
                 child: Icon(
                   _completed
-                      ? Icons.check_rounded
+                      ? (_requiresEmailConfirmation
+                          ? Icons.mark_email_read_outlined
+                          : Icons.check_rounded)
                       : _error != null
                           ? Icons.error_outline_rounded
                           : Icons.sync_rounded,
@@ -85,7 +89,9 @@ class _RegisterStep3ViewState extends ConsumerState<RegisterStep3View> {
                 _error != null
                     ? 'No pudimos completar la activación'
                     : _completed
-                        ? 'Tu negocio está listo'
+                        ? (_requiresEmailConfirmation
+                            ? 'Cuenta creada, falta confirmar correo'
+                            : 'Tu negocio está listo')
                         : 'Estamos activando tu espacio',
                 textAlign: TextAlign.center,
                 style: GoogleFonts.plusJakartaSans(
@@ -99,7 +105,8 @@ class _RegisterStep3ViewState extends ConsumerState<RegisterStep3View> {
                 _error != null
                     ? _error!
                     : _completed
-                        ? 'Todo quedó creado correctamente. En unos segundos entrarás al panel principal.'
+                        ? (_successMessage ??
+                            'Todo quedó creado correctamente. En unos segundos entrarás al panel principal.')
                         : 'Creando configuración base, métodos de pago, moneda e impuestos para ${businessState.businessName}.',
                 textAlign: TextAlign.center,
                 style: GoogleFonts.plusJakartaSans(
@@ -127,7 +134,9 @@ class _RegisterStep3ViewState extends ConsumerState<RegisterStep3View> {
               const SizedBox(height: 14),
               Text(
                 _completed
-                    ? 'Entrando al panel...'
+                    ? (_requiresEmailConfirmation
+                        ? 'Revisa tu correo y luego inicia sesión.'
+                        : 'Entrando al panel...')
                     : _error != null
                         ? 'Corrige y vuelve a intentar.'
                         : 'Preparando $domainPreview',
@@ -139,7 +148,7 @@ class _RegisterStep3ViewState extends ConsumerState<RegisterStep3View> {
                       : MangoTokens.info,
                 ),
               ),
-              if (_error != null) ...[
+              if (_error != null || (_completed && _requiresEmailConfirmation)) ...[
                 const SizedBox(height: 24),
                 Wrap(
                   spacing: 12,
@@ -147,9 +156,13 @@ class _RegisterStep3ViewState extends ConsumerState<RegisterStep3View> {
                   alignment: WrapAlignment.center,
                   children: [
                     OutlinedButton.icon(
-                      onPressed: () => context.go(AppRoutes.registerStep2),
-                      icon: const Icon(Icons.arrow_back_rounded),
-                      label: const Text('Volver'),
+                      onPressed: () => context.go(AppRoutes.login),
+                      icon: const Icon(Icons.login_rounded),
+                      label: Text(
+                        _completed && _requiresEmailConfirmation
+                            ? 'Ir a iniciar sesión'
+                            : 'Volver al login',
+                      ),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: MangoTokens.secondaryForeground,
                         side: const BorderSide(color: MangoTokens.border),
@@ -159,19 +172,20 @@ class _RegisterStep3ViewState extends ConsumerState<RegisterStep3View> {
                         ),
                       ),
                     ),
-                    ElevatedButton.icon(
-                      onPressed: _runSetup,
-                      icon: const Icon(Icons.refresh_rounded),
-                      label: const Text('Reintentar'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: MangoTokens.primary,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 18,
-                          vertical: 14,
+                    if (_error != null)
+                      ElevatedButton.icon(
+                        onPressed: _runSetup,
+                        icon: const Icon(Icons.refresh_rounded),
+                        label: const Text('Reintentar'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: MangoTokens.primary,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 18,
+                            vertical: 14,
+                          ),
                         ),
                       ),
-                    ),
                   ],
                 ),
               ],
@@ -208,13 +222,17 @@ class _RegisterStep3ViewState extends ConsumerState<RegisterStep3View> {
             ),
             const SizedBox(height: 16),
             _MutedBlock(
-              title: _completed ? 'Listo' : 'Activación',
+              title: _completed
+                  ? (_requiresEmailConfirmation ? 'Confirmación pendiente' : 'Listo')
+                  : 'Activación',
               lines: [
                 'Configuración base del negocio.',
                 'Moneda DOP e ITBIS inicial.',
                 'Zona y almacén principal.',
                 _completed
-                    ? 'Acceso creado correctamente.'
+                    ? (_requiresEmailConfirmation
+                        ? 'Cuenta creada. Falta confirmar el correo del propietario.'
+                        : 'Acceso creado correctamente.')
                     : 'Creación del acceso propietario.',
               ],
             ),
@@ -227,21 +245,29 @@ class _RegisterStep3ViewState extends ConsumerState<RegisterStep3View> {
   Future<void> _runSetup() async {
     setState(() {
       _completed = false;
+      _requiresEmailConfirmation = false;
+      _successMessage = null;
       _error = null;
     });
     try {
-      await ref.read(registerStep2VmProvider.notifier).submitAll();
+      final result = await ref.read(registerStep2VmProvider.notifier).submitAll();
       if (!mounted) return;
       setState(() {
         _completed = true;
+        _requiresEmailConfirmation = result.requiresEmailConfirmation;
+        _successMessage = result.message;
       });
-      _redirectTimer = Timer(const Duration(milliseconds: 1100), () {
-        if (mounted) context.go(AppRoutes.dashboard);
-      });
+      if (!result.requiresEmailConfirmation) {
+        _redirectTimer = Timer(const Duration(milliseconds: 1100), () {
+          if (mounted) context.go(AppRoutes.dashboard);
+        });
+      }
     } catch (error) {
       if (!mounted) return;
       setState(() {
         _completed = false;
+        _requiresEmailConfirmation = false;
+        _successMessage = null;
         _error = error.toString().replaceFirst('Exception: ', '');
       });
     }

@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mangopos/services/session/session_controller.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 
@@ -105,6 +106,12 @@ class MenusVm extends Notifier<MenusState> {
 
   Future<String> _normalizeBusinessId(String id) async {
     if (id.isNotEmpty && id != 'auto') return id;
+
+    final activeBusinessId = ref.read(sessionProvider).activeBusinessId;
+    if (activeBusinessId != null && activeBusinessId.isNotEmpty) {
+      return activeBusinessId;
+    }
+
     final uid = _sp.auth.currentUser?.id;
     if (uid == null) throw Exception('Sesión no iniciada');
 
@@ -112,7 +119,7 @@ class MenusVm extends Notifier<MenusState> {
         .from('user_businesses')
         .select('business_id')
         .eq('user_id', uid)
-        .order('created_at')
+        .order('created_at', ascending: false)
         .limit(1)
         .maybeSingle();
     if (ub != null && ub['business_id'] != null) {
@@ -123,7 +130,7 @@ class MenusVm extends Notifier<MenusState> {
         .from('memberships')
         .select('business_id')
         .eq('user_id', uid)
-        .order('created_at')
+        .order('created_at', ascending: false)
         .limit(1)
         .maybeSingle();
     if (mem != null && mem['business_id'] != null) {
@@ -134,7 +141,7 @@ class MenusVm extends Notifier<MenusState> {
         .from('businesses')
         .select('id')
         .eq('owner_id', uid)
-        .order('created_at')
+        .order('created_at', ascending: false)
         .limit(1)
         .maybeSingle();
     if (own != null && own['id'] != null) {

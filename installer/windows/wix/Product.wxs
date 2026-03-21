@@ -37,39 +37,43 @@
 
     <DirectoryRef Id="AGENTDIR">
       <Component Id="cmpAgentService" Guid="A3333333-3333-4333-8333-333333333334" Win64="yes">
-        <!-- Instalacion NATIVA del Servicio (Sin .bat) -->
-        <File Id="filAgentExe" Source="$(var.SourceDir)\Agent\mangopos-agent.exe" KeyPath="yes" Checksum="yes" />
+        <!-- Wrapper de Servicio (WinSW) para Node.js -->
+        <File Id="filServiceExe" Source="$(var.SourceDir)\Agent\mangopos-agent-service.exe" KeyPath="yes" Checksum="yes" />
+        <File Id="filServiceXml" Source="$(var.SourceDir)\Agent\mangopos-agent-service.xml" />
+        <File Id="filAgentExe" Source="$(var.SourceDir)\Agent\mangopos-agent.exe" />
+        
         <ServiceInstall Id="ServiceInstallation"
           Type="ownProcess"
           Name="MangoPOSAgent"
           DisplayName="MangoPOS Print Agent"
-          Description="Servicio de impresión local para MangoPOS."
+          Description="Servicio de impresión de MangoPOS (Wrapper WinSW)."
           Start="auto"
           Account="LocalSystem"
           ErrorControl="normal" />
-        <ServiceControl Id="StartService" Start="install" Stop="both" Remove="uninstall" Name="MangoPOSAgent" Wait="yes" />
+        
+        <ServiceControl Id="StopStartService" Name="MangoPOSAgent" 
+                        Start="install" Stop="both" Remove="uninstall" Wait="yes" />
       </Component>
       
       <Component Id="cmpAgentConfig" Guid="A3333333-3333-4333-8333-333333333335" Win64="yes">
-        <File Id="filAgentEnv" Source="$(var.SourceDir)\Agent\.env" />
         <File Id="filAgentYaml" Source="$(var.SourceDir)\Agent\config.yaml" />
+        <File Id="filAgentEnv" Source="$(var.SourceDir)\Agent\.env" />
       </Component>
     </DirectoryRef>
+
 
     <Feature Id="ProductFeature" Title="MangoPOS" Level="1">
       <ComponentRef Id="cmpMainExe" />
       <ComponentRef Id="cmpAgentService" />
       <ComponentRef Id="cmpAgentConfig" />
       
-      <!-- Usamos el formato bulk de WiX v4/v7 que ya te funcionó antes -->
+      <!-- Incluimos el payload de Flutter (DLLs, data, etc.) pero EXCLUIMOS el exe que ya definimos -->
       <Files Directory="APPDIR" Include="$(var.SourceDir)\App\**">
         <Exclude Files="$(var.SourceDir)\App\mangopos.exe" />
       </Files>
-      
-      <Files Directory="AGENTDIR" Include="$(var.SourceDir)\Agent\**">
-        <Exclude Files="$(var.SourceDir)\Agent\mangopos-agent.exe;$(var.SourceDir)\Agent\config.yaml;$(var.SourceDir)\Agent\.env" />
-      </Files>
     </Feature>
+
+
 
   </Package>
 </Wix>

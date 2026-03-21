@@ -619,13 +619,21 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
     }
     setState(() => _processingClose = true);
     try {
+      final service = CashClosePrintService(Supabase.instance.client);
+      await service.printCloseTicket(
+        input: state.input,
+        result: state.result,
+        denominations: state.denominations,
+        printedAt: DateTime.now(),
+      );
+
       await widget.onCloseConfirmed!(state.result);
       if (!mounted) return;
       ref.read(blindCashCloseProvider(widget.input).notifier).reset();
       Navigator.of(context).pop();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Caja cerrada correctamente'),
+          content: Text('Caja cerrada e impresa correctamente'),
           backgroundColor: MangoColors.successGreen,
           behavior: SnackBarBehavior.floating,
         ),
@@ -634,7 +642,7 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('No se pudo cerrar la caja: $e'),
+          content: Text('No se pudo completar el cierre/impresión: $e'),
           backgroundColor: Colors.red.shade600,
           behavior: SnackBarBehavior.floating,
         ),

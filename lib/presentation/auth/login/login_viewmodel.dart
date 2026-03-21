@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'package:flutter/scheduler.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -11,19 +13,29 @@ class LoginViewModel extends Notifier<LoginState> {
   LoginState build() => const LoginState();
 
   void setEmail(String email) {
-    state = state.copyWith(email: email, error: null);
+    _safeSet(state.copyWith(email: email, error: null));
   }
 
   void setPassword(String password) {
-    state = state.copyWith(password: password, error: null);
+    _safeSet(state.copyWith(password: password, error: null));
+  }
+
+  void _safeSet(LoginState next) {
+    if (state == next) return;
+    final binding = WidgetsBinding.instance;
+    if (binding.schedulerPhase == SchedulerPhase.persistentCallbacks) {
+      binding.addPostFrameCallback((_) => state = next);
+    } else {
+      state = next;
+    }
   }
 
   Future<void> submit() async {
     if (state.email.isEmpty || state.password.isEmpty) {
-      state = state.copyWith(error: 'Ingresa correo y contraseña');
+      _safeSet(state.copyWith(error: 'Ingresa correo y contraseña'));
       return;
     }
-    state = state.copyWith(isLoading: true, error: null);
+    _safeSet(state.copyWith(isLoading: true, error: null));
 
     try {
       final supabase = Supabase.instance.client;
@@ -37,10 +49,10 @@ class LoginViewModel extends Notifier<LoginState> {
         AppLogger.w(
           'Login exitoso pero usuario es null en la respuesta de Supabase',
         );
-        state = state.copyWith(
+        _safeSet(state.copyWith(
           isLoading: false,
           error: 'Credenciales inválidas o usuario no encontrado',
-        );
+        ));
         return;
       }
 
@@ -64,11 +76,11 @@ class LoginViewModel extends Notifier<LoginState> {
           'Usuario sin perfil de negocio asignado (user_businesses está vacía)',
         );
         await supabase.auth.signOut();
-        state = state.copyWith(
+        _safeSet(state.copyWith(
           isLoading: false,
           error:
               'Tu usuario no tiene negocio/rol asignado. Contacta al administrador.',
-        );
+        ));
         return;
       }
 
@@ -81,11 +93,11 @@ class LoginViewModel extends Notifier<LoginState> {
           'Atributos críticos faltantes en Login -> businessId: $businessId | Role: $posRole',
         );
         await supabase.auth.signOut();
-        state = state.copyWith(
+        _safeSet(state.copyWith(
           isLoading: false,
           error:
               'Tu acceso no está configurado correctamente (negocio/rol inválido).',
-        );
+        ));
         return;
       }
 
@@ -100,22 +112,22 @@ class LoginViewModel extends Notifier<LoginState> {
           );
 
       AppLogger.i('[$businessId] Login exitoso para $fullName ($roleStr)');
-      state = const LoginState();
+      _safeSet(const LoginState());
     } on AuthException catch (e, st) {
       AppLogger.w('AuthException durante login', error: e, stackTrace: st);
-      state = state.copyWith(isLoading: false, error: e.message);
+      _safeSet(state.copyWith(isLoading: false, error: e.message));
     } on TimeoutException catch (e, st) {
       AppLogger.w('Timeout en auth', error: e, stackTrace: st);
-      state = state.copyWith(
+      _safeSet(state.copyWith(
         isLoading: false,
         error: 'Tiempo de espera agotado. Revisa tu conexión de red.',
-      );
+      ));
     } catch (e, st) {
       AppLogger.e('Error no controlado en login', error: e, stackTrace: st);
-      state = state.copyWith(
+      _safeSet(state.copyWith(
         isLoading: false,
         error: 'Ocurrió un error inesperado',
-      );
+      ));
     }
   }
 

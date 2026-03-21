@@ -10,9 +10,24 @@ class BusinessResolver {
   /// Si viene un UUID real, lo devuelve tal cual.
   static Future<String> ensure(String businessId) async {
     if (businessId != 'auto') return businessId;
+
+    final user = _client.auth.currentUser;
+
+    final metaBusinessId = user?.userMetadata?['business_id']?.toString();
+    if (metaBusinessId != null && metaBusinessId.isNotEmpty) {
+      _cached = metaBusinessId;
+      return metaBusinessId;
+    }
+
+    final legacyMetaBusinessId = user?.userMetadata?['businessId']?.toString();
+    if (legacyMetaBusinessId != null && legacyMetaBusinessId.isNotEmpty) {
+      _cached = legacyMetaBusinessId;
+      return legacyMetaBusinessId;
+    }
+
     if (_cached != null) return _cached!;
 
-    final uid = _client.auth.currentUser?.id;
+    final uid = user?.id;
     if (uid == null) throw Exception('Sesión no iniciada');
 
     // 1) user_businesses

@@ -51,26 +51,42 @@ Set-Location (Join-Path $root "agent")
 npm run build:exe
 Set-Location $root
 
-if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+if (Test-Path $stage) {
+    Write-Host "==> Cleaning installer stage" -ForegroundColor Gray
+    try { Remove-Item $stage -Recurse -Force -ErrorAction Stop } catch {
+        # Si falló por archivo bloqueado, intentamos un rename o esperar
+        Move-Item $stage (Join-Path $Env:TEMP "stage_old_$([Guid]::NewGuid().ToString().Substring(0,8))") -Force -ErrorAction SilentlyContinue
+    }
+}
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-
-Copy-Item -Recurse -Force (Join-Path $buildDir "*") (Join-Path $stage "App")
-# Copiar el payload completo del agente. El MSI ejecuta setup_pos.bat
-# para registrar el wrapper de servicio correcto mediante node-windows.
+New-Item -ItemType Directory -Force -Path (Join-Path $stage "App") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $stage "Agent") | Out-Null
-Copy-Item -Recurse -Force (Join-Path $root "agent\dist\*") (Join-Path $stage "Agent")
+
+Write-Host "==> Preparing App stage (Robocopy)" -ForegroundColor Cyan
+# Robocopy es mas fiable para mantener la estructura de carpetas (especialmente 'data')
+& robocopy $buildDir (Join-Path $stage "App") /e /np /njh /njs /log:null
+
+Write-Host "==> Preparing Agent stage" -ForegroundColor Cyan
+# Copiar el payload del agente
+& robocopy (Join-Path $root "agent\dist") (Join-Path $stage "Agent") /e /np /njh /njs /log:null
 if (Test-Path (Join-Path $root "agent\config.yaml")) {
   Copy-Item -Force (Join-Path $root "agent\config.yaml") (Join-Path $stage "Agent")
 }
-# Copiar .env personalizado si existe. Si no, setup_pos.bat usara .env.example.
+# Copiar .env personalizado si existe. Si no, usamos .env.example como plantilla para el instalador.
 if (Test-Path (Join-Path $root "agent\.env")) {
   Copy-Item -Force (Join-Path $root "agent\.env") (Join-Path $stage "Agent")
+} elseif (Test-Path (Join-Path $root "agent\.env.example")) {
+  Copy-Item -Force (Join-Path $root "agent\.env.example") (Join-Path $stage "Agent\.env")
 }
 
+# Copiar el wrapper de servicio WinSW y su configuracion XML
+Copy-Item -Force (Join-Path $root "installer\windows\mangopos-agent-service.xml") (Join-Path $stage "Agent")
+Copy-Item -Force (Join-Path $root "installer\windows\WinSW.exe") (Join-Path $stage "Agent\mangopos-agent-service.exe")
+
 Write-Host "==> Building MSI with WiX v7" -ForegroundColor Cyan
+
 # Asegurar que la extension de UI esté instalada (para WiX 4 a 7+)
-# En WiX v4+ se usan paquetes NuGet para las extensiones
 try { & wix -acceptEula wix7 extension add WixToolset.UI.wixext --global } catch { }
 try { & wix -acceptEula wix7 extension add WixToolset.Util.wixext --global } catch { }
 
@@ -106,3 +122,11 @@ if (-not $SkipSign) {
 }
 
 Write-Host "MSI listo: $msiPath" -ForegroundColor Green
+
+# --- Inno Setup (Nueva Opción para Solucionar Truncado) ---
+$iscc = Join-Path $Env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"
+if (Test-Path $iscc) {
+    Write-Host "==> Building Inno Setup EXE (Recomendado)" -ForegroundColor Cyan
+    & $iscc (Join-Path $PSScriptRoot "mangopos.iss")
+    Write-Host "EXE listo en build/installer/" -ForegroundColor Green
+}

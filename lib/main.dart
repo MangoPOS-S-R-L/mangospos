@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:media_kit/media_kit.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'env/env.dart';
 import 'app/router/app_router.dart';
@@ -124,6 +125,10 @@ void main() async {
   try {
     WidgetsFlutterBinding.ensureInitialized();
     AppLogger.i('Arrancando MangoPOS...');
+
+    if (!kIsWeb && Platform.isWindows) {
+      await windowManager.ensureInitialized();
+    }
 
     // Inicializar datos de localización para español
     await initializeDateFormatting('es', null);
