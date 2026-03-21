@@ -597,7 +597,8 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
     final isOtherWaiterTable = ts.sessionId != null && !ts.isOwn;
     final bypassPin =
         session.activeRole == PosRole.administrador ||
-        session.activeRole == PosRole.supervisor;
+        session.activeRole == PosRole.supervisor ||
+        session.activeRole == PosRole.cajero;
     if (isOtherWaiterTable && !bypassPin) {
       if (!context.mounted) {
         byZone.setOpening(ts.tableId, false);

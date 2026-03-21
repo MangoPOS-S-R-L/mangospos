@@ -35,12 +35,26 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
   }
 
   Future<_ManualCashData?> _load() async {
+    final cashierVM = ref.read(cashierViewModelProvider);
     final repository = ref.read(cashierRepositoryProvider);
-    final session = await repository.getCurrentUserActiveSession();
-    if (session == null) {
+
+    // 1. Primero intentamos usar la última sesión cargada en el ViewModel si está abierta
+    Map<String, dynamic>? activeSessionData = cashierVM.lastSession;
+    
+    // 2. Si no es 'open', buscamos directamente la última sesión de la caja actual para confirmar su estado
+    if (activeSessionData == null || activeSessionData['status'] != 'open') {
+      final registerId = cashierVM.currentRegisterId;
+      if (registerId != null) {
+        activeSessionData = await repository.getLastSession(registerId);
+      }
+    }
+
+    // Si sigue sin haber una caja abierta, retornamos null (mostrará pantalla de caja cerrada)
+    if (activeSessionData == null || activeSessionData['status'] != 'open') {
       return null;
     }
 
+    final session = CashRegisterSession.fromMap(activeSessionData);
     final transactions = await repository.getSessionTransactions(session.id);
     final manualTransactions = transactions
         .where(
@@ -435,24 +449,47 @@ class _MetricCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 220,
-      padding: const EdgeInsets.all(16),
+      width: 240,
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withValues(alpha: 0.15)),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.1)),
+        boxShadow: [
+          BoxShadow(
+            color: color.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: TextStyle(color: Colors.grey[600])),
-          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              title,
+              style: TextStyle(
+                color: color,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
           Text(
             NumberFormat.currency(symbol: 'RD\$ ', decimalDigits: 2).format(value),
             style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-              color: color,
+              fontSize: 22,
+              fontWeight: FontWeight.w900,
+              color: MangoColors.darkGray,
+              letterSpacing: -0.5,
             ),
           ),
         ],
@@ -468,7 +505,7 @@ class _ManualMovementTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isPositive = transaction.type == 'deposit';
+    final isDeposit = transaction.type == 'deposit';
     final color = switch (transaction.type) {
       'deposit' => Colors.blue,
       'withdrawal' => const Color(0xFFF97316),
@@ -476,41 +513,58 @@ class _ManualMovementTile extends StatelessWidget {
       _ => Colors.grey,
     };
 
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      leading: CircleAvatar(
-        backgroundColor: color.withValues(alpha: 0.12),
-        child: Icon(
-          switch (transaction.type) {
-            'deposit' => Icons.south_west,
-            'withdrawal' => Icons.north_east,
-            'expense' => Icons.money_off,
-            _ => Icons.receipt_long,
-          },
-          color: color,
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.03),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.1)),
+      ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        leading: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.1),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(
+            switch (transaction.type) {
+              'deposit' => Icons.arrow_downward_rounded,
+              'withdrawal' => Icons.arrow_upward_rounded,
+              'expense' => Icons.shopping_bag_outlined,
+              _ => Icons.receipt_long,
+            },
+            color: color,
+            size: 20,
+          ),
         ),
-      ),
-      title: Text(transaction.description ?? 'Movimiento'),
-      subtitle: Text(
-        '${DateFormat('dd/MM/yyyy HH:mm').format(transaction.createdAt.toLocal())} · ${_typeLabel(transaction.type)}',
-      ),
-      trailing: Text(
-        '${isPositive ? '+' : '-'}RD\$ ${transaction.amount.toStringAsFixed(2)}',
-        style: TextStyle(fontWeight: FontWeight.w700, color: color),
+        title: Text(
+          transaction.description ?? 'Movimiento',
+          style: const TextStyle(fontWeight: FontWeight.w700, color: MangoColors.darkGray),
+        ),
+        subtitle: Text(
+          '${DateFormat('dd MMM hh:mm a').format(transaction.createdAt.toLocal())} · ${_typeLabel(transaction.type)}',
+          style: const TextStyle(fontSize: 12, color: MangoColors.muted),
+        ),
+        trailing: Text(
+          '${isDeposit ? '+' : '-'}RD\$ ${transaction.amount.toStringAsFixed(2)}',
+          style: TextStyle(
+            fontWeight: FontWeight.w900,
+            fontSize: 16,
+            color: color,
+          ),
+        ),
       ),
     );
   }
 
   String _typeLabel(String type) {
     switch (type) {
-      case 'deposit':
-        return 'Ingreso';
-      case 'withdrawal':
-        return 'Retiro';
-      case 'expense':
-        return 'Gasto';
-      default:
-        return type;
+      case 'deposit': return 'Ingreso';
+      case 'withdrawal': return 'Retiro';
+      case 'expense': return 'Gasto';
+      default: return type;
     }
   }
 }
@@ -528,34 +582,82 @@ class _InfoState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      children: [
-        SizedBox(
-          height: MediaQuery.of(context).size.height * 0.65,
-          child: Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(icon, size: 64, color: Colors.grey[400]),
-                const SizedBox(height: 16),
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700,
+    return Container(
+      width: double.infinity,
+      color: const Color(0xFFF5F5F7),
+      child: Center(
+        child: Container(
+          margin: const EdgeInsets.all(40),
+          padding: const EdgeInsets.all(48),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(32),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.04),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          constraints: const BoxConstraints(maxWidth: 450),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: MangoColors.primaryOrange.withValues(alpha: 0.08),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  icon,
+                  size: 56,
+                  color: MangoColors.primaryOrange,
+                ),
+              ),
+              const SizedBox(height: 32),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
+                  color: MangoColors.darkGray,
+                  letterSpacing: -0.5,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                subtitle,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: MangoColors.muted,
+                  fontSize: 16,
+                  height: 1.5,
+                ),
+              ),
+              if (icon == Icons.lock_outline) ...[
+                const SizedBox(height: 40),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => context.go(AppRoutes.cashier),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: MangoColors.primaryOrange,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 18),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      elevation: 0,
+                    ),
+                    child: const Text('Ir a Apertura de Caja', style: TextStyle(fontWeight: FontWeight.w800)),
                   ),
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  subtitle,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.grey[600]),
-                ),
               ],
-            ),
+            ],
           ),
         ),
-      ],
+      ),
     );
   }
 }

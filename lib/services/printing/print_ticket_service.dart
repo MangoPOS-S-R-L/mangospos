@@ -14,6 +14,7 @@ class PrintTicketService {
     required String tableName,
     String? waiterName,
     String? businessName,
+    bool isReprint = false,
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
 
@@ -31,7 +32,7 @@ class PrintTicketService {
     gen.lineFeed();
     gen.setTextSize(width: 2, height: 2);
     gen.setBold(true);
-    gen.textCentered('COMANDA DE COCINA');
+    gen.textCentered(isReprint ? 'REIMPRESIÓN COMANDA' : 'COMANDA DE COCINA');
     gen.setBold(false);
     gen.setTextSize();
     gen.doubleSeparator();
@@ -88,6 +89,7 @@ class PrintTicketService {
     String? legalName,
     String? businessAddress,
     String? businessPhone,
+    String? businessRnc,
     String title = 'PRECUENTA',
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
@@ -108,6 +110,9 @@ class PrintTicketService {
     }
 
     // Info de contacto centrada
+    if (businessRnc != null && businessRnc.isNotEmpty) {
+      gen.textCentered('RNC: $businessRnc');
+    }
     if (businessAddress != null && businessAddress.isNotEmpty) {
       gen.textCentered(businessAddress);
     }
@@ -243,6 +248,15 @@ class PrintTicketService {
     gen.textRow('TOTAL:', 'RD\$ ${_formatMoney(order.total)}');
     gen.setTextSize();
     gen.setBold(false);
+
+    // ════════════════════════════════════════════
+    // DATOS DE COMPROBANTE FISCAL
+    // ════════════════════════════════════════════
+    gen.lineFeed();
+    gen.text('RNC/CÉDULA: ______________________');
+    gen.lineFeed();
+    gen.text('RAZÓN SOCIAL: _____________________');
+    gen.lineFeed();
 
     // ════════════════════════════════════════════
     // AVISO DE PRECUENTA

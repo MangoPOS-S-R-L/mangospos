@@ -4,6 +4,7 @@ class Category {
   final String name;
   final int position;
   final bool isActive;
+  final String? color; // Hex string e.g. '#FF0000'
   final DateTime? createdAt;
 
   const Category({
@@ -12,6 +13,7 @@ class Category {
     required this.name,
     required this.position,
     required this.isActive,
+    this.color,
     this.createdAt,
   });
 
@@ -21,6 +23,7 @@ class Category {
         name: m['name'] as String,
         position: (m['position'] ?? 0) as int,
         isActive: (m['is_active'] ?? true) as bool,
+        color: m['color'] as String?,
         createdAt: m['created_at'] == null ? null : DateTime.parse(m['created_at']),
       );
 
@@ -30,5 +33,6 @@ class Category {
         'name': name,
         'position': position,
         'is_active': isActive,
+        'color': color,
       };
 }

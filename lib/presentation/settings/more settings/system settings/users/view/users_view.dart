@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
@@ -655,10 +656,16 @@ class _UserRow extends StatelessWidget {
                   break;
                 case 'view_permissions':
                   if (user.userId != null) {
-                    context.push('${AppRoutes.settingsRoles}/${user.userId}/${user.id}');
+                    context.push(
+                      '${AppRoutes.settingsRoles}/${user.userId}/${user.id}',
+                    );
                   } else {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Este empleado no tiene un usuario de acceso vinculado.')),
+                      const SnackBar(
+                        content: Text(
+                          'Este empleado no tiene un usuario de acceso vinculado.',
+                        ),
+                      ),
                     );
                   }
                   break;
@@ -1415,6 +1422,25 @@ class _UserDialogState extends State<_UserDialog> {
       );
       return;
     }
+
+    final normalizedPin = _pin.text.trim();
+    if (normalizedPin.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Debes asignar un PIN de 4 dígitos al usuario.'),
+        ),
+      );
+      return;
+    }
+    if (!RegExp(r'^\d{4}$').hasMatch(normalizedPin)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('El PIN debe ser numérico y de 4 dígitos.'),
+        ),
+      );
+      return;
+    }
+
     setState(() => _saving = true);
 
     try {
@@ -1446,7 +1472,7 @@ class _UserDialogState extends State<_UserDialog> {
           emergencyName: _emergencyName.text.trim(),
           emergencyRelation: _emergencyRelation.text.trim(),
           emergencyPhone: _emergencyPhone.text.trim(),
-          // No actualizamos PIN/Password aquí por seguridad
+          pin: normalizedPin.isNotEmpty ? normalizedPin : null,
         );
 
         // Actualizar roles
@@ -1492,7 +1518,7 @@ class _UserDialogState extends State<_UserDialog> {
           emergencyName: _emergencyName.text.trim(),
           emergencyRelation: _emergencyRelation.text.trim(),
           emergencyPhone: _emergencyPhone.text.trim(),
-          pin: _pin.text.isNotEmpty ? _pin.text.trim() : null,
+          pin: normalizedPin.isNotEmpty ? normalizedPin : null,
           password: _password.text.isNotEmpty ? _password.text.trim() : null,
           roleIds: roleIds,
         );
@@ -1829,13 +1855,13 @@ class _UserDialogState extends State<_UserDialog> {
                 const SizedBox(width: 16),
                 Expanded(
                   child: _LabeledField(
-                    label: 'PIN (4-6 dígitos)',
+                    label: 'PIN (4 dígitos)',
                     controller: _pin,
-                    hint: widget.user == null
-                        ? 'Ej: 1234'
-                        : 'Bloqueado por seguridad',
+                    hint: 'Ej: 1234',
                     keyboardType: TextInputType.number,
-                    enabled: widget.user == null,
+                    maxLength: 4,
+                    digitsOnly: true,
+                    obscureText: true,
                   ),
                 ),
               ],
@@ -2194,12 +2220,18 @@ class _LabeledField extends StatelessWidget {
     this.controller,
     this.enabled = true,
     this.keyboardType,
+    this.maxLength,
+    this.digitsOnly = false,
+    this.obscureText = false,
   });
   final String label;
   final String? hint;
   final TextEditingController? controller;
   final bool enabled;
   final TextInputType? keyboardType;
+  final int? maxLength;
+  final bool digitsOnly;
+  final bool obscureText;
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -2218,9 +2250,16 @@ class _LabeledField extends StatelessWidget {
           controller: controller,
           enabled: enabled,
           keyboardType: keyboardType,
+          obscureText: obscureText,
+          maxLength: maxLength,
+          inputFormatters: [
+            if (digitsOnly) FilteringTextInputFormatter.digitsOnly,
+            if (maxLength != null) LengthLimitingTextInputFormatter(maxLength),
+          ],
           style: const TextStyle(fontSize: 14, color: Color(0xFF1A1A1A)),
           decoration: InputDecoration(
             hintText: hint,
+            counterText: '',
             hintStyle: TextStyle(fontSize: 14, color: Colors.grey.shade400),
             filled: true,
             fillColor: enabled ? Colors.white : const Color(0xFFF9F9F9),

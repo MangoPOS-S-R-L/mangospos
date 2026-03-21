@@ -3,7 +3,9 @@ import '../../../../../../services/fiscal/fiscal_service.dart';
 import '../../../../../../data/models/fiscal_models.dart';
 import '../../../../../../services/session/session_controller.dart';
 
-final fiscalVmProvider = NotifierProvider<FiscalViewModel, FiscalState>(() => FiscalViewModel());
+final fiscalVmProvider = NotifierProvider<FiscalViewModel, FiscalState>(
+  () => FiscalViewModel(),
+);
 
 class FiscalState {
   final List<FiscalNcfSequence> sequences;
@@ -34,7 +36,8 @@ class FiscalState {
       sequences: sequences ?? this.sequences,
       isLoading: isLoading ?? this.isLoading,
       error: error,
-      preferElectronicBilling: preferElectronicBilling ?? this.preferElectronicBilling,
+      preferElectronicBilling:
+          preferElectronicBilling ?? this.preferElectronicBilling,
       fiscalRnc: fiscalRnc ?? this.fiscalRnc,
       fiscalName: fiscalName ?? this.fiscalName,
     );
@@ -48,24 +51,29 @@ class FiscalViewModel extends Notifier<FiscalState> {
   Future<void> load(String businessId) async {
     state = state.copyWith(isLoading: true, error: null);
     try {
-      final bizId = businessId == 'auto' 
+      final bizId = businessId == 'auto'
           ? ref.read(sessionProvider).activeBusinessId ?? ''
           : businessId;
-      
+
       if (bizId.isEmpty) {
-        state = state.copyWith(isLoading: false, error: 'No se encontró un ID de negocio válido.');
+        state = state.copyWith(
+          isLoading: false,
+          error: 'No se encontró un ID de negocio válido.',
+        );
         return;
       }
 
       final seqs = await ref.read(fiscalServiceProvider).getSequences(bizId);
-      final settings = await ref.read(fiscalServiceProvider).getBusinessFiscalSettings(bizId);
+      final settings = await ref
+          .read(fiscalServiceProvider)
+          .getBusinessFiscalSettings(bizId);
 
       state = state.copyWith(
         sequences: seqs,
         isLoading: false,
-        preferElectronicBilling: settings['prefer_electronic_billing'] ?? false,
-        fiscalRnc: settings['fiscal_rnc'] ?? '',
-        fiscalName: settings['fiscal_name'] ?? '',
+        preferElectronicBilling: settings['ecf_enabled'] ?? false,
+        fiscalRnc: settings['rnc'] ?? '',
+        fiscalName: settings['business_legal_name'] ?? '',
       );
     } catch (e) {
       state = state.copyWith(isLoading: false, error: e.toString());
@@ -74,42 +82,66 @@ class FiscalViewModel extends Notifier<FiscalState> {
 
   Future<void> toggleElectronicBilling(String businessId, bool value) async {
     try {
-      final bizId = businessId == 'auto' ? ref.read(sessionProvider).activeBusinessId ?? '' : businessId;
-      await ref.read(fiscalServiceProvider).updateBusinessFiscalSettings(bizId, {'prefer_electronic_billing': value});
+      final bizId = businessId == 'auto'
+          ? ref.read(sessionProvider).activeBusinessId ?? ''
+          : businessId;
+      await ref
+          .read(fiscalServiceProvider)
+          .updateBusinessFiscalSettings(bizId, {
+            'rnc': state.fiscalRnc,
+            'business_legal_name': state.fiscalName,
+            'ecf_enabled': value,
+            'default_ncf_type': value ? 'E32' : 'B02',
+          });
       state = state.copyWith(preferElectronicBilling: value);
     } catch (e) {
       state = state.copyWith(error: 'Error al cambiar modalidad: $e');
     }
   }
 
-  Future<void> updateFiscalInfo(String businessId, {required String rnc, required String name}) async {
+  Future<void> updateFiscalInfo(
+    String businessId, {
+    required String rnc,
+    required String name,
+  }) async {
     try {
-      final bizId = businessId == 'auto' ? ref.read(sessionProvider).activeBusinessId ?? '' : businessId;
-      await ref.read(fiscalServiceProvider).updateBusinessFiscalSettings(bizId, {
-        'fiscal_rnc': rnc,
-        'fiscal_name': name,
-      });
+      final bizId = businessId == 'auto'
+          ? ref.read(sessionProvider).activeBusinessId ?? ''
+          : businessId;
+      await ref
+          .read(fiscalServiceProvider)
+          .updateBusinessFiscalSettings(bizId, {
+            'rnc': rnc,
+            'business_legal_name': name,
+            'ecf_enabled': state.preferElectronicBilling,
+            'default_ncf_type': state.preferElectronicBilling ? 'E32' : 'B02',
+          });
       state = state.copyWith(fiscalRnc: rnc, fiscalName: name);
     } catch (e) {
       state = state.copyWith(error: 'Error al guardar datos fiscales: $e');
     }
   }
 
-  Future<void> addSequence(String businessId, {
+  Future<void> addSequence(
+    String businessId, {
     required String tipo,
     required String serie,
     required int ultimoSeq,
     required int maximoSeq,
   }) async {
     try {
-      final bizId = businessId == 'auto' ? ref.read(sessionProvider).activeBusinessId ?? '' : businessId;
-      await ref.read(fiscalServiceProvider).initializeSequence(
-        businessId: bizId,
-        tipo: tipo,
-        serie: serie,
-        ultimoSeq: ultimoSeq,
-        maximoSeq: maximoSeq,
-      );
+      final bizId = businessId == 'auto'
+          ? ref.read(sessionProvider).activeBusinessId ?? ''
+          : businessId;
+      await ref
+          .read(fiscalServiceProvider)
+          .initializeSequence(
+            businessId: bizId,
+            tipo: tipo,
+            serie: serie,
+            ultimoSeq: ultimoSeq,
+            maximoSeq: maximoSeq,
+          );
       await load(businessId); // Recargar
     } catch (e) {
       state = state.copyWith(error: 'Error al agregar secuencia: $e');
@@ -123,9 +155,9 @@ class FiscalViewModel extends Notifier<FiscalState> {
       final newSeqs = state.sequences.map((s) {
         if (s.id == id) {
           return s.copyWith(
-            ultimoSeq: data['ultimo_seq'] ?? s.ultimoSeq,
-            maximoSeq: data['maximo_seq'] ?? s.maximoSeq,
-            activo: data['activo'] ?? s.activo,
+            ultimoSeq: data['current_number'] ?? s.ultimoSeq,
+            maximoSeq: data['range_end'] ?? s.maximoSeq,
+            activo: data['is_active'] ?? s.activo,
           );
         }
         return s;

@@ -469,78 +469,68 @@ class PrintingService {
   }
 
   /// Reimprimir orden en un área específica
+  /// Reimprimir items específicos
+  Future<void> reprintItems({
+    required String orderId,
+    required String businessId,
+    required List<OrderItem> items,
+  }) async {
+    try {
+      final order = await _salesRepo.getOrder(orderId);
+      if (order == null) throw Exception('Orden no encontrada');
+
+      final businessName = await _getBusinessName(businessId);
+      final orderData = await _getOrderDisplayData(orderId);
+      final itemsByArea = await _groupItemsByPrintArea(items);
+
+      for (final entry in itemsByArea.entries) {
+        final areaCode = entry.key;
+        final areaItems = entry.value;
+
+        final area = await _ensureAreaForCode(businessId, areaCode);
+        final printers = await _getOrderPrintersWithOfflineFallback(
+          businessId: businessId,
+          areaId: area.id,
+          areaCode: areaCode,
+        );
+
+        if (printers.isEmpty) continue;
+
+        final ticket = PrintTicketService.generateKitchenTicket(
+          order: order,
+          items: areaItems,
+          tableName: orderData['tableName']?.toString() ?? 'N/A',
+          waiterName: orderData['waiterName']?.toString(),
+          businessName: businessName,
+          isReprint: true,
+        );
+
+        await _dispatchKitchenTicket(
+          printers: printers,
+          bytes: ticket.escPosCommands,
+          areaCode: areaCode,
+          fallbackData: {
+            'title': 'REIMPRESIÓN ${orderData['tableName'] ?? 'COCINA'}',
+            'body': 'Orden ${orderData['orderNumber'] ?? ''}',
+          },
+        );
+      }
+    } catch (e) {
+      throw Exception('Error al reimprimir items: $e');
+    }
+  }
+
   Future<String> reprintOrderInArea({
     required String orderId,
     required String businessId,
     required String areaCode,
   }) async {
-    try {
-      final order = await _salesRepo.getOrder(orderId);
-      if (order == null) {
-        throw Exception('Orden no encontrada');
-      }
-
-      // Obtener items de la orden
-      final items = await _salesRepo.getOrderItems(
-        orderId,
-        includeModifiers: true,
-      );
-
-      // Filtrar items por área
-      final itemsByArea = await _groupItemsByPrintArea(items);
-      final areaItems = itemsByArea[areaCode];
-
-      if (areaItems == null || areaItems.isEmpty) {
-        throw Exception('No hay items para el área $areaCode');
-      }
-
-      // Obtener datos de la orden
-      final orderData = await _getOrderDisplayData(orderId);
-      final businessName = await _getBusinessName(businessId);
-
-      // Obtener área
-      final areas = await _printingRepo.getPrintAreas(businessId);
-      final area = areas.where((a) => a.code == areaCode).firstOrNull;
-
-      if (area == null) {
-        throw Exception('Área no encontrada: $areaCode');
-      }
-
-      final printers = await _getOrderPrintersWithOfflineFallback(
-        businessId: businessId,
-        areaId: area.id,
-        areaCode: areaCode,
-      );
-      if (printers.isEmpty) {
-        throw Exception('No hay impresoras asignadas al área $areaCode');
-      }
-
-      final ticket = PrintTicketService.generateKitchenTicket(
-        order: order,
-        items: areaItems,
-        tableName: orderData['tableName']?.toString() ?? 'N/A',
-        waiterName: orderData['waiterName']?.toString(),
-        businessName: businessName,
-      );
-
-      final dispatchId = _createLocalDispatchId(areaCode);
-      await _dispatchKitchenTicket(
-        printers: printers,
-        bytes: ticket.escPosCommands,
-        areaCode: areaCode,
-        fallbackData: {
-          'title': 'COMANDA ${orderData['tableName'] ?? 'COCINA'}',
-          'body':
-              'Orden ${orderData['orderNumber'] ?? ''}\n'
-              'Mesa: ${orderData['tableName'] ?? 'N/A'}\n'
-              'Mesero: ${orderData['waiterName'] ?? 'N/A'}',
-        },
-      );
-
-      return dispatchId;
-    } catch (e) {
-      throw Exception('Error al reimprimir: $e');
-    }
+    await reprintItems(
+      orderId: orderId,
+      businessId: businessId,
+      items: await _salesRepo.getOrderItems(orderId, includeModifiers: true),
+    );
+    return _createLocalDispatchId(areaCode);
   }
 
   String _createLocalDispatchId(String areaCode) {

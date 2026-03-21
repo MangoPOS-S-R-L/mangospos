@@ -84,9 +84,9 @@ class ReportsRepository {
     final sessions = await _client
         .from(ReportsQueries.tableCashSessions)
         .select(
-          'id, start_amount, end_amount, difference, status, opened_at, closed_at',
+          'id, start_amount, end_amount, difference, status, opened_at, closed_at, cash_registers!inner(business_id)',
         )
-        .eq('business_id', businessId)
+        .eq('cash_registers.business_id', businessId)
         .gte('opened_at', fromIso)
         .lt('opened_at', toIso);
 

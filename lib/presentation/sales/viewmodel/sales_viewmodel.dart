@@ -570,7 +570,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
   }
 
-  Future<void> deleteItem(String itemId) async {
+  Future<void> deleteItem(String itemId, {String? reason}) async {
     final orderId = state.order?.id;
     if (orderId == null) return;
 
@@ -1126,6 +1126,27 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       rethrow;
     }
   }
+
+  Future<void> reprintKitchenTicket({
+    required String orderId,
+    List<OrderItem>? items,
+  }) async {
+    final businessId = _activeBusinessId;
+    if (businessId == null) return;
+
+    try {
+      if (items != null && items.isNotEmpty) {
+        await ref.read(printingServiceProvider).reprintItems(
+          orderId: orderId,
+          businessId: businessId,
+          items: items,
+        );
+      }
+    } catch (e) {
+      state = state.copyWith(error: 'Error al reimprimir: $e');
+    }
+  }
+
 
   Future<void> refreshOrder({bool clearIfPaid = false}) async {
     final orderId = state.order?.id;
