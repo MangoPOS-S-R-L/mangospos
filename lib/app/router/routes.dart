@@ -58,7 +58,12 @@ class AppRoutes {
   static const settingsZonesTables = '$settings/zones-tables';
   static const settingsTaxes = '$settings/taxes';
   static const settingsFiscalReceipts = '$settings/fiscal-receipts';
+  static const settingsBranches = '$settings/branches';
+  static const settingsCashRegisters = '$settings/cash-registers';
+  static const settingsCurrencies = '$settings/currencies';
+  static const settingsRegional = '$settings/regional';
   static const inventoryKardex = '$settings/inventory-kardex';
+  static const inventoryRequirements = '$settings/inventory-requirements';
   static const inventoryOutflow = '$settings/inventory-outflow';
   static const inventoryReconciliation = '$settings/inventory-reconciliation';
   static const printingBase = '$settings/printing';

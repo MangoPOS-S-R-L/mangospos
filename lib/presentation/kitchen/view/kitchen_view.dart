@@ -2,6 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/presentation/kitchen/viewmodel/kitchen_viewmodel.dart';
 import 'package:mangopos/data/models/kitchen_models.dart';
+import 'package:mangopos/services/session/session_controller.dart';
+
+String _formatQty(double qty) {
+  if ((qty - qty.roundToDouble()).abs() < 0.001) {
+    return qty.toStringAsFixed(0);
+  }
+  if ((qty * 10 - (qty * 10).roundToDouble()).abs() < 0.001) {
+    return qty.toStringAsFixed(1);
+  }
+  return qty.toStringAsFixed(2);
+}
 
 class KitchenView extends ConsumerStatefulWidget {
   const KitchenView({super.key});
@@ -12,6 +23,7 @@ class KitchenView extends ConsumerStatefulWidget {
 
 class _KitchenViewState extends ConsumerState<KitchenView> {
   bool autoUpdate = true;
+  String? _lastBusinessId;
   String updateInterval = '10 Segundo';
   String filterType = 'Todos';
   String dateFilter = 'Hoy';
@@ -28,8 +40,19 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
 
   @override
   Widget build(BuildContext context) {
+    final session = ref.watch(sessionProvider);
     final vm = ref.watch(kitchenViewModelProvider);
     final pending = vm.pendingItems;
+
+    if (session.activeBusinessId != null &&
+        session.activeBusinessId != _lastBusinessId) {
+      _lastBusinessId = session.activeBusinessId;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ref.read(kitchenViewModelProvider).init();
+        }
+      });
+    }
     final preparing = vm.preparingItems;
     final ready = vm.readyItems;
     final pendingOrders = _groupOrdersByStatus(vm.items, 'pending');
@@ -253,10 +276,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
               const SizedBox(height: 2),
               Text(
                 subtitle,
-                style: const TextStyle(
-                  color: Color(0xFF6B7280),
-                  fontSize: 12,
-                ),
+                style: const TextStyle(color: Color(0xFF6B7280), fontSize: 12),
               ),
             ],
           ),
@@ -286,8 +306,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
         createdAt: first.createdAt,
         items: list,
       );
-    }).toList()
-      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    }).toList()..sort((a, b) => a.createdAt.compareTo(b.createdAt));
   }
 
   Widget _buildOrderColumn({
@@ -308,10 +327,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
               decoration: BoxDecoration(color: color, shape: BoxShape.circle),
             ),
             const SizedBox(width: 8),
-            Text(
-              title,
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
+            Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(width: 8),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -457,7 +473,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
                           borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(
-                          item.quantity.toInt().toString(),
+                          _formatQty(item.quantity),
                           style: const TextStyle(fontWeight: FontWeight.bold),
                         ),
                       ),

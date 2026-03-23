@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/viewmodel/taxes_viewmodel.dart';
+import 'package:mangopos/services/session/session_controller.dart';
 import '../viewmodel/products_viewmodel.dart';
 import '../widgets/add_edit_product_dialog.dart';
 
@@ -13,6 +14,8 @@ class ProductsView extends ConsumerStatefulWidget {
 }
 
 class _ProductsViewState extends ConsumerState<ProductsView> {
+  String? _lastBusinessId;
+
   @override
   void initState() {
     super.initState();
@@ -25,8 +28,20 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
 
   @override
   Widget build(BuildContext context) {
+    final session = ref.watch(sessionProvider);
     final viewModel = ref.watch(productsViewModelProvider);
     final products = viewModel.filteredProducts;
+
+    if (session.activeBusinessId != null &&
+        session.activeBusinessId != _lastBusinessId) {
+      _lastBusinessId = session.activeBusinessId;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ref.read(productsViewModelProvider).init();
+          ref.read(taxesVmProvider.notifier).load(businessId: 'auto');
+        }
+      });
+    }
 
     return Scaffold(
       backgroundColor: Colors.white,

@@ -22,6 +22,8 @@ class DashboardView extends ConsumerStatefulWidget {
 }
 
 class _DashboardViewState extends ConsumerState<DashboardView> {
+  String? _lastBusinessId;
+
   @override
   void initState() {
     super.initState();
@@ -34,6 +36,14 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
   Widget build(BuildContext context) {
     final vm = ref.watch(cashierViewModelProvider);
     final session = ref.watch(sessionProvider);
+
+    if (session.activeBusinessId != null &&
+        session.activeBusinessId != _lastBusinessId) {
+      _lastBusinessId = session.activeBusinessId;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        ref.read(cashierViewModelProvider).init();
+      });
+    }
 
     return Scaffold(
       backgroundColor: AppColors.background,

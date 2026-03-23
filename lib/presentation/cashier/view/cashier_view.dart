@@ -9,6 +9,7 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/utils/responsive_utils.dart';
 import 'package:mangopos/presentation/cashier/widgets/blind_cash_close_dialog.dart';
 import 'package:mangopos/presentation/cashier/widgets/open_cash_dialog.dart';
+import 'package:mangopos/services/session/session_controller.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:async';
 
@@ -21,6 +22,7 @@ class CashierView extends ConsumerStatefulWidget {
 
 class _CashierViewState extends ConsumerState<CashierView> {
   Timer? _refreshTimer;
+  String? _lastBusinessId;
 
   @override
   void initState() {
@@ -49,10 +51,21 @@ class _CashierViewState extends ConsumerState<CashierView> {
 
   @override
   Widget build(BuildContext context) {
+    final appSession = ref.watch(sessionProvider);
     final vm = ref.watch(cashierViewModelProvider);
     final isLoading = vm.isLoading;
     final session = vm.lastSession;
     final isOpen = session != null && session['status'] == 'open';
+
+    if (appSession.activeBusinessId != null &&
+        appSession.activeBusinessId != _lastBusinessId) {
+      _lastBusinessId = appSession.activeBusinessId;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ref.read(cashierViewModelProvider).init();
+        }
+      });
+    }
 
     if (isLoading && session == null) {
       return const Scaffold(

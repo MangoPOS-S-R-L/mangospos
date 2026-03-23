@@ -2,16 +2,53 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+List<Map<String, dynamic>> _buildPrecheckItems(
+  List<dynamic> rawItems,
+  String receiptItemDisplayMode,
+) {
+  final items = rawItems
+      .map((e) => Map<String, dynamic>.from(e as Map))
+      .toList();
+  if (receiptItemDisplayMode != 'separate') {
+    return items;
+  }
+
+  final expanded = <Map<String, dynamic>>[];
+  for (final item in items) {
+    final qtyRaw = item['qty'] ?? item['quantity'] ?? 1;
+    final qty = qtyRaw is num
+        ? qtyRaw.toDouble()
+        : double.tryParse('$qtyRaw') ?? 1;
+    final roundedQty = qty.roundToDouble();
+    final isWholeQuantity = (qty - roundedQty).abs() < 0.001;
+
+    if (!isWholeQuantity || roundedQty <= 1) {
+      expanded.add(item);
+      continue;
+    }
+
+    final parts = roundedQty.toInt();
+    final unitPrice = ((item['price'] ?? 0) as num).toDouble();
+    for (var idx = 0; idx < parts; idx++) {
+      expanded.add({...item, 'qty': 1, 'quantity': 1, 'price': unitPrice});
+    }
+  }
+
+  return expanded;
+}
+
 class PreCheckDialog extends StatelessWidget {
   final Map<String, dynamic> data;
   final VoidCallback onPrint;
   final VoidCallback onCancel;
+  final String receiptItemDisplayMode;
 
   const PreCheckDialog({
     super.key,
     required this.data,
     required this.onPrint,
     required this.onCancel,
+    this.receiptItemDisplayMode = 'grouped',
   });
 
   @override
@@ -20,7 +57,10 @@ class PreCheckDialog extends StatelessWidget {
       symbol: 'RD\$ ',
       decimalDigits: 2,
     );
-    final items = data['items'] as List<dynamic>;
+    final items = _buildPrecheckItems(
+      data['items'] as List<dynamic>,
+      receiptItemDisplayMode,
+    );
 
     // Calcular totales localmente si no vienen (aunque deberían venir)
     final subtotal = data['subtotal'] ?? 0.0;
@@ -158,7 +198,7 @@ class PreCheckDialog extends StatelessWidget {
                     // Products List
                     ...items.map((item) {
                       final price = item['price'] ?? 0.0;
-                      final qty = item['quantity'] ?? 1;
+                      final qty = item['qty'] ?? item['quantity'] ?? 1;
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 8),
                         child: Row(

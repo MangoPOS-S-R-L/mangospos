@@ -4,10 +4,12 @@ import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/data/models/printing_models.dart';
+import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/areas/viewmodel/print_areas_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/widgets/printer_configuration_dialog.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/widgets/printing_ui.dart';
+import 'package:mangopos/services/session/session_controller.dart';
 
 class PrintingReceiptsView extends ConsumerStatefulWidget {
   const PrintingReceiptsView({super.key, this.businessId = 'auto'});
@@ -24,6 +26,7 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
   PrintArea? _fiscalArea;
   String? _selectedPrebillPrinter;
   String? _selectedReceiptPrinter;
+  String _receiptItemDisplayMode = PosSettingsRepository.receiptItemsGrouped;
   bool _busy = false;
 
   @override
@@ -32,19 +35,32 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
   }
 
+  String get _resolvedBusinessId {
+    if (widget.businessId != 'auto' && widget.businessId.isNotEmpty) {
+      return widget.businessId;
+    }
+    return ref.read(sessionProvider).activeBusinessId ?? '';
+  }
+
   Future<void> _bootstrap() async {
+    final businessId = _resolvedBusinessId;
     final areasCtrl = ref.read(printingAreasViewModelProvider.notifier);
     final printersCtrl = ref.read(printingPrintersViewModelProvider.notifier);
+    final settingsRepo = ref.read(posSettingsRepositoryProvider);
     await printersCtrl.load(businessId: widget.businessId, force: true);
     final bootstrap = await areasCtrl.bootstrapReceiptAssignments(
       businessId: widget.businessId,
     );
+    final receiptItemDisplayMode = businessId.isEmpty
+        ? PosSettingsRepository.receiptItemsGrouped
+        : await settingsRepo.getReceiptItemDisplayMode(businessId);
     if (!mounted) return;
     setState(() {
       _cashierArea = bootstrap.cashierArea;
       _fiscalArea = bootstrap.fiscalArea;
       _selectedPrebillPrinter = bootstrap.selectedPrebillPrinter;
       _selectedReceiptPrinter = bootstrap.selectedReceiptPrinter;
+      _receiptItemDisplayMode = receiptItemDisplayMode;
     });
   }
 
@@ -125,6 +141,35 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
     );
     if (changed == true) {
       await _bootstrap();
+    }
+  }
+
+  Future<void> _updateReceiptItemDisplayMode(String mode) async {
+    final businessId = _resolvedBusinessId;
+    if (businessId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo resolver el negocio activo.')),
+      );
+      return;
+    }
+
+    setState(() => _busy = true);
+    try {
+      await ref
+          .read(posSettingsRepositoryProvider)
+          .setReceiptItemDisplayMode(businessId: businessId, mode: mode);
+      if (!mounted) return;
+      setState(() => _receiptItemDisplayMode = mode);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Formato de artículos guardado.')),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo guardar el formato.')),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -211,6 +256,14 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
                   children: [
                     SizedBox(
                       width: cardWidth,
+                      child: _ReceiptItemModeCard(
+                        value: _receiptItemDisplayMode,
+                        busy: _busy,
+                        onChanged: _updateReceiptItemDisplayMode,
+                      ),
+                    ),
+                    SizedBox(
+                      width: cardWidth,
                       child: _DocumentAssignmentCard(
                         title: 'C.Final',
                         trailingLabel: 'Area fiscal',
@@ -257,6 +310,71 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
                 );
               },
             ),
+    );
+  }
+}
+
+class _ReceiptItemModeCard extends StatelessWidget {
+  const _ReceiptItemModeCard({
+    required this.value,
+    required this.busy,
+    required this.onChanged,
+  });
+
+  final String value;
+  final bool busy;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return PrintingCardFrame(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const PrintingSoftHeader(
+            leading: Icon(
+              Icons.view_list_outlined,
+              color: MangoColors.darkGray,
+            ),
+            title: 'Formato de artículos',
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Elige si en recibos y precuentas los artículos iguales se agrupan o se muestran en líneas separadas.',
+            style: TextStyle(fontSize: 13, color: MangoColors.muted),
+          ),
+          const SizedBox(height: 16),
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment<String>(
+                value: PosSettingsRepository.receiptItemsGrouped,
+                label: Text('Agrupar'),
+                icon: Icon(Icons.merge_type_outlined),
+              ),
+              ButtonSegment<String>(
+                value: PosSettingsRepository.receiptItemsSeparate,
+                label: Text('Separar'),
+                icon: Icon(Icons.view_stream_outlined),
+              ),
+            ],
+            selected: {value},
+            onSelectionChanged: busy
+                ? null
+                : (selection) {
+                    if (selection.isNotEmpty) {
+                      onChanged(selection.first);
+                    }
+                  },
+          ),
+          const SizedBox(height: 14),
+          Text(
+            value == PosSettingsRepository.receiptItemsGrouped
+                ? 'Ej: 3 Coca-Cola en una sola línea.'
+                : 'Ej: Coca-Cola repetida en varias líneas.',
+            style: const TextStyle(fontSize: 13, color: MangoColors.muted),
+          ),
+        ],
+      ),
     );
   }
 }

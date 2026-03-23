@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 
+import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/core/security/access_control_catalog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -11,6 +12,44 @@ enum AuthStatus { unauthenticated, authenticated, loading }
 enum PosRole { administrador, supervisor, cajero, mesero, cocina, delivery }
 
 enum PinAccessLevel { any, supervisor, admin }
+
+class SessionBusiness {
+  final String id;
+  final String name;
+  final String? companyName;
+  final String role;
+  final String? status;
+
+  const SessionBusiness({
+    required this.id,
+    required this.name,
+    required this.role,
+    this.companyName,
+    this.status,
+  });
+
+  String get roleLabel {
+    switch (role) {
+      case 'owner':
+      case 'admin':
+        return 'Administrador';
+      case 'manager':
+        return 'Supervisor';
+      case 'cashier':
+        return 'Cajero';
+      case 'waiter':
+        return 'Mesero';
+      case 'kitchen':
+      case 'cook':
+      case 'chef':
+        return 'Cocina';
+      case 'delivery':
+        return 'Delivery';
+      default:
+        return role;
+    }
+  }
+}
 
 extension PosRoleX on PosRole {
   String get label {
@@ -133,6 +172,7 @@ class SessionState {
   final String? activeBusinessName;
   final PosRole? activeRole;
   final List<PosRole> availableRoles;
+  final List<SessionBusiness> availableBusinesses;
   final Set<String> permissions;
 
   const SessionState({
@@ -144,6 +184,7 @@ class SessionState {
     this.activeBusinessName,
     this.activeRole,
     this.availableRoles = const [],
+    this.availableBusinesses = const [],
     this.permissions = const {},
   });
 
@@ -156,6 +197,7 @@ class SessionState {
     String? activeBusinessName,
     PosRole? activeRole,
     List<PosRole>? availableRoles,
+    List<SessionBusiness>? availableBusinesses,
     Set<String>? permissions,
   }) {
     return SessionState(
@@ -167,6 +209,7 @@ class SessionState {
       activeBusinessName: activeBusinessName ?? this.activeBusinessName,
       activeRole: activeRole ?? this.activeRole,
       availableRoles: availableRoles ?? this.availableRoles,
+      availableBusinesses: availableBusinesses ?? this.availableBusinesses,
       permissions: permissions ?? this.permissions,
     );
   }
@@ -174,7 +217,6 @@ class SessionState {
   bool get isAuthenticated => status == AuthStatus.authenticated;
 }
 
-/// Riverpod 3.0: usar `Notifier` tipado.
 class SessionController extends Notifier<SessionState> {
   StreamSubscription<AuthState>? _authSub;
 
@@ -184,8 +226,6 @@ class SessionController extends Notifier<SessionState> {
     final auth = Supabase.instance.client.auth;
 
     _authSub = auth.onAuthStateChange.listen((event) {
-      // Usamos Future.delayed(Duration.zero) para asegurarnos de que la transición
-      // de estado ocurra después de que cualquier build actual haya terminado.
       Future.delayed(Duration.zero, () {
         final authEvent = event.event;
         final session = event.session;
@@ -204,7 +244,6 @@ class SessionController extends Notifier<SessionState> {
       });
     });
 
-    // Bootstrapping inicial para reload (web/desktop/mobile).
     Future.delayed(Duration.zero, () => restoreFromSupabaseSession());
 
     ref.onDispose(() {
@@ -235,6 +274,7 @@ class SessionController extends Notifier<SessionState> {
     String? userName,
     PosRole? activeRole,
     List<PosRole> availableRoles = const [],
+    List<SessionBusiness> availableBusinesses = const [],
     Set<String>? permissions,
   }) {
     final role =
@@ -242,6 +282,8 @@ class SessionController extends Notifier<SessionState> {
     final perms =
         permissions ??
         (role == null ? <String>{} : _rolePermissions[role] ?? <String>{});
+
+    BusinessResolver.setActiveBusinessId(businessId);
 
     _safeSet(
       SessionState(
@@ -253,12 +295,14 @@ class SessionController extends Notifier<SessionState> {
         userName: userName,
         activeRole: role,
         availableRoles: availableRoles,
+        availableBusinesses: availableBusinesses,
         permissions: perms,
       ),
     );
   }
 
   void setActiveBusiness(String businessId) {
+    BusinessResolver.setActiveBusinessId(businessId);
     _safeSet(state.copyWith(activeBusinessId: businessId));
   }
 
@@ -285,71 +329,143 @@ class SessionController extends Notifier<SessionState> {
           user.email ??
           'Usuario';
 
-      final userBizResp = await client
+      final memberships = await client
           .from('user_businesses')
-          .select('business_id, role')
+          .select('business_id, role, created_at')
           .eq('user_id', user.id)
-          .order('created_at', ascending: true)
-          .limit(1)
-          .maybeSingle();
+          .order('created_at', ascending: true);
 
-      if (userBizResp == null) {
+      if (memberships.isEmpty) {
         setUnauthenticated();
         return false;
       }
 
-      final businessId = userBizResp['business_id'] as String?;
-      final roleStr = userBizResp['role']?.toString();
-      final posRole = _mapRole(roleStr);
+      final businessIds = (memberships as List)
+          .map((row) => row['business_id']?.toString())
+          .whereType<String>()
+          .where((id) => id.isNotEmpty)
+          .toList(growable: false);
 
-      if (businessId == null || businessId.isEmpty || posRole == null) {
-        setUnauthenticated();
-        return false;
-      }
-
-      // Cargar employee_id desde la tabla employees
-      final empResp = await client
-          .from('employees')
-          .select('id')
-          .eq('user_id', user.id)
-          .eq('business_id', businessId)
-          .maybeSingle();
-      final employeeId = empResp?['id'] as String?;
-
-      final businessResp = await client
+      final businessesResp = await client
           .from('businesses')
-          .select('business_name, branch_name')
-          .eq('id', businessId)
-          .maybeSingle();
-      final businessName =
-          (businessResp?['branch_name'] as String?)?.trim().isNotEmpty == true
-          ? (businessResp?['branch_name'] as String).trim()
-          : (businessResp?['business_name'] as String?)?.trim();
+          .select('id, business_name, branch_name, status')
+          .inFilter('id', businessIds);
 
-      final effectivePermissions = await _loadEffectivePermissions(
+      final businessMap = {
+        for (final row in (businessesResp as List).cast<Map<String, dynamic>>())
+          row['id'].toString(): row,
+      };
+
+      final availableBusinesses = (memberships).map<SessionBusiness>((row) {
+        final businessId = row['business_id'].toString();
+        final business = businessMap[businessId] ?? const <String, dynamic>{};
+        final displayName =
+            (business['branch_name']?.toString().trim().isNotEmpty == true)
+            ? business['branch_name'].toString().trim()
+            : (business['business_name']?.toString().trim() ?? 'Negocio');
+        return SessionBusiness(
+          id: businessId,
+          name: displayName,
+          companyName: business['business_name']?.toString(),
+          role: row['role']?.toString() ?? 'owner',
+          status: business['status']?.toString(),
+        );
+      }).toList(growable: false);
+
+      final preferredBusinessId = state.activeBusinessId != null &&
+              businessIds.contains(state.activeBusinessId)
+          ? state.activeBusinessId!
+          : businessIds.first;
+
+      await _activateBusiness(
         userId: user.id,
-        businessId: businessId,
-        roleStr: roleStr,
-        posRole: posRole,
-      );
-
-      setAuthenticated(
-        user.id,
-        businessId: businessId,
-        businessName: businessName,
         userName: fullName,
-        activeRole: posRole,
-        availableRoles: [posRole],
-        permissions: effectivePermissions,
+        businessId: preferredBusinessId,
+        availableBusinesses: availableBusinesses,
       );
       return true;
     } catch (_) {
-      // Conserva estado previo si ya estaba autenticado.
       if (!state.isAuthenticated) {
         setUnauthenticated();
       }
       return false;
     }
+  }
+
+  Future<void> switchBusiness(String businessId) async {
+    final userId = state.userId;
+    if (userId == null || userId.isEmpty) return;
+    final target = state.availableBusinesses.where((b) => b.id == businessId);
+    if (target.isEmpty) return;
+
+    setLoading();
+    await _activateBusiness(
+      userId: userId,
+      userName: state.userName,
+      businessId: businessId,
+      availableBusinesses: state.availableBusinesses,
+    );
+  }
+
+  Future<void> _activateBusiness({
+    required String userId,
+    required String? userName,
+    required String businessId,
+    required List<SessionBusiness> availableBusinesses,
+  }) async {
+    final client = Supabase.instance.client;
+
+    final membership = await client
+        .from('user_businesses')
+        .select('role')
+        .eq('user_id', userId)
+        .eq('business_id', businessId)
+        .maybeSingle();
+
+    final roleStr = membership?['role']?.toString();
+    final posRole = _mapRole(roleStr);
+
+    if (roleStr == null || posRole == null) {
+      setUnauthenticated();
+      return;
+    }
+
+    final empResp = await client
+        .from('employees')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('business_id', businessId)
+        .maybeSingle();
+    final employeeId = empResp?['id'] as String?;
+
+    final businessResp = await client
+        .from('businesses')
+        .select('business_name, branch_name')
+        .eq('id', businessId)
+        .maybeSingle();
+    final businessName =
+        (businessResp?['branch_name'] as String?)?.trim().isNotEmpty == true
+        ? (businessResp?['branch_name'] as String).trim()
+        : (businessResp?['business_name'] as String?)?.trim();
+
+    final effectivePermissions = await _loadEffectivePermissions(
+      userId: userId,
+      businessId: businessId,
+      roleStr: roleStr,
+      posRole: posRole,
+    );
+
+    setAuthenticated(
+      userId,
+      employeeId: employeeId,
+      businessId: businessId,
+      businessName: businessName,
+      userName: userName,
+      activeRole: posRole,
+      availableRoles: [posRole],
+      availableBusinesses: availableBusinesses,
+      permissions: effectivePermissions,
+    );
   }
 
   Future<bool> authenticateWithPin({
@@ -382,6 +498,14 @@ class SessionController extends Notifier<SessionState> {
       userName: found.fullName,
       activeRole: found.roles.first,
       availableRoles: found.roles,
+      availableBusinesses: [
+        SessionBusiness(
+          id: found.businessId,
+          name: 'Negocio demo',
+          role: 'owner',
+          companyName: 'Negocio demo',
+        ),
+      ],
     );
     return true;
   }
@@ -458,9 +582,7 @@ class SessionController extends Notifier<SessionState> {
             }
           }
         }
-      } catch (_) {
-        // fallback demo below
-      }
+      } catch (_) {}
     }
 
     for (final user in pinLoginUsers) {
@@ -493,9 +615,7 @@ class SessionController extends Notifier<SessionState> {
         if (row != null) {
           return true;
         }
-      } catch (_) {
-        // fallback demo below
-      }
+      } catch (_) {}
     }
 
     final currentUserId = state.userId;
@@ -511,6 +631,7 @@ class SessionController extends Notifier<SessionState> {
   }
 
   Future<void> setUnauthenticated() async {
+    BusinessResolver.resetCache();
     final completer = Completer<void>();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       state = const SessionState();
@@ -563,9 +684,7 @@ class SessionController extends Notifier<SessionState> {
           return granted;
         }
       }
-    } catch (_) {
-      // fallback below
-    }
+    } catch (_) {}
 
     return _fallbackPermissions(roleStr, posRole);
   }
@@ -607,7 +726,6 @@ class SessionController extends Notifier<SessionState> {
   }
 }
 
-/// Provider para Notifier en v3
 final sessionProvider = NotifierProvider<SessionController, SessionState>(
   SessionController.new,
 );

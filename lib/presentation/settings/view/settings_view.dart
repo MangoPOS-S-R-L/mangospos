@@ -13,18 +13,23 @@ class SettingsView extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F7F7),
+      backgroundColor: _SettingsSurface.background,
       appBar: AppBar(
         backgroundColor: MangoColors.white,
-        foregroundColor: MangoColors.darkGray,
-        elevation: 0.6,
+        foregroundColor: _SettingsSurface.foreground,
+        elevation: 0.4,
+        scrolledUnderElevation: 0.6,
         titleSpacing: 12,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
               'Más Ajustes',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.2,
+              ),
             ),
             Text(
               'Configuración completa del sistema MangoPOS',
@@ -34,7 +39,7 @@ class SettingsView extends ConsumerWidget {
         ),
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+        padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
         children: [
           _BusinessSummaryCard(
             businessName: ref.watch(sessionProvider).activeBusinessName,
@@ -92,24 +97,28 @@ class SettingsView extends ConsumerWidget {
             subtitle: 'Flujos de apertura y cierre de caja',
             icon: Icons.point_of_sale_rounded,
             color: Color(0xFFE6F7EE),
+            route: AppRoutes.cashier,
           ),
           _SettingsOption(
-            title: 'Historial de Venta',
+            title: 'Historial de Ventas',
             subtitle: 'Consulta de ventas realizadas',
             icon: Icons.receipt_long_rounded,
             color: Color(0xFFF1F1F1),
+            route: AppRoutes.cashierHistory,
           ),
           _SettingsOption(
             title: 'Registro de Ingresos y Egresos',
             subtitle: 'Movimientos de efectivo en caja',
             icon: Icons.attach_money_rounded,
             color: Color(0xFFEAF0FF),
+            route: AppRoutes.cashierIncomeExpense,
           ),
           _SettingsOption(
             title: 'Gestión de Cierres de Caja',
             subtitle: 'Administración de cierres y arqueos',
             icon: Icons.lock_rounded,
             color: Color(0xFFFFEFE3),
+            route: AppRoutes.cashierClosures,
           ),
           _SettingsOption(
             title: 'Gestión de Notas de Crédito',
@@ -129,7 +138,7 @@ class SettingsView extends ConsumerWidget {
         title: 'Gestión de Productos',
         items: [
           _SettingsOption(
-            title: 'Productos y Categorias',
+            title: 'Productos y Categorías',
             subtitle: 'Catálogo de productos',
             icon: Icons.inventory_2_rounded,
             color: const Color(0xFFFFE6D5),
@@ -149,7 +158,7 @@ class SettingsView extends ConsumerWidget {
             color: const Color(0xFFE6F7EE),
           ),
           _SettingsOption(
-            title: 'Menu',
+            title: 'Menú',
             subtitle: 'Configuración de menús',
             icon: Icons.menu_book_rounded,
             color: const Color(0xFFFFF0D9),
@@ -175,15 +184,15 @@ class SettingsView extends ConsumerWidget {
         title: 'Comandas y Precuentas',
         items: const [
           _SettingsOption(
-            title: 'Configuración de Comandas',
+            title: 'Config. de Comandas',
             subtitle: 'Formato y comportamiento de comandas',
             icon: Icons.list_alt_rounded,
             color: Color(0xFFFFE6D5),
           ),
           _SettingsOption(
-            title: 'Configuración de Precuentas',
+            title: 'Config. de Precuentas',
             subtitle: 'Formato de precuentas',
-            icon: Icons.description_rounded,
+            icon: Icons.receipt_rounded,
             color: Color(0xFFEAF0FF),
           ),
           _SettingsOption(
@@ -216,6 +225,7 @@ class SettingsView extends ConsumerWidget {
             subtitle: 'Configuración de puntos de venta',
             icon: Icons.point_of_sale_rounded,
             color: Color(0xFFE6F7EE),
+            route: AppRoutes.settingsCashRegisters,
           ),
           const _SettingsOption(
             title: 'Impuestos',
@@ -229,18 +239,21 @@ class SettingsView extends ConsumerWidget {
             subtitle: 'Configuración de divisas',
             icon: Icons.monetization_on_rounded,
             color: Color(0xFFEAF0FF),
+            route: AppRoutes.settingsCurrencies,
           ),
           const _SettingsOption(
             title: 'Configuraciones Regionales',
             subtitle: 'Idioma, zona horaria y formato',
-            icon: Icons.public_rounded,
+            icon: Icons.language_rounded,
             color: Color(0xFFF1F1F1),
+            route: AppRoutes.settingsRegional,
           ),
           const _SettingsOption(
             title: 'Sucursales',
             subtitle: 'Gestión de múltiples locales',
             icon: Icons.store_mall_directory_rounded,
             color: Color(0xFFFFEDED),
+            route: AppRoutes.settingsBranches,
           ),
         ],
       ),
@@ -252,7 +265,6 @@ class SettingsView extends ConsumerWidget {
             subtitle: 'Historial de movimientos por ubicación',
             icon: Icons.list_rounded,
             color: Color(0xFFFFE6D5),
-            route: AppRoutes.inventoryKardex,
           ),
           _SettingsOption(
             title: 'Registro de Salida de Inventario',
@@ -285,6 +297,7 @@ class SettingsView extends ConsumerWidget {
             subtitle: 'Solicitudes de stock',
             icon: Icons.assignment_rounded,
             color: Color(0xFFF1F1F1),
+            route: AppRoutes.inventoryRequirements,
           ),
         ],
       ),
@@ -307,8 +320,8 @@ class SettingsView extends ConsumerWidget {
           ),
           _SettingsOption(
             title: 'Gestión de Proveedores',
-            subtitle: 'Catalogo de proveedores',
-            icon: Icons.group_rounded,
+            subtitle: 'Catálogo de proveedores',
+            icon: Icons.local_shipping_rounded,
             color: Color(0xFFE6F7EE),
             route: AppRoutes.purchasesList,
           ),
@@ -333,21 +346,21 @@ class SettingsView extends ConsumerWidget {
           _SettingsOption(
             title: 'Asignar Impresión de Productos',
             subtitle: 'Productos por impresora',
-            icon: Icons.print_rounded,
+            icon: Icons.inventory_2_rounded,
             color: const Color(0xFFEAF0FF),
             route: AppRoutes.printingProducts,
           ),
           _SettingsOption(
             title: 'Asignar Impresión de Comprobantes',
             subtitle: 'Comprobantes por impresora',
-            icon: Icons.print_rounded,
+            icon: Icons.receipt_rounded,
             color: const Color(0xFFE6F7EE),
             route: AppRoutes.printingReceipts,
           ),
           _SettingsOption(
             title: 'Asignar Impresión de Comandas',
             subtitle: 'Comandas por impresora de cocina',
-            icon: Icons.print_rounded,
+            icon: Icons.list_alt_rounded,
             color: const Color(0xFFFFF0D9),
             route: AppRoutes.printingOrders,
           ),
@@ -365,7 +378,7 @@ class SettingsView extends ConsumerWidget {
           _SettingsOption(
             title: 'Transferencias',
             subtitle: 'Pagos por transferencia bancaria',
-            icon: Icons.account_balance_rounded,
+            icon: Icons.alt_route_rounded,
             color: Color(0xFFEAF0FF),
           ),
           _SettingsOption(
@@ -417,7 +430,7 @@ class SettingsView extends ConsumerWidget {
         ],
       ),
       _SettingsSection(
-        title: 'Fidelizacion',
+        title: 'Fidelización',
         items: const [
           _SettingsOption(
             title: 'Tarjeta de Fidelidad',
@@ -428,8 +441,8 @@ class SettingsView extends ConsumerWidget {
           ),
           _SettingsOption(
             title: 'Niveles de Membresías',
-            subtitle: 'Categorias de clientes VIP',
-            icon: Icons.star_rounded,
+            subtitle: 'Categorías de clientes VIP',
+            icon: Icons.verified_user_rounded,
             color: Color(0xFFEAF0FF),
             route: AppRoutes.promosCenter,
           ),
@@ -450,7 +463,7 @@ class SettingsView extends ConsumerWidget {
           _SettingsOption(
             title: 'Gift Cards y Bonos',
             subtitle: 'Tarjetas de regalo',
-            icon: Icons.card_giftcard_rounded,
+            icon: Icons.redeem_rounded,
             color: Color(0xFFFFEDED),
             route: AppRoutes.promosCenter,
           ),
@@ -476,26 +489,27 @@ class SettingsView extends ConsumerWidget {
           _SettingsOption(
             title: 'Opciones del Sistema',
             subtitle: 'Configuración general del sistema',
-            icon: Icons.settings_rounded,
+            icon: Icons.tune_rounded,
             color: Color(0xFFFFE6D5),
           ),
           _SettingsOption(
             title: 'Opciones de APP MangoPOS',
             subtitle: 'Configuración de la aplicación móvil',
-            icon: Icons.phone_android_rounded,
+            icon: Icons.smartphone_rounded,
             color: Color(0xFFEAF0FF),
           ),
           _SettingsOption(
             title: 'Información del Restaurante',
             subtitle: 'Datos del negocio',
-            icon: Icons.store_rounded,
+            icon: Icons.business_rounded,
             color: Color(0xFFE6F7EE),
           ),
           _SettingsOption(
             title: 'Gestión de Sucursales',
             subtitle: 'Administración multisucursal',
-            icon: Icons.apartment_rounded,
+            icon: Icons.store_rounded,
             color: Color(0xFFFFF0D9),
+            route: AppRoutes.settingsBranches,
           ),
           _SettingsOption(
             title: 'Actualizaciones',
@@ -506,7 +520,7 @@ class SettingsView extends ConsumerWidget {
           _SettingsOption(
             title: 'Integración con Marketing',
             subtitle: 'Conexión con herramientas de marketing',
-            icon: Icons.campaign_rounded,
+            icon: Icons.track_changes_rounded,
             color: Color(0xFFFFEDED),
           ),
         ],
@@ -518,7 +532,7 @@ class SettingsView extends ConsumerWidget {
             title: 'Configuración de Crédito Fiscal',
             subtitle: 'NCF y comprobantes fiscales DGII',
             icon: Icons.receipt_long_rounded,
-            color: const Color(0xFFFFE6D5),
+            color: Color(0xFFFFE6D5),
             route: AppRoutes.settingsFiscalReceipts,
           ),
         ],
@@ -531,24 +545,28 @@ class SettingsView extends ConsumerWidget {
             subtitle: 'Reportes de ventas detallados',
             icon: Icons.bar_chart_rounded,
             color: Color(0xFFFFE6D5),
+            route: '${AppRoutes.reports}?tab=sales',
           ),
           _SettingsOption(
             title: 'Informe de Compras',
             subtitle: 'Reportes de compras',
             icon: Icons.receipt_rounded,
             color: Color(0xFFEAF0FF),
+            route: '${AppRoutes.reports}?tab=purchases',
           ),
           _SettingsOption(
             title: 'Informe de Finanzas',
             subtitle: 'Reportes financieros',
             icon: Icons.trending_up_rounded,
             color: Color(0xFFE6F7EE),
+            route: '${AppRoutes.reports}?tab=finances',
           ),
           _SettingsOption(
             title: 'Informe de Inventario',
             subtitle: 'Reportes de stock',
             icon: Icons.inventory_2_rounded,
             color: Color(0xFFFFF0D9),
+            route: '${AppRoutes.reports}?tab=inventory',
           ),
           _SettingsOption(
             title: 'Informe de Asistencia',
@@ -566,7 +584,7 @@ class SettingsView extends ConsumerWidget {
       ),
     ].expand((section) sync* {
       yield section;
-      yield const SizedBox(height: 20);
+      yield const SizedBox(height: 28);
     }).toList();
   }
 }
@@ -583,74 +601,104 @@ class _BusinessSummaryCard extends StatelessWidget {
         : 'Negocio no configurado';
     return Container(
       decoration: BoxDecoration(
-        color: MangoColors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: MangoColors.cardBorder),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFFFFF5EC), Colors.white],
+        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _SettingsSurface.border),
         boxShadow: const [
           BoxShadow(
-            color: Color(0x12000000),
-            blurRadius: 10,
-            offset: Offset(0, 4),
+            color: Color(0x0D1C1917),
+            blurRadius: 18,
+            offset: Offset(0, 6),
+          ),
+          BoxShadow(
+            color: Color(0x141C1917),
+            blurRadius: 4,
+            offset: Offset(0, 1),
           ),
         ],
       ),
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(24),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
               Container(
-                width: 44,
-                height: 44,
+                width: 64,
+                height: 64,
                 decoration: BoxDecoration(
-                  color: MangoColors.primaryOrange,
-                  borderRadius: BorderRadius.circular(12),
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFFFF8A3D), Color(0xFFF97316)],
+                  ),
+                  borderRadius: BorderRadius.circular(20),
                 ),
                 child: const Icon(
-                  Icons.storefront_rounded,
+                  Icons.business_rounded,
                   color: Colors.white,
+                  size: 30,
                 ),
               ),
-              const SizedBox(width: 12),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    resolvedBusinessName,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  Text(
-                    'Configuracion general del negocio',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                  ),
-                ],
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      resolvedBusinessName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF1C1917),
+                        letterSpacing: -0.3,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Configuración general del negocio',
+                      style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'RNC pendiente de sincronizar',
+                      style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
+          const SizedBox(height: 20),
+          const Divider(height: 1, color: Color(0xFFE7E0D9)),
           const SizedBox(height: 16),
-          const Divider(height: 1, color: MangoColors.cardBorder),
-          const SizedBox(height: 12),
           Row(
-            children: [
+            children: const [
               _MiniStat(
                 label: 'NCF Disponibles',
                 value: '2,450',
                 color: MangoColors.primaryOrange,
-                icon: Icons.receipt_outlined,
+                icon: Icons.receipt_long_outlined,
               ),
-              const SizedBox(width: 12),
+              SizedBox(width: 12),
               _MiniStat(
-                label: 'CF',
+                label: 'e-CF',
                 value: 'Pendiente',
-                color: const Color(0xFFF97316),
-                icon: Icons.access_time_rounded,
+                color: Color(0xFFEAB308),
+                icon: Icons.shield_outlined,
               ),
-              const SizedBox(width: 12),
+              SizedBox(width: 12),
               _MiniStat(
                 label: 'Impresoras',
                 value: '3 activas',
-                color: const Color(0xFF22C55E),
-                icon: Icons.print_rounded,
+                color: Color(0xFF22C55E),
+                icon: Icons.print_outlined,
               ),
             ],
           ),
@@ -677,26 +725,31 @@ class _MiniStat extends StatelessWidget {
   Widget build(BuildContext context) {
     return Expanded(
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         decoration: BoxDecoration(
           color: color.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: color.withValues(alpha: 0.14)),
         ),
         child: Row(
           children: [
             Icon(icon, size: 16, color: color),
-            const SizedBox(width: 6),
+            const SizedBox(width: 8),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
                     label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontSize: 11, color: Colors.grey[600]),
                   ),
-                  const SizedBox(height: 2),
+                  const SizedBox(height: 3),
                   Text(
                     value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontWeight: FontWeight.w700,
                       color: color,
@@ -724,27 +777,60 @@ class _SettingsSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          title,
-          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                title.toUpperCase(),
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF1C1917),
+                  letterSpacing: 0.25,
+                ),
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF3ECE5),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: _SettingsSurface.border),
+              ),
+              child: Text(
+                '${items.length}',
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF78716C),
+                ),
+              ),
+            ),
+          ],
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
+        Container(
+          height: 1,
+          width: double.infinity,
+          color: _SettingsSurface.divider,
+        ),
+        const SizedBox(height: 14),
         LayoutBuilder(
           builder: (context, constraints) {
             final width = constraints.maxWidth;
             int crossAxisCount = 4;
-            if (width < 1200) crossAxisCount = 3;
-            if (width < 900) crossAxisCount = 2;
-            if (width < 560) crossAxisCount = 1;
+            if (width < 1280) crossAxisCount = 3;
+            if (width < 1024) crossAxisCount = 2;
+            if (width < 768) crossAxisCount = 1;
             return GridView.builder(
               itemCount: items.length,
               physics: const NeverScrollableScrollPhysics(),
               shrinkWrap: true,
               gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: crossAxisCount,
-                mainAxisSpacing: 12,
-                crossAxisSpacing: 12,
-                childAspectRatio: 3.2,
+                mainAxisSpacing: 16,
+                crossAxisSpacing: 16,
+                mainAxisExtent: 104, // Altura fija garantizada
               ),
               itemBuilder: (context, index) {
                 return _SettingsCardItem(data: items[index]);
@@ -773,88 +859,172 @@ class _SettingsOption {
   });
 }
 
-class _SettingsCardItem extends StatelessWidget {
+class _SettingsSurface {
+  static const background = Color(0xFFF8F5F1);
+  static const foreground = Color(0xFF1C1917);
+  static const muted = Color(0xFF78716C);
+  static const border = Color(0xFFE7E0D9);
+  static const divider = Color(0xFFECE5DE);
+}
+
+class _SettingsCardItem extends StatefulWidget {
   final _SettingsOption data;
   const _SettingsCardItem({required this.data});
 
   @override
+  State<_SettingsCardItem> createState() => _SettingsCardItemState();
+}
+
+class _SettingsCardItemState extends State<_SettingsCardItem> {
+  bool _hovered = false;
+
+  Color _accentFor(Color base) {
+    if (base == const Color(0xFFFFE6D5)) return const Color(0xFFF97316);
+    if (base == const Color(0xFFEAF0FF)) return const Color(0xFF3B82F6);
+    if (base == const Color(0xFFE6F7EE)) return const Color(0xFF22C55E);
+    if (base == const Color(0xFFFFF0D9) || base == const Color(0xFFFFEFE3)) {
+      return const Color(0xFFEAB308);
+    }
+    if (base == const Color(0xFFFFE6E6) || base == const Color(0xFFFFEDED)) {
+      return const Color(0xFFEF4444);
+    }
+    return _SettingsSurface.muted;
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final data = widget.data;
+    final accent = _accentFor(data.color);
     final isLink = data.route != null;
+    final active = isLink && _hovered;
 
-    final card = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: isLink ? MangoColors.white : const Color(0xFFF5F5F5),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isLink ? MangoColors.cardBorder : Colors.transparent,
+    return MouseRegion(
+      cursor: isLink ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+        transform: Matrix4.translationValues(0, active ? -2 : 0, 0),
+        decoration: BoxDecoration(
+          color: isLink ? Colors.white : const Color(0xFFF5F5F5),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: active
+                ? accent.withValues(alpha: 0.30)
+                : (isLink ? _SettingsSurface.border : Colors.transparent),
+          ),
+          boxShadow: isLink
+              ? [
+                  BoxShadow(
+                    color: const Color(0x0D1C1917),
+                    blurRadius: active ? 18 : 12,
+                    offset: Offset(0, active ? 8 : 4),
+                  ),
+                  const BoxShadow(
+                    color: Color(0x141C1917),
+                    blurRadius: 4,
+                    offset: Offset(0, 1),
+                  ),
+                ]
+              : null,
         ),
-        boxShadow: isLink
-            ? const [
-                BoxShadow(
-                  color: Color(0x12000000),
-                  blurRadius: 8,
-                  offset: Offset(0, 3),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: isLink ? () => context.go(data.route!) : null,
+            child: Opacity(
+              opacity: isLink ? 1.0 : 0.62,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center, // Centrado vertical del contenido
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: isLink
+                            ? accent.withValues(alpha: 0.10)
+                            : Colors.grey[300],
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: isLink
+                              ? accent.withValues(alpha: active ? 0.20 : 0.12)
+                              : Colors.transparent,
+                        ),
+                      ),
+                      child: Icon(
+                        data.icon,
+                        size: 20,
+                        color: isLink ? accent : Colors.grey[600],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min, // Ocupa solo el espacio necesario
+                        children: [
+                          Text(
+                            data.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: isLink
+                                  ? _SettingsSurface.foreground
+                                  : Colors.grey[700],
+                              letterSpacing: -0.1,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            data.subtitle,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              height: 1.25,
+                              fontSize: 12,
+                              color: isLink
+                                  ? _SettingsSurface.muted
+                                  : Colors.grey[500],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    if (isLink)
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 180),
+                        width: 24,
+                        height: 24,
+                        decoration: BoxDecoration(
+                          color: active
+                              ? accent.withValues(alpha: 0.08)
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: AnimatedSlide(
+                          duration: const Duration(milliseconds: 180),
+                          offset: active ? const Offset(0.12, 0) : Offset.zero,
+                          child: Icon(
+                            Icons.chevron_right_rounded,
+                            size: 18,
+                            color: active ? accent : _SettingsSurface.muted,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
-              ]
-            : null,
-      ),
-      child: Opacity(
-        opacity: isLink ? 1.0 : 0.6,
-        child: Row(
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: isLink ? data.color : Colors.grey[300],
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(
-                data.icon,
-                size: 18,
-                color: isLink ? MangoColors.darkGray : Colors.grey[600],
               ),
             ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    data.title,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: isLink ? null : Colors.grey[700],
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    data.subtitle,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: isLink ? Colors.grey[600] : Colors.grey[500],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            if (isLink)
-              const Icon(Icons.chevron_right, size: 18, color: Colors.black54),
-          ],
+          ),
         ),
       ),
-    );
-
-    if (!isLink) return card;
-    return InkWell(
-      borderRadius: BorderRadius.circular(12),
-      onTap: () => context.go(data.route!),
-      child: card,
     );
   }
 }

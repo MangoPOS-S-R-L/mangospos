@@ -464,55 +464,82 @@ class _UserInfo extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 4),
-            InkWell(
-              onTap: session.availableRoles.length > 1
-                  ? () async {
-                      final selected = await showMenu<PosRole>(
-                        context: context,
-                        position: const RelativeRect.fromLTRB(0, 64, 24, 0),
-                        items: session.availableRoles
-                            .map(
-                              (r) => PopupMenuItem<PosRole>(
-                                value: r,
-                                child: Row(
-                                  children: [
-                                    if (r == role)
-                                      const Padding(
-                                        padding: EdgeInsets.only(right: 8),
-                                        child: Icon(Icons.check, size: 14),
-                                      ),
-                                    Text(r.label),
-                                  ],
-                                ),
-                              ),
-                            )
-                            .toList(),
-                      );
-                      if (selected != null) {
-                        ctrl.switchRole(selected);
-                      }
-                    }
-                  : null,
-              borderRadius: BorderRadius.circular(999),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 5,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF1F5F9),
-                  border: Border.all(color: const Color(0xFFE2E8F0)),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                InkWell(
+                  onTap: session.availableRoles.length > 1
+                      ? () async {
+                          final selected = await showMenu<PosRole>(
+                            context: context,
+                            position: const RelativeRect.fromLTRB(0, 64, 24, 0),
+                            items: session.availableRoles
+                                .map(
+                                  (r) => PopupMenuItem<PosRole>(
+                                    value: r,
+                                    child: Row(
+                                      children: [
+                                        if (r == role)
+                                          const Padding(
+                                            padding: EdgeInsets.only(right: 8),
+                                            child: Icon(Icons.check, size: 14),
+                                          ),
+                                        Text(r.label),
+                                      ],
+                                    ),
+                                  ),
+                                )
+                                .toList(),
+                          );
+                          if (selected != null) {
+                            ctrl.switchRole(selected);
+                          }
+                        }
+                      : null,
                   borderRadius: BorderRadius.circular(999),
-                ),
-                child: Text(
-                  roleLabel,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: Color(0xFF475569),
-                    fontWeight: FontWeight.w700,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF1F5F9),
+                      border: Border.all(color: const Color(0xFFE2E8F0)),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      roleLabel,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF475569),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                   ),
                 ),
-              ),
+                if (session.activeBusinessName?.trim().isNotEmpty == true) ...[
+                  const SizedBox(height: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF7ED),
+                      border: Border.all(color: const Color(0xFFFED7AA)),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      session.activeBusinessName!.trim(),
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: MangoColors.primaryOrange,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
             ),
           ],
         ),
@@ -536,6 +563,15 @@ class _UserInfo extends ConsumerWidget {
           offset: const Offset(0, 12),
           onSelected: (value) async {
             switch (value) {
+              case _UserMenuAction.switchBranch:
+                final selected = await _showBranchPicker(context, session, ctrl);
+                if (selected != null && context.mounted) {
+                  context.go(AppRoutes.dashboard);
+                }
+                break;
+              case _UserMenuAction.manageBranches:
+                context.go(AppRoutes.settingsBranches);
+                break;
               case _UserMenuAction.plan:
                 context.go(AppRoutes.settingsPlan);
                 break;
@@ -602,6 +638,31 @@ class _UserInfo extends ConsumerWidget {
               ),
             ),
             const PopupMenuDivider(height: 1),
+            PopupMenuItem<_UserMenuAction>(
+              value: _UserMenuAction.switchBranch,
+              padding: EdgeInsets.zero,
+              height: 56,
+              enabled: session.availableBusinesses.length > 1,
+              child: _UserMenuTile(
+                icon: Icons.swap_horiz_rounded,
+                label: session.availableBusinesses.length > 1
+                    ? 'Cambiar sucursal'
+                    : 'Solo tienes una sucursal',
+                accent: const Color(0xFFEAFBF3),
+                iconColor: const Color(0xFF059669),
+              ),
+            ),
+            const PopupMenuItem<_UserMenuAction>(
+              value: _UserMenuAction.manageBranches,
+              padding: EdgeInsets.zero,
+              height: 56,
+              child: _UserMenuTile(
+                icon: Icons.apartment_rounded,
+                label: 'Gestionar sucursales',
+                accent: Color(0xFFFFF0D9),
+                iconColor: MangoColors.primaryOrange,
+              ),
+            ),
             const PopupMenuItem<_UserMenuAction>(
               value: _UserMenuAction.plan,
               padding: EdgeInsets.zero,
@@ -679,7 +740,125 @@ class _UserInfo extends ConsumerWidget {
   }
 }
 
-enum _UserMenuAction { plan, settings, logout }
+Future<SessionBusiness?> _showBranchPicker(
+  BuildContext context,
+  SessionState session,
+  SessionController ctrl,
+) async {
+  return showModalBottomSheet<SessionBusiness>(
+    context: context,
+    backgroundColor: Colors.white,
+    showDragHandle: true,
+    builder: (context) {
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFFF97316), Color(0xFFFBAA16)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(22),
+                ),
+                child: const Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Cambiar sucursal',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                      ),
+                    ),
+                    SizedBox(height: 6),
+                    Text(
+                      'Cada sucursal trabaja con sus propios datos. Cambiar aquí cambia el negocio activo del panel.',
+                      style: TextStyle(color: Colors.white, fontSize: 13),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              for (final branch in session.availableBusinesses)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(
+                      color: branch.id == session.activeBusinessId
+                          ? const Color(0xFFFED7AA)
+                          : const Color(0xFFE5E7EB),
+                    ),
+                  ),
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 4,
+                    ),
+                    leading: CircleAvatar(
+                      backgroundColor: branch.id == session.activeBusinessId
+                          ? const Color(0xFFFFE8D6)
+                          : const Color(0xFFF3F4F6),
+                      child: Icon(
+                        branch.id == session.activeBusinessId
+                            ? Icons.check_rounded
+                            : Icons.storefront_rounded,
+                        color: branch.id == session.activeBusinessId
+                            ? MangoColors.primaryOrange
+                            : const Color(0xFF6B7280),
+                      ),
+                    ),
+                    title: Text(
+                      branch.name,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    subtitle: Text(branch.companyName ?? branch.roleLabel),
+                    trailing: branch.id == session.activeBusinessId
+                        ? Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFECFDF5),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: const Text(
+                              'Actual',
+                              style: TextStyle(
+                                color: Color(0xFF059669),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          )
+                        : const Icon(Icons.chevron_right_rounded),
+                    onTap: () async {
+                      await ctrl.switchBusiness(branch.id);
+                      if (!context.mounted) return;
+                      Navigator.of(context).pop(branch);
+                    },
+                  ),
+                ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}
+
+enum _UserMenuAction { switchBranch, manageBranches, plan, settings, logout }
 
 class _UserMenuTile extends StatelessWidget {
   const _UserMenuTile({

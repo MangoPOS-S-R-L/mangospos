@@ -4,12 +4,21 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 class BusinessResolver {
   static final _client = Supabase.instance.client;
 
-  static String? _cached; // cache por sesión
+  static String? _cached;
+  static String? _activeBusinessId;
 
-  /// Si [businessId] == 'auto', resuelve el UUID activo del usuario.
-  /// Si viene un UUID real, lo devuelve tal cual.
+  static void setActiveBusinessId(String? businessId) {
+    _activeBusinessId = businessId;
+    _cached = businessId;
+  }
+
   static Future<String> ensure(String businessId) async {
     if (businessId != 'auto') return businessId;
+
+    if (_activeBusinessId != null && _activeBusinessId!.isNotEmpty) {
+      _cached = _activeBusinessId;
+      return _activeBusinessId!;
+    }
 
     final user = _client.auth.currentUser;
 
@@ -30,7 +39,6 @@ class BusinessResolver {
     final uid = user?.id;
     if (uid == null) throw Exception('Sesión no iniciada');
 
-    // 1) user_businesses
     final ub = await _client
         .from('user_businesses')
         .select('business_id')
@@ -43,7 +51,6 @@ class BusinessResolver {
       return _cached!;
     }
 
-    // 2) memberships
     final mem = await _client
         .from('memberships')
         .select('business_id')
@@ -56,7 +63,6 @@ class BusinessResolver {
       return _cached!;
     }
 
-    // 3) owner directo (fallback)
     final own = await _client
         .from('businesses')
         .select('id')
@@ -72,6 +78,8 @@ class BusinessResolver {
     throw Exception('No tienes un negocio asignado');
   }
 
-  /// Por si quieres recalentar/forzar refresco al hacer login/cambio de negocio.
-  static void resetCache() => _cached = null;
+  static void resetCache() {
+    _cached = null;
+    _activeBusinessId = null;
+  }
 }

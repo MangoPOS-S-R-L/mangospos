@@ -7,6 +7,7 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/data/models/payment_models.dart';
 import 'package:mangopos/data/models/sales_models.dart';
+import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
@@ -14,6 +15,16 @@ import 'package:mangopos/services/printing/print_ticket_service.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+String _formatQty(double qty) {
+  if ((qty - qty.roundToDouble()).abs() < 0.001) {
+    return qty.toStringAsFixed(0);
+  }
+  if ((qty * 10 - (qty * 10).roundToDouble()).abs() < 0.001) {
+    return qty.toStringAsFixed(1);
+  }
+  return qty.toStringAsFixed(2);
+}
 
 class SalesHistoryView extends ConsumerStatefulWidget {
   const SalesHistoryView({super.key});
@@ -98,17 +109,27 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
               return const _CashierInfoState(
                 icon: Icons.receipt_long_outlined,
                 title: 'No hay sesiones registradas',
-                subtitle: 'Abre una caja y procesa ventas para ver movimientos.',
+                subtitle:
+                    'Abre una caja y procesa ventas para ver movimientos.',
               );
             }
 
-            final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
-            final totalSales = (data.summary['total_sales'] as num?)?.toDouble() ?? 0.0;
-            final totalDeposits = (data.summary['total_deposits'] as num?)?.toDouble() ?? 0.0;
-            final totalWithdrawals = (data.summary['total_withdrawals'] as num?)?.toDouble() ?? 0.0;
-            final totalExpenses = (data.summary['total_expenses'] as num?)?.toDouble() ?? 0.0;
-            final startAmount = (data.summary['start_amount'] as num?)?.toDouble() ?? 0.0;
-            final expectedAmount = (data.summary['expected_amount'] as num?)?.toDouble() ??
+            final currency = NumberFormat.currency(
+              symbol: 'RD\$',
+              decimalDigits: 2,
+            );
+            final totalSales =
+                (data.summary['total_sales'] as num?)?.toDouble() ?? 0.0;
+            final totalDeposits =
+                (data.summary['total_deposits'] as num?)?.toDouble() ?? 0.0;
+            final totalWithdrawals =
+                (data.summary['total_withdrawals'] as num?)?.toDouble() ?? 0.0;
+            final totalExpenses =
+                (data.summary['total_expenses'] as num?)?.toDouble() ?? 0.0;
+            final startAmount =
+                (data.summary['start_amount'] as num?)?.toDouble() ?? 0.0;
+            final expectedAmount =
+                (data.summary['expected_amount'] as num?)?.toDouble() ??
                 (totalSales + totalDeposits - totalWithdrawals - totalExpenses);
 
             return Padding(
@@ -142,24 +163,32 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
                       Expanded(
                         child: TextField(
                           decoration: InputDecoration(
-                            hintText: 'Buscar por comprobante, cliente o número de comprobante',
+                            hintText:
+                                'Buscar por comprobante, cliente o número de comprobante',
                             prefixIcon: const Icon(Icons.search),
                             filled: true,
                             fillColor: MangoColors.white,
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(12),
-                              borderSide: const BorderSide(color: MangoColors.cardBorder),
+                              borderSide: const BorderSide(
+                                color: MangoColors.cardBorder,
+                              ),
                             ),
                             enabledBorder: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(12),
-                              borderSide: const BorderSide(color: MangoColors.cardBorder),
+                              borderSide: const BorderSide(
+                                color: MangoColors.cardBorder,
+                              ),
                             ),
                           ),
                         ),
                       ),
                       const SizedBox(width: 16),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
+                        ),
                         decoration: BoxDecoration(
                           color: MangoColors.white,
                           borderRadius: BorderRadius.circular(12),
@@ -171,7 +200,9 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
                             const SizedBox(width: 12),
                             Text(
                               '${DateFormat('dd MMM. yyyy').format(DateTime.now())} → ${DateFormat('dd MMM. yyyy').format(DateTime.now())}',
-                              style: const TextStyle(fontWeight: FontWeight.w600),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ],
                         ),
@@ -192,15 +223,19 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
                           const Divider(height: 1),
                           Expanded(
                             child: data.payments.isEmpty
-                                ? const Center(child: Text('No hay ventas registradas.'))
+                                ? const Center(
+                                    child: Text('No hay ventas registradas.'),
+                                  )
                                 : ListView.separated(
                                     itemCount: data.payments.length,
-                                    separatorBuilder: (_, __) => const Divider(height: 1),
-                                    itemBuilder: (context, index) => _PaymentTableRow(
-                                      payment: data.payments[index],
-                                      currency: currency,
-                                      onRefresh: _reload,
-                                    ),
+                                    separatorBuilder: (_, __) =>
+                                        const Divider(height: 1),
+                                    itemBuilder: (context, index) =>
+                                        _PaymentTableRow(
+                                          payment: data.payments[index],
+                                          currency: currency,
+                                          onRefresh: _reload,
+                                        ),
                                   ),
                           ),
                           _buildTableFooter(),
@@ -229,7 +264,10 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
           Expanded(flex: 2, child: _HeaderText('Cliente')),
           Expanded(flex: 2, child: _HeaderText('N° de documento')),
           Expanded(flex: 2, child: _HeaderText('Total')),
-          SizedBox(width: 120, child: _HeaderText('Opciones', textAlign: TextAlign.right)),
+          SizedBox(
+            width: 120,
+            child: _HeaderText('Opciones', textAlign: TextAlign.right),
+          ),
         ],
       ),
     );
@@ -251,7 +289,13 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
               color: MangoColors.primaryOrange,
               borderRadius: BorderRadius.circular(4),
             ),
-            child: const Text('1', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            child: const Text(
+              '1',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
           ),
           const Text('  2  3  4  5  6  7  8  ›  »'),
         ],
@@ -293,17 +337,25 @@ class _PaymentTableRow extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final amount = (payment['amount'] as num?)?.toDouble() ?? 0;
-    final createdAt = DateTime.tryParse(payment['created_at']?.toString() ?? '');
-    final dateStr = createdAt == null ? '-' : DateFormat('dd/MM/yyyy').format(createdAt.toLocal());
-    final timeStr = createdAt == null ? '-' : DateFormat('hh:mm a').format(createdAt.toLocal());
+    final createdAt = DateTime.tryParse(
+      payment['created_at']?.toString() ?? '',
+    );
+    final dateStr = createdAt == null
+        ? '-'
+        : DateFormat('dd/MM/yyyy').format(createdAt.toLocal());
+    final timeStr = createdAt == null
+        ? '-'
+        : DateFormat('hh:mm a').format(createdAt.toLocal());
 
-    final customerName = payment['customer_name']?.toString() ?? 'Público General';
+    final customerName =
+        payment['customer_name']?.toString() ?? 'Público General';
     final ncf = payment['ncf_number']?.toString() ?? 'Ticket';
     final ncfType = payment['ncf_type_name']?.toString() ?? 'Boleta';
     final taxId = payment['customer_tax_id']?.toString() ?? '';
     final waiterName = payment['waiter_name']?.toString() ?? 'Servicio';
     final orderId = payment['order_id']?.toString() ?? '';
-    final isVoided = payment['status'] == 'void' || payment['status'] == 'cancelled';
+    final isVoided =
+        payment['status'] == 'void' || payment['status'] == 'cancelled';
 
     return Container(
       color: isVoided ? Colors.red.withValues(alpha: 0.05) : null,
@@ -322,7 +374,13 @@ class _PaymentTableRow extends ConsumerWidget {
                     decoration: isVoided ? TextDecoration.lineThrough : null,
                   ),
                 ),
-                Text(timeStr, style: const TextStyle(fontSize: 12, color: MangoColors.muted)),
+                Text(
+                  timeStr,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: MangoColors.muted,
+                  ),
+                ),
               ],
             ),
           ),
@@ -339,7 +397,13 @@ class _PaymentTableRow extends ConsumerWidget {
                     color: isVoided ? Colors.red : null,
                   ),
                 ),
-                Text(ncf, style: const TextStyle(fontSize: 12, color: MangoColors.muted)),
+                Text(
+                  ncf,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: MangoColors.muted,
+                  ),
+                ),
               ],
             ),
           ),
@@ -347,14 +411,18 @@ class _PaymentTableRow extends ConsumerWidget {
             flex: 2,
             child: Text(
               waiterName,
-              style: TextStyle(decoration: isVoided ? TextDecoration.lineThrough : null),
+              style: TextStyle(
+                decoration: isVoided ? TextDecoration.lineThrough : null,
+              ),
             ),
           ),
           Expanded(
             flex: 2,
             child: Text(
               customerName,
-              style: TextStyle(decoration: isVoided ? TextDecoration.lineThrough : null),
+              style: TextStyle(
+                decoration: isVoided ? TextDecoration.lineThrough : null,
+              ),
             ),
           ),
           Expanded(flex: 2, child: Text(taxId.isEmpty ? '-' : taxId)),
@@ -388,7 +456,11 @@ class _PaymentTableRow extends ConsumerWidget {
                     color: Colors.blue,
                   ),
                   IconButton(
-                    icon: const Icon(Icons.cancel_outlined, size: 20, color: Colors.redAccent),
+                    icon: const Icon(
+                      Icons.cancel_outlined,
+                      size: 20,
+                      color: Colors.redAccent,
+                    ),
                     onPressed: () => _voidSale(context, ref, orderId),
                     tooltip: 'Anular',
                   ),
@@ -412,16 +484,31 @@ class _PaymentTableRow extends ConsumerWidget {
     );
   }
 
-  void _reprintInvoice(BuildContext context, WidgetRef ref, String orderId) async {
+  void _reprintInvoice(
+    BuildContext context,
+    WidgetRef ref,
+    String orderId,
+  ) async {
     if (orderId.isEmpty) return;
 
     try {
       final scaffold = ScaffoldMessenger.of(context);
-      scaffold.showSnackBar(const SnackBar(content: Text('Generando impresión...')));
+      scaffold.showSnackBar(
+        const SnackBar(content: Text('Generando impresión...')),
+      );
 
       final salesRepo = ref.read(salesRepositoryProvider);
       final bundle = await salesRepo.getOrderBundle(orderId);
       if (bundle.order == null) throw Exception('No se encontró la orden.');
+
+      // Para historial/reimpresión necesitamos TODOS los productos de la venta,
+      // incluidos los ya pagados. El bundle del order detail excluye items paid
+      // para no reinyectar subcuentas cerradas en la UI de la mesa.
+      final allItems = await salesRepo.getOrderItems(
+        orderId,
+        includeModifiers: true,
+        onlyOpen: false,
+      );
 
       // Fetch payments for this order
       final paymentsRaw = await Supabase.instance.client
@@ -433,11 +520,11 @@ class _PaymentTableRow extends ConsumerWidget {
 
       final payments = List<Map<String, dynamic>>.from(paymentsRaw).map((p) {
         final map = p;
-        final method = map['payment_methods'];
+        final method = map['payment_methods'] as Map<String, dynamic>?;
         return Payment.fromMap({
           ...map,
-          'payment_method_name': (method as Map?)?['name'],
-          'payment_method_code': (method as Map?)?['code'],
+          'payment_method_name': method?['name'],
+          'payment_method_code': method?['code'],
         });
       }).toList();
 
@@ -467,9 +554,13 @@ class _PaymentTableRow extends ConsumerWidget {
         throw Exception('No hay impresora configurada para recibos.');
       }
 
+      final receiptItemDisplayMode = await ref
+          .read(posSettingsRepositoryProvider)
+          .getReceiptItemDisplayMode(businessId);
+
       final ticket = PrintTicketService.generateInvoice(
         order: bundle.order!,
-        items: bundle.items,
+        items: allItems,
         payments: payments,
         tableName: payment['table_code']?.toString() ?? 'Mesa',
         waiterName: waiterName,
@@ -483,12 +574,15 @@ class _PaymentTableRow extends ConsumerWidget {
         customerName: payment['customer_name']?.toString(),
         customerTaxId: payment['customer_tax_id']?.toString(),
         title: '*** REIMPRESION ***',
+        receiptItemDisplayMode: receiptItemDisplayMode,
       );
 
       if (kIsWeb) {
         final up = await printRepo.isAgentUp();
         if (!up) {
-           throw Exception('Para imprimir desde la Web necesitas el Agente LAN activo en tu PC.');
+          throw Exception(
+            'Para imprimir desde la Web necesitas el Agente LAN activo en tu PC.',
+          );
         }
         await printRepo.printRawViaAgent(
           ip: assignedPrinter.ipAddress!,
@@ -504,7 +598,9 @@ class _PaymentTableRow extends ConsumerWidget {
       }
 
       if (context.mounted) {
-        scaffold.showSnackBar(const SnackBar(content: Text('Impresión enviada correctamente.')));
+        scaffold.showSnackBar(
+          const SnackBar(content: Text('Impresión enviada correctamente.')),
+        );
       }
     } catch (e) {
       if (context.mounted) {
@@ -513,7 +609,12 @@ class _PaymentTableRow extends ConsumerWidget {
           builder: (context) => AlertDialog(
             title: const Text('Error de Impresión'),
             content: Text(e.toString()),
-            actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK'))],
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('OK'),
+              ),
+            ],
           ),
         );
       }
@@ -526,7 +627,9 @@ class _PaymentTableRow extends ConsumerWidget {
     final session = ref.read(sessionProvider);
     final currentRole = session.activeRole;
     // Si el usuario ya es Administrador o Supervisor, no necesita PIN otra vez.
-    final bool isManager = currentRole == PosRole.administrador || currentRole == PosRole.supervisor;
+    final bool isManager =
+        currentRole == PosRole.administrador ||
+        currentRole == PosRole.supervisor;
 
     // Confirmación inicial
     final confirm = await showDialog<bool>(
@@ -571,14 +674,15 @@ class _PaymentTableRow extends ConsumerWidget {
 
     // 2. Pedir motivo de anulación (Requerido por el usuario)
     final reason = await _showAnulacionReasonDialog(context);
-    if (reason == null) return; // El usuario canceló o cerró el diálogo de nota.
+    if (reason == null)
+      return; // El usuario canceló o cerró el diálogo de nota.
 
     // 3. Ejecutar anulación
     try {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Anulando venta...')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Anulando venta...')));
 
       final salesRepo = ref.read(salesRepositoryProvider);
       await salesRepo.annulOrder(
@@ -673,10 +777,16 @@ class _PaymentTableRow extends ConsumerWidget {
                 controller: controller,
                 autofocus: true,
                 maxLines: 3,
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
                 decoration: InputDecoration(
                   hintText: 'Escriba el motivo aquí...',
-                  hintStyle: const TextStyle(color: MangoColors.muted, fontWeight: FontWeight.w400),
+                  hintStyle: const TextStyle(
+                    color: MangoColors.muted,
+                    fontWeight: FontWeight.w400,
+                  ),
                   filled: true,
                   fillColor: const Color(0xFFF7F8FA),
                   contentPadding: const EdgeInsets.all(20),
@@ -686,7 +796,10 @@ class _PaymentTableRow extends ConsumerWidget {
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(20),
-                    borderSide: const BorderSide(color: MangoColors.primaryOrange, width: 2),
+                    borderSide: const BorderSide(
+                      color: MangoColors.primaryOrange,
+                      width: 2,
+                    ),
                   ),
                 ),
               ),
@@ -698,7 +811,9 @@ class _PaymentTableRow extends ConsumerWidget {
                       onPressed: () => Navigator.pop(context),
                       style: TextButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 18),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
                       ),
                       child: const Text(
                         'Cancelar',
@@ -717,24 +832,32 @@ class _PaymentTableRow extends ConsumerWidget {
                         borderRadius: BorderRadius.circular(16),
                         boxShadow: [
                           BoxShadow(
-                            color: MangoColors.primaryOrange.withValues(alpha: 0.3),
+                            color: MangoColors.primaryOrange.withValues(
+                              alpha: 0.3,
+                            ),
                             blurRadius: 12,
                             offset: const Offset(0, 4),
                           ),
                         ],
                       ),
                       child: ElevatedButton(
-                        onPressed: () => Navigator.pop(context, controller.text.trim()),
+                        onPressed: () =>
+                            Navigator.pop(context, controller.text.trim()),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: MangoColors.primaryOrange,
                           foregroundColor: Colors.white,
                           elevation: 0,
                           padding: const EdgeInsets.symmetric(vertical: 18),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
                         ),
                         child: const Text(
                           'Anular Venta',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
                       ),
                     ),
@@ -748,14 +871,20 @@ class _PaymentTableRow extends ConsumerWidget {
     );
   }
 
-  void _showDetailDialog(BuildContext context, WidgetRef ref, String orderId) async {
+  void _showDetailDialog(
+    BuildContext context,
+    WidgetRef ref,
+    String orderId,
+  ) async {
     if (orderId.isEmpty) return;
 
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('Productos Orden #${orderId.substring(0, 8).toUpperCase()}'),
+        title: Text(
+          'Productos Orden #${orderId.substring(0, 8).toUpperCase()}',
+        ),
         content: FutureBuilder<List<OrderItem>>(
           future: ref.read(salesRepositoryProvider).getOrderItems(orderId),
           builder: (context, snapshot) {
@@ -784,8 +913,10 @@ class _PaymentTableRow extends ConsumerWidget {
                         final item = items[i];
                         return ListTile(
                           title: Text(item.productName),
-                          trailing: Text('x${item.quantity.toInt()}'),
-                          subtitle: Text('Total: ${currency.format(item.total)}'),
+                          trailing: Text('x${_formatQty(item.quantity)}'),
+                          subtitle: Text(
+                            'Total: ${currency.format(item.total)}',
+                          ),
                         );
                       },
                     ),
@@ -793,7 +924,10 @@ class _PaymentTableRow extends ConsumerWidget {
           },
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cerrar')),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cerrar'),
+          ),
         ],
       ),
     );

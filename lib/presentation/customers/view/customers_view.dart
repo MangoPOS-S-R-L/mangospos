@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/presentation/customers/viewmodel/customers_viewmodel.dart';
+import 'package:mangopos/services/session/session_controller.dart';
 
 class CustomersView extends ConsumerStatefulWidget {
   const CustomersView({super.key});
@@ -11,6 +12,7 @@ class CustomersView extends ConsumerStatefulWidget {
 
 class _CustomersViewState extends ConsumerState<CustomersView> {
   final TextEditingController _searchController = TextEditingController();
+  String? _lastBusinessId;
 
   @override
   void initState() {
@@ -32,9 +34,21 @@ class _CustomersViewState extends ConsumerState<CustomersView> {
 
   @override
   Widget build(BuildContext context) {
+    final session = ref.watch(sessionProvider);
     final vm = ref.watch(customersViewModelProvider);
     final customers = vm.customers;
     final isLoading = vm.isLoading;
+
+    if (session.activeBusinessId != null &&
+        session.activeBusinessId != _lastBusinessId) {
+      _lastBusinessId = session.activeBusinessId;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _searchController.clear();
+          ref.read(customersViewModelProvider).init();
+        }
+      });
+    }
 
     return Scaffold(
       backgroundColor: Colors.white,

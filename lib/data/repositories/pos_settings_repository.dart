@@ -8,6 +8,9 @@ final posSettingsRepositoryProvider = Provider<PosSettingsRepository>(
 class PosSettingsRepository {
   PosSettingsRepository(this._client);
 
+  static const String receiptItemsGrouped = 'grouped';
+  static const String receiptItemsSeparate = 'separate';
+
   final SupabaseClient _client;
 
   Future<bool> getPromptPeopleCountOnTableOpen(String businessId) async {
@@ -31,6 +34,38 @@ class PosSettingsRepository {
     await _client.from('business_settings').upsert({
       'business_id': businessId,
       'prompt_people_count_on_table_open': enabled,
+    }, onConflict: 'business_id');
+  }
+
+  Future<String> getReceiptItemDisplayMode(String businessId) async {
+    try {
+      final row = await _client
+          .from('business_settings')
+          .select('receipt_item_display_mode')
+          .eq('business_id', businessId)
+          .maybeSingle();
+
+      final mode = row?['receipt_item_display_mode']?.toString();
+      if (mode == receiptItemsSeparate) {
+        return receiptItemsSeparate;
+      }
+      return receiptItemsGrouped;
+    } catch (_) {
+      return receiptItemsGrouped;
+    }
+  }
+
+  Future<void> setReceiptItemDisplayMode({
+    required String businessId,
+    required String mode,
+  }) async {
+    final normalized = mode == receiptItemsSeparate
+        ? receiptItemsSeparate
+        : receiptItemsGrouped;
+
+    await _client.from('business_settings').upsert({
+      'business_id': businessId,
+      'receipt_item_display_mode': normalized,
     }, onConflict: 'business_id');
   }
 }

@@ -246,7 +246,7 @@ class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
                     ),
                     const SizedBox(height: 8),
                     const Text(
-                      'Esto puede tomar hasta 45 segundos...',
+                      'Esto puede tomar hasta 10 segundos...',
                       style: TextStyle(fontSize: 14, color: MangoColors.muted),
                       textAlign: TextAlign.center,
                     ),
@@ -740,7 +740,15 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
                 return _PrinterFoundCard(
                   printer: printer,
                   selected: _selectedPrinter == printer,
-                  onTap: () => setState(() => _selectedPrinter = printer),
+                  onTap: () {
+                    setState(() {
+                      _selectedPrinter = printer;
+                      // Pre-completar nombre si está vacío
+                      if (_nameCtrl.text.trim().isEmpty) {
+                        _nameCtrl.text = printer['name'] ?? '';
+                      }
+                    });
+                  },
                 );
               },
             ),

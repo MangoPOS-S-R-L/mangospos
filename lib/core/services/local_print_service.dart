@@ -240,7 +240,7 @@ class LocalPrintService {
 
       final response = await http
           .get(Uri.parse('$baseUrl/api/printers/discover'))
-          .timeout(const Duration(seconds: 15));
+          .timeout(const Duration(seconds: 12));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
