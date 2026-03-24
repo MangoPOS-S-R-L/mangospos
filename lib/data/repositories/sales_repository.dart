@@ -659,7 +659,10 @@ class SalesRepository {
 
   /// Consolida líneas duplicadas dentro de una subcuenta.
   /// Útil después de unir cuentas para no terminar con items duplicados.
-  Future<void> consolidateCheckItems({required String checkId}) async {
+  Future<void> consolidateCheckItems({
+    required String checkId,
+    bool normalizeQtyToInteger = false,
+  }) async {
     try {
       final rawItems = await _client
           .from('order_items')
@@ -742,11 +745,15 @@ class SalesRepository {
           }
         }
 
+        final normalizedQty = normalizeQtyToInteger
+            ? sumQty.roundToDouble()
+            : sumQty;
+
         await _client
             .from('order_items')
             .update({
-              'qty': sumQty,
-              'quantity': sumQty.round(),
+              'qty': normalizedQty,
+              'quantity': normalizedQty.round(),
               'discounts': sumDiscounts,
             })
             .eq('id', keeperId);

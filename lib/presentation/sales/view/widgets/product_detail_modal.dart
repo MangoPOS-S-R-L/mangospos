@@ -60,9 +60,8 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
       text: _initialManualDiscount().toStringAsFixed(2),
     );
 
-    _quantity = _scopedItems.fold<double>(
-      0,
-      (sum, item) => sum + item.quantity,
+    _quantity = _normalizeQty(
+      _scopedItems.fold<double>(0, (sum, item) => sum + item.quantity),
     );
     _isTakeout = _scopedItems.every((item) => item.isTakeout);
     final fullAmount = _fullAmountForQuantity(widget.item.quantity);
@@ -81,16 +80,24 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     super.dispose();
   }
 
+  double _normalizeQty(double value) {
+    final rounded = value.roundToDouble();
+    if ((value - rounded).abs() < 0.001) {
+      return rounded;
+    }
+    return double.parse(value.toStringAsFixed(2));
+  }
+
   void _incrementQty() {
     setState(() {
-      _quantity++;
+      _quantity = _normalizeQty(_quantity + 1);
     });
   }
 
   void _decrementQty() {
     if (_quantity > 1) {
       setState(() {
-        _quantity--;
+        _quantity = _normalizeQty(_quantity - 1);
       });
     }
   }
