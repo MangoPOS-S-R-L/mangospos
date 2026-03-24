@@ -9,6 +9,7 @@ import '../../core/offline/offline_pos_service.dart';
 import '../../core/storage/storage_service.dart';
 import '../../services/printing/print_ticket_service.dart';
 import '../../presentation/sales/state/sales_state.dart';
+import 'pos_settings_repository.dart';
 import 'printing_repository.dart';
 import 'sales_repository.dart';
 
@@ -43,6 +44,8 @@ class PrintingService {
   Future<Map<String, String>> sendOrderToKitchen({
     required String orderId,
     required String businessId,
+    String? fallbackTableName,
+    String? fallbackWaiterName,
   }) async {
     try {
       // 1. Obtener información de la orden
@@ -70,8 +73,15 @@ class PrintingService {
       }
 
       // 3. Obtener información adicional para el ticket
-      final orderData = await _getOrderDisplayData(orderId);
+      final orderData = await _getOrderDisplayData(
+        orderId,
+        fallbackTableName: fallbackTableName,
+        fallbackWaiterName: fallbackWaiterName,
+      );
       final businessName = await _getBusinessName(businessId);
+      final receiptItemDisplayMode = await PosSettingsRepository(
+        _client,
+      ).getReceiptItemDisplayMode(businessId);
 
       // 4. Agrupar items por área de impresión
       final itemsByArea = await _groupItemsByPrintArea(draftItems);
@@ -124,6 +134,7 @@ class PrintingService {
           tableName: orderData['tableName']?.toString() ?? 'N/A',
           waiterName: orderData['waiterName']?.toString(),
           businessName: businessName,
+          receiptItemDisplayMode: receiptItemDisplayMode,
         );
 
         await _dispatchKitchenTicket(
@@ -257,10 +268,10 @@ class PrintingService {
       // Primero intentar desde el item directamente
       String areaCode = item.printAreaCode ?? 'kitchen_hot'; // Default
 
-      // Si el item no tiene área asignada, obtener del menu_item
-      if (item.printAreaCode == null && item.productId != null) {
-        areaCode =
-            await _getMenuItemPrintArea(item.productId!) ?? 'kitchen_hot';
+      // Si el item no trae área asignada, usamos la cocina caliente por defecto.
+      // OJO: el schema actual no tiene menu_items.print_area_code.
+      if (item.printAreaCode == null) {
+        areaCode = 'kitchen_hot';
       }
 
       // Agrupar
@@ -273,55 +284,76 @@ class PrintingService {
     return itemsByArea;
   }
 
-  /// Obtener área de impresión de un menu item
-  Future<String?> _getMenuItemPrintArea(String productId) async {
-    try {
-      final data = await _client
-          .from('menu_items')
-          .select('print_area_code')
-          .eq('id', productId)
-          .maybeSingle();
-
-      return data?['print_area_code'] as String?;
-    } catch (e) {
-      debugPrint('Error al obtener área de impresión: $e');
-      return null;
-    }
-  }
-
   /// Obtener datos de la orden para mostrar en el ticket
-  Future<Map<String, dynamic>> _getOrderDisplayData(String orderId) async {
+  Future<Map<String, dynamic>> _getOrderDisplayData(
+    String orderId, {
+    String? fallbackTableName,
+    String? fallbackWaiterName,
+  }) async {
     try {
       final data = await _client
           .from('orders')
           .select('''
             *,
-            table_sessions!inner(
-              dining_tables(label),
-              users(full_name)
+            table_sessions(
+              people_count,
+              dining_tables(code, label),
+              waiter:profiles!waiter_user_id(full_name),
+              opener:profiles!opened_by(full_name)
             )
           ''')
           .eq('id', orderId)
-          .single();
+          .maybeSingle();
+
+      if (data == null) {
+        throw Exception('Orden no encontrada');
+      }
 
       final tableSession = data['table_sessions'] as Map<String, dynamic>?;
       final diningTable =
           tableSession?['dining_tables'] as Map<String, dynamic>?;
-      final user = tableSession?['users'] as Map<String, dynamic>?;
+
+      // Resolver nombre de la mesa
+      String? resolvedTableName;
+      final tableCode = diningTable?['code']?.toString().trim();
+      final tableLabel = diningTable?['label']?.toString().trim();
+      if (tableCode != null && tableCode.isNotEmpty) {
+        resolvedTableName = tableCode;
+      } else if (tableLabel != null && tableLabel.isNotEmpty) {
+        resolvedTableName = tableLabel;
+      }
+
+      // Resolver mesero (asignado -> abridor)
+      String? resolvedWaiterName;
+      final waiterUser = tableSession?['waiter'] as Map<String, dynamic>?;
+      final openerUser = tableSession?['opener'] as Map<String, dynamic>?;
+
+      final waiterFullName = waiterUser?['full_name']?.toString().trim();
+      final openerFullName = openerUser?['full_name']?.toString().trim();
+
+      if (waiterFullName != null && waiterFullName.isNotEmpty) {
+        resolvedWaiterName = waiterFullName;
+      } else if (openerFullName != null && openerFullName.isNotEmpty) {
+        resolvedWaiterName = openerFullName;
+      }
 
       return {
-        'orderNumber': data['order_number'] ?? '',
-        'tableName': diningTable?['label'] ?? 'N/A',
-        'waiterName': user?['full_name'] ?? 'N/A',
+        'orderNumber':
+            data['order_number']?.toString() ??
+            data['id'].toString().substring(0, 8).toUpperCase(),
+        'tableName': resolvedTableName ?? fallbackTableName,
+        'waiterName': resolvedWaiterName ?? fallbackWaiterName,
         'peopleCount': tableSession?['people_count'] ?? 1,
-        'createdAt': data['created_at'],
+        'createdAt': data['created_at'] != null
+            ? DateTime.tryParse(data['created_at'].toString())
+            : DateTime.now(),
       };
     } catch (e) {
       debugPrint('Error al obtener datos de orden: $e');
       return {
         'orderNumber': '',
-        'tableName': 'N/A',
-        'waiterName': 'N/A',
+        'tableName': null,
+        'waiterName': null,
         'peopleCount': 1,
         'createdAt': DateTime.now().toIso8601String(),
       };
@@ -336,13 +368,13 @@ class PrintingService {
           .eq('id', businessId)
           .maybeSingle();
 
-      final branchName = data?['branch_name']?.toString().trim();
-      if (branchName != null && branchName.isNotEmpty) {
-        return branchName;
-      }
       final businessName = data?['business_name']?.toString().trim();
       if (businessName != null && businessName.isNotEmpty) {
         return businessName;
+      }
+      final branchName = data?['branch_name']?.toString().trim();
+      if (branchName != null && branchName.isNotEmpty) {
+        return branchName;
       }
       return null;
     } catch (_) {
@@ -350,7 +382,10 @@ class PrintingService {
     }
   }
 
-  Future<PrintArea> _ensureAreaForCode(String businessId, String areaCode) async {
+  Future<PrintArea> _ensureAreaForCode(
+    String businessId,
+    String areaCode,
+  ) async {
     // Primero intentar GET (todos los miembros del negocio tienen SELECT).
     final existing = await _printingRepo.getPrintAreaByCode(
       businessId: businessId,
@@ -407,6 +442,11 @@ class PrintingService {
     }
 
     final itemsByArea = await _groupItemsByPrintArea(draftItems);
+    final resolvedBusinessName =
+        await _getBusinessName(businessId) ?? businessName;
+    final receiptItemDisplayMode = await PosSettingsRepository(
+      _client,
+    ).getReceiptItemDisplayMode(businessId);
     final createdJobs = <String, String>{};
 
     for (final entry in itemsByArea.entries) {
@@ -435,7 +475,8 @@ class PrintingService {
         items: entry.value,
         tableName: tableName,
         waiterName: waiterName,
-        businessName: businessName,
+        businessName: resolvedBusinessName,
+        receiptItemDisplayMode: receiptItemDisplayMode,
       );
 
       final dispatchId = _createLocalDispatchId(areaCode);
@@ -480,6 +521,9 @@ class PrintingService {
       if (order == null) throw Exception('Orden no encontrada');
 
       final businessName = await _getBusinessName(businessId);
+      final receiptItemDisplayMode = await PosSettingsRepository(
+        _client,
+      ).getReceiptItemDisplayMode(businessId);
       final orderData = await _getOrderDisplayData(orderId);
       final itemsByArea = await _groupItemsByPrintArea(items);
 
@@ -503,6 +547,7 @@ class PrintingService {
           waiterName: orderData['waiterName']?.toString(),
           businessName: businessName,
           isReprint: true,
+          receiptItemDisplayMode: receiptItemDisplayMode,
         );
 
         await _dispatchKitchenTicket(

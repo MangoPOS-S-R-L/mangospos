@@ -118,6 +118,55 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
     return maxPos + 1;
   }
 
+  Future<void> assignCustomerToCheck({
+    required String checkId,
+    required String customerId,
+    required String customerName,
+  }) async {
+    final updatedChecks = state.checks
+        .map((check) {
+          if (check.id != checkId) return check;
+          return check.copyWith(
+            customerId: customerId,
+            customerName: customerName,
+          );
+        })
+        .toList(growable: false);
+
+    state = state.copyWith(checks: updatedChecks, error: null);
+
+    if (_isUuid(checkId)) {
+      try {
+        await _salesRepo.assignCustomerToCheck(
+          checkId: checkId,
+          customerId: customerId,
+          customerName: customerName,
+        );
+      } catch (e) {
+        state = state.copyWith(error: 'Error asignando cliente: $e');
+      }
+    }
+  }
+
+  Future<void> clearCustomerFromCheck(String checkId) async {
+    final updatedChecks = state.checks
+        .map((check) {
+          if (check.id != checkId) return check;
+          return check.copyWith(clearCustomer: true);
+        })
+        .toList(growable: false);
+
+    state = state.copyWith(checks: updatedChecks, error: null);
+
+    if (_isUuid(checkId)) {
+      try {
+        await _salesRepo.clearCustomerFromCheck(checkId);
+      } catch (e) {
+        state = state.copyWith(error: 'Error limpiando cliente: $e');
+      }
+    }
+  }
+
   Future<void> deleteCheck(String checkId) async {
     // 1. SNAPSHOT for revert/reference
     final previousItems = state.allItems;

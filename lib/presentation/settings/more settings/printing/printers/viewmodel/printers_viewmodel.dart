@@ -383,19 +383,36 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
   // ============================================================
   Future<List<DiscoveredPrinter>> scanOnLANUnified() async {
     if (kIsWeb) {
+      final sw = Stopwatch()..start();
       try {
         final up = await _repo.isAgentUp();
         if (up) return await scanViaAgent();
       } catch (_) {}
-      _log('scanOnLANUnified() -> web sin agente: lista vacía');
-      return <DiscoveredPrinter>[];
+      
+      _log('scanOnLANUnified() -> web sin agente: intentando cloud discovery');
+      await discoverOnLANWeb(); 
+      
+      final rem = 10000 - sw.elapsed.inMilliseconds;
+      if (rem > 0) {
+        _log('scanOnLANUnified() -> Esperando $rem ms adicionales para llegar a 10s.');
+        await Future.delayed(Duration(milliseconds: rem));
+      }
+
+      await load(businessId: _businessId ?? 'auto', force: true);
+      return state.items.map((p) => DiscoveredPrinter(
+        name: p.name,
+        type: p.type,
+        ip: p.ip,
+        mac: p.mac,
+        idHint: p.id,
+      )).toList();
     }
     return scanOnLAN();
   }
 
   Future<List<DiscoveredPrinter>> scanOnLAN({
     List<int> ports = const [9100, 631, 515],
-    Duration timeout = const Duration(milliseconds: 350),
+    Duration timeout = const Duration(seconds: 1),
     int maxConcurrent = 96,
   }) async {
     state = state.copyWith(isDiscovering: true, errorMessage: null);
@@ -424,12 +441,22 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         }
       }
 
-      _log(
-        'scanOnLAN() -> subnets=${subnets.join(', ')} hosts=${hosts.length}',
-      );
+      _log('scanOnLAN() -> Generados ${hosts.length} hosts para escanear.');
+      if (hosts.isEmpty) {
+        _log('scanOnLAN() -> LISTA DE HOSTS VACÍA. Algo salió mal.');
+      }
 
       final found = <String, Set<int>>{};
+      final stopwatch = Stopwatch()..start();
       for (int offset = 0; offset < hosts.length; offset += maxConcurrent) {
+        final elapsedRaw = stopwatch.elapsed.inMilliseconds;
+        _log('scanOnLAN() -> Procesando batch offset=$offset de ${hosts.length} (T=${elapsedRaw}ms)');
+        
+        if (stopwatch.elapsed.inSeconds >= 10) {
+          _log('scanOnLAN() -> Límite de 10s alcanzado (alcanzó offset $offset). Deteniendo.');
+          break;
+        }
+
         final batch = hosts.sublist(
           offset,
           (offset + maxConcurrent > hosts.length)
@@ -442,8 +469,18 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         for (int i = 0; i < batch.length; i++) {
           final host = batch[i];
           final openPorts = resultsBatch[i];
-          if (openPorts.isNotEmpty) found[host] = openPorts;
+          if (openPorts.isNotEmpty) {
+            _log('scanOnLAN() -> ¡ENCONTRADO!: $host puertos=${openPorts.join(',')}');
+            found[host] = openPorts;
+          }
         }
+      }
+
+      // 💡 Forzamos que dure al menos 10 segundos si terminó muy rápido (UX)
+      final remaining = 10000 - stopwatch.elapsed.inMilliseconds;
+      if (remaining > 0) {
+        _log('scanOnLAN() -> Escaneo terminó en ${stopwatch.elapsed.inMilliseconds}ms. Esperando ${remaining}ms adicionales para llegar a los 10s...');
+        await Future.delayed(Duration(milliseconds: remaining));
       }
 
       for (final e in found.entries) {
@@ -471,9 +508,11 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
 
   /// Escaneo vía Agente local. Acepta respuesta `PrinterDevice` **o** `Map`.
   Future<List<DiscoveredPrinter>> scanViaAgent() async {
+    final sw = Stopwatch()..start();
     final b = await _ensureOrResolveBusiness();
     state = state.copyWith(isDiscovering: true, errorMessage: null);
     try {
+      _log('scanViaAgent() -> Iniciando descubrimiento vía Agente...');
       final raw = await _repo.discoverWithAgent(b);
 
       final out = <DiscoveredPrinter>[];
@@ -531,7 +570,14 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         );
       }
 
-      _log('scanViaAgent() -> ${out.length} resultados');
+      _log('scanViaAgent() -> ${out.length} resultados en ${sw.elapsed.inMilliseconds}ms');
+      
+      final rem = 10000 - sw.elapsed.inMilliseconds;
+      if (rem > 0) {
+        _log('scanViaAgent() -> Esperando $rem ms adicionales...');
+        await Future.delayed(Duration(milliseconds: rem));
+      }
+
       return out;
     } catch (e, st) {
       _log('scanViaAgent() ERROR: $e\n$st');
@@ -544,7 +590,7 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
 
   /// Escaneo Bluetooth. **No guarda**.
   Future<List<DiscoveredPrinter>> scanBluetooth({
-    Duration timeout = const Duration(seconds: 8),
+    Duration timeout = const Duration(seconds: 10),
   }) async {
     if (!_isBluetoothPlatformSupported()) {
       state = state.copyWith(
@@ -753,7 +799,7 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       _startPolling(
         businessId: b,
         interval: const Duration(seconds: 2),
-        totalTimeout: const Duration(seconds: 25),
+        totalTimeout: const Duration(seconds: 10),
       );
     } catch (e, st) {
       _log('discoverOnLANWeb() ERROR: $e\n$st');

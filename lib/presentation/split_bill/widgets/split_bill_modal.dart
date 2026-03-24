@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mangopos/presentation/customers/viewmodel/customers_viewmodel.dart';
 
 import '../../../data/models/sales_models.dart';
 import '../viewmodel/split_bill_viewmodel.dart';
@@ -24,7 +25,6 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
     with SingleTickerProviderStateMixin {
   // Colores Mango POS
   static const Color _primary = Color(0xFFF97316);
-  static final Color _primaryLight = _primary.withOpacity(0.1);
   static const Color _textPrimary = Color(0xFF2C2C2C);
   static const Color _textSecondary = Color(0xFF7A7A7A);
   static const Color _border = Color(0xFFE5E7EB);
@@ -761,6 +761,36 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                                 state.selectedItemIds, // Pass selection
                             onToggleSelection: viewModel
                                 .toggleItemSelection, // Pass toggle callback
+                            onAssignCustomer: () async {
+                              final selected =
+                                  await showDialog<Map<String, dynamic>>(
+                                    context: context,
+                                    builder: (_) =>
+                                        const _AssignCheckCustomerDialog(),
+                                  );
+                              if (selected == null) return;
+                              final customerId = selected['id']?.toString();
+                              final customerName = selected['name']
+                                  ?.toString()
+                                  .trim();
+                              if (customerId == null || customerId.isEmpty)
+                                return;
+                              if (customerName == null || customerName.isEmpty)
+                                return;
+                              await viewModel.assignCustomerToCheck(
+                                checkId: check.id,
+                                customerId: customerId,
+                                customerName: customerName,
+                              );
+                            },
+                            onClearCustomer:
+                                check.customerId == null &&
+                                    (check.customerName == null ||
+                                        check.customerName!.trim().isEmpty)
+                                ? null
+                                : () => viewModel.clearCustomerFromCheck(
+                                    check.id,
+                                  ),
                             onDelete: () => viewModel.deleteCheck(check.id),
                             onRemoveItem: viewModel.unassignItem,
                             primaryColor: _primary,
@@ -1119,11 +1149,178 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
 }
 
 // --- CHECK CARD WIDGET ---
+class _AssignCheckCustomerDialog extends ConsumerStatefulWidget {
+  const _AssignCheckCustomerDialog();
+
+  @override
+  ConsumerState<_AssignCheckCustomerDialog> createState() =>
+      _AssignCheckCustomerDialogState();
+}
+
+class _AssignCheckCustomerDialogState
+    extends ConsumerState<_AssignCheckCustomerDialog> {
+  final TextEditingController _searchController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(customersViewModelProvider).init();
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final vm = ref.watch(customersViewModelProvider);
+
+    return Dialog(
+      insetPadding: const EdgeInsets.all(20),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: SizedBox(
+        width: 760,
+        height: 560,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF97316).withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: const Icon(
+                      Icons.person_search_rounded,
+                      color: Color(0xFFF97316),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Cliente de esta subcuenta',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF2C2C2C),
+                          ),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          'Busca y selecciona el cliente que corresponde a esta cuenta.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF7A7A7A),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _searchController,
+                onChanged: (value) =>
+                    ref.read(customersViewModelProvider).search(value),
+                decoration: InputDecoration(
+                  hintText: 'Buscar por nombre, teléfono o correo',
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: Color(0xFFF97316)),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Expanded(
+                child: Container(
+                  decoration: BoxDecoration(
+                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: vm.isLoading
+                      ? const Center(child: CircularProgressIndicator())
+                      : vm.customers.isEmpty
+                      ? const Center(
+                          child: Text(
+                            'No se encontraron clientes',
+                            style: TextStyle(color: Color(0xFF7A7A7A)),
+                          ),
+                        )
+                      : ListView.separated(
+                          itemCount: vm.customers.length,
+                          separatorBuilder: (_, __) => const Divider(height: 1),
+                          itemBuilder: (context, index) {
+                            final customer = vm.customers[index];
+                            final name = customer['name']?.toString().trim();
+                            final phone = customer['phone']?.toString().trim();
+                            final email = customer['email']?.toString().trim();
+                            final taxId = customer['tax_id']?.toString().trim();
+                            return ListTile(
+                              leading: CircleAvatar(
+                                backgroundColor: const Color(
+                                  0xFFF97316,
+                                ).withValues(alpha: 0.12),
+                                child: const Icon(
+                                  Icons.person_outline_rounded,
+                                  color: Color(0xFFF97316),
+                                ),
+                              ),
+                              title: Text(
+                                name?.isNotEmpty == true ? name! : 'Sin nombre',
+                              ),
+                              subtitle: Text(
+                                [phone, email, taxId]
+                                    .where((v) => v != null && v.isNotEmpty)
+                                    .join(' • '),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              onTap: () => Navigator.of(context).pop(customer),
+                            );
+                          },
+                        ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _CheckCard extends StatelessWidget {
   final OrderCheck check;
   final List<OrderItem> items;
   final Set<String> selectedItemIds; // New prop
   final Function(String) onToggleSelection; // New prop
+  final VoidCallback onAssignCustomer;
+  final VoidCallback? onClearCustomer;
   final VoidCallback onDelete;
   final Function(String) onRemoveItem;
   final Color primaryColor;
@@ -1133,6 +1330,8 @@ class _CheckCard extends StatelessWidget {
     required this.items,
     required this.selectedItemIds,
     required this.onToggleSelection,
+    required this.onAssignCustomer,
+    required this.onClearCustomer,
     required this.onDelete,
     required this.onRemoveItem,
     required this.primaryColor,
@@ -1184,33 +1383,107 @@ class _CheckCard extends StatelessWidget {
           // Header
           Padding(
             padding: const EdgeInsets.all(16),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
+                    Row(
+                      children: [
+                        Text(
+                          check.label,
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: primaryColor,
+                            fontSize: 18,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Icon(Icons.launch, size: 16, color: primaryColor),
+                      ],
+                    ),
                     Text(
-                      check.label,
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: primaryColor,
+                      'TOTAL: RD\$${check.total.toStringAsFixed(2)}',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w900,
                         fontSize: 18,
+                        color: Color(0xFF111827),
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    Icon(
-                      Icons.launch,
-                      size: 16,
-                      color: primaryColor,
-                    ), // External link icon style
                   ],
                 ),
-                Text(
-                  'TOTAL: RD\$${check.total.toStringAsFixed(2)}',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w900,
-                    fontSize: 18,
-                    color: Color(0xFF111827),
+                const SizedBox(height: 10),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF9FAFB),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                  ),
+                  child: Wrap(
+                    spacing: 10,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.person_outline_rounded,
+                            size: 16,
+                            color: Color(0xFF6B7280),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            check.customerName?.trim().isNotEmpty == true
+                                ? check.customerName!
+                                : 'Sin cliente asignado',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight:
+                                  check.customerName?.trim().isNotEmpty == true
+                                  ? FontWeight.w600
+                                  : FontWeight.w500,
+                              color:
+                                  check.customerName?.trim().isNotEmpty == true
+                                  ? const Color(0xFF111827)
+                                  : const Color(0xFF6B7280),
+                            ),
+                          ),
+                        ],
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: onAssignCustomer,
+                        icon: const Icon(Icons.person_search_rounded, size: 16),
+                        label: Text(
+                          check.customerName?.trim().isNotEmpty == true
+                              ? 'Cambiar cliente'
+                              : 'Asignar cliente',
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: primaryColor,
+                          side: BorderSide(
+                            color: primaryColor.withOpacity(0.28),
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ),
+                      if (onClearCustomer != null)
+                        TextButton.icon(
+                          onPressed: onClearCustomer,
+                          icon: const Icon(Icons.close_rounded, size: 16),
+                          label: const Text('Quitar'),
+                          style: TextButton.styleFrom(
+                            foregroundColor: const Color(0xFF6B7280),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ),
+                    ],
                   ),
                 ),
               ],

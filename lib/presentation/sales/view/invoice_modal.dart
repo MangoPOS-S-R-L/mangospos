@@ -2,6 +2,72 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 
+String _formatQty(double qty) {
+  if ((qty - qty.roundToDouble()).abs() < 0.001) {
+    return qty.toStringAsFixed(0);
+  }
+  if ((qty * 10 - (qty * 10).roundToDouble()).abs() < 0.001) {
+    return qty.toStringAsFixed(1);
+  }
+  return qty.toStringAsFixed(2);
+}
+
+List<OrderItem> _buildInvoiceItems(
+  List<OrderItem> items,
+  String receiptItemDisplayMode,
+) {
+  if (receiptItemDisplayMode != 'separate') {
+    return items;
+  }
+
+  final expanded = <OrderItem>[];
+  for (final item in items) {
+    final roundedQty = item.quantity.roundToDouble();
+    final isWholeQuantity = (item.quantity - roundedQty).abs() < 0.001;
+    if (!isWholeQuantity || roundedQty <= 1) {
+      expanded.add(item);
+      continue;
+    }
+
+    final parts = roundedQty.toInt();
+    final baseSubtotal = item.subtotal / parts;
+    final baseDiscount = item.discounts / parts;
+    final baseTax = item.tax / parts;
+    final baseTotal = item.total / parts;
+    double subtotalAccum = 0;
+    double discountAccum = 0;
+    double taxAccum = 0;
+    double totalAccum = 0;
+
+    for (var idx = 0; idx < parts; idx++) {
+      final isLast = idx == parts - 1;
+      final lineSubtotal = isLast
+          ? item.subtotal - subtotalAccum
+          : baseSubtotal;
+      final lineDiscount = isLast
+          ? item.discounts - discountAccum
+          : baseDiscount;
+      final lineTax = isLast ? item.tax - taxAccum : baseTax;
+      final lineTotal = isLast ? item.total - totalAccum : baseTotal;
+      expanded.add(
+        item.copyWith(
+          quantity: 1,
+          subtotal: lineSubtotal,
+          discounts: lineDiscount,
+          tax: lineTax,
+          total: lineTotal,
+        ),
+      );
+      subtotalAccum += lineSubtotal;
+      discountAccum += lineDiscount;
+      taxAccum += lineTax;
+      totalAccum += lineTotal;
+    }
+  }
+
+  return expanded;
+}
+
 class InvoiceModal extends StatelessWidget {
   final Order order;
   final List<OrderItem> items;
@@ -23,6 +89,7 @@ class InvoiceModal extends StatelessWidget {
   final VoidCallback onNewSale;
   final VoidCallback onPrint;
   final String? checkId; // si se paga solo un check, filtramos
+  final String receiptItemDisplayMode;
 
   const InvoiceModal({
     super.key,
@@ -46,6 +113,7 @@ class InvoiceModal extends StatelessWidget {
     required this.onNewSale,
     required this.onPrint,
     this.checkId,
+    this.receiptItemDisplayMode = 'grouped',
   });
 
   @override
@@ -53,9 +121,10 @@ class InvoiceModal extends StatelessWidget {
     final currency = NumberFormat('#,##0.00', 'en_US');
     final dateFormat = DateFormat('dd/MM/yyyy HH:mm:ss');
 
-    final filteredItems = checkId == null
+    final baseItems = checkId == null
         ? items
         : items.where((i) => i.checkId == checkId).toList();
+    final filteredItems = _buildInvoiceItems(baseItems, receiptItemDisplayMode);
     final filteredPayments = checkId == null
         ? payments
         : payments.where((p) => p.checkId == checkId).toList();
@@ -63,8 +132,8 @@ class InvoiceModal extends StatelessWidget {
         issuedAt ??
         (filteredPayments.isNotEmpty
             ? filteredPayments
-                .map((payment) => payment.createdAt)
-                .reduce((a, b) => a.isAfter(b) ? a : b)
+                  .map((payment) => payment.createdAt)
+                  .reduce((a, b) => a.isAfter(b) ? a : b)
             : order.createdAt);
 
     final subtotal = filteredItems.fold<double>(0, (s, i) => s + i.subtotal);
@@ -153,11 +222,13 @@ class InvoiceModal extends StatelessWidget {
                     ],
                     if (customerName != null && customerName != 'Cliente')
                       _DetailRow('Cliente:', customerName!),
-                    if (customerLegalName != null && 
-                        customerLegalName!.isNotEmpty && 
+                    if (customerLegalName != null &&
+                        customerLegalName!.isNotEmpty &&
                         customerLegalName != customerName)
                       _DetailRow('Razón Social:', customerLegalName!),
-                    if (customerTaxId != null && customerTaxId != null && customerTaxId!.isNotEmpty)
+                    if (customerTaxId != null &&
+                        customerTaxId != null &&
+                        customerTaxId!.isNotEmpty)
                       _DetailRow('RNC/Cédula:', customerTaxId!),
                     _DetailRow('Fecha:', dateFormat.format(effectiveIssuedAt)),
                     if (tableName != null) _DetailRow('Mesa:', tableName!),
@@ -185,7 +256,7 @@ class InvoiceModal extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              '${item.quantity.toInt()}x',
+                              '${_formatQty(item.quantity)}x',
                               style: const TextStyle(
                                 fontWeight: FontWeight.bold,
                               ),

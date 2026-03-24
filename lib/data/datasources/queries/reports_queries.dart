@@ -7,5 +7,6 @@ class ReportsQueries {
   static const tablePurchaseOrders = 'purchase_orders';
   static const tableSuppliers = 'suppliers';
   static const tableInventoryItems = 'inventory_items';
+  static const tableInventoryMovements = 'inventory_movements';
   static const tableInventoryStock = 'inventory_stock';
 }

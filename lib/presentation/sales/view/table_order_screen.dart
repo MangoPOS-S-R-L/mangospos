@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/models/fiscal_models.dart';
+import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dart';
 import 'package:mangopos/presentation/sales/state/sales_state.dart';
@@ -56,7 +57,7 @@ Color _parseHexColor(String? hex, {Color fallback = _salesDivider}) {
 }
 
 class _BusinessReceiptProfile {
-  final String name; 
+  final String name;
   final String? businessName;
   final String? legalName;
   final String? address;
@@ -97,21 +98,25 @@ Future<_BusinessReceiptProfile> _loadBusinessReceiptProfile(
   try {
     final business = await client
         .from('businesses')
-        .select('business_name, branch_name, address, phone, fiscal_rnc, fiscal_name')
+        .select(
+          'business_name, branch_name, address, phone, fiscal_rnc, fiscal_name',
+        )
         .eq('id', businessId)
         .maybeSingle();
 
     final branchName = business?['branch_name']?.toString().trim();
     final businessName = business?['business_name']?.toString().trim();
     final fiscalNameVal = business?['fiscal_name']?.toString().trim();
-    
+
     // Prefer fiscal_name if available for receipts
     name = fiscalNameVal?.isNotEmpty == true
         ? fiscalNameVal
         : (branchName?.isNotEmpty == true
-            ? branchName
-            : (businessName?.isNotEmpty == true ? businessName : fallbackName));
-    
+              ? branchName
+              : (businessName?.isNotEmpty == true
+                    ? businessName
+                    : fallbackName));
+
     address = business?['address']?.toString().trim();
     phone = business?['phone']?.toString().trim();
     rnc = business?['fiscal_rnc']?.toString().trim();
@@ -584,12 +589,15 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                   return;
                 }
                 if (orderState.order == null) {
-                  final errorMsg = orderState.error ?? 'No hay una orden activa.';
+                  final errorMsg =
+                      orderState.error ?? 'No hay una orden activa.';
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(
-                      'Error: $errorMsg\nPor favor envíame una captura de este mensaje.',
-                      maxLines: 4,
-                    )),
+                    SnackBar(
+                      content: Text(
+                        'Error: $errorMsg\nPor favor envíame una captura de este mensaje.',
+                        maxLines: 4,
+                      ),
+                    ),
                   );
                   return;
                 }
@@ -829,7 +837,8 @@ class _CartView extends ConsumerWidget {
     String? customerName,
   }) async {
     var currentOrderState = ref.read(currentOrderProvider);
-    final isFiscal = currentOrderState.fiscalType == 'B01' ||
+    final isFiscal =
+        currentOrderState.fiscalType == 'B01' ||
         currentOrderState.fiscalType == '01' ||
         currentOrderState.fiscalType == 'B14' ||
         currentOrderState.fiscalType == '14' ||
@@ -840,31 +849,32 @@ class _CartView extends ConsumerWidget {
 
     if (isFiscal) {
       // Usamos los valores del estado para la validación inicial
-      if (currentOrderState.customerId == null || 
-          currentOrderState.customerId!.isEmpty || 
-          currentOrderState.customerTaxId == null || 
+      if (currentOrderState.customerId == null ||
+          currentOrderState.customerId!.isEmpty ||
+          currentOrderState.customerTaxId == null ||
           currentOrderState.customerTaxId!.trim().isEmpty) {
-        
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Para comprobante fiscal se requiere un cliente con RNC/Cédula.'),
+            content: Text(
+              'Para comprobante fiscal se requiere un cliente con RNC/Cédula.',
+            ),
             backgroundColor: Colors.orange,
           ),
         );
-        
+
         await onAssignClient();
-        
+
         // RE-LEER estado después de la asignación
         currentOrderState = ref.read(currentOrderProvider);
-        if (currentOrderState.customerId == null || 
-            currentOrderState.customerId!.isEmpty || 
-            currentOrderState.customerTaxId == null || 
+        if (currentOrderState.customerId == null ||
+            currentOrderState.customerId!.isEmpty ||
+            currentOrderState.customerTaxId == null ||
             currentOrderState.customerTaxId!.trim().isEmpty) {
           return; // Sigue sin cliente o sin RNC válido
         }
       }
     }
-    
+
     // Sincronizar estas variables con el estado más reciente
     final finalCustomerId = currentOrderState.customerId;
     final finalCustomerName = currentOrderState.customerName;
@@ -907,7 +917,9 @@ class _CartView extends ConsumerWidget {
                 : order.createdAt);
         // Optional: Filter items if paying a specific check (though strictly we show all items on invoice or filter inside modal)
 
-        final ncfFromPayment = payments.isNotEmpty ? payments.last.reference : null;
+        final ncfFromPayment = payments.isNotEmpty
+            ? payments.last.reference
+            : null;
 
         if (context.mounted) {
           final invoiceData = {
@@ -1000,19 +1012,93 @@ class _CartView extends ConsumerWidget {
   void _openProductDetailModal(
     BuildContext context,
     WidgetRef ref,
-    OrderItem item,
-  ) {
+    OrderItem item, {
+    List<OrderItem>? groupedItems,
+  }) {
     showDialog(
       context: context,
       builder: (context) => ProductDetailModal(
         item: item,
+        groupedItems: groupedItems,
         onSave: (updatedItem) async {
           await ref
               .read(currentOrderProvider.notifier)
               .updateItem(item.id, updatedItem);
         },
+        onSaveBatch: (items, updatedItem, reductionReason) async {
+          final salesRepo = ref.read(salesRepositoryProvider);
+          final orderNotifier = ref.read(currentOrderProvider.notifier);
+          final totalBase = items.fold<double>(
+            0,
+            (sum, current) => sum + (current.subtotal + current.tax),
+          );
+          final originalTotalQty = items.fold<double>(
+            0,
+            (sum, current) => sum + current.quantity,
+          );
+          final targetTotalQty = updatedItem.quantity <= 0
+              ? 1.0
+              : updatedItem.quantity;
+          var qtyToDistribute = targetTotalQty;
+
+          for (var index = 0; index < items.length; index++) {
+            final current = items[index];
+            final isLast = index == items.length - 1;
+            double nextQty;
+
+            if (targetTotalQty >= originalTotalQty) {
+              nextQty = isLast ? qtyToDistribute : current.quantity;
+            } else {
+              final remainingAfterCurrent = qtyToDistribute - current.quantity;
+              if (remainingAfterCurrent >= 0) {
+                nextQty = current.quantity;
+              } else {
+                nextQty = qtyToDistribute.clamp(0, current.quantity).toDouble();
+              }
+            }
+
+            if (isLast) {
+              nextQty = qtyToDistribute.clamp(0, double.infinity).toDouble();
+            }
+
+            final base = current.subtotal + current.tax;
+            final discountShare = totalBase > 0
+                ? (updatedItem.discounts * (base / totalBase))
+                : 0.0;
+            final trimmedNotes = updatedItem.notes?.trim();
+            final mergedNotes = <String>[];
+            if (trimmedNotes != null && trimmedNotes.isNotEmpty) {
+              mergedNotes.add(trimmedNotes);
+            }
+            if (reductionReason != null && reductionReason.trim().isNotEmpty) {
+              mergedNotes.add('[REDUCCION:${reductionReason.trim()}]');
+            }
+
+            if (nextQty <= 0.0001) {
+              await orderNotifier.deleteItem(
+                current.id,
+                reason: reductionReason ?? 'Reducción de cantidad',
+              );
+            } else {
+              await salesRepo.updateItemDetails(
+                itemId: current.id,
+                productName: updatedItem.productName,
+                quantity: nextQty,
+                isTakeout: updatedItem.isTakeout,
+                discounts: discountShare,
+                notes: mergedNotes.isEmpty ? null : mergedNotes.join('\n'),
+              );
+            }
+
+            qtyToDistribute -= nextQty;
+          }
+
+          await ref.read(currentOrderProvider.notifier).refreshOrder();
+        },
         onDelete: (reason) async {
-          await ref.read(currentOrderProvider.notifier).deleteItem(item.id, reason: reason);
+          await ref
+              .read(currentOrderProvider.notifier)
+              .deleteItem(item.id, reason: reason);
         },
         onMarkSoldOut: item.productId == null
             ? null
@@ -1043,9 +1129,13 @@ class _CartView extends ConsumerWidget {
             ? () {
                 final order = ref.read(currentOrderProvider).order;
                 if (order != null) {
-                  ref.read(currentOrderProvider.notifier).reprintKitchenTicket(
+                  ref
+                      .read(currentOrderProvider.notifier)
+                      .reprintKitchenTicket(
                         orderId: order.id,
-                        items: [item],
+                        items: groupedItems?.isNotEmpty == true
+                            ? groupedItems
+                            : [item],
                       );
                 }
               }
@@ -1098,6 +1188,15 @@ class _CartView extends ConsumerWidget {
 
     final selectedCheckId = orderState.selectedCheckId;
     final allChecks = orderState.checks;
+    OrderCheck? selectedCheck;
+    if (selectedCheckId != null) {
+      for (final check in allChecks) {
+        if (check.id == selectedCheckId) {
+          selectedCheck = check;
+          break;
+        }
+      }
+    }
     final activeChecks = allChecks.where((c) => !c.isClosed).toList();
     final hasChecks =
         activeChecks.length > 1 ||
@@ -1121,35 +1220,28 @@ class _CartView extends ConsumerWidget {
     }
 
     // Calculate Totals based on View
-    double displayTotal = 0.0;
-    double displaySubtotal = 0.0;
-    double displayTax = 0.0;
+    double displayTotal = displayedItems.fold(
+      0.0,
+      (sum, i) => sum + _effectiveItemTotal(i),
+    );
+    double displaySubtotal = displayedItems.fold(0.0, (sum, i) {
+      return sum + _effectiveItemSubtotal(i);
+    });
+    double displayTax = displayedItems.fold(0.0, (sum, i) {
+      return sum + _effectiveItemTax(i);
+    });
 
-    if (selectedCheckId != null) {
-      displayTotal = displayedItems.fold(0.0, (sum, i) {
-        return sum + _effectiveItemTotal(i);
-      });
-      displaySubtotal = displayedItems.fold(0.0, (sum, i) {
-        return sum + _effectiveItemSubtotal(i);
-      });
-      displayTax = displayedItems.fold(0.0, (sum, i) {
-        return sum + _effectiveItemTax(i);
-      });
-    } else {
-      // Global View (TODAS)
-      // Calculate totals from displayed items only (excluding closed checks)
-      // This ensures the total matches what is seen on screen
-      displayTotal = displayedItems.fold(
-        0.0,
-        (sum, i) => sum + _effectiveItemTotal(i),
+    final pendingOrderItems = openItems.where((i) {
+      final checkIsClosed = allChecks.any(
+        (c) => c.id == i.checkId && c.isClosed,
       );
-      displaySubtotal = displayedItems.fold(0.0, (sum, i) {
-        return sum + _effectiveItemSubtotal(i);
-      });
-      displayTax = displayedItems.fold(0.0, (sum, i) {
-        return sum + _effectiveItemTax(i);
-      });
-    }
+      return !checkIsClosed;
+    }).toList();
+
+    final pendingOrderTotal = pendingOrderItems.fold(
+      0.0,
+      (sum, i) => sum + _effectiveItemTotal(i),
+    );
 
     final currency = NumberFormat('#,##0.00', 'en_US');
 
@@ -1167,7 +1259,7 @@ class _CartView extends ConsumerWidget {
       final name = item.productName;
       final qty = item.quantity.toDouble();
       final totalItem = _effectiveItemTotal(item);
-      final groupKey = name.toLowerCase().trim();
+      final groupKey = '${name.toLowerCase().trim()}|${item.isTakeout}';
       if (groupedSent.containsKey(groupKey)) {
         groupedSent[groupKey] = groupedSent[groupKey]!.copyWith(
           qty: groupedSent[groupKey]!.qty + qty,
@@ -1179,6 +1271,7 @@ class _CartView extends ConsumerWidget {
           name: name,
           qty: qty,
           total: totalItem,
+          isTakeout: item.isTakeout,
           items: [item],
         );
       }
@@ -1290,12 +1383,16 @@ class _CartView extends ConsumerWidget {
                           padding: const EdgeInsets.symmetric(horizontal: 12),
                           decoration: BoxDecoration(
                             border: Border.all(color: _salesDivider),
-                            borderRadius: BorderRadius.circular(_salesRadiusButton),
+                            borderRadius: BorderRadius.circular(
+                              _salesRadiusButton,
+                            ),
                           ),
                           child: PopupMenuButton<String>(
                             initialValue: orderState.fiscalType,
                             onSelected: (String newValue) {
-                              ref.read(currentOrderProvider.notifier).updateFiscalType(newValue);
+                              ref
+                                  .read(currentOrderProvider.notifier)
+                                  .updateFiscalType(newValue);
                             },
                             tooltip: 'Tipo de comprobante',
                             padding: EdgeInsets.zero,
@@ -1304,7 +1401,10 @@ class _CartView extends ConsumerWidget {
                             ),
                             offset: const Offset(0, 40),
                             child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 8,
+                              ),
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
@@ -1317,24 +1417,51 @@ class _CartView extends ConsumerWidget {
                                     ),
                                   ),
                                   const SizedBox(width: 4),
-                                  const Icon(Icons.arrow_drop_down, color: _salesTotalColor, size: 20),
+                                  const Icon(
+                                    Icons.arrow_drop_down,
+                                    color: _salesTotalColor,
+                                    size: 20,
+                                  ),
                                 ],
                               ),
                             ),
                             itemBuilder: (BuildContext context) {
-                              final sequences = orderState.fiscalSequences.isNotEmpty
+                              final sequences =
+                                  orderState.fiscalSequences.isNotEmpty
                                   ? orderState.fiscalSequences
                                   : [
-                                      FiscalNcfSequence(tipo: 'B02', serie: 'B', ultimoSeq: 0, maximoSeq: 0),
-                                      FiscalNcfSequence(tipo: 'B01', serie: 'B', ultimoSeq: 0, maximoSeq: 0),
-                                      FiscalNcfSequence(tipo: 'B14', serie: 'B', ultimoSeq: 0, maximoSeq: 0),
-                                      FiscalNcfSequence(tipo: 'B15', serie: 'B', ultimoSeq: 0, maximoSeq: 0),
+                                      FiscalNcfSequence(
+                                        tipo: 'B02',
+                                        serie: 'B',
+                                        ultimoSeq: 0,
+                                        maximoSeq: 0,
+                                      ),
+                                      FiscalNcfSequence(
+                                        tipo: 'B01',
+                                        serie: 'B',
+                                        ultimoSeq: 0,
+                                        maximoSeq: 0,
+                                      ),
+                                      FiscalNcfSequence(
+                                        tipo: 'B14',
+                                        serie: 'B',
+                                        ultimoSeq: 0,
+                                        maximoSeq: 0,
+                                      ),
+                                      FiscalNcfSequence(
+                                        tipo: 'B15',
+                                        serie: 'B',
+                                        ultimoSeq: 0,
+                                        maximoSeq: 0,
+                                      ),
                                     ];
-                              
+
                               return sequences.map((seq) {
                                 return PopupMenuItem<String>(
                                   value: seq.tipo,
-                                  child: Text('${_getNcfLabel(seq.tipo)} (${seq.tipo})'),
+                                  child: Text(
+                                    '${_getNcfLabel(seq.tipo)} (${seq.tipo})',
+                                  ),
                                 );
                               }).toList();
                             },
@@ -1581,10 +1708,12 @@ class _CartView extends ConsumerWidget {
                               name: groupedSentItems[i].name,
                               qty: groupedSentItems[i].qty,
                               total: groupedSentItems[i].total,
+                              isTakeout: groupedSentItems[i].isTakeout,
                               onTap: () => _openProductDetailModal(
                                 context,
                                 ref,
                                 groupedSentItems[i].items.first,
+                                groupedItems: groupedSentItems[i].items,
                               ),
                             ),
                             if (i < groupedSentItems.length - 1)
@@ -1708,9 +1837,16 @@ class _CartView extends ConsumerWidget {
                     background: _salesKitchenButton,
                     onPressed: () async {
                       try {
+                        final waiterName =
+                            await _loadWaiterName(ref, orderState.order!.id) ??
+                            ref.read(sessionProvider).userName;
+                        if (!context.mounted) return;
                         await ref
                             .read(currentOrderProvider.notifier)
-                            .confirmOrder();
+                            .confirmOrder(
+                              tableName: tableCode,
+                              waiterName: waiterName,
+                            );
                         if (!context.mounted) return;
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
@@ -1741,25 +1877,80 @@ class _CartView extends ConsumerWidget {
                   // It seems draft items replace payment flow until sent?
                   // Let's keep existing logic: if drafts, show Pay AND Send? No, usually Send first.
                   // Original code showed BOTH.
-                  _ActionButton(
-                    label: 'Pagar RD\$ ${currency.format(displayTotal)}',
-                    background: _salesPayButton,
-                    onPressed:
-                        !canCharge ||
-                            orderState.order == null ||
-                            displayTotal <= 0
-                        ? null
-                        : () => _openPaymentModal(
-                            context,
-                            ref,
-                            orderState.order!,
-                            displayTotal,
-                            checkId: selectedCheckId, // Pass Checks ID!
-                            customerId: orderState.customerId,
-                            customerName: orderState.customerName,
+                  if (selectedCheckId != null && hasChecks) ...[
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _ActionButton(
+                            label:
+                                'Pagar esta cuenta RD\$ ${currency.format(displayTotal)}',
+                            background: _salesPayButton,
+                            onPressed:
+                                !canCharge ||
+                                    orderState.order == null ||
+                                    displayTotal <= 0
+                                ? null
+                                : () => _openPaymentModal(
+                                    context,
+                                    ref,
+                                    orderState.order!,
+                                    displayTotal,
+                                    checkId: selectedCheckId,
+                                    customerId:
+                                        selectedCheck?.customerId ??
+                                        orderState.customerId,
+                                    customerName:
+                                        selectedCheck?.customerName ??
+                                        orderState.customerName,
+                                  ),
+                            icon: Icons.payments_outlined,
                           ),
-                    icon: Icons.payments_outlined,
-                  ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _ActionButton(
+                            label:
+                                'Pagar todo lo pendiente RD\$ ${currency.format(pendingOrderTotal)}',
+                            background: _salesPayButton,
+                            onPressed:
+                                !canCharge ||
+                                    orderState.order == null ||
+                                    pendingOrderTotal <= 0
+                                ? null
+                                : () => _openPaymentModal(
+                                    context,
+                                    ref,
+                                    orderState.order!,
+                                    pendingOrderTotal,
+                                    checkId: null,
+                                    customerId: orderState.customerId,
+                                    customerName: orderState.customerName,
+                                  ),
+                            icon: Icons.point_of_sale_rounded,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ] else
+                    _ActionButton(
+                      label: 'Pagar RD\$ ${currency.format(displayTotal)}',
+                      background: _salesPayButton,
+                      onPressed:
+                          !canCharge ||
+                              orderState.order == null ||
+                              displayTotal <= 0
+                          ? null
+                          : () => _openPaymentModal(
+                              context,
+                              ref,
+                              orderState.order!,
+                              displayTotal,
+                              checkId: selectedCheckId,
+                              customerId: orderState.customerId,
+                              customerName: orderState.customerName,
+                            ),
+                      icon: Icons.payments_outlined,
+                    ),
                 ] else if (sentItems.isNotEmpty ||
                     (selectedCheckId != null && displayedItems.isNotEmpty)) ...[
                   // If items are sent, show Pre-Check, Split/Edit, Pay
@@ -1856,25 +2047,80 @@ class _CartView extends ConsumerWidget {
                     ],
                   ),
                   const SizedBox(height: 12),
-                  _ActionButton(
-                    label: 'Pagar RD\$ ${currency.format(displayTotal)}',
-                    background: _salesPayButton,
-                    onPressed:
-                        !canCharge ||
-                            orderState.order == null ||
-                            displayTotal <= 0
-                        ? null
-                        : () => _openPaymentModal(
-                            context,
-                            ref,
-                            orderState.order!,
-                            displayTotal,
-                            checkId: selectedCheckId,
-                            customerId: orderState.customerId,
-                            customerName: orderState.customerName,
+                  if (selectedCheckId != null && hasChecks) ...[
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _ActionButton(
+                            label:
+                                'Pagar esta cuenta RD\$ ${currency.format(displayTotal)}',
+                            background: _salesPayButton,
+                            onPressed:
+                                !canCharge ||
+                                    orderState.order == null ||
+                                    displayTotal <= 0
+                                ? null
+                                : () => _openPaymentModal(
+                                    context,
+                                    ref,
+                                    orderState.order!,
+                                    displayTotal,
+                                    checkId: selectedCheckId,
+                                    customerId:
+                                        selectedCheck?.customerId ??
+                                        orderState.customerId,
+                                    customerName:
+                                        selectedCheck?.customerName ??
+                                        orderState.customerName,
+                                  ),
+                            icon: Icons.payments_rounded,
                           ),
-                    icon: Icons.payments_rounded,
-                  ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _ActionButton(
+                            label:
+                                'Pagar todo lo pendiente RD\$ ${currency.format(pendingOrderTotal)}',
+                            background: _salesPayButton,
+                            onPressed:
+                                !canCharge ||
+                                    orderState.order == null ||
+                                    pendingOrderTotal <= 0
+                                ? null
+                                : () => _openPaymentModal(
+                                    context,
+                                    ref,
+                                    orderState.order!,
+                                    pendingOrderTotal,
+                                    checkId: null,
+                                    customerId: orderState.customerId,
+                                    customerName: orderState.customerName,
+                                  ),
+                            icon: Icons.point_of_sale_rounded,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ] else
+                    _ActionButton(
+                      label: 'Pagar RD\$ ${currency.format(displayTotal)}',
+                      background: _salesPayButton,
+                      onPressed:
+                          !canCharge ||
+                              orderState.order == null ||
+                              displayTotal <= 0
+                          ? null
+                          : () => _openPaymentModal(
+                              context,
+                              ref,
+                              orderState.order!,
+                              displayTotal,
+                              checkId: selectedCheckId,
+                              customerId: orderState.customerId,
+                              customerName: orderState.customerName,
+                            ),
+                      icon: Icons.payments_rounded,
+                    ),
                 ],
               ],
             ],
@@ -1924,12 +2170,17 @@ class _CartView extends ConsumerWidget {
         throw Exception('IP de impresora no configurada.');
       }
 
+      final receiptItemDisplayMode = await ref
+          .read(posSettingsRepositoryProvider)
+          .getReceiptItemDisplayMode(businessId);
+
       // Preparación de datos (fuera del timeout para no penalizar generación)
       dynamic ticket;
       if ((type == 'precheck' || type == 'invoice') &&
           orderObj != null &&
           orderItems != null) {
-        final title = data['title'] as String? ??
+        final title =
+            data['title'] as String? ??
             (type == 'invoice' ? 'FACTURA' : 'PRECUENTA');
 
         ticket = type == 'invoice'
@@ -1953,18 +2204,22 @@ class _CartView extends ConsumerWidget {
                     ? null
                     : DateTime.tryParse(data['issuedAt'].toString()),
                 title: title,
+                receiptItemDisplayMode: receiptItemDisplayMode,
               )
             : PrintTicketService.generatePrecheck(
                 order: orderObj,
                 items: orderItems,
                 tableName: tableName ?? 'Mesa',
                 waiterName: waiterName,
-                businessName: (data['businessName'] as String?) ?? (data['restaurantName'] as String?),
+                businessName:
+                    (data['businessName'] as String?) ??
+                    (data['restaurantName'] as String?),
                 legalName: data['legalName'] as String?,
                 businessAddress: data['address'] as String?,
                 businessPhone: data['phone'] as String?,
                 businessRnc: data['rnc'] as String?,
                 title: title,
+                receiptItemDisplayMode: receiptItemDisplayMode,
               );
       }
 
@@ -2078,7 +2333,7 @@ class _CartView extends ConsumerWidget {
                 ),
               ),
               const SizedBox(height: 24),
-              
+
               // Title
               const Text(
                 'Fallo de Impresión',
@@ -2090,7 +2345,7 @@ class _CartView extends ConsumerWidget {
                 ),
               ),
               const SizedBox(height: 12),
-              
+
               // Message
               const Text(
                 'No pudimos procesar la impresión. ¿Deseas intentar enviar el trabajo nuevamente?',
@@ -2102,9 +2357,9 @@ class _CartView extends ConsumerWidget {
                 ),
               ),
               const SizedBox(height: 16),
-              
+
               const SizedBox(height: 32),
-              
+
               // Actions
               Row(
                 children: [
@@ -2599,6 +2854,23 @@ class _CartLineItem extends StatelessWidget {
                   ),
                 ),
               ),
+              if (item.isTakeout) ...[
+                const SizedBox(width: 6),
+                Container(
+                  width: 22,
+                  height: 22,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF3E8),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Icon(
+                    Icons.shopping_bag_outlined,
+                    size: 13,
+                    color: Color(0xFFF97316),
+                  ),
+                ),
+              ],
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
@@ -2642,25 +2914,22 @@ class _ActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
+    return Container(
       width: double.infinity,
-      height: 50,
-      child: ElevatedButton.icon(
+      constraints: const BoxConstraints(
+        minHeight: 54,
+      ), // Altura mínima para consistencia
+      child: ElevatedButton(
         onPressed: onPressed,
-        icon: Icon(icon, size: 20, color: Colors.white),
-        label: Text(
-          label,
-          style: const TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w600,
-            color: Colors.white,
-          ),
-        ),
         style:
             ElevatedButton.styleFrom(
               backgroundColor: background,
               disabledBackgroundColor: background.withValues(alpha: 0.35),
               elevation: 0,
+              padding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 8,
+              ), // Padding interno para multi-línea
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(_salesRadiusButton),
               ),
@@ -2669,6 +2938,26 @@ class _ActionButton extends StatelessWidget {
                 Colors.white.withValues(alpha: 0.08),
               ),
             ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 20, color: Colors.white),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                label,
+                textAlign: TextAlign.center, // Texto centrado
+                style: const TextStyle(
+                  fontSize:
+                      14, // Ligeramente más pequeño para optimizar espacio
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                  height: 1.1, // Altura de línea compacta
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2687,26 +2976,37 @@ class _SecondaryActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
+    return Container(
       width: double.infinity,
-      height: 50,
-      child: OutlinedButton.icon(
+      constraints: const BoxConstraints(minHeight: 54),
+      child: OutlinedButton(
         onPressed: onPressed,
-        icon: Icon(icon, size: 18, color: _salesTextPrimary),
-        label: Text(
-          label,
-          style: const TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w600,
-            color: _salesTextPrimary,
-          ),
-        ),
         style: OutlinedButton.styleFrom(
           backgroundColor: _salesTabActiveBg,
           side: const BorderSide(color: _salesDivider),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(_salesRadiusButton),
           ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 18, color: _salesTextPrimary),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                label,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: _salesTextPrimary,
+                  height: 1.1,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -2725,12 +3025,14 @@ class _SentLineItem extends StatelessWidget {
   final String name;
   final double qty;
   final double total;
+  final bool isTakeout;
   final VoidCallback? onTap;
 
   const _SentLineItem({
     required this.name,
     required this.qty,
     required this.total,
+    required this.isTakeout,
     this.onTap,
   });
 
@@ -2741,80 +3043,100 @@ class _SentLineItem extends StatelessWidget {
       borderRadius: BorderRadius.circular(12),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-      child: Row(
-        children: [
-          // Cantidad
-          // Cantidad: Centrada en 52px y más compacta
-          SizedBox(
-            width: 52,
-            child: Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: _salesDivider),
-                ),
-                child: Text(
-                  qty.toStringAsFixed(qty % 1 == 0 ? 0 : 1),
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 13,
-                    color: _salesTextPrimary,
+        child: Row(
+          children: [
+            // Cantidad
+            // Cantidad: Centrada en 52px y más compacta
+            SizedBox(
+              width: 52,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: _salesDivider),
+                  ),
+                  child: Text(
+                    qty.toStringAsFixed(qty % 1 == 0 ? 0 : 1),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13,
+                      color: _salesTextPrimary,
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-          const SizedBox(width: 10),
-          // Iconos de estado
-          const Icon(Icons.check_circle, size: 18, color: Color(0xFF22C55E)),
-          const SizedBox(width: 6),
-          Container(
-            width: 24,
-            height: 24,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: const Color(0xFFE6F0FF),
-              borderRadius: BorderRadius.circular(7),
-            ),
-            child: const Text(
-              'P',
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF3B82F6),
+            const SizedBox(width: 10),
+            // Iconos de estado
+            const Icon(Icons.check_circle, size: 18, color: Color(0xFF22C55E)),
+            const SizedBox(width: 6),
+            Container(
+              width: 24,
+              height: 24,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: const Color(0xFFE6F0FF),
+                borderRadius: BorderRadius.circular(7),
+              ),
+              child: const Text(
+                'P',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF3B82F6),
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: 10),
-          // Nombre
-          Expanded(
-            child: Text(
-              name,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
+            if (isTakeout) ...[
+              const SizedBox(width: 6),
+              Container(
+                width: 24,
+                height: 24,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF3E8),
+                  borderRadius: BorderRadius.circular(7),
+                ),
+                child: const Icon(
+                  Icons.shopping_bag_outlined,
+                  size: 14,
+                  color: Color(0xFFF97316),
+                ),
+              ),
+            ],
+            const SizedBox(width: 10),
+            // Nombre
+            Expanded(
+              child: Text(
+                name,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: _salesTextPrimary,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            // Precio
+            Text(
+              'RD\$ ${total.toStringAsFixed(2)}',
               style: const TextStyle(
                 fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: _salesTextPrimary,
+                fontWeight: FontWeight.w700,
+                color: _salesTotalColor,
               ),
             ),
-          ),
-          const SizedBox(width: 10),
-          // Precio
-          Text(
-            'RD\$ ${total.toStringAsFixed(2)}',
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w700,
-              color: _salesTotalColor,
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
-    ),
-   );
+    );
   }
 }
 
@@ -2912,12 +3234,14 @@ class _GroupedSentItem {
   final String name;
   final double qty;
   final double total;
+  final bool isTakeout;
   final List<OrderItem> items;
 
   const _GroupedSentItem({
     required this.name,
     required this.qty,
     required this.total,
+    required this.isTakeout,
     required this.items,
   });
 
@@ -2925,12 +3249,14 @@ class _GroupedSentItem {
     String? name,
     double? qty,
     double? total,
+    bool? isTakeout,
     List<OrderItem>? items,
   }) {
     return _GroupedSentItem(
       name: name ?? this.name,
       qty: qty ?? this.qty,
       total: total ?? this.total,
+      isTakeout: isTakeout ?? this.isTakeout,
       items: items ?? this.items,
     );
   }

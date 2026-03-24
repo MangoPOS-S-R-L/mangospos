@@ -1,6 +1,9 @@
 // lib/app/app_router.dart
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/categories/view/categories_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/modifiers/view/modifiers_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/menus/view/menus_view.dart';
@@ -37,6 +40,10 @@ import '../../presentation/purchases/view/purchases_list_view.dart';
 import '../../presentation/purchases/view/purchases_register_view.dart';
 import '../../presentation/promos/view/discounts_view.dart';
 import '../../presentation/products/view/products_view.dart';
+import '../../presentation/branches/view/branch_management_view.dart';
+import '../../presentation/settings/cash_registers/view/cash_registers_view.dart';
+import '../../presentation/settings/currencies/view/currencies_view.dart';
+import '../../presentation/settings/regional/view/regional_view.dart';
 import 'routes.dart';
 
 // Sales module
@@ -46,6 +53,7 @@ import '../../presentation/sales/view/delivery_express_view.dart';
 import '../../presentation/sales/view/self_service_view.dart';
 import '../../presentation/sales/view/table_order_screen.dart';
 import '../../presentation/reports/view/reports_view.dart';
+import '../../presentation/reports/viewmodel/reports_viewmodel.dart';
 
 // More Settings module
 import 'package:mangopos/presentation/settings/view/settings_view.dart';
@@ -61,10 +69,48 @@ import 'package:mangopos/presentation/settings/view/plan_management_view.dart';
 // import 'package:mangopos/presentation/menu/view/modifier_groups_view.dart';
 // import 'package:mangopos/presentation/menu/view/modifiers_view.dart';
 
+class GoRouterRefreshStream extends ChangeNotifier {
+  GoRouterRefreshStream(Stream<dynamic> stream) {
+    _subscription = stream.asBroadcastStream().listen((_) => notifyListeners());
+  }
+
+  late final StreamSubscription<dynamic> _subscription;
+
+  @override
+  void dispose() {
+    _subscription.cancel();
+    super.dispose();
+  }
+}
+
 class AppRouter {
+  static final GoRouterRefreshStream _authRefresh = GoRouterRefreshStream(
+    Supabase.instance.client.auth.onAuthStateChange,
+  );
+
   static GoRouter router = GoRouter(
-    // cambia a login/dashboard según tu flujo
     initialLocation: AppRoutes.login,
+    refreshListenable: _authRefresh,
+    redirect: (context, state) {
+      final session = Supabase.instance.client.auth.currentSession;
+      final isAuthenticated = session != null;
+      final path = state.uri.path;
+      final isAuthRoute =
+          path == AppRoutes.login ||
+          path == AppRoutes.register ||
+          path == AppRoutes.registerStep2 ||
+          path == AppRoutes.registerSetup;
+
+      if (!isAuthenticated) {
+        return isAuthRoute ? null : AppRoutes.login;
+      }
+
+      if (isAuthRoute) {
+        return AppRoutes.dashboard;
+      }
+
+      return null;
+    },
     errorBuilder: (_, state) => _NotFoundView(path: state.uri.toString()),
     routes: [
       // ---------- Alias React (paridad de rutas 1:1) ----------
@@ -108,9 +154,8 @@ class AppRouter {
       ),
       GoRoute(
         path: AppRoutes.register,
-        builder: (context, state) => RegisterStep1View(
-          initialPlan: state.uri.queryParameters['plan'],
-        ),
+        builder: (context, state) =>
+            RegisterStep1View(initialPlan: state.uri.queryParameters['plan']),
       ),
       GoRoute(
         path: AppRoutes.registerStep2,
@@ -278,7 +323,11 @@ class AppRouter {
           ),
           GoRoute(
             path: AppRoutes.reports,
-            builder: (context, state) => const ReportsView(),
+            builder: (context, state) => ReportsView(
+              initialCategory: _reportCategoryFromQuery(
+                state.uri.queryParameters['tab'],
+              ),
+            ),
           ),
 
           // ✅ Ajustes (vista principal)
@@ -323,10 +372,27 @@ class AppRouter {
           ),
           GoRoute(
             path: AppRoutes.settingsFiscalReceipts,
-            builder: (context, state) => const FiscalReceiptsView(businessId: 'auto'),
+            builder: (context, state) =>
+                const FiscalReceiptsView(businessId: 'auto'),
           ),
           GoRoute(
-            path: AppRoutes.inventoryKardex,
+            path: AppRoutes.settingsBranches,
+            builder: (context, state) => const BranchManagementView(),
+          ),
+          GoRoute(
+            path: AppRoutes.settingsCashRegisters,
+            builder: (context, state) => const CashRegistersView(),
+          ),
+          GoRoute(
+            path: AppRoutes.settingsCurrencies,
+            builder: (context, state) => const CurrenciesView(),
+          ),
+          GoRoute(
+            path: AppRoutes.settingsRegional,
+            builder: (context, state) => const RegionalView(),
+          ),
+          GoRoute(
+            path: AppRoutes.inventoryRequirements,
             builder: (context, state) => const RequirementsView(),
           ),
           GoRoute(
@@ -487,6 +553,21 @@ class _Placeholder extends StatelessWidget {
       ),
     ),
   );
+}
+
+ReportCategory? _reportCategoryFromQuery(String? value) {
+  switch (value) {
+    case 'sales':
+      return ReportCategory.sales;
+    case 'purchases':
+      return ReportCategory.purchases;
+    case 'finances':
+      return ReportCategory.finances;
+    case 'inventory':
+      return ReportCategory.inventory;
+    default:
+      return null;
+  }
 }
 
 class _NotFoundView extends StatelessWidget {

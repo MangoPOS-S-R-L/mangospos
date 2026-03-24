@@ -1,6 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../datasources/queries/products_queries.dart';
+import '../utils/business_id_resolver.dart';
 
 class ProductsRepository {
   final SupabaseClient _client;
@@ -8,18 +9,7 @@ class ProductsRepository {
   ProductsRepository(this._client);
 
   Future<String?> getBusinessIdForCurrentUser() async {
-    final user = _client.auth.currentUser;
-    if (user == null) return null;
-
-    final ub = await _client
-        .from(ProductsQueries.tableUserBusinesses)
-        .select('business_id')
-        .eq('user_id', user.id)
-        .order('created_at', ascending: true)
-        .limit(1)
-        .maybeSingle();
-
-    return ub?['business_id']?.toString();
+    return resolveBusinessIdOrNull(_client, 'auto');
   }
 
   Future<List<Map<String, dynamic>>> getProducts(String businessId) async {
