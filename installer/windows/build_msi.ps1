@@ -111,14 +111,15 @@ if (-not (Test-Path $msiPath)) {
 if (-not $SkipSign) {
   $signtool = Find-SignTool
   if (-not $signtool) {
-    throw "No se encontró signtool.exe. Instala Windows SDK."
+    Write-Warning "No se encontró signtool.exe. Se omitirá la firma digital."
   }
-  if ([string]::IsNullOrWhiteSpace($CertPfx)) {
-    throw "Debes indicar -CertPfx para firmar el MSI."
+  elseif ([string]::IsNullOrWhiteSpace($CertPfx)) {
+    Write-Warning "Certificado no proporcionado. Se omitirá la firma digital."
   }
-
-  Write-Host "==> Signing MSI" -ForegroundColor Cyan
-  & $signtool sign /fd SHA256 /f $CertPfx /p $CertPassword /tr http://timestamp.digicert.com /td SHA256 $msiPath
+  else {
+    Write-Host "==> Signing MSI" -ForegroundColor Cyan
+    & $signtool sign /fd SHA256 /f $CertPfx /p $CertPassword /tr http://timestamp.digicert.com /td SHA256 $msiPath
+  }
 }
 
 Write-Host "MSI listo: $msiPath" -ForegroundColor Green
