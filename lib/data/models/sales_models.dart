@@ -377,6 +377,8 @@ class OrderCheck extends Equatable {
   final double discounts;
   final double tax;
   final double total;
+  final String? customerId;
+  final String? customerName;
   final List<OrderItem> items;
 
   const OrderCheck({
@@ -389,6 +391,8 @@ class OrderCheck extends Equatable {
     required this.discounts,
     required this.tax,
     required this.total,
+    this.customerId,
+    this.customerName,
     this.items = const [],
   });
 
@@ -403,7 +407,40 @@ class OrderCheck extends Equatable {
       discounts: (map['discounts'] ?? 0).toDouble(),
       tax: (map['tax'] ?? 0).toDouble(),
       total: (map['total'] ?? 0).toDouble(),
+      customerId: map['customer_id']?.toString(),
+      customerName: map['customer_name']?.toString(),
       items: [],
+    );
+  }
+
+  OrderCheck copyWith({
+    String? id,
+    String? orderId,
+    String? label,
+    int? position,
+    bool? isClosed,
+    double? subtotal,
+    double? discounts,
+    double? tax,
+    double? total,
+    String? customerId,
+    String? customerName,
+    bool clearCustomer = false,
+    List<OrderItem>? items,
+  }) {
+    return OrderCheck(
+      id: id ?? this.id,
+      orderId: orderId ?? this.orderId,
+      label: label ?? this.label,
+      position: position ?? this.position,
+      isClosed: isClosed ?? this.isClosed,
+      subtotal: subtotal ?? this.subtotal,
+      discounts: discounts ?? this.discounts,
+      tax: tax ?? this.tax,
+      total: total ?? this.total,
+      customerId: clearCustomer ? null : (customerId ?? this.customerId),
+      customerName: clearCustomer ? null : (customerName ?? this.customerName),
+      items: items ?? this.items,
     );
   }
 
@@ -418,6 +455,8 @@ class OrderCheck extends Equatable {
     discounts,
     tax,
     total,
+    customerId,
+    customerName,
     items,
   ];
 }
@@ -497,10 +536,7 @@ class Payment extends Equatable {
     createdAt,
   ];
 
-  Payment copyWith({
-    String? paymentMethodCode,
-    String? paymentMethodName,
-  }) {
+  Payment copyWith({String? paymentMethodCode, String? paymentMethodName}) {
     return Payment(
       id: id,
       businessId: businessId,

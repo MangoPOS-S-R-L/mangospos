@@ -3,7 +3,14 @@ import '../../../../data/models/sales_models.dart';
 
 class ProductDetailModal extends StatefulWidget {
   final OrderItem item;
+  final List<OrderItem>? groupedItems;
   final Future<void> Function(OrderItem updatedItem) onSave;
+  final Future<void> Function(
+    List<OrderItem> items,
+    OrderItem updatedItem,
+    String? reductionReason,
+  )?
+  onSaveBatch;
   final Future<void> Function(String reason) onDelete;
   final Future<void> Function()? onMarkSoldOut;
   final VoidCallback? onReprint;
@@ -11,7 +18,9 @@ class ProductDetailModal extends StatefulWidget {
   const ProductDetailModal({
     super.key,
     required this.item,
+    this.groupedItems,
     required this.onSave,
+    this.onSaveBatch,
     required this.onDelete,
     this.onMarkSoldOut,
     this.onReprint,
@@ -23,6 +32,9 @@ class ProductDetailModal extends StatefulWidget {
 
 class _ProductDetailModalState extends State<ProductDetailModal> {
   static const _courtesyPrefix = '[CORTESIA:';
+
+  List<OrderItem> get _scopedItems => widget.groupedItems ?? [widget.item];
+  bool get _isGroupedMode => _scopedItems.length > 1;
 
   late TextEditingController _nameController;
   late TextEditingController _notesController;
@@ -48,8 +60,11 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
       text: _initialManualDiscount().toStringAsFixed(2),
     );
 
-    _quantity = widget.item.quantity;
-    _isTakeout = widget.item.isTakeout;
+    _quantity = _scopedItems.fold<double>(
+      0,
+      (sum, item) => sum + item.quantity,
+    );
+    _isTakeout = _scopedItems.every((item) => item.isTakeout);
     final fullAmount = _fullAmountForQuantity(widget.item.quantity);
     _isCourtesy =
         parsedNotes.courtesyReason != null ||
@@ -95,10 +110,14 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: Colors.red.withOpacity(0.1),
+                color: Colors.red.withValues(alpha: 0.1),
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.delete_outline, color: Colors.red, size: 24),
+              child: const Icon(
+                Icons.delete_outline,
+                color: Colors.red,
+                size: 24,
+              ),
             ),
             const SizedBox(width: 12),
             const Text(
@@ -123,7 +142,8 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
               decoration: InputDecoration(
                 filled: true,
                 fillColor: const Color(0xFFF8FAFC),
-                hintText: 'Ej: Error de digitación, Cliente cambió de opinión...',
+                hintText:
+                    'Ej: Error de digitación, Cliente cambió de opinión...',
                 hintStyle: const TextStyle(color: Color(0xFF94A3B8)),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
@@ -143,7 +163,10 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
             onPressed: () => Navigator.of(context).pop(),
             child: const Text(
               'CANCELAR',
-              style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.bold),
+              style: TextStyle(
+                color: Color(0xFF64748B),
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ),
           const SizedBox(width: 8),
@@ -157,7 +180,9 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
               foregroundColor: Colors.white,
               elevation: 0,
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
             ),
             child: const Text(
               'ELIMINAR PRODUCTO',
@@ -174,8 +199,55 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     }
   }
 
+  Future<String?> _promptReductionReason() async {
+    final controller = TextEditingController();
+    final reason = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Motivo de reducción'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLines: 3,
+          decoration: const InputDecoration(
+            hintText: 'Explica por qué se está reduciendo la cantidad...',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final value = controller.text.trim();
+              if (value.isEmpty) return;
+              Navigator.of(context).pop(value);
+            },
+            child: const Text('Confirmar'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    return reason;
+  }
+
   Future<void> _handleSave() async {
     if (_isSaving) return;
+
+    final originalQuantity = _scopedItems.fold<double>(
+      0,
+      (sum, item) => sum + item.quantity,
+    );
+    String? reductionReason;
+    if (_quantity < originalQuantity - 0.0001) {
+      reductionReason = await _promptReductionReason();
+      if (reductionReason == null || reductionReason.trim().isEmpty) {
+        return;
+      }
+    }
 
     final discount = _effectiveDiscount();
     final baseNotes = _notesController.text.trim();
@@ -205,7 +277,11 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
       _isSaving = true;
     });
     try {
-      await widget.onSave(updated);
+      if (_isGroupedMode && widget.onSaveBatch != null) {
+        await widget.onSaveBatch!(_scopedItems, updated, reductionReason);
+      } else {
+        await widget.onSave(updated);
+      }
       if (!mounted) return;
       Navigator.of(context).pop();
     } catch (e) {
@@ -295,89 +371,56 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-                // Header
-                Row(
-                  children: [
-                    const Icon(Icons.restaurant_menu, color: kPrimary, size: 28),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        widget.item.productName,
-                        style: const TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          color: kTextPrimary,
-                        ),
+              // Header
+              Row(
+                children: [
+                  const Icon(Icons.restaurant_menu, color: kPrimary, size: 28),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      widget.item.productName,
+                      style: const TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        color: kTextPrimary,
                       ),
                     ),
-                    IconButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      icon: const Icon(Icons.close, color: kTextSecondary, size: 24),
-                    ),
-                  ],
-                ),
-                const Divider(height: 20, color: kBorder),
-
-                // Content Scrollable if needed, but Dialog fits.
-                // Detalle del pedido
-                const Text(
-                  'Detalle del pedido',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: kTextPrimary,
                   ),
-                ),
-                const SizedBox(height: 8),
-
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    // Nombre de reemplazo
-                    Expanded(
-                      flex: 4,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Nombre de reemplazo',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: kTextSecondary,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          TextField(
-                            controller: _nameController,
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                            decoration: InputDecoration(
-                              filled: true,
-                              fillColor: const Color(0xFFF9FAFB),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(8),
-                                borderSide: const BorderSide(color: kBorder),
-                              ),
-                              enabledBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(8),
-                                borderSide: const BorderSide(color: kBorder),
-                              ),
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 14,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
+                  IconButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(
+                      Icons.close,
+                      color: kTextSecondary,
+                      size: 24,
                     ),
-                    const SizedBox(width: 16),
-                    // Cantidad
-                    Column(
+                  ),
+                ],
+              ),
+              const Divider(height: 20, color: kBorder),
+
+              // Content Scrollable if needed, but Dialog fits.
+              // Detalle del pedido
+              const Text(
+                'Detalle del pedido',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: kTextPrimary,
+                ),
+              ),
+              const SizedBox(height: 8),
+
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  // Nombre de reemplazo
+                  Expanded(
+                    flex: 4,
+                    child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text(
-                          'Cantidad',
+                          'Nombre de reemplazo',
                           style: TextStyle(
                             fontSize: 14,
                             color: kTextSecondary,
@@ -385,287 +428,365 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                           ),
                         ),
                         const SizedBox(height: 8),
-                        Container(
-                          height: 48,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF3F4F6),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                onPressed: _decrementQty,
-                                icon: const Icon(Icons.remove, size: 20),
-                                color: kTextSecondary,
-                              ),
-                              Container(
-                                color: Colors.white,
-                                width: 45,
-                                height: 40,
-                                margin: const EdgeInsets.symmetric(vertical: 4),
-                                alignment: Alignment.center,
-                                child: Text(
-                                  _quantity.toStringAsFixed(0),
-                                  style: const TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
-                              IconButton(
-                                onPressed: _incrementQty,
-                                icon: const Icon(Icons.add, size: 20),
-                                color: kPrimary,
-                              ),
-                            ],
+                        TextField(
+                          controller: _nameController,
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                          decoration: InputDecoration(
+                            filled: true,
+                            fillColor: const Color(0xFFF9FAFB),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              borderSide: const BorderSide(color: kBorder),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              borderSide: const BorderSide(color: kBorder),
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 14,
+                            ),
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(width: 24),
-                    // Precio und.
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
+                  ),
+                  const SizedBox(width: 16),
+                  // Cantidad
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Cantidad',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: kTextSecondary,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Container(
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF3F4F6),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              onPressed: _decrementQty,
+                              icon: const Icon(Icons.remove, size: 20),
+                              color: kTextSecondary,
+                            ),
+                            Container(
+                              color: Colors.white,
+                              width: 45,
+                              height: 40,
+                              margin: const EdgeInsets.symmetric(vertical: 4),
+                              alignment: Alignment.center,
+                              child: Text(
+                                _quantity == _quantity.roundToDouble()
+                                    ? _quantity.toStringAsFixed(0)
+                                    : _quantity.toStringAsFixed(2),
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              onPressed: _incrementQty,
+                              icon: const Icon(Icons.add, size: 20),
+                              color: kPrimary,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(width: 24),
+                  if (_isGroupedMode)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 2),
+                      child: Text(
+                        'Cantidad total agrupada',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: kTextSecondary.withValues(alpha: 0.9),
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  // Precio und.
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      const Text(
+                        'Precio und.',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: kTextSecondary,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.baseline,
+                        textBaseline: TextBaseline.alphabetic,
+                        children: [
+                          Text(
+                            'RD\$',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: kTextPrimary.withValues(alpha: 0.8),
+                            ),
+                          ),
+                          Text(
+                            widget.item.unitPrice.toStringAsFixed(2),
+                            style: const TextStyle(
+                              fontSize: 36,
+                              fontWeight: FontWeight.w900,
+                              color: kTextPrimary,
+                              letterSpacing: -1,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Container(height: 1, width: 140, color: kBorder),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+
+              // Notas y switch takeout
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text(
-                          'Precio und.',
+                          'Notas del pedido',
                           style: TextStyle(
                             fontSize: 14,
                             color: kTextSecondary,
                             fontWeight: FontWeight.w500,
                           ),
                         ),
-                        const SizedBox(height: 4),
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.baseline,
-                          textBaseline: TextBaseline.alphabetic,
-                          children: [
-                            Text(
-                              'RD\$',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: kTextPrimary.withOpacity(0.8),
-                              ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _notesController,
+                          maxLines: 2,
+                          decoration: InputDecoration(
+                            hintText: 'Por ejm: Caliente, con ají, sin sal...',
+                            hintStyle: const TextStyle(
+                              color: Color(0xFF9CA3AF),
                             ),
-                            Text(
-                              widget.item.unitPrice.toStringAsFixed(2),
-                              style: const TextStyle(
-                                fontSize: 36,
-                                fontWeight: FontWeight.w900,
-                                color: kTextPrimary,
-                                letterSpacing: -1,
-                              ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              borderSide: const BorderSide(color: kBorder),
                             ),
-                          ],
+                          ),
                         ),
-                        Container(height: 1, width: 140, color: kBorder),
                       ],
                     ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-
-                // Notas y switch takeout
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Notas del pedido',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: kTextSecondary,
-                              fontWeight: FontWeight.w500,
-                            ),
+                  ),
+                  const SizedBox(width: 24),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 28),
+                    child: Row(
+                      children: [
+                        const Text(
+                          '¿Tu pedido es para llevar?',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: kTextPrimary,
+                            fontWeight: FontWeight.w500,
                           ),
-                          const SizedBox(height: 8),
-                          TextField(
-                            controller: _notesController,
-                            maxLines: 2,
-                            decoration: InputDecoration(
-                              hintText:
-                                  'Por ejm: Caliente, con ají, sin sal...',
-                              hintStyle: const TextStyle(
-                                color: Color(0xFF9CA3AF),
-                              ),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(8),
-                                borderSide: const BorderSide(color: kBorder),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 24),
-                    Padding(
-                      padding: const EdgeInsets.only(top: 28),
-                      child: Row(
-                        children: [
-                          const Text(
-                            '¿Tu pedido es para llevar?',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: kTextPrimary,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Switch(
-                            value: _isTakeout,
-                            onChanged: (val) {
-                              setState(() => _isTakeout = val);
-                            },
-                            activeThumbColor: Colors.white,
-                            activeTrackColor: kPrimary,
-                            inactiveTrackColor: const Color(0xFFD1D5DB),
-                            inactiveThumbColor: const Color(0xFF6B7280),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-
-                // Cortesía
-                Row(
-                  children: [
-                    const Text(
-                      '¿Deseas aplicar una cortesía?',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: kTextPrimary,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Switch(
-                      value: _isCourtesy,
-                      onChanged: (val) {
-                        setState(() => _isCourtesy = val);
-                      },
-                      activeThumbColor: Colors.white,
-                      activeTrackColor: kPrimary,
-                      inactiveTrackColor: const Color(0xFFD1D5DB),
-                      inactiveThumbColor: const Color(0xFF6B7280),
-                    ),
-                  ],
-                ),
-                if (_isCourtesy) ...[
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _courtesyReasonController,
-                    decoration: InputDecoration(
-                      hintText: 'Ingrese el motivo de la cortesía',
-                      hintStyle: const TextStyle(color: Color(0xFF9CA3AF)),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: const BorderSide(color: kBorder),
-                      ),
+                        ),
+                        const SizedBox(width: 12),
+                        Switch(
+                          value: _isTakeout,
+                          onChanged: (val) {
+                            setState(() => _isTakeout = val);
+                          },
+                          activeThumbColor: Colors.white,
+                          activeTrackColor: kPrimary,
+                          inactiveTrackColor: const Color(0xFFD1D5DB),
+                          inactiveThumbColor: const Color(0xFF6B7280),
+                        ),
+                      ],
                     ),
                   ),
                 ],
-                const SizedBox(height: 12), // Reduced from 20 to 12
+              ),
+              const SizedBox(height: 12),
 
-                const SizedBox(height: 8), // Reduced from 16 to 8
-                const Text(
-                  'Descuento aplicado al pedido',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: kTextPrimary,
-                    fontWeight: FontWeight.w500,
+              // Cortesía
+              Row(
+                children: [
+                  const Text(
+                    '¿Deseas aplicar una cortesía?',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: kTextPrimary,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Switch(
+                    value: _isCourtesy,
+                    onChanged: (val) {
+                      setState(() => _isCourtesy = val);
+                    },
+                    activeThumbColor: Colors.white,
+                    activeTrackColor: kPrimary,
+                    inactiveTrackColor: const Color(0xFFD1D5DB),
+                    inactiveThumbColor: const Color(0xFF6B7280),
+                  ),
+                ],
+              ),
+              if (_isCourtesy) ...[
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _courtesyReasonController,
+                  decoration: InputDecoration(
+                    hintText: 'Ingrese el motivo de la cortesía',
+                    hintStyle: const TextStyle(color: Color(0xFF9CA3AF)),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: kBorder),
+                    ),
                   ),
                 ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    TextButton.icon(
-                      onPressed: () {}, // TODO: Implementar selección de descuento
-                      icon: const Icon(Icons.add_circle_outline, size: 18),
-                      label: const Text('Aplicar descuento a producto'),
-                      style: TextButton.styleFrom(
-                        foregroundColor: kPrimary,
-                        padding: EdgeInsets.zero,
+              ],
+              const SizedBox(height: 12), // Reduced from 20 to 12
+
+              const SizedBox(height: 8), // Reduced from 16 to 8
+              const Text(
+                'Descuento aplicado al pedido',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: kTextPrimary,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  SizedBox(
+                    width: 220,
+                    child: TextField(
+                      controller: _discountController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
                       ),
+                      decoration: InputDecoration(
+                        prefixText: 'RD\$ ',
+                        labelText: 'Descuento manual',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: const BorderSide(color: kBorder),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: const BorderSide(color: kBorder),
+                        ),
+                        isDense: true,
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: kBorder),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _PreviewRow(
+                      label: 'Subtotal estimado',
+                      value: previewSubtotal,
+                    ),
+                    const SizedBox(height: 6),
+                    _PreviewRow(
+                      label: 'Impuestos estimados',
+                      value: previewTax,
+                    ),
+                    const SizedBox(height: 6),
+                    _PreviewRow(
+                      label: _isCourtesy ? 'Cortesía total' : 'Descuento',
+                      value: -previewDiscount,
+                      valueColor: const Color(0xFF16A34A),
+                    ),
+                    const Divider(height: 20),
+                    _PreviewRow(
+                      label: 'Total estimado del item',
+                      value: previewTotal,
+                      isBold: true,
+                      valueColor: kTextPrimary,
                     ),
                   ],
                 ),
-                const SizedBox(height: 4),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF8FAFC),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: kBorder),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+              ),
+
+              const SizedBox(height: 12),
+              const Divider(color: kBorder, height: 1),
+
+              // Footer Actions
+              Container(
+                padding: const EdgeInsets.only(top: 0),
+                child: IntrinsicHeight(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      _PreviewRow(
-                        label: 'Subtotal estimado',
-                        value: previewSubtotal,
+                      Expanded(
+                        child: _ModalButton(
+                          icon: Icons.close,
+                          label: 'Cancelar',
+                          color: kTextPrimary,
+                          onTap: () => Navigator.of(context).pop(),
+                        ),
                       ),
-                      const SizedBox(height: 6),
-                      _PreviewRow(
-                        label: 'Impuestos estimados',
-                        value: previewTax,
+                      const VerticalDivider(width: 1, color: kBorder),
+                      Expanded(
+                        child: _ModalButton(
+                          icon: Icons.warning_amber_rounded,
+                          label: 'Agotar producto',
+                          color: widget.item.productId == null
+                              ? kTextSecondary
+                              : kDangerRed,
+                          onTap: widget.item.productId == null
+                              ? null
+                              : _handleMarkSoldOut,
+                        ),
                       ),
-                      const SizedBox(height: 6),
-                      _PreviewRow(
-                        label: _isCourtesy ? 'Cortesía total' : 'Descuento',
-                        value: -previewDiscount,
-                        valueColor: const Color(0xFF16A34A),
-                      ),
-                      const Divider(height: 20),
-                      _PreviewRow(
-                        label: 'Total estimado del item',
-                        value: previewTotal,
-                        isBold: true,
-                        valueColor: kTextPrimary,
-                      ),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 12),
-                const Divider(color: kBorder, height: 1),
-
-                // Footer Actions
-                Container(
-                  padding: const EdgeInsets.only(top: 0),
-                  child: IntrinsicHeight(
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
+                      const VerticalDivider(width: 1, color: kBorder),
+                      if (widget.onReprint != null) ...[
                         Expanded(
                           child: _ModalButton(
-                            icon: Icons.close,
-                            label: 'Cancelar',
-                            color: kTextPrimary,
-                            onTap: () => Navigator.of(context).pop(),
+                            icon: Icons.print_outlined,
+                            label: 'Reimprimir comanda',
+                            color: const Color(0xFF2563EB),
+                            onTap: widget.onReprint,
                           ),
                         ),
                         const VerticalDivider(width: 1, color: kBorder),
-                        Expanded(
-                          child: _ModalButton(
-                            icon: Icons.warning_amber_rounded,
-                            label: 'Agotar producto',
-                            color: widget.item.productId == null
-                                ? kTextSecondary
-                                : kDangerRed,
-                            onTap: widget.item.productId == null
-                                ? null
-                                : _handleMarkSoldOut,
-                          ),
-                        ),
-                        const VerticalDivider(width: 1, color: kBorder),
+                      ],
                       Expanded(
                         child: _ModalButton(
                           icon: Icons.delete_outline,
@@ -681,7 +802,10 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                           padding: const EdgeInsets.all(8),
                           child: ElevatedButton.icon(
                             onPressed: _isSaving ? null : _handleSave,
-                            icon: const Icon(Icons.check_circle_outline, size: 24),
+                            icon: const Icon(
+                              Icons.check_circle_outline,
+                              size: 24,
+                            ),
                             label: Text(
                               _isSaving ? 'Guardando...' : 'Guardar cambios',
                               style: const TextStyle(
@@ -700,10 +824,10 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                           ),
                         ),
                       ),
-                      ],
-                    ),
+                    ],
                   ),
                 ),
+              ),
             ],
           ),
         ),
@@ -766,8 +890,6 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     }
     return _enteredDiscount().clamp(0, _estimatedSubtotal());
   }
-
-
 
   ({String notes, String? courtesyReason}) _splitStoredNotes(String? rawNotes) {
     if (rawNotes == null || rawNotes.trim().isEmpty) {
@@ -841,8 +963,6 @@ class _ModalButton extends StatelessWidget {
     );
   }
 }
-
-
 
 class _PreviewRow extends StatelessWidget {
   final String label;

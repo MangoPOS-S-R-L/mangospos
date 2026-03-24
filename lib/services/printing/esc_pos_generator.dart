@@ -74,6 +74,16 @@ class EscPosGenerator {
     setAlignment(Alignment.left);
   }
 
+  /// Texto centrado con wrap automático por ancho disponible
+  void textCenteredWrapped(String value) {
+    final lines = _wrapText(value, _getMaxChars());
+    setAlignment(Alignment.center);
+    for (final line in lines) {
+      text(line);
+    }
+    setAlignment(Alignment.left);
+  }
+
   /// Texto a la derecha
   void textRight(String text, {bool newLine = true}) {
     setAlignment(Alignment.right);
@@ -216,7 +226,7 @@ class EscPosGenerator {
   /// Información de orden
   void orderInfo({
     required String orderNumber,
-    required String tableName,
+    String? tableName,
     required DateTime dateTime,
     String? waiterName,
   }) {
@@ -224,8 +234,16 @@ class EscPosGenerator {
     text('ORDEN: $orderNumber');
     setBold(false);
 
-    text('Mesa: $tableName');
-    if (waiterName != null) text('Mesero: $waiterName');
+    final resolvedTable = tableName?.trim();
+    if (resolvedTable != null && resolvedTable.isNotEmpty) {
+      text('Mesa: $resolvedTable');
+    }
+
+    final resolvedWaiter = waiterName?.trim();
+    if (resolvedWaiter != null && resolvedWaiter.isNotEmpty) {
+      text('Mesero: $resolvedWaiter');
+    }
+
     text('Fecha: ${_formatDateTime(dateTime)}');
 
     separator();
@@ -361,6 +379,44 @@ class EscPosGenerator {
     return '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year} '
         '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
   }
+
+  List<String> _wrapText(String value, int maxChars) {
+    final normalized = value.trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (normalized.isEmpty) return [''];
+    if (normalized.length <= maxChars) return [normalized];
+
+    final words = normalized.split(' ');
+    final lines = <String>[];
+    var current = '';
+
+    for (final word in words) {
+      if (word.length > maxChars) {
+        if (current.isNotEmpty) {
+          lines.add(current);
+          current = '';
+        }
+        for (var i = 0; i < word.length; i += maxChars) {
+          final end = (i + maxChars < word.length) ? i + maxChars : word.length;
+          lines.add(word.substring(i, end));
+        }
+        continue;
+      }
+
+      final candidate = current.isEmpty ? word : '$current $word';
+      if (candidate.length <= maxChars) {
+        current = candidate;
+      } else {
+        if (current.isNotEmpty) lines.add(current);
+        current = word;
+      }
+    }
+
+    if (current.isNotEmpty) {
+      lines.add(current);
+    }
+
+    return lines;
+  }
 }
 
 /// Alineación de texto
@@ -368,4 +424,3 @@ enum Alignment { left, center, right }
 
 /// Fuente ESC/POS
 enum Font { a, b }
-

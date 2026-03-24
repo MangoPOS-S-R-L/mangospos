@@ -115,9 +115,8 @@ class SalesRepository {
     }
   }
 
-  Future<({String? customerId, String? customerName, String? note})> getSessionCustomer(
-    String sessionId,
-  ) async {
+  Future<({String? customerId, String? customerName, String? note})>
+  getSessionCustomer(String sessionId) async {
     try {
       final data = await _client
           .from('table_sessions')
@@ -761,6 +760,35 @@ class SalesRepository {
     }
   }
 
+  Future<void> assignCustomerToCheck({
+    required String checkId,
+    required String customerId,
+    required String customerName,
+  }) async {
+    try {
+      await _client
+          .from('order_checks')
+          .update({
+            'customer_id': customerId,
+            'customer_name': customerName.trim(),
+          })
+          .eq('id', checkId);
+    } catch (e) {
+      throw Exception('Error al asignar cliente al check: $e');
+    }
+  }
+
+  Future<void> clearCustomerFromCheck(String checkId) async {
+    try {
+      await _client
+          .from('order_checks')
+          .update({'customer_id': null, 'customer_name': null})
+          .eq('id', checkId);
+    } catch (e) {
+      throw Exception('Error al limpiar cliente del check: $e');
+    }
+  }
+
   /// Obtener checks de una orden
   Future<List<OrderCheck>> getOrderChecks(String orderId) async {
     try {
@@ -884,10 +912,7 @@ class SalesRepository {
   }
 
   /// Anular orden y sus pagos
-  Future<void> annulOrder({
-    required String orderId,
-    String? reason,
-  }) async {
+  Future<void> annulOrder({required String orderId, String? reason}) async {
     try {
       // 1. Obtener pagos asociados
       final paymentsRaw = await _client
@@ -895,7 +920,7 @@ class SalesRepository {
           .select('id, amount, session_id')
           .eq('order_id', orderId)
           .eq('status', 'completed');
-      
+
       final payments = List<Map<String, dynamic>>.from(paymentsRaw);
 
       // 2. Anular la orden mediante RPC (cierra orden, sesión y libera mesa)
@@ -911,7 +936,7 @@ class SalesRepository {
           .eq('order_id', orderId);
 
       // 4. Anular pagos asociados
-      // Nota: La restricción de tabla 'payments_status_check' no acepta 'void', 
+      // Nota: La restricción de tabla 'payments_status_check' no acepta 'void',
       // pero sí acepta 'cancelled'.
       if (payments.isNotEmpty) {
         final paymentIds = payments.map((p) => p['id'] as String).toList();
@@ -922,11 +947,10 @@ class SalesRepository {
       }
 
       // 5. Anular Documentos Fiscales asociados
-       await _client
+      await _client
           .from('fiscal_documents')
           .update({'status': 'cancelled'})
           .eq('order_id', orderId);
-
     } catch (e) {
       throw Exception('Error al anular orden: $e');
     }

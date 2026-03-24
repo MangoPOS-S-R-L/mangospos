@@ -15,21 +15,27 @@ class PrintTicketService {
     String? waiterName,
     String? businessName,
     bool isReprint = false,
+    String receiptItemDisplayMode = 'grouped',
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
+    final printableItems = _buildPrintableItems(
+      items,
+      receiptItemDisplayMode: receiptItemDisplayMode,
+    );
 
     gen.initialize();
     gen.lineFeed();
 
-    if (businessName != null) {
-      gen.setTextSize(width: 2, height: 2);
+    final resolvedBusinessName = businessName?.trim();
+    if (resolvedBusinessName != null && resolvedBusinessName.isNotEmpty) {
+      gen.setTextSize(width: 1, height: 2);
       gen.setBold(true);
-      gen.textCentered(businessName);
+      gen.textCenteredWrapped(resolvedBusinessName.toUpperCase());
       gen.setBold(false);
       gen.setTextSize();
+      gen.lineFeed();
     }
 
-    gen.lineFeed();
     gen.setTextSize(width: 2, height: 2);
     gen.setBold(true);
     gen.textCentered(isReprint ? 'REIMPRESIÓN COMANDA' : 'COMANDA DE COCINA');
@@ -37,20 +43,48 @@ class PrintTicketService {
     gen.setTextSize();
     gen.doubleSeparator();
 
-    gen.orderInfo(
-      orderNumber: order.id.substring(0, 8).toUpperCase(),
-      tableName: tableName,
-      dateTime: order.createdAt,
-      waiterName: waiterName,
-    );
+    gen.setBold(true);
+    gen.text('ORDEN: ${order.id.substring(0, 8).toUpperCase()}');
+    gen.setBold(false);
 
-    for (final item in items) {
-      gen.lineFeed();
+    if (tableName.isNotEmpty) {
+      gen.text('MESA: $tableName');
+    }
+
+    if (waiterName != null && waiterName.isNotEmpty) {
+      gen.text('MESERO: $waiterName');
+    }
+
+    final dateStr = _formatDate(order.createdAt);
+    final timeStr = _formatTime(order.createdAt);
+    gen.text('FECHA: $dateStr');
+    gen.text('HORA: $timeStr');
+
+    gen.lineFeed();
+    gen.separator();
+
+    for (var idx = 0; idx < printableItems.length; idx++) {
+      final item = printableItems[idx];
       gen.setTextSize(width: 2, height: 2);
       gen.setBold(true);
-      gen.text('x${_formatQty(item.quantity)} ${item.productName}');
+      final itemPrefix = 'x${_formatQty(item.quantity)} ';
+      final itemNameLines = _wrapKitchenItemName(
+        item.productName,
+        prefix: itemPrefix,
+        maxChars: 20,
+      );
+      for (var lineIndex = 0; lineIndex < itemNameLines.length; lineIndex++) {
+        final line = lineIndex == 0
+            ? '$itemPrefix${itemNameLines[lineIndex]}'
+            : '   ${itemNameLines[lineIndex]}';
+        gen.text(line);
+      }
       gen.setBold(false);
       gen.setTextSize();
+
+      if (item.isTakeout) {
+        gen.text('  [PARA LLEVAR]');
+      }
 
       if (item.modifiers.isNotEmpty) {
         for (final mod in item.modifiers) {
@@ -59,7 +93,6 @@ class PrintTicketService {
       }
 
       if (item.notes != null && item.notes!.isNotEmpty) {
-        gen.lineFeed();
         gen.setBold(true);
         gen.text('NOTA: ${item.notes}');
         gen.setBold(false);
@@ -68,6 +101,7 @@ class PrintTicketService {
       gen.separator();
     }
 
+    gen.lineFeed(2);
     gen.lineFeed(3);
     gen.cut();
 
@@ -194,14 +228,12 @@ class PrintTicketService {
       final leftPart = '$displayQty x RD\$ ${_formatMoney(unitPrice)}';
       final rightPart = 'RD\$ ${_formatMoney(item.total)}';
       gen.dotRow(leftPart, rightPart);
-      gen.lineFeed(); // línea en blanco debajo del detalle
 
       // Modificadores con indentación
       if (item.modifiers.isNotEmpty) {
         for (final mod in item.modifiers) {
           gen.text('  + ${mod.name}');
         }
-        gen.lineFeed(); // línea en blanco debajo de modificadores
       }
 
       // Notas especiales destacadas
@@ -209,10 +241,9 @@ class PrintTicketService {
         gen.setBold(true);
         gen.text('  NOTA: ${item.notes}');
         gen.setBold(false);
-        gen.lineFeed(); // línea en blanco debajo de nota
       }
 
-      // Espacio ligero entre items (sin separador)
+      // Espacio ligero entre items
       if (i < consolidatedItems.length - 1) {
         gen.lineFeed();
       }
@@ -427,12 +458,20 @@ class PrintTicketService {
       final leftPart = '$displayQty x RD\$ ${_formatMoney(unitPrice)}';
       final rightPart = 'RD\$ ${_formatMoney(item.total)}';
       gen.dotRow(leftPart, rightPart);
-      gen.lineFeed();
 
       if (item.modifiers.isNotEmpty) {
         for (final mod in item.modifiers) {
           gen.text('  + ${mod.name}');
         }
+      }
+
+      if (item.notes != null && item.notes!.isNotEmpty) {
+        gen.setBold(true);
+        gen.text('  NOTA: ${item.notes}');
+        gen.setBold(false);
+      }
+
+      if (i < consolidatedItems.length - 1) {
         gen.lineFeed();
       }
     }
@@ -504,10 +543,13 @@ class PrintTicketService {
     List<OrderItem> items, {
     required String receiptItemDisplayMode,
   }) {
-    if (receiptItemDisplayMode == 'separate') {
-      return _separatePrintableItems(items);
+    final normalizedMode = receiptItemDisplayMode.trim().toLowerCase();
+    final normalizedItems = _consolidatePrintableItems(items);
+
+    if (normalizedMode == 'separate') {
+      return _separatePrintableItems(normalizedItems);
     }
-    return _consolidatePrintableItems(items);
+    return normalizedItems;
   }
 
   static List<OrderItem> _consolidatePrintableItems(List<OrderItem> items) {
@@ -592,6 +634,60 @@ class PrintTicketService {
     }
 
     return separated;
+  }
+
+  static List<String> _wrapKitchenItemName(
+    String name, {
+    required String prefix,
+    required int maxChars,
+  }) {
+    final normalized = name.trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (normalized.isEmpty) return [''];
+
+    final firstLineWidth = (maxChars - prefix.length).clamp(8, maxChars);
+    final continuationWidth = (maxChars - 3).clamp(8, maxChars);
+    final words = normalized.split(' ');
+    final lines = <String>[];
+    var current = '';
+    var currentWidth = firstLineWidth;
+
+    void pushCurrent() {
+      if (current.isNotEmpty) {
+        lines.add(current);
+        current = '';
+        currentWidth = continuationWidth;
+      }
+    }
+
+    for (final word in words) {
+      if (word.length > currentWidth) {
+        if (current.isNotEmpty) {
+          pushCurrent();
+        }
+        var start = 0;
+        while (start < word.length) {
+          final width = lines.isEmpty ? firstLineWidth : continuationWidth;
+          final end = (start + width < word.length)
+              ? start + width
+              : word.length;
+          lines.add(word.substring(start, end));
+          start = end;
+          currentWidth = continuationWidth;
+        }
+        continue;
+      }
+
+      final candidate = current.isEmpty ? word : '$current $word';
+      if (candidate.length <= currentWidth) {
+        current = candidate;
+      } else {
+        pushCurrent();
+        current = word;
+      }
+    }
+
+    pushCurrent();
+    return lines.isEmpty ? [''] : lines;
   }
 
   static String _formatQty(double qty) {

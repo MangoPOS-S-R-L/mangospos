@@ -1012,16 +1012,88 @@ class _CartView extends ConsumerWidget {
   void _openProductDetailModal(
     BuildContext context,
     WidgetRef ref,
-    OrderItem item,
-  ) {
+    OrderItem item, {
+    List<OrderItem>? groupedItems,
+  }) {
     showDialog(
       context: context,
       builder: (context) => ProductDetailModal(
         item: item,
+        groupedItems: groupedItems,
         onSave: (updatedItem) async {
           await ref
               .read(currentOrderProvider.notifier)
               .updateItem(item.id, updatedItem);
+        },
+        onSaveBatch: (items, updatedItem, reductionReason) async {
+          final salesRepo = ref.read(salesRepositoryProvider);
+          final orderNotifier = ref.read(currentOrderProvider.notifier);
+          final totalBase = items.fold<double>(
+            0,
+            (sum, current) => sum + (current.subtotal + current.tax),
+          );
+          final originalTotalQty = items.fold<double>(
+            0,
+            (sum, current) => sum + current.quantity,
+          );
+          final targetTotalQty = updatedItem.quantity <= 0
+              ? 1.0
+              : updatedItem.quantity;
+          var qtyToDistribute = targetTotalQty;
+
+          for (var index = 0; index < items.length; index++) {
+            final current = items[index];
+            final isLast = index == items.length - 1;
+            double nextQty;
+
+            if (targetTotalQty >= originalTotalQty) {
+              nextQty = isLast ? qtyToDistribute : current.quantity;
+            } else {
+              final remainingAfterCurrent = qtyToDistribute - current.quantity;
+              if (remainingAfterCurrent >= 0) {
+                nextQty = current.quantity;
+              } else {
+                nextQty = qtyToDistribute.clamp(0, current.quantity).toDouble();
+              }
+            }
+
+            if (isLast) {
+              nextQty = qtyToDistribute.clamp(0, double.infinity).toDouble();
+            }
+
+            final base = current.subtotal + current.tax;
+            final discountShare = totalBase > 0
+                ? (updatedItem.discounts * (base / totalBase))
+                : 0.0;
+            final trimmedNotes = updatedItem.notes?.trim();
+            final mergedNotes = <String>[];
+            if (trimmedNotes != null && trimmedNotes.isNotEmpty) {
+              mergedNotes.add(trimmedNotes);
+            }
+            if (reductionReason != null && reductionReason.trim().isNotEmpty) {
+              mergedNotes.add('[REDUCCION:${reductionReason.trim()}]');
+            }
+
+            if (nextQty <= 0.0001) {
+              await orderNotifier.deleteItem(
+                current.id,
+                reason: reductionReason ?? 'Reducción de cantidad',
+              );
+            } else {
+              await salesRepo.updateItemDetails(
+                itemId: current.id,
+                productName: updatedItem.productName,
+                quantity: nextQty,
+                isTakeout: updatedItem.isTakeout,
+                discounts: discountShare,
+                notes: mergedNotes.isEmpty ? null : mergedNotes.join('\n'),
+              );
+            }
+
+            qtyToDistribute -= nextQty;
+          }
+
+          await ref.read(currentOrderProvider.notifier).refreshOrder();
         },
         onDelete: (reason) async {
           await ref
@@ -1059,7 +1131,12 @@ class _CartView extends ConsumerWidget {
                 if (order != null) {
                   ref
                       .read(currentOrderProvider.notifier)
-                      .reprintKitchenTicket(orderId: order.id, items: [item]);
+                      .reprintKitchenTicket(
+                        orderId: order.id,
+                        items: groupedItems?.isNotEmpty == true
+                            ? groupedItems
+                            : [item],
+                      );
                 }
               }
             : null,
@@ -1111,6 +1188,15 @@ class _CartView extends ConsumerWidget {
 
     final selectedCheckId = orderState.selectedCheckId;
     final allChecks = orderState.checks;
+    OrderCheck? selectedCheck;
+    if (selectedCheckId != null) {
+      for (final check in allChecks) {
+        if (check.id == selectedCheckId) {
+          selectedCheck = check;
+          break;
+        }
+      }
+    }
     final activeChecks = allChecks.where((c) => !c.isClosed).toList();
     final hasChecks =
         activeChecks.length > 1 ||
@@ -1173,7 +1259,7 @@ class _CartView extends ConsumerWidget {
       final name = item.productName;
       final qty = item.quantity.toDouble();
       final totalItem = _effectiveItemTotal(item);
-      final groupKey = name.toLowerCase().trim();
+      final groupKey = '${name.toLowerCase().trim()}|${item.isTakeout}';
       if (groupedSent.containsKey(groupKey)) {
         groupedSent[groupKey] = groupedSent[groupKey]!.copyWith(
           qty: groupedSent[groupKey]!.qty + qty,
@@ -1185,6 +1271,7 @@ class _CartView extends ConsumerWidget {
           name: name,
           qty: qty,
           total: totalItem,
+          isTakeout: item.isTakeout,
           items: [item],
         );
       }
@@ -1621,10 +1708,12 @@ class _CartView extends ConsumerWidget {
                               name: groupedSentItems[i].name,
                               qty: groupedSentItems[i].qty,
                               total: groupedSentItems[i].total,
+                              isTakeout: groupedSentItems[i].isTakeout,
                               onTap: () => _openProductDetailModal(
                                 context,
                                 ref,
                                 groupedSentItems[i].items.first,
+                                groupedItems: groupedSentItems[i].items,
                               ),
                             ),
                             if (i < groupedSentItems.length - 1)
@@ -1748,9 +1837,16 @@ class _CartView extends ConsumerWidget {
                     background: _salesKitchenButton,
                     onPressed: () async {
                       try {
+                        final waiterName =
+                            await _loadWaiterName(ref, orderState.order!.id) ??
+                            ref.read(sessionProvider).userName;
+                        if (!context.mounted) return;
                         await ref
                             .read(currentOrderProvider.notifier)
-                            .confirmOrder();
+                            .confirmOrder(
+                              tableName: tableCode,
+                              waiterName: waiterName,
+                            );
                         if (!context.mounted) return;
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
@@ -1800,8 +1896,12 @@ class _CartView extends ConsumerWidget {
                                     orderState.order!,
                                     displayTotal,
                                     checkId: selectedCheckId,
-                                    customerId: orderState.customerId,
-                                    customerName: orderState.customerName,
+                                    customerId:
+                                        selectedCheck?.customerId ??
+                                        orderState.customerId,
+                                    customerName:
+                                        selectedCheck?.customerName ??
+                                        orderState.customerName,
                                   ),
                             icon: Icons.payments_outlined,
                           ),
@@ -1966,8 +2066,12 @@ class _CartView extends ConsumerWidget {
                                     orderState.order!,
                                     displayTotal,
                                     checkId: selectedCheckId,
-                                    customerId: orderState.customerId,
-                                    customerName: orderState.customerName,
+                                    customerId:
+                                        selectedCheck?.customerId ??
+                                        orderState.customerId,
+                                    customerName:
+                                        selectedCheck?.customerName ??
+                                        orderState.customerName,
                                   ),
                             icon: Icons.payments_rounded,
                           ),
@@ -2750,6 +2854,23 @@ class _CartLineItem extends StatelessWidget {
                   ),
                 ),
               ),
+              if (item.isTakeout) ...[
+                const SizedBox(width: 6),
+                Container(
+                  width: 22,
+                  height: 22,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF3E8),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Icon(
+                    Icons.shopping_bag_outlined,
+                    size: 13,
+                    color: Color(0xFFF97316),
+                  ),
+                ),
+              ],
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
@@ -2793,25 +2914,22 @@ class _ActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
+    return Container(
       width: double.infinity,
-      height: 50,
-      child: ElevatedButton.icon(
+      constraints: const BoxConstraints(
+        minHeight: 54,
+      ), // Altura mínima para consistencia
+      child: ElevatedButton(
         onPressed: onPressed,
-        icon: Icon(icon, size: 20, color: Colors.white),
-        label: Text(
-          label,
-          style: const TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w600,
-            color: Colors.white,
-          ),
-        ),
         style:
             ElevatedButton.styleFrom(
               backgroundColor: background,
               disabledBackgroundColor: background.withValues(alpha: 0.35),
               elevation: 0,
+              padding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 8,
+              ), // Padding interno para multi-línea
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(_salesRadiusButton),
               ),
@@ -2820,6 +2938,26 @@ class _ActionButton extends StatelessWidget {
                 Colors.white.withValues(alpha: 0.08),
               ),
             ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 20, color: Colors.white),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                label,
+                textAlign: TextAlign.center, // Texto centrado
+                style: const TextStyle(
+                  fontSize:
+                      14, // Ligeramente más pequeño para optimizar espacio
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                  height: 1.1, // Altura de línea compacta
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2838,26 +2976,37 @@ class _SecondaryActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
+    return Container(
       width: double.infinity,
-      height: 50,
-      child: OutlinedButton.icon(
+      constraints: const BoxConstraints(minHeight: 54),
+      child: OutlinedButton(
         onPressed: onPressed,
-        icon: Icon(icon, size: 18, color: _salesTextPrimary),
-        label: Text(
-          label,
-          style: const TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w600,
-            color: _salesTextPrimary,
-          ),
-        ),
         style: OutlinedButton.styleFrom(
           backgroundColor: _salesTabActiveBg,
           side: const BorderSide(color: _salesDivider),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(_salesRadiusButton),
           ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 18, color: _salesTextPrimary),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                label,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: _salesTextPrimary,
+                  height: 1.1,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -2876,12 +3025,14 @@ class _SentLineItem extends StatelessWidget {
   final String name;
   final double qty;
   final double total;
+  final bool isTakeout;
   final VoidCallback? onTap;
 
   const _SentLineItem({
     required this.name,
     required this.qty,
     required this.total,
+    required this.isTakeout,
     this.onTap,
   });
 
@@ -2941,6 +3092,23 @@ class _SentLineItem extends StatelessWidget {
                 ),
               ),
             ),
+            if (isTakeout) ...[
+              const SizedBox(width: 6),
+              Container(
+                width: 24,
+                height: 24,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF3E8),
+                  borderRadius: BorderRadius.circular(7),
+                ),
+                child: const Icon(
+                  Icons.shopping_bag_outlined,
+                  size: 14,
+                  color: Color(0xFFF97316),
+                ),
+              ),
+            ],
             const SizedBox(width: 10),
             // Nombre
             Expanded(
@@ -3066,12 +3234,14 @@ class _GroupedSentItem {
   final String name;
   final double qty;
   final double total;
+  final bool isTakeout;
   final List<OrderItem> items;
 
   const _GroupedSentItem({
     required this.name,
     required this.qty,
     required this.total,
+    required this.isTakeout,
     required this.items,
   });
 
@@ -3079,12 +3249,14 @@ class _GroupedSentItem {
     String? name,
     double? qty,
     double? total,
+    bool? isTakeout,
     List<OrderItem>? items,
   }) {
     return _GroupedSentItem(
       name: name ?? this.name,
       qty: qty ?? this.qty,
       total: total ?? this.total,
+      isTakeout: isTakeout ?? this.isTakeout,
       items: items ?? this.items,
     );
   }

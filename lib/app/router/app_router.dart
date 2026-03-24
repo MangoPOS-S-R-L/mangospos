@@ -1,6 +1,9 @@
 // lib/app/app_router.dart
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/categories/view/categories_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/modifiers/view/modifiers_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/menus/view/menus_view.dart';
@@ -66,10 +69,48 @@ import 'package:mangopos/presentation/settings/view/plan_management_view.dart';
 // import 'package:mangopos/presentation/menu/view/modifier_groups_view.dart';
 // import 'package:mangopos/presentation/menu/view/modifiers_view.dart';
 
+class GoRouterRefreshStream extends ChangeNotifier {
+  GoRouterRefreshStream(Stream<dynamic> stream) {
+    _subscription = stream.asBroadcastStream().listen((_) => notifyListeners());
+  }
+
+  late final StreamSubscription<dynamic> _subscription;
+
+  @override
+  void dispose() {
+    _subscription.cancel();
+    super.dispose();
+  }
+}
+
 class AppRouter {
+  static final GoRouterRefreshStream _authRefresh = GoRouterRefreshStream(
+    Supabase.instance.client.auth.onAuthStateChange,
+  );
+
   static GoRouter router = GoRouter(
-    // cambia a login/dashboard según tu flujo
     initialLocation: AppRoutes.login,
+    refreshListenable: _authRefresh,
+    redirect: (context, state) {
+      final session = Supabase.instance.client.auth.currentSession;
+      final isAuthenticated = session != null;
+      final path = state.uri.path;
+      final isAuthRoute =
+          path == AppRoutes.login ||
+          path == AppRoutes.register ||
+          path == AppRoutes.registerStep2 ||
+          path == AppRoutes.registerSetup;
+
+      if (!isAuthenticated) {
+        return isAuthRoute ? null : AppRoutes.login;
+      }
+
+      if (isAuthRoute) {
+        return AppRoutes.dashboard;
+      }
+
+      return null;
+    },
     errorBuilder: (_, state) => _NotFoundView(path: state.uri.toString()),
     routes: [
       // ---------- Alias React (paridad de rutas 1:1) ----------

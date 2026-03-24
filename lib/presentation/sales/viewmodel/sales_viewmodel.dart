@@ -40,7 +40,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
   Future<void> refreshOfflineMonitor() => _refreshOfflineMonitor();
 
-  Future<void> _refreshOfflineMonitor({String? syncStatus, bool? syncInFlight}) async {
+  Future<void> _refreshOfflineMonitor({
+    String? syncStatus,
+    bool? syncInFlight,
+  }) async {
     final businessId = _activeBusinessId;
     final pending = businessId == null || businessId.isEmpty
         ? 0
@@ -62,7 +65,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   CurrentOrderState build() {
     unawaited(_connectivity.initialize());
     unawaited(_refreshOfflineMonitor());
-    _connectivitySubscription ??= _connectivity.connectionStream.listen((isConnected) {
+    _connectivitySubscription ??= _connectivity.connectionStream.listen((
+      isConnected,
+    ) {
       unawaited(
         _refreshOfflineMonitor(
           syncStatus: isConnected
@@ -599,7 +604,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       tax: newTax,
     );
 
-    state = state.copyWith(items: updatedItems, order: updatedOrder, error: null);
+    state = state.copyWith(
+      items: updatedItems,
+      order: updatedOrder,
+      error: null,
+    );
 
     try {
       await ref.read(salesRepositoryProvider).deleteItem(itemId: itemId);
@@ -659,19 +668,23 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       final isOffline =
           !_connectivity.isConnected || orderId.startsWith('local-order-');
       if (isOffline && businessId != null && businessId.isNotEmpty) {
-        final updatedItems = state.items.map((item) {
-          if (item.id != itemId) return item;
-          final subtotal = item.unitPrice * quantity;
-          final taxRate = item.subtotal > 0 ? (item.tax / item.subtotal) : 0.0;
-          final tax = subtotal * taxRate;
-          final total = subtotal + tax;
-          return item.copyWith(
-            quantity: quantity,
-            subtotal: double.parse(subtotal.toStringAsFixed(2)),
-            tax: double.parse(tax.toStringAsFixed(2)),
-            total: double.parse(total.toStringAsFixed(2)),
-          );
-        }).toList(growable: false);
+        final updatedItems = state.items
+            .map((item) {
+              if (item.id != itemId) return item;
+              final subtotal = item.unitPrice * quantity;
+              final taxRate = item.subtotal > 0
+                  ? (item.tax / item.subtotal)
+                  : 0.0;
+              final tax = subtotal * taxRate;
+              final total = subtotal + tax;
+              return item.copyWith(
+                quantity: quantity,
+                subtotal: double.parse(subtotal.toStringAsFixed(2)),
+                tax: double.parse(tax.toStringAsFixed(2)),
+                total: double.parse(total.toStringAsFixed(2)),
+              );
+            })
+            .toList(growable: false);
 
         state = state.copyWith(items: updatedItems);
         await _offlinePos.enqueueAction(
@@ -722,9 +735,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           !_connectivity.isConnected || orderId.startsWith('local-order-');
       if (isOffline && businessId != null && businessId.isNotEmpty) {
         state = state.copyWith(
-          items: state.items.map((item) {
-            return item.id == itemId ? item.copyWith(notes: notes) : item;
-          }).toList(growable: false),
+          items: state.items
+              .map((item) {
+                return item.id == itemId ? item.copyWith(notes: notes) : item;
+              })
+              .toList(growable: false),
         );
         await _offlinePos.enqueueAction(
           businessId: businessId,
@@ -773,11 +788,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           !_connectivity.isConnected || orderId.startsWith('local-order-');
       if (isOffline && businessId != null && businessId.isNotEmpty) {
         state = state.copyWith(
-          items: state.items.map((item) {
-            return item.id == itemId
-                ? item.copyWith(isTakeout: isTakeout)
-                : item;
-          }).toList(growable: false),
+          items: state.items
+              .map((item) {
+                return item.id == itemId
+                    ? item.copyWith(isTakeout: isTakeout)
+                    : item;
+              })
+              .toList(growable: false),
         );
         await _offlinePos.enqueueAction(
           businessId: businessId,
@@ -794,7 +811,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         );
         await _persistCurrentState(localOnly: true);
         state = state.copyWith(
-          error: 'Takeout del item actualizado en local. Pendiente de sincronizar.',
+          error:
+              'Takeout del item actualizado en local. Pendiente de sincronizar.',
         );
         return;
       }
@@ -979,7 +997,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         );
         await _persistCurrentState(localOnly: true);
         state = state.copyWith(
-          error: 'Movimiento a subcuenta guardado en local. Pendiente de sincronizar.',
+          error:
+              'Movimiento a subcuenta guardado en local. Pendiente de sincronizar.',
         );
         return;
       }
@@ -1078,7 +1097,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }
 
   // Method to confirm order (send to kitchen)
-  Future<void> confirmOrder() async {
+  Future<void> confirmOrder({String? tableName, String? waiterName}) async {
     final orderId = state.order?.id;
     if (orderId == null) return;
     state = state.copyWith(loading: true);
@@ -1097,8 +1116,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             .sendLocalOrderToKitchen(
               businessId: businessId,
               localState: state,
-              tableName: state.origin == 'table' ? 'MESA' : 'LOCAL',
-              waiterName: session.userName,
+              tableName:
+                  tableName ?? (state.origin == 'table' ? 'MESA' : 'LOCAL'),
+              waiterName: waiterName ?? session.userName,
               businessName: session.activeBusinessName,
             );
         await _offlinePos.enqueueAction(
@@ -1119,7 +1139,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
       await ref
           .read(printingServiceProvider)
-          .sendOrderToKitchen(orderId: orderId, businessId: businessId);
+          .sendOrderToKitchen(
+            orderId: orderId,
+            businessId: businessId,
+            fallbackTableName: tableName,
+            fallbackWaiterName: waiterName ?? session.userName,
+          );
       await _loadOrderDetail(orderId);
     } catch (e) {
       state = state.copyWith(loading: false, error: e.toString());
@@ -1136,17 +1161,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
     try {
       if (items != null && items.isNotEmpty) {
-        await ref.read(printingServiceProvider).reprintItems(
-          orderId: orderId,
-          businessId: businessId,
-          items: items,
-        );
+        await ref
+            .read(printingServiceProvider)
+            .reprintItems(
+              orderId: orderId,
+              businessId: businessId,
+              items: items,
+            );
       }
     } catch (e) {
       state = state.copyWith(error: 'Error al reimprimir: $e');
     }
   }
-
 
   Future<void> refreshOrder({bool clearIfPaid = false}) async {
     final orderId = state.order?.id;
@@ -1183,11 +1209,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           state.order != null &&
           state.order!.id.startsWith('local-order-') &&
           result.lastMappedOrderId != null) {
-        await _loadOrderDetail(
-          result.lastMappedOrderId!,
-          origin: state.origin,
-        );
-      } else if (state.order != null && !state.order!.id.startsWith('local-order-')) {
+        await _loadOrderDetail(result.lastMappedOrderId!, origin: state.origin);
+      } else if (state.order != null &&
+          !state.order!.id.startsWith('local-order-')) {
         await _loadOrderDetail(state.order!.id, origin: state.origin);
       }
 
@@ -1201,7 +1225,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           ? 'Sync offline en progreso. Pendientes: ${result.pending}.'
           : 'Sync offline completada (${result.completed}).';
 
-      state = state.copyWith(error: result.hasFailures ? syncMessage : state.error);
+      state = state.copyWith(
+        error: result.hasFailures ? syncMessage : state.error,
+      );
       await _refreshOfflineMonitor(
         syncStatus: syncMessage,
         syncInFlight: false,
@@ -1347,7 +1373,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
       state = state.copyWith(
         loading: false,
-        error: loadError ?? 'Orden no encontrada (Probable error RLS o de permisos)',
+        error:
+            loadError ??
+            'Orden no encontrada (Probable error RLS o de permisos)',
       );
       return;
     }
@@ -1367,8 +1395,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     List<FiscalNcfSequence> fiscalSequences = state.fiscalSequences;
     if (fiscalSequences.isEmpty && _activeBusinessId != null) {
       try {
-        fiscalSequences =
-            await ref.read(fiscalServiceProvider).getSequences(_activeBusinessId!);
+        fiscalSequences = await ref
+            .read(fiscalServiceProvider)
+            .getSequences(_activeBusinessId!);
       } catch (e) {
         debugPrint('Error loading fiscal sequences: $e');
       }
