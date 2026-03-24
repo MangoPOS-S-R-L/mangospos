@@ -256,26 +256,51 @@ class PrintTicketService {
     // ════════════════════════════════════════════
     gen.lineFeed();
 
+    final printableSubtotal = consolidatedItems.fold<double>(
+      0,
+      (sum, item) => sum + item.subtotal,
+    );
+    final printableDiscounts = consolidatedItems.fold<double>(
+      0,
+      (sum, item) => sum + item.discounts,
+    );
+    final printableTax = consolidatedItems.fold<double>(
+      0,
+      (sum, item) => sum + item.tax,
+    );
+    final printableItemsTotal = consolidatedItems.fold<double>(
+      0,
+      (sum, item) => sum + item.total,
+    );
+    final printableServiceFee = order.subtotal > 0
+        ? double.parse(
+            (order.serviceFee * (printableSubtotal / order.subtotal))
+                .toStringAsFixed(2),
+          )
+        : 0.0;
+    final printableGrandTotal = printableItemsTotal + printableServiceFee;
+
     // Subtotal
-    gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(order.subtotal)}');
+    gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(printableSubtotal)}');
 
     // Descuentos
-    if (order.discounts > 0) {
-      gen.textRow('DESCUENTO:', '-RD\$ ${_formatMoney(order.discounts)}');
+    if (printableDiscounts > 0) {
+      gen.textRow('DESCUENTO:', '-RD\$ ${_formatMoney(printableDiscounts)}');
     }
 
     // Cargo por servicio
-    if (order.serviceFee > 0) {
-      final servicePct = ((order.serviceFee / order.subtotal) * 100)
-          .toStringAsFixed(0);
+    if (printableServiceFee > 0) {
+      final servicePct = printableSubtotal > 0
+          ? ((printableServiceFee / printableSubtotal) * 100).toStringAsFixed(0)
+          : '0';
       gen.textRow(
         'SERVICIO ($servicePct%):',
-        'RD\$ ${_formatMoney(order.serviceFee)}',
+        'RD\$ ${_formatMoney(printableServiceFee)}',
       );
     }
 
     // ITBIS
-    gen.textRow('ITBIS (18%):', 'RD\$ ${_formatMoney(order.tax)}');
+    gen.textRow('ITBIS (18%):', 'RD\$ ${_formatMoney(printableTax)}');
 
     gen.lineFeed();
     _thickSeparator(gen);
@@ -286,7 +311,7 @@ class PrintTicketService {
     // ════════════════════════════════════════════
     gen.setBold(true);
     gen.setTextSize(width: 2, height: 2);
-    gen.textRow('TOTAL:', 'RD\$ ${_formatMoney(order.total)}');
+    gen.textRow('TOTAL:', 'RD\$ ${_formatMoney(printableGrandTotal)}');
     gen.setTextSize();
     gen.setBold(false);
 

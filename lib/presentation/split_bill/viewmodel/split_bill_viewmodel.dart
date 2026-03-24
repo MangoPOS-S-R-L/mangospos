@@ -168,37 +168,52 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
   }
 
   Future<void> deleteCheck(String checkId) async {
-    // 1. SNAPSHOT for revert/reference
     final previousItems = state.allItems;
+    final mainCheck = state.checks.firstWhere(
+      (c) => c.position == 1,
+      orElse: () => OrderCheck(
+        id: '',
+        orderId: '',
+        label: '',
+        position: 1,
+        isClosed: false,
+        subtotal: 0,
+        discounts: 0,
+        tax: 0,
+        total: 0,
+      ),
+    );
 
-    // 2. OPTIMISTIC UPDATE (UI Inmediato)
-
-    // a) Identificar items que estaban en este check
-    // b) Mover items locales a 'Sin Asignar' (checkId: null)
-    final updatedItems = state.allItems.map((item) {
+    final movedToMainItems = state.allItems.map((item) {
       if (item.checkId == checkId) {
-        return item.copyWith(checkId: null, forceCheckIdNull: true);
+        return item.copyWith(
+          checkId: mainCheck.id.isNotEmpty ? mainCheck.id : null,
+          forceCheckIdNull: mainCheck.id.isEmpty,
+        );
       }
       return item;
     }).toList();
 
-    // c) Remover el check de la lista local
+    final normalizedItems = mainCheck.id.isNotEmpty
+        ? _consolidateCheckItemsLocally(
+            items: movedToMainItems,
+            checkId: mainCheck.id,
+          )
+        : _consolidateUnassignedItemsLocally(movedToMainItems);
+
     final updatedChecks = state.checks.where((c) => c.id != checkId).toList();
     final updatedPendingDeletes = Set<String>.from(state.pendingDeletedCheckIds)
       ..remove(checkId);
 
-    // Actualizar estado para reflejar cambios en UI YA
     state = state.copyWith(
-      checks: updatedChecks,
-      allItems: updatedItems,
-      selectedItemIds: {}, // limpiar selección
+      checks: _recalculateChecksTotals(updatedChecks, normalizedItems),
+      allItems: normalizedItems,
+      selectedItemIds: {},
       pendingDeletedCheckIds: updatedPendingDeletes,
       error: null,
     );
 
-    // 3. BACKGROUND SYNC (Solo si existe en DB)
     if (_isUuid(checkId)) {
-      // Ejecutar en segundo plano sin await para no bloquear UI
       Future(() async {
         try {
           final itemIdsToMove = previousItems
@@ -206,16 +221,20 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
               .map((i) => i.id)
               .toList(growable: false);
 
-          // Mover items en DB al pool principal en un solo batch.
           if (itemIdsToMove.isNotEmpty) {
             await _salesRepo.moveItemsToCheckBatch(
               itemIds: itemIdsToMove,
-              checkPosition: 1, // 1 = Main/Unassigned
+              checkPosition: 1,
             );
           }
 
-          // Eliminar check en DB
           await _salesRepo.deleteCheck(checkId);
+          if (mainCheck.id.isNotEmpty && _isUuid(mainCheck.id)) {
+            await _salesRepo.consolidateCheckItems(
+              checkId: mainCheck.id,
+              normalizeQtyToInteger: true,
+            );
+          }
         } catch (e) {
           // Manejo de error silencioso o notificación global
           // Por ahora, solo log en consola o update de error si aún montado
@@ -467,6 +486,38 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
     }
 
     return [...otherItems, ...consolidatedByKey.values];
+  }
+
+  List<OrderItem> _consolidateUnassignedItemsLocally(List<OrderItem> items) {
+    final consolidatedByKey = <String, OrderItem>{};
+    final assignedItems = <OrderItem>[];
+
+    for (final item in items) {
+      if (item.checkId != null) {
+        assignedItems.add(item);
+        continue;
+      }
+
+      final key =
+          '${item.productId ?? ''}|${item.productName}|${item.sku ?? ''}|'
+          '${item.unitPrice}|${item.isTakeout}|${item.status}|${item.notes ?? ''}';
+
+      final existing = consolidatedByKey[key];
+      if (existing == null) {
+        consolidatedByKey[key] = item;
+      } else {
+        consolidatedByKey[key] = existing.copyWith(
+          quantity: existing.quantity + item.quantity,
+          subtotal: existing.subtotal + item.subtotal,
+          discounts: existing.discounts + item.discounts,
+          tax: existing.tax + item.tax,
+          total: existing.total + item.total,
+          forceCheckIdNull: true,
+        );
+      }
+    }
+
+    return [...assignedItems, ...consolidatedByKey.values];
   }
 
   /// Retornar item a 'Sin Asignar' (Check position 0)
