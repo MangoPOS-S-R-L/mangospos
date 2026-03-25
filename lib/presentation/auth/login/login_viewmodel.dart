@@ -9,6 +9,8 @@ import 'package:web/web.dart' as web;
 
 import '../../../services/session/session_controller.dart';
 import '../../../core/utils/logger.dart';
+import '../../../core/auth/session_bridge.dart';
+import '../../../core/tenant/tenant_resolver.dart';
 import 'login_state.dart';
 
 class LoginViewModel extends Notifier<LoginState> {
@@ -85,20 +87,12 @@ class LoginViewModel extends Notifier<LoginState> {
         return;
       }
 
-      // Si tiene más de una sucursal y estamos en web (portal), redirigir directamente al selector.
-      // Así la nueva vista 'SelectBusinessView' se encarga de mostrarle los cuadritos elegibles
+      // Si tiene más de un negocio → mostrar selector en app.mangopos.do
       if (businessesList.length > 1) {
         AppLogger.i('Multi-tenant detectado (${businessesList.length} negocios). Redirigiendo a selector...');
-        
-        // Lo guardamos temporalmente en el estado o router, o simplemente
-        // lo pasamos como GoRouter extra en la vista SelectBusiness
-        // Por simplificar y porque es web, podemos simplemente navegar:
         _safeSet(state.copyWith(isLoading: false));
-        if (kIsWeb) {
-          // Importante: No cerramos sesión, la mantenemos para que el selector consulte su lista
-          try {
-             web.window.location.assign('/#/select-business'); // Navegación segura GoRouter
-          } catch (_) {}
+        if (kIsWeb && TenantResolver.isAppShell) {
+          web.window.location.assign('/#/select-business');
         }
         return;
       }
@@ -119,28 +113,22 @@ class LoginViewModel extends Notifier<LoginState> {
         return;
       }
 
-      // Lógica de redirección a subdominio si estamos en app.mangopos.do (Hacerlo ANTES de autenticar localmente)
-      if (kIsWeb) {
-        final currentUrl = web.window.location.href;
-        if (currentUrl.contains('app.mangopos.do')) {
-          try {
-            final businessObj = singleBiz['businesses'];
-            final domain = businessObj?['domain'] as String?;
-            
-            if (domain != null && domain.isNotEmpty) {
-              final targetUrl = 'https://$domain/';
-              AppLogger.i('Redirigiendo LIMPIAMENTE a subdominio: $targetUrl');
-              
-              _safeSet(state.copyWith(isLoading: false));
-              web.window.location.assign(targetUrl);
-              return; 
-            }
-          } catch (e) {
-            AppLogger.w('No se pudo redirigir al subdominio: $e');
-          }
+      // Lógica de redirección a subdominio si estamos en app.mangopos.do
+      // — ANTES de setAuthenticated para que GoRouter no intervenga.
+      if (kIsWeb && TenantResolver.isAppShell) {
+        final businessObj = singleBiz['businesses'];
+        final domain = businessObj?['domain'] as String?;
+
+        if (domain != null && domain.isNotEmpty) {
+          AppLogger.i('[$businessId] Transfiriendo sesión al tenant: $domain');
+          _safeSet(state.copyWith(isLoading: false));
+          SessionBridge.redirectToTenant(domain);
+          return; // El browser navega al tenant; no seguimos montando nada local.
         }
       }
 
+      // Si NO estamos en app.mangopos.do (ej: desktop, mobile, desarrollo local)
+      // autenticamos localmente de forma normal.
       ref.read(sessionProvider.notifier).setAuthenticated(
         user.id,
         businessId: businessId,
@@ -150,7 +138,6 @@ class LoginViewModel extends Notifier<LoginState> {
       );
 
       AppLogger.i('[$businessId] Login exitoso para $fullName ($roleStr)');
-
 
       _safeSet(const LoginState());
     } on AuthException catch (e, st) {

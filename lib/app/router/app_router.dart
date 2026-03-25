@@ -1,4 +1,3 @@
-// lib/app/app_router.dart
 import 'dart:async';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -7,6 +6,7 @@ import 'package:web/web.dart' as web;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:mangopos/core/tenant/tenant_resolver.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/categories/view/categories_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/modifiers/view/modifiers_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/menus/view/menus_view.dart';
@@ -127,7 +127,7 @@ class AppRouter {
       final requestedBusinessId = state.uri.queryParameters['business_id'];
 
       // LOG DIAGNÓSTICO — siempre visible en consola del browser
-      print('[MangoPOS:Router] redirect → path="$path" isAuthenticated=$isAuthenticated uri=${state.uri}');
+      print('[MangoPOS:Router] redirect → path="$path" isAuthenticated=$isAuthenticated mode=${TenantResolver.mode.name} uri=${state.uri}');
 
       final isAuthRoute =
           path == AppRoutes.login ||
@@ -135,8 +135,28 @@ class AppRouter {
           path == AppRoutes.registerStep2 ||
           path == AppRoutes.registerSetup ||
           path == AppRoutes.crossAuth ||
-          path == '/auth'; // Hardcoded fallback
+          path == '/auth';
 
+      // ── MODO TENANT (*.mangopos.do) ────────────────────────────────────
+      // Cuando estamos en el subdominio del negocio, el comportamiento es simple:
+      //  - Sin sesión → login local del tenant
+      //  - Con sesión → dashboard
+      if (kIsWeb && TenantResolver.isTenant) {
+        if (!isAuthenticated) {
+          if (isAuthRoute) return null; // deja pasar auth routes
+          return AppRoutes.login;
+        }
+        // Si ya está autenticado y trata de ir al login, redirigir al dashboard
+        if (isAuthRoute && path != '/auth') {
+          return Uri(
+            path: AppRoutes.dashboard,
+            queryParameters: requestedBusinessId == null ? null : {'business_id': requestedBusinessId},
+          ).toString();
+        }
+        return null;
+      }
+
+      // ── MODO APP SHELL (app.mangopos.do) — comportamiento original ─────
       print('[MangoPOS:Router] isAuthRoute=$isAuthRoute  isAuthenticated=$isAuthenticated');
 
       if (!isAuthenticated) {

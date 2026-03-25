@@ -4,10 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_animate/flutter_animate.dart';
- // ignore: avoid_web_libraries_in_dot_dart
-import 'package:web/web.dart' as web;
+
 
 import '../../../core/utils/logger.dart';
+import '../../../core/auth/session_bridge.dart';
 
 class SelectBusinessView extends ConsumerStatefulWidget {
   const SelectBusinessView({super.key});
@@ -78,12 +78,8 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
     final domain = biz['domain'] as String?;
     if (domain == null || domain.isEmpty) return;
 
-    final targetUrl = 'https://$domain/';
-    AppLogger.i('Negocio seleccionado, redirigiendo a: $targetUrl');
-    
-    // Aquí es donde sucede la magia: Como la cookie de sesión es .mangopos.do 
-    // y SameSite=Lax, se mantendrá logueado en el subdominio de destino.
-    web.window.location.assign(targetUrl);
+    AppLogger.i('Negocio seleccionado, transfiriendo sesión a tenant: $domain');
+    SessionBridge.redirectToTenant(domain);
   }
 
   @override

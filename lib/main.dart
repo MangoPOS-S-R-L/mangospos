@@ -17,6 +17,7 @@ import 'app/router/app_router.dart';
 import 'core/network/supabase_config.dart';
 import 'core/cache/cache_manager.dart';
 import 'core/utils/logger.dart';
+import 'core/auth/session_bridge.dart';
 
 /// === CONFIG DEL AGENTE ===
 const String agentHost = '127.0.0.1';
@@ -149,6 +150,11 @@ void main() async {
     AppLogger.i(
       'Supabase inicializado correctamente conectando a: ${Env.supabaseUrl}',
     );
+
+    // Si estamos en un subdominio tenant (*.mangopos.do) y la URL trae tokens
+    // de una redirección desde app.mangopos.do, los consumimos aquí antes de
+    // montar la UI para que el router ya vea la sesión activa.
+    await SessionBridge.handleIncoming();
 
     MediaKit.ensureInitialized();
     AppLogger.d('MediaKit inicializado');
