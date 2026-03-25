@@ -31,9 +31,13 @@ class SupabaseConfig {
     required String url,
     required String anonKey,
   }) async {
+    // Limpiamos los parámetros por si vienen con comillas o backticks residuales del entorno
+    final cleanUrl = url.replaceAll('`', '').replaceAll('\'', '').replaceAll('"', '').trim();
+    final cleanAnonKey = anonKey.replaceAll('`', '').replaceAll('\'', '').replaceAll('"', '').trim();
+
     await Supabase.initialize(
-      url: url,
-      anonKey: anonKey,
+      url: cleanUrl,
+      anonKey: cleanAnonKey,
       debug: kDebugMode || kIsWeb, // Enable debug
       authOptions: const FlutterAuthClientOptions(
         authFlowType: AuthFlowType.pkce,
