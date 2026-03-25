@@ -18,6 +18,8 @@ import 'core/network/supabase_config.dart';
 import 'core/cache/cache_manager.dart';
 import 'core/utils/logger.dart';
 import 'core/auth/session_bridge.dart';
+// ignore: depend_on_referenced_packages
+import 'package:flutter_web_plugins/url_strategy.dart';
 
 /// === CONFIG DEL AGENTE ===
 const String agentHost = '127.0.0.1';
@@ -133,6 +135,9 @@ void main() async {
   try {
     WidgetsFlutterBinding.ensureInitialized();
     AppLogger.i('Arrancando MangoPOS...');
+
+    // Usar path-based routing en web (sin # en la URL)
+    if (kIsWeb) usePathUrlStrategy();
 
     if (!kIsWeb && Platform.isWindows) {
       await windowManager.ensureInitialized();
