@@ -163,6 +163,19 @@ bool _meetsPinAccess(PosRole role, PinAccessLevel level) {
   }
 }
 
+String? _requestedBusinessIdFromUrl() {
+  final direct = Uri.base.queryParameters['business_id'];
+  if (direct != null && direct.isNotEmpty) return direct;
+
+  final fragment = Uri.base.fragment;
+  if (fragment.isEmpty) return null;
+  final queryIndex = fragment.indexOf('?');
+  if (queryIndex == -1 || queryIndex == fragment.length - 1) return null;
+
+  final query = fragment.substring(queryIndex + 1);
+  return Uri.splitQueryString(query)['business_id'];
+}
+
 class SessionState {
   final AuthStatus status;
   final String? userId;
@@ -372,8 +385,12 @@ class SessionController extends Notifier<SessionState> {
         );
       }).toList(growable: false);
 
-      final preferredBusinessId = state.activeBusinessId != null &&
-              businessIds.contains(state.activeBusinessId)
+      final requestedBusinessId = _requestedBusinessIdFromUrl();
+      final preferredBusinessId = requestedBusinessId != null &&
+              businessIds.contains(requestedBusinessId)
+          ? requestedBusinessId
+          : state.activeBusinessId != null &&
+                businessIds.contains(state.activeBusinessId)
           ? state.activeBusinessId!
           : businessIds.first;
 

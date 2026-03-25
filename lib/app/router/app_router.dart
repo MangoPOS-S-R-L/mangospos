@@ -95,6 +95,7 @@ class AppRouter {
       final session = Supabase.instance.client.auth.currentSession;
       final isAuthenticated = session != null;
       final path = state.uri.path;
+      final requestedBusinessId = state.uri.queryParameters['business_id'];
       final isAuthRoute =
           path == AppRoutes.login ||
           path == AppRoutes.register ||
@@ -102,11 +103,22 @@ class AppRouter {
           path == AppRoutes.registerSetup;
 
       if (!isAuthenticated) {
-        return isAuthRoute ? null : AppRoutes.login;
+        if (isAuthRoute) return null;
+        return Uri(
+          path: AppRoutes.login,
+          queryParameters: requestedBusinessId == null
+              ? null
+              : {'business_id': requestedBusinessId},
+        ).toString();
       }
 
       if (isAuthRoute) {
-        return AppRoutes.dashboard;
+        return Uri(
+          path: AppRoutes.dashboard,
+          queryParameters: requestedBusinessId == null
+              ? null
+              : {'business_id': requestedBusinessId},
+        ).toString();
       }
 
       return null;
