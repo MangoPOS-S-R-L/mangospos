@@ -157,14 +157,16 @@ class AppRouter {
       GoRoute(
         path: '/auth',
         builder: (context, state) {
-          // Leer parámetros propios (?at=, ?rt=) O los estándar de Supabase
-          // (?access_token=, ?refresh_token=) que llegan en la redirección PKCE.
+          // Los tokens vienen como query params REALES de la URL (antes del '#'):
+          // https://tenant.mangopos.do/?at=TOKEN&rt=TOKEN#/auth
+          // GoRouter con hash-routing puede no pasarlos en state.uri, así que
+          // CrossAuthView los leerá directamente de window.location como fallback.
           final at = state.uri.queryParameters['at']
               ?? state.uri.queryParameters['access_token'];
           final rt = state.uri.queryParameters['rt']
               ?? state.uri.queryParameters['refresh_token'];
           AppLogger.i(
-            'Auth Route Triggered: at=${at != null && at.length > 10 ? at.substring(0, 10) : at}...',
+            'CrossAuth route: at=${at != null && at.length > 10 ? "${at.substring(0, 10)}..." : at ?? "null (será leído de window.location)"}',
           );
           return CrossAuthView(
             accessToken: at,

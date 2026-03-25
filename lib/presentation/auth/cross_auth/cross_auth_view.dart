@@ -8,10 +8,10 @@ import 'package:mangopos/core/utils/logger.dart';
 import 'package:web/web.dart' as web;
 
 class CrossAuthView extends StatefulWidget {
-  /// Parámetro propio (`?at=`) o estándar de Supabase (`?access_token=`)
+  /// Token de acceso recibido como query param real (?at=) ANTES del fragmento #
   final String? accessToken;
 
-  /// Parámetro propio (`?rt=`) o estándar de Supabase (`?refresh_token=`)
+  /// Refresh token recibido como query param real (?rt=) ANTES del fragmento #
   final String? refreshToken;
 
   const CrossAuthView({
@@ -25,6 +25,8 @@ class CrossAuthView extends StatefulWidget {
 }
 
 class _CrossAuthViewState extends State<CrossAuthView> {
+  String? _errorMessage;
+
   @override
   void initState() {
     super.initState();
@@ -32,63 +34,66 @@ class _CrossAuthViewState extends State<CrossAuthView> {
   }
 
   Future<void> _handleAuth() async {
-    // Leer la URL real del browser para capturar también los params estándar
-    // que Supabase envía en el callback PKCE/Magic Link
+    // Prioridad 1: tokens de GoRouter state (query params antes del '#')
     String? at = widget.accessToken;
     String? rt = widget.refreshToken;
 
-    // Si no vienen por los parámetros del widget, buscarlos en la URL actual
-    // Supabase puede enviarlos como ?access_token= o en el fragmento #access_token=
-    if ((at == null || at.isEmpty)) {
+    AppLogger.i('CrossAuthView init: at=${at != null ? "[presente, len=${at.length}]" : "null"}, rt=${rt != null ? "[presente]" : "null"}');
+
+    // Prioridad 2: leer directamente de window.location si el widget no los tiene
+    if (at == null || at.isEmpty) {
       try {
-        final currentHref = web.window.location.href;
-        final currentUri = Uri.parse(currentHref);
+        final href = web.window.location.href;
+        AppLogger.d('CrossAuthView: URL completa = $href');
+        final uri = Uri.parse(href);
 
-        // Buscar en query params directos
-        at ??= currentUri.queryParameters['access_token'];
-        rt ??= currentUri.queryParameters['refresh_token'];
+        // Query params de la URL real (antes del #)
+        at ??= uri.queryParameters['at'];
+        rt ??= uri.queryParameters['rt'];
 
-        // Buscar también en el fragmento (#access_token=...&refresh_token=...)
-        if ((at == null || at.isEmpty) && currentUri.fragment.isNotEmpty) {
-          final fragmentParams = Uri.splitQueryString(currentUri.fragment);
-          at ??= fragmentParams['access_token'];
-          rt ??= fragmentParams['refresh_token'];
+        // También intentar desde el fragmento (formato antiguo /#/auth?at=...)
+        if ((at == null || at.isEmpty) && uri.fragment.contains('?')) {
+          final fragParams = Uri.splitQueryString(uri.fragment.split('?').last);
+          at ??= fragParams['at'] ?? fragParams['access_token'];
+          rt ??= fragParams['rt'] ?? fragParams['refresh_token'];
         }
+
+        AppLogger.d('CrossAuthView: after URL scan: at=${at != null ? "[presente]" : "null"}');
       } catch (e) {
-        AppLogger.w('CrossAuthView: No se pudo leer la URL del browser: $e');
+        AppLogger.w('CrossAuthView: Error leyendo URL: $e');
       }
     }
 
-    // Caso 1: el SDK ya restauró la sesión automáticamente (detectSessionInUri)
+    // Prioridad 3: Supabase ya restauró la sesión automáticamente (detectSessionInUri)
     final existingSession = Supabase.instance.client.auth.currentSession;
     if (existingSession != null) {
-      AppLogger.i('CrossAuthView: Sesión ya activa (detectSessionInUri). Redirigiendo...');
+      AppLogger.i('CrossAuthView: Sesión ya activa. Redirigiendo al dashboard...');
       _clearUrl();
       if (mounted) context.go(AppRoutes.dashboard);
       return;
     }
 
-    // Caso 2: no hay sesión activa y no tenemos tokens → al login
+    // Sin tokens y sin sesión activa → ir al login
     if (at == null || at.isEmpty) {
-      AppLogger.w('CrossAuthView: No se encontró access_token en ningún origen');
+      AppLogger.w('CrossAuthView: No hay tokens ni sesión activa. Redirigiendo al login.');
       if (mounted) context.go(AppRoutes.login);
       return;
     }
 
     try {
-      AppLogger.i('CrossAuthView: Estableciendo sesión con tokens recibidos...');
+      AppLogger.i('CrossAuthView: Llamando setSession...');
       await Supabase.instance.client.auth.setSession(at);
-      AppLogger.i('CrossAuthView: Sesión establecida correctamente.');
+      AppLogger.i('CrossAuthView: setSession exitoso.');
 
       _clearUrl();
       if (mounted) context.go(AppRoutes.dashboard);
     } catch (e, st) {
-      AppLogger.e('CrossAuthView: Error al establecer sesión cruzada', error: e, stackTrace: st);
+      AppLogger.e('CrossAuthView: setSession falló', error: e, stackTrace: st);
+      // Mostrar el error en pantalla en vez de redirigir silenciosamente
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error de autenticación: $e')),
-        );
-        context.go(AppRoutes.login);
+        setState(() {
+          _errorMessage = 'Error validando sesión: $e';
+        });
       }
     }
   }
@@ -107,6 +112,39 @@ class _CrossAuthViewState extends State<CrossAuthView> {
 
   @override
   Widget build(BuildContext context) {
+    if (_errorMessage != null) {
+      return Scaffold(
+        backgroundColor: Colors.white,
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.error_outline, color: Colors.redAccent, size: 48),
+                const SizedBox(height: 16),
+                const Text(
+                  'No se pudo iniciar sesión',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _errorMessage!,
+                  style: const TextStyle(color: Colors.grey, fontSize: 13),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 24),
+                FilledButton(
+                  onPressed: () => context.go(AppRoutes.login),
+                  child: const Text('Ir al inicio de sesión'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     return const Scaffold(
       body: Center(
         child: Column(
