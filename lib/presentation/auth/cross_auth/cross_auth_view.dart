@@ -8,7 +8,10 @@ import 'package:mangopos/core/utils/logger.dart';
 import 'package:web/web.dart' as web;
 
 class CrossAuthView extends StatefulWidget {
+  /// Parámetro propio (`?at=`) o estándar de Supabase (`?access_token=`)
   final String? accessToken;
+
+  /// Parámetro propio (`?rt=`) o estándar de Supabase (`?refresh_token=`)
   final String? refreshToken;
 
   const CrossAuthView({
@@ -29,34 +32,56 @@ class _CrossAuthViewState extends State<CrossAuthView> {
   }
 
   Future<void> _handleAuth() async {
-    final at = widget.accessToken;
-    final rt = widget.refreshToken;
+    // Leer la URL real del browser para capturar también los params estándar
+    // que Supabase envía en el callback PKCE/Magic Link
+    String? at = widget.accessToken;
+    String? rt = widget.refreshToken;
 
+    // Si no vienen por los parámetros del widget, buscarlos en la URL actual
+    // Supabase puede enviarlos como ?access_token= o en el fragmento #access_token=
+    if ((at == null || at.isEmpty)) {
+      try {
+        final currentHref = web.window.location.href;
+        final currentUri = Uri.parse(currentHref);
+
+        // Buscar en query params directos
+        at ??= currentUri.queryParameters['access_token'];
+        rt ??= currentUri.queryParameters['refresh_token'];
+
+        // Buscar también en el fragmento (#access_token=...&refresh_token=...)
+        if ((at == null || at.isEmpty) && currentUri.fragment.isNotEmpty) {
+          final fragmentParams = Uri.splitQueryString(currentUri.fragment);
+          at ??= fragmentParams['access_token'];
+          rt ??= fragmentParams['refresh_token'];
+        }
+      } catch (e) {
+        AppLogger.w('CrossAuthView: No se pudo leer la URL del browser: $e');
+      }
+    }
+
+    // Caso 1: el SDK ya restauró la sesión automáticamente (detectSessionInUri)
+    final existingSession = Supabase.instance.client.auth.currentSession;
+    if (existingSession != null) {
+      AppLogger.i('CrossAuthView: Sesión ya activa (detectSessionInUri). Redirigiendo...');
+      _clearUrl();
+      if (mounted) context.go(AppRoutes.dashboard);
+      return;
+    }
+
+    // Caso 2: no hay sesión activa y no tenemos tokens → al login
     if (at == null || at.isEmpty) {
-      AppLogger.w('CrossAuthView: No se encontró access_token');
+      AppLogger.w('CrossAuthView: No se encontró access_token en ningún origen');
       if (mounted) context.go(AppRoutes.login);
       return;
     }
 
     try {
-      AppLogger.i('CrossAuthView: Iniciando sesión con tokens externos...');
-      
-      if (rt != null) {
-        // En versiones modernas de Supabase, recoverSession es ideal si hay refresh_token.
-        // Pero para ser paritarios con la lógica del usuario, intentaremos setSession.
-        await Supabase.instance.client.auth.setSession(at);
-      } else {
-        await Supabase.instance.client.auth.setSession(at);
-      }
-      
+      AppLogger.i('CrossAuthView: Estableciendo sesión con tokens recibidos...');
+      await Supabase.instance.client.auth.setSession(at);
       AppLogger.i('CrossAuthView: Sesión establecida correctamente.');
 
-      // Limpiar URL (solo en Web)
       _clearUrl();
-
-      if (mounted) {
-        context.go(AppRoutes.dashboard);
-      }
+      if (mounted) context.go(AppRoutes.dashboard);
     } catch (e, st) {
       AppLogger.e('CrossAuthView: Error al establecer sesión cruzada', error: e, stackTrace: st);
       if (mounted) {
@@ -70,10 +95,10 @@ class _CrossAuthViewState extends State<CrossAuthView> {
 
   void _clearUrl() {
     try {
-      // Usando package:web para manipular el historial del browser
       final currentUri = Uri.parse(web.window.location.href);
-      // Extraer solo la parte base antes del fragmento o simplemente limpiar parametros
-      final newUrl = '${currentUri.scheme}://${currentUri.host}${currentUri.port != 80 && currentUri.port != 443 ? ":${currentUri.port}" : ""}/#/';
+      final newUrl =
+          '${currentUri.scheme}://${currentUri.host}'
+          '${currentUri.port != 80 && currentUri.port != 443 ? ":${currentUri.port}" : ""}/#/';
       web.window.history.replaceState(null, '', newUrl);
     } catch (e) {
       AppLogger.w('CrossAuthView: No se pudo limpiar la URL: $e');

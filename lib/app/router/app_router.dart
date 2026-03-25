@@ -1,6 +1,9 @@
 // lib/app/app_router.dart
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
+// ignore: avoid_web_libraries_in_dot_dart
+import 'package:web/web.dart' as web;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -90,8 +93,25 @@ class AppRouter {
     Supabase.instance.client.auth.onAuthStateChange,
   );
 
+  static String _initialLocation() {
+    if (kIsWeb) {
+      try {
+        // ignore: avoid_web_libraries_in_dot_dart
+        final hash = web.window.location.hash; // '#/auth?at=...&rt=...'
+        if (hash.startsWith('#')) {
+          final fromHash = hash.substring(1); // '/auth?at=...&rt=...'
+          if (fromHash.isNotEmpty && fromHash != '/') {
+            AppLogger.d('GoRouter initial from hash: $fromHash');
+            return fromHash;
+          }
+        }
+      } catch (_) {}
+    }
+    return AppRoutes.login;
+  }
+
   static GoRouter router = GoRouter(
-    initialLocation: AppRoutes.login,
+    initialLocation: _initialLocation(),
     refreshListenable: _authRefresh,
     redirect: (context, state) {
       final session = Supabase.instance.client.auth.currentSession;
@@ -137,9 +157,15 @@ class AppRouter {
       GoRoute(
         path: '/auth',
         builder: (context, state) {
-          final at = state.uri.queryParameters['at'];
-          final rt = state.uri.queryParameters['rt'];
-          AppLogger.i('Auth Route Triggered: at=${at?.substring(0, 10)}...');
+          // Leer parámetros propios (?at=, ?rt=) O los estándar de Supabase
+          // (?access_token=, ?refresh_token=) que llegan en la redirección PKCE.
+          final at = state.uri.queryParameters['at']
+              ?? state.uri.queryParameters['access_token'];
+          final rt = state.uri.queryParameters['rt']
+              ?? state.uri.queryParameters['refresh_token'];
+          AppLogger.i(
+            'Auth Route Triggered: at=${at != null && at.length > 10 ? at.substring(0, 10) : at}...',
+          );
           return CrossAuthView(
             accessToken: at,
             refreshToken: rt,
