@@ -51,6 +51,20 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
         return;
       }
 
+      // Si solo tiene 1 negocio → auto-redirigir al tenant sin mostrar el selector
+      if (list.length == 1) {
+        final item = list.first as Map<String, dynamic>;
+        final biz = item['businesses'];
+        final domain = biz?['domain'] as String?;
+
+        if (domain != null && domain.isNotEmpty && kIsWeb) {
+          AppLogger.i('[SelectBusiness] Un solo negocio, redirigiendo automáticamente a $domain');
+          SessionBridge.redirectToTenant(domain);
+          return; // El browser navega al tenant
+        }
+      }
+
+      // Múltiples negocios → mostrar el selector
       if (mounted) {
         setState(() {
           _businesses = list.cast<Map<String, dynamic>>();

@@ -164,7 +164,9 @@ class AppRouter {
         return null;
       }
 
-      // ── MODO APP SHELL (app.mangopos.do) — comportamiento original ─────
+      // ── MODO APP SHELL (app.mangopos.do) — portal de login/registro ─────
+      // En el app shell NUNCA mostramos el dashboard directamente.
+      // Siempre pasamos por /select-business que decide a qué tenant ir.
       print('[MangoPOS:Router] isAuthRoute=$isAuthRoute  isAuthenticated=$isAuthenticated');
 
       if (!isAuthenticated) {
@@ -177,16 +179,13 @@ class AppRouter {
         ).toString();
       }
 
-      if (isAuthRoute) {
-        return Uri(
-          path: AppRoutes.dashboard,
-          queryParameters: requestedBusinessId == null
-              ? null
-              : {'business_id': requestedBusinessId},
-        ).toString();
+      // Autenticado en appShell → siempre a select-business (nunca al dashboard local)
+      if (isAuthRoute || path == '/' || path == AppRoutes.dashboard) {
+        return AppRoutes.selectBusiness;
       }
 
       return null;
+
     },
     errorBuilder: (_, state) => _NotFoundView(path: state.uri.toString()),
     routes: [
