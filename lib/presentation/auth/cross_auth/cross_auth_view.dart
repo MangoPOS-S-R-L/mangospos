@@ -38,34 +38,43 @@ class _CrossAuthViewState extends State<CrossAuthView> {
     String? at = widget.accessToken;
     String? rt = widget.refreshToken;
 
+    print('[MangoPOS:CrossAuth] _handleAuth iniciado');
+    print('[MangoPOS:CrossAuth] widget.accessToken = ${at != null ? "[len=${at.length}]" : "NULL"}');
+    print('[MangoPOS:CrossAuth] widget.refreshToken = ${rt != null ? "[presente]" : "NULL"}');
+
     AppLogger.i('CrossAuthView init: at=${at != null ? "[presente, len=${at.length}]" : "null"}, rt=${rt != null ? "[presente]" : "null"}');
 
     // Prioridad 2: leer directamente de window.location si el widget no los tiene
     if (at == null || at.isEmpty) {
       try {
         final href = web.window.location.href;
+        print('[MangoPOS:CrossAuth] Buscando tokens en URL: $href');
         AppLogger.d('CrossAuthView: URL completa = $href');
         final uri = Uri.parse(href);
 
         // Query params de la URL real (antes del #)
         at ??= uri.queryParameters['at'];
         rt ??= uri.queryParameters['rt'];
+        print('[MangoPOS:CrossAuth] Desde query params reales: at=${at != null ? "[encontrado]" : "null"}, rt=${rt != null ? "[encontrado]" : "null"}');
 
         // También intentar desde el fragmento (formato antiguo /#/auth?at=...)
         if ((at == null || at.isEmpty) && uri.fragment.contains('?')) {
           final fragParams = Uri.splitQueryString(uri.fragment.split('?').last);
           at ??= fragParams['at'] ?? fragParams['access_token'];
           rt ??= fragParams['rt'] ?? fragParams['refresh_token'];
+          print('[MangoPOS:CrossAuth] Desde fragmento hash: at=${at != null ? "[encontrado]" : "null"}');
         }
 
         AppLogger.d('CrossAuthView: after URL scan: at=${at != null ? "[presente]" : "null"}');
       } catch (e) {
+        print('[MangoPOS:CrossAuth] Error leyendo URL: $e');
         AppLogger.w('CrossAuthView: Error leyendo URL: $e');
       }
     }
 
     // Prioridad 3: Supabase ya restauró la sesión automáticamente (detectSessionInUri)
     final existingSession = Supabase.instance.client.auth.currentSession;
+    print('[MangoPOS:CrossAuth] existingSession = ${existingSession != null ? "ACTIVA (uid=${existingSession.user.id})" : "null"}');
     if (existingSession != null) {
       AppLogger.i('CrossAuthView: Sesión ya activa. Redirigiendo al dashboard...');
       _clearUrl();
@@ -75,19 +84,23 @@ class _CrossAuthViewState extends State<CrossAuthView> {
 
     // Sin tokens y sin sesión activa → ir al login
     if (at == null || at.isEmpty) {
+      print('[MangoPOS:CrossAuth] ERROR: No hay tokens ni sesión activa → Redirigiendo a LOGIN');
       AppLogger.w('CrossAuthView: No hay tokens ni sesión activa. Redirigiendo al login.');
       if (mounted) context.go(AppRoutes.login);
       return;
     }
 
     try {
+      print('[MangoPOS:CrossAuth] Llamando setSession con token de ${at.length} chars...');
       AppLogger.i('CrossAuthView: Llamando setSession...');
       await Supabase.instance.client.auth.setSession(at);
+      print('[MangoPOS:CrossAuth] setSession EXITOSO → navegando a dashboard');
       AppLogger.i('CrossAuthView: setSession exitoso.');
 
       _clearUrl();
       if (mounted) context.go(AppRoutes.dashboard);
     } catch (e, st) {
+      print('[MangoPOS:CrossAuth] setSession FALLÓ: $e');
       AppLogger.e('CrossAuthView: setSession falló', error: e, stackTrace: st);
       // Mostrar el error en pantalla en vez de redirigir silenciosamente
       if (mounted) {

@@ -96,17 +96,23 @@ class AppRouter {
   static String _initialLocation() {
     if (kIsWeb) {
       try {
-        // ignore: avoid_web_libraries_in_dot_dart
-        final hash = web.window.location.hash; // '#/auth?at=...&rt=...'
+        final href = web.window.location.href;
+        final hash = web.window.location.hash;
+        final search = web.window.location.search;
+        print('[MangoPOS:Router] href=$href');
+        print('[MangoPOS:Router] hash=$hash  search=$search');
         if (hash.startsWith('#')) {
-          final fromHash = hash.substring(1); // '/auth?at=...&rt=...'
+          final fromHash = hash.substring(1);
           if (fromHash.isNotEmpty && fromHash != '/') {
-            AppLogger.d('GoRouter initial from hash: $fromHash');
+            print('[MangoPOS:Router] initialLocation from hash: $fromHash');
             return fromHash;
           }
         }
-      } catch (_) {}
+      } catch (e) {
+        print('[MangoPOS:Router] Error reading hash: $e');
+      }
     }
+    print('[MangoPOS:Router] initialLocation fallback: ${AppRoutes.login}');
     return AppRoutes.login;
   }
 
@@ -118,9 +124,9 @@ class AppRouter {
       final isAuthenticated = session != null;
       final path = state.uri.path;
       final requestedBusinessId = state.uri.queryParameters['business_id'];
-      
-      // LOG PARA DEPURAR (ver en consola de Coolify/Browser)
-      AppLogger.d('GoRouter Redirect: path=$path isAuthenticated=$isAuthenticated');
+
+      // LOG DIAGNÓSTICO — siempre visible en consola del browser
+      print('[MangoPOS:Router] redirect → path="$path" isAuthenticated=$isAuthenticated uri=${state.uri}');
 
       final isAuthRoute =
           path == AppRoutes.login ||
@@ -129,6 +135,8 @@ class AppRouter {
           path == AppRoutes.registerSetup ||
           path == AppRoutes.crossAuth ||
           path == '/auth'; // Hardcoded fallback
+
+      print('[MangoPOS:Router] isAuthRoute=$isAuthRoute  isAuthenticated=$isAuthenticated');
 
       if (!isAuthenticated) {
         if (isAuthRoute) return null;
@@ -157,17 +165,15 @@ class AppRouter {
       GoRoute(
         path: '/auth',
         builder: (context, state) {
-          // Los tokens vienen como query params REALES de la URL (antes del '#'):
-          // https://tenant.mangopos.do/?at=TOKEN&rt=TOKEN#/auth
-          // GoRouter con hash-routing puede no pasarlos en state.uri, así que
-          // CrossAuthView los leerá directamente de window.location como fallback.
           final at = state.uri.queryParameters['at']
               ?? state.uri.queryParameters['access_token'];
           final rt = state.uri.queryParameters['rt']
               ?? state.uri.queryParameters['refresh_token'];
-          AppLogger.i(
-            'CrossAuth route: at=${at != null && at.length > 10 ? "${at.substring(0, 10)}..." : at ?? "null (será leído de window.location)"}',
-          );
+          // LOG DIAGNÓSTICO — siempre visible en consola del browser
+          print('[MangoPOS:CrossAuth] GoRoute builder disparado!');
+          print('[MangoPOS:CrossAuth] state.uri = ${state.uri}');
+          print('[MangoPOS:CrossAuth] at = ${at != null ? "[len=${at.length} inicio=${at.length > 10 ? at.substring(0, 10) : at}]" : "NULL"}');
+          print('[MangoPOS:CrossAuth] rt = ${rt != null ? "[presente]" : "NULL"}');
           return CrossAuthView(
             accessToken: at,
             refreshToken: rt,
