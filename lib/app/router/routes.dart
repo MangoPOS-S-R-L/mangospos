@@ -1,5 +1,6 @@
 class AppRoutes {
   static const login = '/login';
+  static const selectBusiness = '/select-business';
   static const register = '/register';
   static const registerStep2 = '/register/branch';
   static const registerSetup = '/register/setup';

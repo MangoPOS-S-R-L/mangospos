@@ -67,80 +67,81 @@ class LoginViewModel extends Notifier<LoginState> {
           .maybeSingle();
       final fullName = profileResp?['full_name'] as String? ?? 'Usuario';
 
-      // Obtener rol y negocio activo
+      // Obtener todos los roles y negocios asignados en lugar de solo uno (Soporta multi-sucursal)
       final userBizResp = await supabase
           .from('user_businesses')
-          .select('business_id, role')
-          .eq('user_id', user.id)
-          .maybeSingle();
+          .select('business_id, role, businesses(name, domain)')
+          .eq('user_id', user.id);
 
-      if (userBizResp == null) {
-        AppLogger.w(
-          'Usuario sin perfil de negocio asignado (user_businesses está vacía)',
-        );
+      final businessesList = userBizResp as List<dynamic>;
+
+      if (businessesList.isEmpty) {
+        AppLogger.w('Usuario sin perfil de negocio asignado (user_businesses está vacía)');
         await supabase.auth.signOut();
         _safeSet(state.copyWith(
           isLoading: false,
-          error:
-              'Tu usuario no tiene negocio/rol asignado. Contacta al administrador.',
+          error: 'Tu usuario no tiene negocio/rol asignado. Contacta al administrador.',
         ));
         return;
       }
 
-      final businessId = userBizResp['business_id'] as String?;
-      final roleStr = userBizResp['role']?.toString();
+      // Si tiene más de una sucursal y estamos en web (portal), redirigir directamente al selector.
+      // Así la nueva vista 'SelectBusinessView' se encarga de mostrarle los cuadritos elegibles
+      if (businessesList.length > 1) {
+        AppLogger.i('Multi-tenant detectado (${businessesList.length} negocios). Redirigiendo a selector...');
+        
+        // Lo guardamos temporalmente en el estado o router, o simplemente
+        // lo pasamos como GoRouter extra en la vista SelectBusiness
+        // Por simplificar y porque es web, podemos simplemente navegar:
+        _safeSet(state.copyWith(isLoading: false));
+        if (kIsWeb) {
+          // Importante: No cerramos sesión, la mantenemos para que el selector consulte su lista
+          try {
+             web.window.location.assign('/#/select-business'); // Navegación segura GoRouter
+          } catch (_) {}
+        }
+        return;
+      }
+
+      // El usuario solo tiene 1 negocio asignado
+      final singleBiz = businessesList.first;
+      final businessId = singleBiz['business_id'] as String?;
+      final roleStr = singleBiz['role']?.toString();
       final posRole = _mapRole(roleStr);
 
       if (businessId == null || businessId.isEmpty || posRole == null) {
-        AppLogger.e(
-          'Atributos críticos faltantes en Login -> businessId: $businessId | Role: $posRole',
-        );
+        AppLogger.e('Atributos críticos faltantes en Login -> businessId: $businessId');
         await supabase.auth.signOut();
         _safeSet(state.copyWith(
           isLoading: false,
-          error:
-              'Tu acceso no está configurado correctamente (negocio/rol inválido).',
+          error: 'Tu acceso no está configurado correctamente.',
         ));
         return;
       }
 
-      ref
-          .read(sessionProvider.notifier)
-          .setAuthenticated(
-            user.id,
-            businessId: businessId,
-            userName: fullName,
-            activeRole: posRole,
-            availableRoles: [posRole],
-          );
+      ref.read(sessionProvider.notifier).setAuthenticated(
+        user.id,
+        businessId: businessId,
+        userName: fullName,
+        activeRole: posRole,
+        availableRoles: [posRole],
+      );
 
       AppLogger.i('[$businessId] Login exitoso para $fullName ($roleStr)');
       
-      // Lógica de redirección a subdominio (solo en Web y si estamos en app.mangopos.do)
+      // Lógica de redirección a subdominio si estamos en app.mangopos.do
       if (kIsWeb) {
         final currentUrl = web.window.location.href;
         if (currentUrl.contains('app.mangopos.do')) {
           try {
-            // Obtener el dominio del negocio
-            final bizData = await supabase
-                .from('businesses')
-                .select('domain')
-                .eq('id', businessId)
-                .single();
+            final businessObj = singleBiz['businesses'];
+            final domain = businessObj?['domain'] as String?;
             
-            final domain = bizData['domain'] as String?;
-            final session = supabase.auth.currentSession;
-            
-            if (domain != null && session != null) {
-              final at = session.accessToken;
-              final rt = session.refreshToken;
-              
-              // Construir URI de redirección con fragmento /auth como solicitó el usuario
-              final targetUrl = 'https://$domain/#/auth?at=${Uri.encodeComponent(at)}&rt=${Uri.encodeComponent(rt ?? "")}';
-              
-              AppLogger.i('Redirigiendo a subdominio: $targetUrl');
+            if (domain != null) {
+              final targetUrl = 'https://$domain/';
+              AppLogger.i('Redirigiendo LIMPIAMENTE a subdominio: $targetUrl');
               web.window.location.href = targetUrl;
-              return; // Detener flujo para que no navegue al dashboard local
+              return; 
             }
           } catch (e) {
             AppLogger.w('No se pudo redirigir al subdominio: $e');

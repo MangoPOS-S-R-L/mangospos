@@ -2,10 +2,13 @@ import 'dart:async';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/core/security/access_control_catalog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+// ignore: avoid_web_libraries_in_dot_dart
+import 'package:web/web.dart' as web;
 
 enum AuthStatus { unauthenticated, authenticated, loading }
 
@@ -19,6 +22,7 @@ class SessionBusiness {
   final String? companyName;
   final String role;
   final String? status;
+  final String? domain;
 
   const SessionBusiness({
     required this.id,
@@ -26,6 +30,7 @@ class SessionBusiness {
     required this.role,
     this.companyName,
     this.status,
+    this.domain,
   });
 
   String get roleLabel {
@@ -361,7 +366,7 @@ class SessionController extends Notifier<SessionState> {
 
       final businessesResp = await client
           .from('businesses')
-          .select('id, business_name, branch_name, status')
+          .select('id, business_name, branch_name, status, domain')
           .inFilter('id', businessIds);
 
       final businessMap = {
@@ -382,15 +387,31 @@ class SessionController extends Notifier<SessionState> {
           companyName: business['business_name']?.toString(),
           role: row['role']?.toString() ?? 'owner',
           status: business['status']?.toString(),
+          domain: business['domain']?.toString(),
         );
       }).toList(growable: false);
 
       final requestedBusinessId = _requestedBusinessIdFromUrl();
+      
+      String? matchedByDomainId;
+      if (kIsWeb) {
+        final currentHost = web.window.location.hostname;
+        try {
+          final matchedDomain = availableBusinesses.firstWhere(
+            (b) => b.domain == currentHost,
+          );
+          matchedByDomainId = matchedDomain.id;
+        } catch (_) {
+          // No match by domain
+        }
+      }
+
       final preferredBusinessId = requestedBusinessId != null &&
               businessIds.contains(requestedBusinessId)
           ? requestedBusinessId
-          : state.activeBusinessId != null &&
-                businessIds.contains(state.activeBusinessId)
+          : matchedByDomainId != null && businessIds.contains(matchedByDomainId)
+          ? matchedByDomainId
+          : state.activeBusinessId != null && businessIds.contains(state.activeBusinessId)
           ? state.activeBusinessId!
           : businessIds.first;
 
