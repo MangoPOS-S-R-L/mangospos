@@ -45,6 +45,7 @@ import '../../presentation/branches/view/branch_management_view.dart';
 import '../../presentation/settings/cash_registers/view/cash_registers_view.dart';
 import '../../presentation/settings/currencies/view/currencies_view.dart';
 import '../../presentation/settings/regional/view/regional_view.dart';
+import 'package:mangopos/core/utils/logger.dart';
 import 'routes.dart';
 
 // Sales module
@@ -97,12 +98,17 @@ class AppRouter {
       final isAuthenticated = session != null;
       final path = state.uri.path;
       final requestedBusinessId = state.uri.queryParameters['business_id'];
+      
+      // LOG PARA DEPURAR (ver en consola de Coolify/Browser)
+      AppLogger.d('GoRouter Redirect: path=$path isAuthenticated=$isAuthenticated');
+
       final isAuthRoute =
           path == AppRoutes.login ||
           path == AppRoutes.register ||
           path == AppRoutes.registerStep2 ||
           path == AppRoutes.registerSetup ||
-          path == AppRoutes.crossAuth;
+          path == AppRoutes.crossAuth ||
+          path == '/auth'; // Hardcoded fallback
 
       if (!isAuthenticated) {
         if (isAuthRoute) return null;
@@ -127,6 +133,19 @@ class AppRouter {
     },
     errorBuilder: (_, state) => _NotFoundView(path: state.uri.toString()),
     routes: [
+      // ---------- Auth Cross (MOVIDO AL PRINCIPIO) ----------
+      GoRoute(
+        path: '/auth',
+        builder: (context, state) {
+          final at = state.uri.queryParameters['at'];
+          final rt = state.uri.queryParameters['rt'];
+          AppLogger.i('Auth Route Triggered: at=${at?.substring(0, 10)}...');
+          return CrossAuthView(
+            accessToken: at,
+            refreshToken: rt,
+          );
+        },
+      ),
       // ---------- Alias React (paridad de rutas 1:1) ----------
       GoRoute(
         path: AppRoutes.homeReact,
@@ -161,13 +180,6 @@ class AppRouter {
       GoRoute(
         path: AppRoutes.login,
         builder: (context, state) => const LoginView(),
-      ),
-      GoRoute(
-        path: AppRoutes.crossAuth,
-        builder: (context, state) => CrossAuthView(
-          accessToken: state.uri.queryParameters['at'],
-          refreshToken: state.uri.queryParameters['rt'],
-        ),
       ),
       GoRoute(
         path: AppRoutes.cacheTest,
