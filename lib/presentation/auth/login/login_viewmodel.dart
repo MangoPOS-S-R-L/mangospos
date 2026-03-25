@@ -72,7 +72,7 @@ class LoginViewModel extends Notifier<LoginState> {
       // Obtener todos los roles y negocios asignados en lugar de solo uno (Soporta multi-sucursal)
       final userBizResp = await supabase
           .from('user_businesses')
-          .select('business_id, role, businesses(name, domain)')
+          .select('business_id, role, businesses(business_name, domain)')
           .eq('user_id', user.id);
 
       final businessesList = userBizResp as List<dynamic>;

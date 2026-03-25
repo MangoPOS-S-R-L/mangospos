@@ -39,7 +39,7 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
 
       final res = await supabase
           .from('user_businesses')
-          .select('business_id, role, businesses(name, domain, business_name, branch_name)')
+          .select('business_id, role, businesses(business_name, branch_name, domain)')
           .eq('user_id', user.id);
 
       final list = res as List<dynamic>;
