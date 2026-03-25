@@ -32,8 +32,13 @@ class SupabaseConfig {
     required String anonKey,
   }) async {
     // Limpiamos los parámetros por si vienen con comillas o backticks residuales del entorno
-    final cleanUrl = url.replaceAll('`', '').replaceAll('\'', '').replaceAll('"', '').trim();
+    String cleanUrl = url.replaceAll('`', '').replaceAll('\'', '').replaceAll('"', '').trim();
     final cleanAnonKey = anonKey.replaceAll('`', '').replaceAll('\'', '').replaceAll('"', '').trim();
+
+    // Asegurarse de que el URL tenga scheme (https://)
+    if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
+      cleanUrl = 'https://$cleanUrl';
+    }
 
     await Supabase.initialize(
       url: cleanUrl,
