@@ -119,6 +119,28 @@ class LoginViewModel extends Notifier<LoginState> {
         return;
       }
 
+      // Lógica de redirección a subdominio si estamos en app.mangopos.do (Hacerlo ANTES de autenticar localmente)
+      if (kIsWeb) {
+        final currentUrl = web.window.location.href;
+        if (currentUrl.contains('app.mangopos.do')) {
+          try {
+            final businessObj = singleBiz['businesses'];
+            final domain = businessObj?['domain'] as String?;
+            
+            if (domain != null && domain.isNotEmpty) {
+              final targetUrl = 'https://$domain/';
+              AppLogger.i('Redirigiendo LIMPIAMENTE a subdominio: $targetUrl');
+              
+              _safeSet(state.copyWith(isLoading: false));
+              web.window.location.assign(targetUrl);
+              return; 
+            }
+          } catch (e) {
+            AppLogger.w('No se pudo redirigir al subdominio: $e');
+          }
+        }
+      }
+
       ref.read(sessionProvider.notifier).setAuthenticated(
         user.id,
         businessId: businessId,
@@ -128,26 +150,7 @@ class LoginViewModel extends Notifier<LoginState> {
       );
 
       AppLogger.i('[$businessId] Login exitoso para $fullName ($roleStr)');
-      
-      // Lógica de redirección a subdominio si estamos en app.mangopos.do
-      if (kIsWeb) {
-        final currentUrl = web.window.location.href;
-        if (currentUrl.contains('app.mangopos.do')) {
-          try {
-            final businessObj = singleBiz['businesses'];
-            final domain = businessObj?['domain'] as String?;
-            
-            if (domain != null) {
-              final targetUrl = 'https://$domain/';
-              AppLogger.i('Redirigiendo LIMPIAMENTE a subdominio: $targetUrl');
-              web.window.location.href = targetUrl;
-              return; 
-            }
-          } catch (e) {
-            AppLogger.w('No se pudo redirigir al subdominio: $e');
-          }
-        }
-      }
+
 
       _safeSet(const LoginState());
     } on AuthException catch (e, st) {
