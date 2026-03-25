@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+// ignore: avoid_web_libraries_in_dot_dart
+import 'package:web/web.dart' as web;
 
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/services/session/session_controller.dart';
@@ -183,6 +185,31 @@ class _LoginViewState extends ConsumerState<LoginView> {
                 if (kDebugMode || kIsWeb) ...[
                   const SizedBox(height: 20),
                   const Divider(),
+                  Builder(
+                    builder: (context) {
+                      String debugStr = 'N/A';
+                      if (kIsWeb) {
+                        try {
+                          final href = web.window.location.href;
+                          final hash = web.window.location.hash;
+                          final pathname = web.window.location.pathname;
+                          final search = web.window.location.search;
+                          debugStr = 'href: $href\nhash: $hash\npath: $pathname\nsearch: $search';
+                        } catch (e) {
+                          debugStr = 'Error leyendo URL: $e';
+                        }
+                      }
+                      return Container(
+                        margin: const EdgeInsets.symmetric(vertical: 8),
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(color: Colors.amber.withValues(alpha: .2), borderRadius: BorderRadius.circular(8)),
+                        child: Text(
+                          '🔍 URL DETECTADA POR FLUTTER:\n$debugStr',
+                          style: const TextStyle(fontSize: 10, fontFamily: 'monospace', color: Colors.blueGrey),
+                        ),
+                      );
+                    }
+                  ),
                   const Center(
                     child: Text(
                       'WASM Build - Debug Mode\nRev: 1.0.1',
