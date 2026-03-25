@@ -8,10 +8,7 @@ import 'package:mangopos/core/utils/logger.dart';
 import 'package:web/web.dart' as web;
 
 class CrossAuthView extends StatefulWidget {
-  /// Token de acceso recibido como query param real (?at=) ANTES del fragmento #
   final String? accessToken;
-
-  /// Refresh token recibido como query param real (?rt=) ANTES del fragmento #
   final String? refreshToken;
 
   const CrossAuthView({
@@ -25,7 +22,16 @@ class CrossAuthView extends StatefulWidget {
 }
 
 class _CrossAuthViewState extends State<CrossAuthView> {
-  String? _errorMessage;
+  final List<String> _logs = [];
+
+  void _addLog(String msg) {
+    print('[MangoPOS:CrossAuth] $msg');
+    if (mounted) {
+      setState(() {
+        _logs.add(msg);
+      });
+    }
+  }
 
   @override
   void initState() {
@@ -34,80 +40,64 @@ class _CrossAuthViewState extends State<CrossAuthView> {
   }
 
   Future<void> _handleAuth() async {
-    // Prioridad 1: tokens de GoRouter state (query params antes del '#')
+    _addLog('_handleAuth() INICIADO');
+
     String? at = widget.accessToken;
     String? rt = widget.refreshToken;
 
-    print('[MangoPOS:CrossAuth] _handleAuth iniciado');
-    print('[MangoPOS:CrossAuth] widget.accessToken = ${at != null ? "[len=${at.length}]" : "NULL"}');
-    print('[MangoPOS:CrossAuth] widget.refreshToken = ${rt != null ? "[presente]" : "NULL"}');
+    _addLog('PARAMS WIDGET: at=${at != null ? "[recibido: ${at.length} chars]" : "NULL"}, rt=${rt != null ? "[recibido]" : "NULL"}');
 
-    AppLogger.i('CrossAuthView init: at=${at != null ? "[presente, len=${at.length}]" : "null"}, rt=${rt != null ? "[presente]" : "null"}');
-
-    // Prioridad 2: leer directamente de window.location si el widget no los tiene
     if (at == null || at.isEmpty) {
       try {
         final href = web.window.location.href;
-        print('[MangoPOS:CrossAuth] Buscando tokens en URL: $href');
-        AppLogger.d('CrossAuthView: URL completa = $href');
+        _addLog('URL BROWSER: $href');
         final uri = Uri.parse(href);
 
-        // Query params de la URL real (antes del #)
         at ??= uri.queryParameters['at'];
         rt ??= uri.queryParameters['rt'];
-        print('[MangoPOS:CrossAuth] Desde query params reales: at=${at != null ? "[encontrado]" : "null"}, rt=${rt != null ? "[encontrado]" : "null"}');
+        _addLog('Búsqueda QueryParams (antes de #): at=${at != null ? "ENCONTRADO" : "NO"}, rt=${rt != null ? "ENCONTRADO" : "NO"}');
 
-        // También intentar desde el fragmento (formato antiguo /#/auth?at=...)
         if ((at == null || at.isEmpty) && uri.fragment.contains('?')) {
           final fragParams = Uri.splitQueryString(uri.fragment.split('?').last);
           at ??= fragParams['at'] ?? fragParams['access_token'];
           rt ??= fragParams['rt'] ?? fragParams['refresh_token'];
-          print('[MangoPOS:CrossAuth] Desde fragmento hash: at=${at != null ? "[encontrado]" : "null"}');
+          _addLog('Búsqueda Hash Fragment (después de #): at=${at != null ? "ENCONTRADO" : "NO"}');
         }
-
-        AppLogger.d('CrossAuthView: after URL scan: at=${at != null ? "[presente]" : "null"}');
       } catch (e) {
-        print('[MangoPOS:CrossAuth] Error leyendo URL: $e');
-        AppLogger.w('CrossAuthView: Error leyendo URL: $e');
+        _addLog('ERROR LEYENDO URL: $e');
       }
     }
 
-    // Prioridad 3: Supabase ya restauró la sesión automáticamente (detectSessionInUri)
     final existingSession = Supabase.instance.client.auth.currentSession;
-    print('[MangoPOS:CrossAuth] existingSession = ${existingSession != null ? "ACTIVA (uid=${existingSession.user.id})" : "null"}');
+    _addLog('SESIÓN EXISTENTE: ${existingSession != null ? "ACTIVA (uid=${existingSession.user.id})" : "Nula"}');
+
     if (existingSession != null) {
-      AppLogger.i('CrossAuthView: Sesión ya activa. Redirigiendo al dashboard...');
+      _addLog('OK -> SESIÓN ACTIVA CONFIRMADA. Vamos a dashboard en 2 seg...');
+      await Future.delayed(const Duration(seconds: 2));
       _clearUrl();
       if (mounted) context.go(AppRoutes.dashboard);
       return;
     }
 
-    // Sin tokens y sin sesión activa → ir al login
     if (at == null || at.isEmpty) {
-      print('[MangoPOS:CrossAuth] ERROR: No hay tokens ni sesión activa → Redirigiendo a LOGIN');
-      AppLogger.w('CrossAuthView: No hay tokens ni sesión activa. Redirigiendo al login.');
+      _addLog('CRÍTICO -> NO HAY TOKENS EN NINGÚN LADO.');
+      _addLog('Mandando a LOGIN en 3 seg...');
+      await Future.delayed(const Duration(seconds: 3));
       if (mounted) context.go(AppRoutes.login);
       return;
     }
 
     try {
-      print('[MangoPOS:CrossAuth] Llamando setSession con token de ${at.length} chars...');
-      AppLogger.i('CrossAuthView: Llamando setSession...');
+      _addLog('LLAMANDO SETSESSION(at: ${at.length} chars)... ESPERANDO SUPABASE...');
       await Supabase.instance.client.auth.setSession(at);
-      print('[MangoPOS:CrossAuth] setSession EXITOSO → navegando a dashboard');
-      AppLogger.i('CrossAuthView: setSession exitoso.');
-
+      _addLog('SETSESSION EXITOSO! Redirigiendo a dashboard en 2 seg...');
+      
+      await Future.delayed(const Duration(seconds: 2));
       _clearUrl();
       if (mounted) context.go(AppRoutes.dashboard);
-    } catch (e, st) {
-      print('[MangoPOS:CrossAuth] setSession FALLÓ: $e');
-      AppLogger.e('CrossAuthView: setSession falló', error: e, stackTrace: st);
-      // Mostrar el error en pantalla en vez de redirigir silenciosamente
-      if (mounted) {
-        setState(() {
-          _errorMessage = 'Error validando sesión: $e';
-        });
-      }
+    } catch (e) {
+      _addLog('ERROR EN SETSESSION: $e');
+      _addLog('Asegurate que *.mangopos.do está en la config de Redirect URLs de Supabase.');
     }
   }
 
@@ -119,56 +109,44 @@ class _CrossAuthViewState extends State<CrossAuthView> {
           '${currentUri.port != 80 && currentUri.port != 443 ? ":${currentUri.port}" : ""}/#/';
       web.window.history.replaceState(null, '', newUrl);
     } catch (e) {
-      AppLogger.w('CrossAuthView: No se pudo limpiar la URL: $e');
+      _addLog('Error ocultando URL: $e');
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_errorMessage != null) {
-      return Scaffold(
-        backgroundColor: Colors.white,
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.error_outline, color: Colors.redAccent, size: 48),
-                const SizedBox(height: 16),
-                const Text(
-                  'No se pudo iniciar sesión',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  _errorMessage!,
-                  style: const TextStyle(color: Colors.grey, fontSize: 13),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 24),
-                FilledButton(
-                  onPressed: () => context.go(AppRoutes.login),
-                  child: const Text('Ir al inicio de sesión'),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
-    return const Scaffold(
-      body: Center(
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(title: const Text('DEBUG CROSS-AUTH'), backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 20),
-            Text('Validando sesión...', style: TextStyle(fontWeight: FontWeight.w600)),
+            const Text('Logs del flujo de Autenticación:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            const Divider(),
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.all(8),
+                color: Colors.black87,
+                child: ListView.builder(
+                  itemCount: _logs.length,
+                  itemBuilder: (c, i) => Text(
+                    '> ${_logs[i]}',
+                    style: const TextStyle(color: Colors.greenAccent, fontFamily: 'monospace', fontSize: 12),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: () => context.go(AppRoutes.login),
+              child: const Text('FORZAR IR AL LOGIN'),
+            ),
           ],
         ),
       ),
     );
   }
 }
+
