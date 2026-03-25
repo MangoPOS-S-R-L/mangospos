@@ -138,21 +138,29 @@ class AppRouter {
           path == '/auth';
 
       // ── MODO TENANT (*.mangopos.do) ────────────────────────────────────
-      // Cuando estamos en el subdominio del negocio, el comportamiento es simple:
-      //  - Sin sesión → login local del tenant
-      //  - Con sesión → dashboard
+      // - Sin sesión  → redirigir a app.mangopos.do (el portal de login)
+      // - Con sesión  → dejar pasar normalmente (GoRouter maneja el dashboard)
+      // - /auth route → dejar pasar siempre (SessionBridge la consume en main())
       if (kIsWeb && TenantResolver.isTenant) {
+        // La ruta /auth es el landing del SessionBridge, siempre debe pasar
+        if (path == '/auth') return null;
+
         if (!isAuthenticated) {
-          if (isAuthRoute) return null; // deja pasar auth routes
-          return AppRoutes.login;
+          // Sin sesión → mandar al portal principal para hacer login
+          print('[MangoPOS:Router] Tenant sin sesión → redirigiendo a app.mangopos.do');
+          web.window.location.assign('https://app.mangopos.do/');
+          // Retornamos null para no causar un loop de GoRouter mientras el browser navega
+          return null;
         }
-        // Si ya está autenticado y trata de ir al login, redirigir al dashboard
-        if (isAuthRoute && path != '/auth') {
+
+        // Con sesión: si intenta ir a una auth route (ej: /login), mandarlo al dashboard
+        if (isAuthRoute) {
           return Uri(
             path: AppRoutes.dashboard,
             queryParameters: requestedBusinessId == null ? null : {'business_id': requestedBusinessId},
           ).toString();
         }
+
         return null;
       }
 
