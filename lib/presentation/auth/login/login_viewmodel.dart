@@ -3,6 +3,9 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+// ignore: avoid_web_libraries_in_dot_dart
+import 'package:web/web.dart' as web;
 
 import '../../../services/session/session_controller.dart';
 import '../../../core/utils/logger.dart';
@@ -112,6 +115,39 @@ class LoginViewModel extends Notifier<LoginState> {
           );
 
       AppLogger.i('[$businessId] Login exitoso para $fullName ($roleStr)');
+      
+      // Lógica de redirección a subdominio (solo en Web y si estamos en app.mangopos.do)
+      if (kIsWeb) {
+        final currentUrl = web.window.location.href;
+        if (currentUrl.contains('app.mangopos.do')) {
+          try {
+            // Obtener el dominio del negocio
+            final bizData = await supabase
+                .from('businesses')
+                .select('domain')
+                .eq('id', businessId)
+                .single();
+            
+            final domain = bizData['domain'] as String?;
+            final session = supabase.auth.currentSession;
+            
+            if (domain != null && session != null) {
+              final at = session.accessToken;
+              final rt = session.refreshToken;
+              
+              // Construir URI de redirección con fragmento /auth como solicitó el usuario
+              final targetUrl = 'https://$domain/#/auth?at=${Uri.encodeComponent(at)}&rt=${Uri.encodeComponent(rt ?? "")}';
+              
+              AppLogger.i('Redirigiendo a subdominio: $targetUrl');
+              web.window.location.href = targetUrl;
+              return; // Detener flujo para que no navegue al dashboard local
+            }
+          } catch (e) {
+            AppLogger.w('No se pudo redirigir al subdominio: $e');
+          }
+        }
+      }
+
       _safeSet(const LoginState());
     } on AuthException catch (e, st) {
       AppLogger.w('AuthException durante login', error: e, stackTrace: st);

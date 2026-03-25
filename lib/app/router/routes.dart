@@ -3,6 +3,7 @@ class AppRoutes {
   static const register = '/register';
   static const registerStep2 = '/register/branch';
   static const registerSetup = '/register/setup';
+  static const crossAuth = '/auth';
 
   // Alias React (paridad 1:1)
   static const homeReact = '/';

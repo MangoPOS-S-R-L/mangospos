@@ -24,6 +24,7 @@ import '../../tests/cache_test_page.dart';
 import '../../presentation/auth/register/register_step1_view.dart';
 import '../../presentation/auth/register/register_step2_view.dart';
 import '../../presentation/auth/register/register_step3_view.dart';
+import '../../presentation/auth/cross_auth/cross_auth_view.dart';
 import '../../presentation/dashboard/dashboard_view.dart';
 import '../../presentation/shell/main_shell.dart';
 import '../../presentation/cashier/view/cashier_view.dart';
@@ -100,7 +101,8 @@ class AppRouter {
           path == AppRoutes.login ||
           path == AppRoutes.register ||
           path == AppRoutes.registerStep2 ||
-          path == AppRoutes.registerSetup;
+          path == AppRoutes.registerSetup ||
+          path == AppRoutes.crossAuth;
 
       if (!isAuthenticated) {
         if (isAuthRoute) return null;
@@ -159,6 +161,13 @@ class AppRouter {
       GoRoute(
         path: AppRoutes.login,
         builder: (context, state) => const LoginView(),
+      ),
+      GoRoute(
+        path: AppRoutes.crossAuth,
+        builder: (context, state) => CrossAuthView(
+          accessToken: state.uri.queryParameters['at'],
+          refreshToken: state.uri.queryParameters['rt'],
+        ),
       ),
       GoRoute(
         path: AppRoutes.cacheTest,
