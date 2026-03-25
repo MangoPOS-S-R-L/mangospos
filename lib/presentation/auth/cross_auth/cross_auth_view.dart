@@ -79,8 +79,8 @@ class _CrossAuthViewState extends State<CrossAuthView> {
       return;
     }
 
-    if (at == null || at.isEmpty) {
-      _addLog('CRÍTICO -> NO HAY TOKENS EN NINGÚN LADO.');
+    if (rt == null || rt.isEmpty) {
+      _addLog('CRÍTICO -> NO HAY REFRESH TOKEN (rt) EN NINGÚN LADO.');
       _addLog('Mandando a LOGIN en 3 seg...');
       await Future.delayed(const Duration(seconds: 3));
       if (mounted) context.go(AppRoutes.login);
@@ -88,8 +88,16 @@ class _CrossAuthViewState extends State<CrossAuthView> {
     }
 
     try {
-      _addLog('LLAMANDO SETSESSION(at: ${at.length} chars)... ESPERANDO SUPABASE...');
-      await Supabase.instance.client.auth.setSession(at);
+      _addLog('CONSTRUYENDO SESIÓN VIA GET-USER (... ESPERANDO SUPABASE...)');
+      // La API REST rejecta el refresh_token si ya fue "consumido" o es de otro subdominio rápido.
+      // Usaremos getSessionFromUrl que reconstruye la sesión validando el access_token 
+      // contra /auth/v1/user directamente y guarda la sesión localmente sin gastar el refresh loop inicial.
+      
+      final authUri = Uri.parse(
+        'http://localhost/#access_token=$at&refresh_token=$rt&expires_in=3600&token_type=bearer&type=magiclink'
+      );
+      
+      await Supabase.instance.client.auth.getSessionFromUrl(authUri);
       _addLog('SETSESSION EXITOSO! Redirigiendo a dashboard en 2 seg...');
       
       await Future.delayed(const Duration(seconds: 2));
@@ -97,7 +105,7 @@ class _CrossAuthViewState extends State<CrossAuthView> {
       if (mounted) context.go(AppRoutes.dashboard);
     } catch (e) {
       _addLog('ERROR EN SETSESSION: $e');
-      _addLog('Asegurate que *.mangopos.do está en la config de Redirect URLs de Supabase.');
+      _addLog('Probablemente el access_token expiró o es inválido.');
     }
   }
 
