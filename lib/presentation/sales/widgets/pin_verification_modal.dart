@@ -86,6 +86,30 @@ class _PinVerificationDialogState extends State<_PinVerificationDialog> {
     super.dispose();
   }
 
+  void _onNumberTap(String number) {
+    if (_verifying) return;
+    if (_controller.text.length < 4) {
+      setState(() {
+        _localError = null;
+        _controller.text += number;
+      });
+      if (_controller.text.length == 4) {
+        _verify();
+      }
+    }
+  }
+
+  void _onBackspaceTap() {
+    if (_verifying) return;
+    if (_controller.text.isNotEmpty) {
+      setState(() {
+        _localError = null;
+        _controller.text =
+            _controller.text.substring(0, _controller.text.length - 1);
+      });
+    }
+  }
+
   Future<void> _verify() async {
     final pin = _controller.text.trim();
     if (pin.length != 4) {
@@ -104,7 +128,9 @@ class _PinVerificationDialogState extends State<_PinVerificationDialog> {
       if (!ok) {
         setState(() {
           _verifying = false;
+          _controller.clear();
           _localError = widget.invalidMessage;
+          _focusNode.requestFocus();
         });
         return;
       }
@@ -113,7 +139,9 @@ class _PinVerificationDialogState extends State<_PinVerificationDialog> {
       if (!mounted) return;
       setState(() {
         _verifying = false;
+        _controller.clear();
         _localError = 'No se pudo validar el PIN.';
+        _focusNode.requestFocus();
       });
     }
   }
@@ -125,157 +153,126 @@ class _PinVerificationDialogState extends State<_PinVerificationDialog> {
     return Dialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
       backgroundColor: Colors.transparent,
-      child: Container(
-        width: 420,
-        padding: const EdgeInsets.all(24),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(24),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x22000000),
-              blurRadius: 24,
-              offset: Offset(0, 16),
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF97316).withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: const Icon(
-                    Icons.lock_outline_rounded,
-                    color: Color(0xFFF97316),
-                  ),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        widget.title,
-                        style: theme.textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.w800,
-                          color: const Color(0xFF111827),
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        widget.subtitle,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: const Color(0xFF6B7280),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 24),
-            GestureDetector(
-              onTap: () => _focusNode.requestFocus(),
-              child: _PinDots(value: _controller.text),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _controller,
-              focusNode: _focusNode,
-              keyboardType: TextInputType.number,
-              textInputAction: TextInputAction.done,
-              obscureText: true,
-              autofocus: true,
-              maxLength: 4,
-              inputFormatters: [
-                FilteringTextInputFormatter.digitsOnly,
-                LengthLimitingTextInputFormatter(4),
-              ],
-              decoration: const InputDecoration(
-                labelText: 'PIN de 4 dígitos',
-                counterText: '',
-                border: OutlineInputBorder(),
-              ),
-              onChanged: (_) {
-                if (_localError != null) {
-                  setState(() => _localError = null);
-                } else {
-                  setState(() {});
-                }
-              },
-              onSubmitted: (_) => _verify(),
-            ),
-            if (_localError != null) ...[
-              const SizedBox(height: 10),
-              Text(
-                _localError!,
-                style: const TextStyle(
-                  color: Color(0xFFE11D48),
-                  fontWeight: FontWeight.w600,
-                ),
+      child: GestureDetector(
+        onTap: () {
+          if (!_focusNode.hasFocus) _focusNode.requestFocus();
+        },
+        child: Container(
+          width: 380,
+          padding: const EdgeInsets.all(32),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(28),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x22000000),
+                blurRadius: 32,
+                offset: Offset(0, 16),
               ),
             ],
-            const SizedBox(height: 24),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: _verifying
-                        ? null
-                        : () => Navigator.of(context).pop(false),
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size.fromHeight(48),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                    ),
-                    child: const Text('Cancelar'),
+          ),
+          child: Stack(
+            children: [
+              // TextField oculto para capturar teclado físico
+              Positioned(
+                top: -1000,
+                child: Opacity(
+                  opacity: 0,
+                  child: TextField(
+                    controller: _controller,
+                    focusNode: _focusNode,
+                    keyboardType: TextInputType.number,
+                    maxLength: 4,
+                    autofocus: true,
+                    onChanged: (val) {
+                      setState(() {
+                        _localError = null;
+                      });
+                      if (val.length == 4) {
+                        _verify();
+                      }
+                    },
                   ),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: FilledButton(
-                    onPressed: _verifying ? null : _verify,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFFF97316),
-                      minimumSize: const Size.fromHeight(48),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
+              ),
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Botón de cerrar superior
+                  Align(
+                    alignment: Alignment.topRight,
+                    child: IconButton(
+                      icon: const Icon(Icons.close_rounded,
+                          color: Color(0xFF6B7280)),
+                      onPressed: () => Navigator.of(context).pop(false),
+                    ),
+                  ),
+
+                  // Títulos
+                  Text(
+                    widget.title,
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      color: const Color(0xFF111827),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    widget.subtitle,
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: const Color(0xFF6B7280),
+                    ),
+                  ),
+                  const SizedBox(height: 32),
+
+                  // Cajas de los 4 dígitos
+                  _PinBoxes(value: _controller.text, isError: _localError != null),
+
+                  if (_localError != null) ...[
+                    const SizedBox(height: 16),
+                    Text(
+                      _localError!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Color(0xFFE11D48),
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
-                    child: _verifying
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Text('Confirmar'),
-                  ),
-                ),
-              ],
-            ),
-          ],
+                  ],
+
+                  const SizedBox(height: 32),
+
+                  // Teclado numérico interactivo
+                  if (_verifying)
+                    const Center(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(vertical: 48),
+                        child: CircularProgressIndicator(color: Color(0xFFF97316)),
+                      ),
+                    )
+                  else
+                    _NumericKeypad(
+                      onNumberTap: _onNumberTap,
+                      onBackspaceTap: _onBackspaceTap,
+                    ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-class _PinDots extends StatelessWidget {
-  const _PinDots({required this.value});
+class _PinBoxes extends StatelessWidget {
+  const _PinBoxes({required this.value, required this.isError});
 
   final String value;
+  final bool isError;
 
   @override
   Widget build(BuildContext context) {
@@ -283,16 +280,127 @@ class _PinDots extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.center,
       children: List.generate(4, (index) {
         final filled = index < value.length;
-        return Container(
-          width: 18,
-          height: 18,
+        final hasBorder = index == value.length; // Cajita actual seleccionada
+
+        Color borderColor = const Color(0xFFE5E7EB);
+        if (isError) {
+          borderColor = const Color(0xFFE11D48);
+        } else if (hasBorder) {
+          borderColor = const Color(0xFFF97316); 
+        }
+
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          width: 56,
+          height: 64,
           margin: const EdgeInsets.symmetric(horizontal: 8),
           decoration: BoxDecoration(
-            color: filled ? const Color(0xFFF97316) : const Color(0xFFE5E7EB),
-            shape: BoxShape.circle,
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: borderColor,
+              width: hasBorder || isError ? 2.5 : 1.5,
+            ),
+            boxShadow: hasBorder && !isError
+                ? [
+                    BoxShadow(
+                      color: const Color(0xFFF97316).withValues(alpha: 0.15),
+                      blurRadius: 12,
+                      spreadRadius: 2,
+                    )
+                  ]
+                : [],
+          ),
+          child: Center(
+            child: AnimatedScale(
+              scale: filled ? 1.0 : 0.0,
+              duration: const Duration(milliseconds: 150),
+              child: Container(
+                width: 14,
+                height: 14,
+                decoration: BoxDecoration(
+                  color: isError ? const Color(0xFFE11D48) : const Color(0xFF111827),
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ),
           ),
         );
       }),
+    );
+  }
+}
+
+class _NumericKeypad extends StatelessWidget {
+  const _NumericKeypad({
+    required this.onNumberTap,
+    required this.onBackspaceTap,
+  });
+
+  final void Function(String) onNumberTap;
+  final VoidCallback onBackspaceTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        _buildRow(['1', '2', '3']),
+        const SizedBox(height: 16),
+        _buildRow(['4', '5', '6']),
+        const SizedBox(height: 16),
+        _buildRow(['7', '8', '9']),
+        const SizedBox(height: 16),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            _buildKeypadButton(null, icon: Icons.fingerprint_rounded),
+            _buildKeypadButton('0'),
+            _buildKeypadButton(null, icon: Icons.backspace_outlined, onTap: onBackspaceTap),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRow(List<String> numbers) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: numbers.map((n) => _buildKeypadButton(n)).toList(),
+    );
+  }
+
+  Widget _buildKeypadButton(String? text, {IconData? icon, VoidCallback? onTap}) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap ?? (text != null ? () => onNumberTap(text) : null),
+        borderRadius: BorderRadius.circular(40),
+        splashColor: const Color(0xFFF97316).withValues(alpha: 0.2),
+        highlightColor: const Color(0xFFF97316).withValues(alpha: 0.1),
+        child: Container(
+          width: 72,
+          height: 72,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: const Color(0xFFF3F4F6).withValues(alpha: 0.5), // fondo súper sutil
+          ),
+          child: text != null
+              ? Text(
+                  text,
+                  style: const TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF111827),
+                  ),
+                )
+              : Icon(
+                  icon,
+                  size: 28,
+                  color: const Color(0xFF6B7280),
+                ),
+        ),
+      ),
     );
   }
 }

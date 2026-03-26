@@ -11,7 +11,9 @@ COPY . .
 ARG SUPABASE_URL
 ARG SUPABASE_ANON_KEY
 RUN if [ -n "$SUPABASE_URL" ] && [ -n "$SUPABASE_ANON_KEY" ]; then \
-      flutter build web --dart-define=SUPABASE_URL=${SUPABASE_URL} --dart-define=SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}; \
+      CLEAN_URL=$(echo "$SUPABASE_URL" | tr -d '`"'\''  ' | sed 's|^https\?://||' | sed 's|^|https://|'); \
+      CLEAN_KEY=$(echo "$SUPABASE_ANON_KEY" | tr -d '`"'\'' '); \
+      flutter build web --dart-define=SUPABASE_URL="$CLEAN_URL" --dart-define=SUPABASE_ANON_KEY="$CLEAN_KEY"; \
     else \
       flutter build web; \
     fi

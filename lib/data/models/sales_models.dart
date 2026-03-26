@@ -197,6 +197,8 @@ class OrderItem extends Equatable {
   final bool isTakeout;
   final String status; // 'draft', 'pending', 'preparing', 'ready', 'served'
   final String? notes;
+  final String taxMode;
+  final double taxRate;
   final DateTime createdAt;
   final List<OrderItemModifier> modifiers;
 
@@ -216,6 +218,8 @@ class OrderItem extends Equatable {
     required this.isTakeout,
     required this.status,
     this.notes,
+    this.taxMode = 'exclusive',
+    this.taxRate = 0.0,
     required this.createdAt,
     this.modifiers = const [],
   });
@@ -268,6 +272,8 @@ class OrderItem extends Equatable {
       isTakeout: map['is_takeout'] ?? false,
       status: map['status'] ?? 'draft',
       notes: map['notes'],
+      taxMode: map['tax_mode']?.toString() ?? 'exclusive',
+      taxRate: (map['tax_rate'] ?? 0).toDouble(),
       createdAt: DateTime.tryParse(map['created_at'] ?? '') ?? DateTime.now(),
       modifiers: [], // Se cargan aparte
     );
@@ -290,6 +296,8 @@ class OrderItem extends Equatable {
     bool? isTakeout,
     String? status,
     String? notes,
+    String? taxMode,
+    double? taxRate,
     DateTime? createdAt,
     List<OrderItemModifier>? modifiers,
   }) {
@@ -309,6 +317,8 @@ class OrderItem extends Equatable {
       isTakeout: isTakeout ?? this.isTakeout,
       status: status ?? this.status,
       notes: notes ?? this.notes,
+      taxMode: taxMode ?? this.taxMode,
+      taxRate: taxRate ?? this.taxRate,
       createdAt: createdAt ?? this.createdAt,
       modifiers: modifiers ?? this.modifiers,
     );
@@ -331,6 +341,8 @@ class OrderItem extends Equatable {
     isTakeout,
     status,
     notes,
+    taxMode,
+    taxRate,
     createdAt,
     modifiers,
   ];

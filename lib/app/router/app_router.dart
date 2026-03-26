@@ -1,9 +1,12 @@
-// lib/app/app_router.dart
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
+// ignore: avoid_web_libraries_in_dot_dart
+import 'package:web/web.dart' as web;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:mangopos/core/tenant/tenant_resolver.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/categories/view/categories_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/modifiers/view/modifiers_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/menus/view/menus_view.dart';
@@ -20,10 +23,12 @@ import 'package:mangopos/presentation/settings/more%20settings/system%20settings
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/users/view/users_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/fiscal/view/fiscal_receipts_view.dart';
 import '../../presentation/auth/login/login_view.dart';
+import '../../presentation/auth/login/select_business_view.dart';
 import '../../tests/cache_test_page.dart';
 import '../../presentation/auth/register/register_step1_view.dart';
 import '../../presentation/auth/register/register_step2_view.dart';
 import '../../presentation/auth/register/register_step3_view.dart';
+import '../../presentation/auth/cross_auth/cross_auth_view.dart';
 import '../../presentation/dashboard/dashboard_view.dart';
 import '../../presentation/shell/main_shell.dart';
 import '../../presentation/cashier/view/cashier_view.dart';
@@ -44,6 +49,7 @@ import '../../presentation/branches/view/branch_management_view.dart';
 import '../../presentation/settings/cash_registers/view/cash_registers_view.dart';
 import '../../presentation/settings/currencies/view/currencies_view.dart';
 import '../../presentation/settings/regional/view/regional_view.dart';
+import 'package:mangopos/core/utils/logger.dart';
 import 'routes.dart';
 
 // Sales module
@@ -88,31 +94,124 @@ class AppRouter {
     Supabase.instance.client.auth.onAuthStateChange,
   );
 
+  static String _initialLocation() {
+    if (kIsWeb) {
+      try {
+        final href = web.window.location.href;
+        final hash = web.window.location.hash;
+        final search = web.window.location.search;
+        print('[MangoPOS:Router] href=$href');
+        print('[MangoPOS:Router] hash=$hash  search=$search');
+        if (hash.startsWith('#')) {
+          final fromHash = hash.substring(1);
+          if (fromHash.isNotEmpty && fromHash != '/') {
+            print('[MangoPOS:Router] initialLocation from hash: $fromHash');
+            return fromHash;
+          }
+        }
+      } catch (e) {
+        print('[MangoPOS:Router] Error reading hash: $e');
+      }
+    }
+    print('[MangoPOS:Router] initialLocation fallback: ${AppRoutes.login}');
+    return AppRoutes.login;
+  }
+
   static GoRouter router = GoRouter(
-    initialLocation: AppRoutes.login,
+    initialLocation: _initialLocation(),
     refreshListenable: _authRefresh,
     redirect: (context, state) {
       final session = Supabase.instance.client.auth.currentSession;
       final isAuthenticated = session != null;
       final path = state.uri.path;
+      final requestedBusinessId = state.uri.queryParameters['business_id'];
+
+      // LOG DIAGNÓSTICO — siempre visible en consola del browser
+      print('[MangoPOS:Router] redirect → path="$path" isAuthenticated=$isAuthenticated mode=${TenantResolver.mode.name} uri=${state.uri}');
+
       final isAuthRoute =
           path == AppRoutes.login ||
           path == AppRoutes.register ||
           path == AppRoutes.registerStep2 ||
-          path == AppRoutes.registerSetup;
+          path == AppRoutes.registerSetup ||
+          path == AppRoutes.crossAuth ||
+          path == '/auth';
 
-      if (!isAuthenticated) {
-        return isAuthRoute ? null : AppRoutes.login;
+      // ── MODO TENANT (*.mangopos.do) ────────────────────────────────────
+      // - Sin sesión  → redirigir a app.mangopos.do (el portal de login)
+      // - Con sesión  → dejar pasar normalmente (GoRouter maneja el dashboard)
+      // - /auth route → dejar pasar siempre (SessionBridge la consume en main())
+      if (kIsWeb && TenantResolver.isTenant) {
+        // La ruta /auth es el landing del SessionBridge, siempre debe pasar
+        if (path == '/auth') return null;
+
+        if (!isAuthenticated) {
+          // Sin sesión → mandar al portal principal para hacer login
+          print('[MangoPOS:Router] Tenant sin sesión → redirigiendo a app.mangopos.do');
+          web.window.location.assign('https://app.mangopos.do/');
+          // Retornamos null para no causar un loop de GoRouter mientras el browser navega
+          return null;
+        }
+
+        // Con sesión: si intenta ir a una auth route (ej: /login), mandarlo al dashboard
+        if (isAuthRoute) {
+          return Uri(
+            path: AppRoutes.dashboard,
+            queryParameters: requestedBusinessId == null ? null : {'business_id': requestedBusinessId},
+          ).toString();
+        }
+
+        return null;
       }
 
-      if (isAuthRoute) {
-        return AppRoutes.dashboard;
+      // ── MODO APP SHELL (app.mangopos.do) — portal de login/registro ─────
+      // En el app shell NUNCA mostramos el dashboard directamente.
+      // Siempre pasamos por /select-business que decide a qué tenant ir.
+      print('[MangoPOS:Router] isAuthRoute=$isAuthRoute  isAuthenticated=$isAuthenticated');
+
+      if (!isAuthenticated) {
+        if (isAuthRoute) return null;
+        return Uri(
+          path: AppRoutes.login,
+          queryParameters: requestedBusinessId == null
+              ? null
+              : {'business_id': requestedBusinessId},
+        ).toString();
+      }
+
+      // Autenticado en appShell → siempre a select-business (nunca al dashboard local)
+      if (isAuthRoute || path == '/' || path == AppRoutes.dashboard) {
+        return AppRoutes.selectBusiness;
       }
 
       return null;
+
     },
     errorBuilder: (_, state) => _NotFoundView(path: state.uri.toString()),
     routes: [
+      // ---------- Auth Cross (MOVIDO AL PRINCIPIO) ----------
+      GoRoute(
+        path: AppRoutes.selectBusiness,
+        builder: (context, state) => const SelectBusinessView(),
+      ),
+      GoRoute(
+        path: '/auth',
+        builder: (context, state) {
+          final at = state.uri.queryParameters['at']
+              ?? state.uri.queryParameters['access_token'];
+          final rt = state.uri.queryParameters['rt']
+              ?? state.uri.queryParameters['refresh_token'];
+          // LOG DIAGNÓSTICO — siempre visible en consola del browser
+          print('[MangoPOS:CrossAuth] GoRoute builder disparado!');
+          print('[MangoPOS:CrossAuth] state.uri = ${state.uri}');
+          print('[MangoPOS:CrossAuth] at = ${at != null ? "[len=${at.length} inicio=${at.length > 10 ? at.substring(0, 10) : at}]" : "NULL"}');
+          print('[MangoPOS:CrossAuth] rt = ${rt != null ? "[presente]" : "NULL"}');
+          return CrossAuthView(
+            accessToken: at,
+            refreshToken: rt,
+          );
+        },
+      ),
       // ---------- Alias React (paridad de rutas 1:1) ----------
       GoRoute(
         path: AppRoutes.homeReact,

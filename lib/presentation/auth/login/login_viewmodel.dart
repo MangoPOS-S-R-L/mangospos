@@ -3,9 +3,14 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+// ignore: avoid_web_libraries_in_dot_dart
+import 'package:web/web.dart' as web;
 
 import '../../../services/session/session_controller.dart';
 import '../../../core/utils/logger.dart';
+import '../../../core/auth/session_bridge.dart';
+import '../../../core/tenant/tenant_resolver.dart';
 import 'login_state.dart';
 
 class LoginViewModel extends Notifier<LoginState> {
@@ -64,54 +69,76 @@ class LoginViewModel extends Notifier<LoginState> {
           .maybeSingle();
       final fullName = profileResp?['full_name'] as String? ?? 'Usuario';
 
-      // Obtener rol y negocio activo
+      // Obtener todos los roles y negocios asignados en lugar de solo uno (Soporta multi-sucursal)
       final userBizResp = await supabase
           .from('user_businesses')
-          .select('business_id, role')
-          .eq('user_id', user.id)
-          .maybeSingle();
+          .select('business_id, role, businesses(business_name, domain)')
+          .eq('user_id', user.id);
 
-      if (userBizResp == null) {
-        AppLogger.w(
-          'Usuario sin perfil de negocio asignado (user_businesses está vacía)',
-        );
+      final businessesList = userBizResp as List<dynamic>;
+
+      if (businessesList.isEmpty) {
+        AppLogger.w('Usuario sin perfil de negocio asignado (user_businesses está vacía)');
         await supabase.auth.signOut();
         _safeSet(state.copyWith(
           isLoading: false,
-          error:
-              'Tu usuario no tiene negocio/rol asignado. Contacta al administrador.',
+          error: 'Tu usuario no tiene negocio/rol asignado. Contacta al administrador.',
         ));
         return;
       }
 
-      final businessId = userBizResp['business_id'] as String?;
-      final roleStr = userBizResp['role']?.toString();
+      // Si tiene más de un negocio → mostrar selector en app.mangopos.do
+      if (businessesList.length > 1) {
+        AppLogger.i('Multi-tenant detectado (${businessesList.length} negocios). Redirigiendo a selector...');
+        _safeSet(state.copyWith(isLoading: false));
+        if (kIsWeb && TenantResolver.isAppShell) {
+          web.window.location.assign('/#/select-business');
+        }
+        return;
+      }
+
+      // El usuario solo tiene 1 negocio asignado
+      final singleBiz = businessesList.first;
+      final businessId = singleBiz['business_id'] as String?;
+      final roleStr = singleBiz['role']?.toString();
       final posRole = _mapRole(roleStr);
 
       if (businessId == null || businessId.isEmpty || posRole == null) {
-        AppLogger.e(
-          'Atributos críticos faltantes en Login -> businessId: $businessId | Role: $posRole',
-        );
+        AppLogger.e('Atributos críticos faltantes en Login -> businessId: $businessId');
         await supabase.auth.signOut();
         _safeSet(state.copyWith(
           isLoading: false,
-          error:
-              'Tu acceso no está configurado correctamente (negocio/rol inválido).',
+          error: 'Tu acceso no está configurado correctamente.',
         ));
         return;
       }
 
-      ref
-          .read(sessionProvider.notifier)
-          .setAuthenticated(
-            user.id,
-            businessId: businessId,
-            userName: fullName,
-            activeRole: posRole,
-            availableRoles: [posRole],
-          );
+      // Lógica de redirección a subdominio si estamos en app.mangopos.do
+      // — ANTES de setAuthenticated para que GoRouter no intervenga.
+      if (kIsWeb && TenantResolver.isAppShell) {
+        final businessObj = singleBiz['businesses'];
+        final domain = businessObj?['domain'] as String?;
+
+        if (domain != null && domain.isNotEmpty) {
+          AppLogger.i('[$businessId] Transfiriendo sesión al tenant: $domain');
+          _safeSet(state.copyWith(isLoading: false));
+          SessionBridge.redirectToTenant(domain);
+          return; // El browser navega al tenant; no seguimos montando nada local.
+        }
+      }
+
+      // Si NO estamos en app.mangopos.do (ej: desktop, mobile, desarrollo local)
+      // autenticamos localmente de forma normal.
+      ref.read(sessionProvider.notifier).setAuthenticated(
+        user.id,
+        businessId: businessId,
+        userName: fullName,
+        activeRole: posRole,
+        availableRoles: [posRole],
+      );
 
       AppLogger.i('[$businessId] Login exitoso para $fullName ($roleStr)');
+
       _safeSet(const LoginState());
     } on AuthException catch (e, st) {
       AppLogger.w('AuthException durante login', error: e, stackTrace: st);

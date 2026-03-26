@@ -4,7 +4,8 @@ import 'dart:io' show Platform, Process, File, Directory, ProcessStartMode;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // <-- NECESARIO para bloquear orientacion
-import 'package:path/path.dart' as p; // Necesitas agregar path a pubspec.yaml si no está
+import 'package:path/path.dart'
+    as p; // Necesitas agregar path a pubspec.yaml si no está
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/date_symbol_data_local.dart';
@@ -16,10 +17,14 @@ import 'app/router/app_router.dart';
 import 'core/network/supabase_config.dart';
 import 'core/cache/cache_manager.dart';
 import 'core/utils/logger.dart';
+import 'core/auth/session_bridge.dart';
+// ignore: depend_on_referenced_packages
+import 'package:flutter_web_plugins/url_strategy.dart';
 
 /// === CONFIG DEL AGENTE ===
 const String agentHost = '127.0.0.1';
-const int agentPort = 4000; // El agente local corre en 4000 por defecto en index.js
+const int agentPort =
+    4000; // El agente local corre en 4000 por defecto en index.js
 
 Future<bool> _pingAgentOnce({
   Duration timeout = const Duration(milliseconds: 1000),
@@ -53,9 +58,11 @@ Future<void> _ensurePrinterAgentStarted() async {
 
   // Ruta base de la aplicación (donde está el .exe de Flutter)
   final String appDir = p.dirname(Platform.resolvedExecutable);
-  
+
   // Ruta esperada del agente en PRODUCCIÓN: ../Agent/mangopos-agent.exe
-  final String prodAgentPath = p.normalize(p.join(appDir, '..', 'Agent', 'mangopos-agent.exe'));
+  final String prodAgentPath = p.normalize(
+    p.join(appDir, '..', 'Agent', 'mangopos-agent.exe'),
+  );
   final bool hasProdAgent = File(prodAgentPath).existsSync();
 
   if (hasProdAgent) {
@@ -69,7 +76,7 @@ Future<void> _ensurePrinterAgentStarted() async {
     // Buscamos la carpeta /agent relativa al proyecto
     // Asumimos que estamos corriendo desde el root del proyecto
     workingDir = p.normalize(p.join(Directory.current.path, 'agent'));
-    
+
     if (Platform.isWindows) {
       exec = 'node';
       args = ['src/index.js'];
@@ -77,9 +84,11 @@ Future<void> _ensurePrinterAgentStarted() async {
       exec = 'node';
       args = ['src/index.js'];
     }
-    
+
     if (!Directory(workingDir).existsSync()) {
-      debugPrint('[Agent] Error: No se encontró la carpeta del agente en $workingDir');
+      debugPrint(
+        '[Agent] Error: No se encontró la carpeta del agente en $workingDir',
+      );
       return;
     }
     debugPrint('[Agent] Usando modo desarrollo (node src/index.js)');
@@ -92,7 +101,8 @@ Future<void> _ensurePrinterAgentStarted() async {
       args,
       workingDirectory: workingDir,
       runInShell: true,
-      mode: ProcessStartMode.detached, // Para que el agente siga vivo si la app se reinicia en hot reload
+      mode: ProcessStartMode
+          .detached, // Para que el agente siga vivo si la app se reinicia en hot reload
     );
   } catch (e) {
     debugPrint('[Agent] Error al iniciar el agente: $e');
@@ -126,6 +136,9 @@ void main() async {
     WidgetsFlutterBinding.ensureInitialized();
     AppLogger.i('Arrancando MangoPOS...');
 
+    // Usar path-based routing en web (sin # en la URL)
+    if (kIsWeb) usePathUrlStrategy();
+
     if (!kIsWeb && Platform.isWindows) {
       await windowManager.ensureInitialized();
     }
@@ -142,6 +155,11 @@ void main() async {
     AppLogger.i(
       'Supabase inicializado correctamente conectando a: ${Env.supabaseUrl}',
     );
+
+    // Si estamos en un subdominio tenant (*.mangopos.do) y la URL trae tokens
+    // de una redirección desde app.mangopos.do, los consumimos aquí antes de
+    // montar la UI para que el router ya vea la sesión activa.
+    await SessionBridge.handleIncoming();
 
     MediaKit.ensureInitialized();
     AppLogger.d('MediaKit inicializado');

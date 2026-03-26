@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'cookie_local_storage.dart';
 
 /// 🔧 Configuración personalizada de Supabase
 /// Incluye timeouts, reintentos y manejo de errores
@@ -30,21 +31,28 @@ class SupabaseConfig {
     required String url,
     required String anonKey,
   }) async {
+    // Limpiamos los parámetros por si vienen con comillas o backticks residuales del entorno
+    String cleanUrl = url.replaceAll('`', '').replaceAll('\'', '').replaceAll('"', '').trim();
+    final cleanAnonKey = anonKey.replaceAll('`', '').replaceAll('\'', '').replaceAll('"', '').trim();
+
+    // Asegurarse de que el URL tenga scheme (https://)
+    if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
+      cleanUrl = 'https://$cleanUrl';
+    }
+
     await Supabase.initialize(
-      url: url,
-      anonKey: anonKey,
+      url: cleanUrl,
+      anonKey: cleanAnonKey,
       debug: kDebugMode || kIsWeb, // Enable debug
       authOptions: const FlutterAuthClientOptions(
         authFlowType: AuthFlowType.pkce,
-        // Mantener sesión activa
         autoRefreshToken: true,
         detectSessionInUri: true,
+        localStorage: SharedCookieLocalStorage(),
       ),
       realtimeClientOptions: const RealtimeClientOptions(
-        // Configuración de reconexión automática
         eventsPerSecond: 10,
       ),
-      // Configuración de almacenamiento local
       storageOptions: const StorageClientOptions(retryAttempts: 3),
     );
   }
