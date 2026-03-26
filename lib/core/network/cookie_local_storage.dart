@@ -1,7 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-// ignore: avoid_web_libraries_in_dot_dart
-import 'package:web/web.dart' as web;
+import 'package:mangopos/core/utils/web_utils/web_utils.dart';
 
 /// Implementación personalizada de LocalStorage para Supabase
 /// que guarda la sesión en una Cookie tipo wildcard (.mangopos.do)
@@ -24,7 +23,7 @@ class SharedCookieLocalStorage extends LocalStorage {
   Future<String?> accessToken() async {
     if (!kIsWeb) return _mobileFallback.accessToken();
     
-    final cookieStr = web.window.document.cookie;
+    final cookieStr = WebUtils.cookie;
     final cookies = cookieStr.split(';');
     for (final c in cookies) {
       final pair = c.trim().split('=');
@@ -51,7 +50,7 @@ class SharedCookieLocalStorage extends LocalStorage {
     final domain = _getCookieDomain();
     
     // Cookie expira en 7 días (604800 segundos)
-    web.window.document.cookie = 
+    WebUtils.cookie = 
         '$cookieName=$encoded; Max-Age=604800; Domain=$domain; Path=/; Secure; SameSite=Lax';
   }
 
@@ -62,13 +61,13 @@ class SharedCookieLocalStorage extends LocalStorage {
     }
     
     final domain = _getCookieDomain();
-    web.window.document.cookie = 
+    WebUtils.cookie = 
         '$cookieName=; Max-Age=0; Domain=$domain; Path=/; Secure; SameSite=Lax';
   }
 
   String _getCookieDomain() {
     try {
-      final host = web.window.location.hostname.toLowerCase();
+      final host = WebUtils.hostname.toLowerCase();
       if (host == 'localhost' || host == '127.0.0.1') return host;
       
       // Si estamos en cualquier subdominio de mangopos.do,

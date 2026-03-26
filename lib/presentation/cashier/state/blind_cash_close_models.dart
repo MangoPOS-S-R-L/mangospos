@@ -14,7 +14,11 @@ class DenominationCount extends Equatable {
   int get subtotal => value * count;
 
   DenominationCount copyWith({int? count}) {
-    return DenominationCount(value: value, label: label, count: count ?? this.count);
+    return DenominationCount(
+      value: value,
+      label: label,
+      count: count ?? this.count,
+    );
   }
 
   @override
@@ -41,17 +45,18 @@ class CashCloseInput extends Equatable {
   });
 
   int get expectedTotal => expectedCash + expectedCard + expectedTransfer;
+  int get expectedClosureAmount => expectedCash;
 
   @override
   List<Object?> get props => [
-        expectedCash,
-        expectedCard,
-        expectedTransfer,
-        totalSales,
-        transactionCount,
-        cashierName,
-        businessName,
-      ];
+    expectedCash,
+    expectedCard,
+    expectedTransfer,
+    totalSales,
+    transactionCount,
+    cashierName,
+    businessName,
+  ];
 }
 
 class CashCloseResult extends Equatable {
@@ -77,13 +82,13 @@ class CashCloseResult extends Equatable {
 
   @override
   List<Object?> get props => [
-        totalCounted,
-        numericCard,
-        numericTransfer,
-        totalReported,
-        expectedTotal,
-        difference,
-      ];
+    totalCounted,
+    numericCard,
+    numericTransfer,
+    totalReported,
+    expectedTotal,
+    difference,
+  ];
 }
 
 class CashCloseCalculator {
@@ -108,7 +113,7 @@ class CashCloseCalculator {
     final numericTransfer = parseAmount(transferInput);
     final totalReported = totalCounted + numericCard + numericTransfer;
     final expectedTotal = input.expectedTotal;
-    final difference = totalReported - expectedTotal;
+    final difference = totalCounted - input.expectedClosureAmount;
 
     return CashCloseResult(
       totalCounted: totalCounted,
@@ -120,4 +125,3 @@ class CashCloseCalculator {
     );
   }
 }
-

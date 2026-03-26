@@ -517,28 +517,6 @@ class _UserInfo extends ConsumerWidget {
                     ),
                   ),
                 ),
-                if (session.activeBusinessName?.trim().isNotEmpty == true) ...[
-                  const SizedBox(height: 6),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 5,
-                    ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFFF7ED),
-                      border: Border.all(color: const Color(0xFFFED7AA)),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Text(
-                      session.activeBusinessName!.trim(),
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: MangoColors.primaryOrange,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                ],
               ],
             ),
           ],

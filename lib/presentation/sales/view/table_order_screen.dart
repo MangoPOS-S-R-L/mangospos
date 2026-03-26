@@ -8,6 +8,7 @@ import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/models/fiscal_models.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
+import 'package:mangopos/data/utils/order_pricing_utils.dart';
 import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dart';
 import 'package:mangopos/presentation/sales/state/sales_state.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
@@ -215,8 +216,14 @@ double _effectiveItemSubtotal(OrderItem item) {
   return _effectiveItemAmounts(item).subtotal;
 }
 
-double _effectiveItemTax(OrderItem item) {
-  return _effectiveItemAmounts(item).tax;
+double _catalogItemGrossAmount(OrderItem item) {
+  final modifiersTotal = item.modifiers.fold<double>(
+    0.0,
+    (sum, modifier) => sum + (modifier.price * modifier.qty),
+  );
+  return double.parse(
+    ((item.unitPrice * item.quantity) + modifiersTotal).toStringAsFixed(2),
+  );
 }
 
 ({double subtotal, double tax, double total}) _effectiveItemAmounts(
@@ -248,7 +255,21 @@ double _effectiveItemTax(OrderItem item) {
       .clamp(0, double.infinity)
       .toDouble();
   final netTax = (baseTax - discountOnTax).clamp(0, double.infinity).toDouble();
-  final netTotal = (netSubtotal + netTax).clamp(0, double.infinity).toDouble();
+  var netTotal = (netSubtotal + netTax).clamp(0, double.infinity).toDouble();
+
+  // En productos inclusivos el total almacenado puede traer propina incluida.
+  final catalogTotal = (_catalogItemGrossAmount(item) - item.discounts).clamp(
+    0,
+    double.infinity,
+  );
+  final storedTotal = item.taxMode == 'inclusive'
+      ? (item.total >= catalogTotal ? item.total : catalogTotal).toDouble()
+      : (item.total - item.discounts).clamp(0, double.infinity).toDouble();
+  if (item.taxMode == 'inclusive' &&
+      item.total > 0 &&
+      (storedTotal - netTotal).abs() > 0.01) {
+    netTotal = storedTotal;
+  }
 
   return (
     subtotal: double.parse(netSubtotal.toStringAsFixed(2)),
@@ -910,7 +931,22 @@ class _CartView extends ConsumerWidget {
 
         // INSTANT LOAD: Use data from result + local state
         final payments = result;
-        final items = ref.read(currentOrderProvider).items;
+        final currentOrderState = ref.read(currentOrderProvider);
+        var items = currentOrderState.items;
+        var printOrder = order;
+
+        if (checkId != null) {
+          items = items.where((i) => i.checkId == checkId).toList();
+          try {
+            final check = currentOrderState.checks.firstWhere(
+              (c) => c.id == checkId,
+            );
+            printOrder = check.toOrder(createdAt: order.createdAt);
+          } catch (_) {
+            // Fallback: items are filtered, but totals remain global (incorrect but avoids crash)
+          }
+        }
+
         final businessProfile = await _loadBusinessReceiptProfile(ref);
         final fiscalDoc = await _loadFiscalDocument(ref, order.id);
         final waiterName =
@@ -954,19 +990,20 @@ class _CartView extends ConsumerWidget {
                   },
                 )
                 .toList(),
-            'subtotal': order.subtotal,
-            'tax': order.tax,
-            'total': order.total,
+            'subtotal': printOrder.subtotal,
+            'tax': printOrder.tax,
+            'serviceFee': printOrder.serviceFee,
+            'total': printOrder.total,
           };
 
           // Define completion logic
-          final onFinish = () {
+          void onFinish() {
             if (checkId == null) {
               if (context.mounted) context.go(AppRoutes.salesByZone);
             } else {
               ref.read(currentOrderProvider.notifier).refreshOrder();
             }
-          };
+          }
 
           try {
             await _handlePrintFlow(
@@ -974,7 +1011,7 @@ class _CartView extends ConsumerWidget {
               ref,
               'invoice',
               invoiceData,
-              orderObj: order,
+              orderObj: printOrder,
               orderItems: items,
               payments: payments,
               tableName: tableName,
@@ -1228,16 +1265,18 @@ class _CartView extends ConsumerWidget {
     }
 
     // Calculate Totals based on View
-    double displayTotal = displayedItems.fold(
-      0.0,
-      (sum, i) => sum + _effectiveItemTotal(i),
+    final pricingSummary = summarizeOrderPricing(
+      orderState.order,
+      displayedItems,
     );
-    double displaySubtotal = displayedItems.fold(0.0, (sum, i) {
-      return sum + _effectiveItemSubtotal(i);
-    });
-    double displayTax = displayedItems.fold(0.0, (sum, i) {
-      return sum + _effectiveItemTax(i);
-    });
+    final displayTotal = pricingSummary.total;
+    final displaySubtotal = pricingSummary.subtotal;
+    final displayTax = pricingSummary.tax;
+    final displayServiceFee =
+        selectedCheck?.serviceFee ??
+        (pricingSummary.serviceFee > 0
+            ? pricingSummary.serviceFee
+            : (orderState.order?.serviceFee ?? 0.0));
 
     final pendingOrderItems = openItems.where((i) {
       final checkIsClosed = allChecks.any(
@@ -1246,10 +1285,10 @@ class _CartView extends ConsumerWidget {
       return !checkIsClosed;
     }).toList();
 
-    final pendingOrderTotal = pendingOrderItems.fold(
-      0.0,
-      (sum, i) => sum + _effectiveItemTotal(i),
-    );
+    final pendingOrderTotal = summarizeOrderPricing(
+      orderState.order,
+      pendingOrderItems,
+    ).total;
 
     final currency = NumberFormat('#,##0.00', 'en_US');
 
@@ -1822,6 +1861,13 @@ class _CartView extends ConsumerWidget {
                 label: 'ITBIS',
                 value: 'RD\$ ${currency.format(displayTax)}',
               ),
+              if (displayServiceFee > 0) ...[
+                const SizedBox(height: 8),
+                _SummaryRow(
+                  label: 'Propina Ley (10%)',
+                  value: 'RD\$ ${currency.format(displayServiceFee)}',
+                ),
+              ],
               const SizedBox(height: 12),
               _SummaryRow(
                 label: 'Total',

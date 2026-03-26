@@ -1,7 +1,8 @@
 // lib/main.dart
 import 'dart:async';
 import 'dart:io' show Platform, Process, File, Directory, ProcessStartMode;
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // <-- NECESARIO para bloquear orientacion
 import 'package:path/path.dart'
@@ -161,8 +162,12 @@ void main() async {
     // montar la UI para que el router ya vea la sesión activa.
     await SessionBridge.handleIncoming();
 
-    MediaKit.ensureInitialized();
-    AppLogger.d('MediaKit inicializado');
+    if (!kIsWeb && defaultTargetPlatform != TargetPlatform.windows) {
+      MediaKit.ensureInitialized();
+      AppLogger.d('MediaKit inicializado');
+    } else {
+      AppLogger.d('MediaKit omitido en esta plataforma');
+    }
 
     // Bloquear orientacion a horizontal (Android/iOS)
     await _lockLandscapeIfMobile();

@@ -199,7 +199,7 @@ class _PrintersTabState extends State<_PrintersTab> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Trabajo de prueba enviado'),
-            backgroundColor: const Color(0xFF22C55E),
+            backgroundColor: Color(0xFF22C55E),
           ),
         );
       }
@@ -588,7 +588,7 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Impresora agregada exitosamente'),
-            backgroundColor: const Color(0xFF22C55E),
+            backgroundColor: Color(0xFF22C55E),
           ),
         );
         widget.onSaved();

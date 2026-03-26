@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-
+import '../../../services/session/session_controller.dart';
 import '../../../data/utils/business_id_resolver.dart';
 
 @immutable
@@ -166,23 +166,25 @@ class MenuBrowserState {
 /// Proveedor del ViewModel
 final menuBrowserVmProvider =
     StateNotifierProvider<MenuBrowserViewModel, MenuBrowserState>((ref) {
-      final client = Supabase.instance.client;
-      return MenuBrowserViewModel(client);
-    });
+  final client = Supabase.instance.client;
+  // Escuchar cambios en el negocio activo para forzar recreación si cambia
+  ref.watch(sessionProvider.select((s) => s.activeBusinessId));
+  return MenuBrowserViewModel(client, ref);
+});
 
 class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
-  MenuBrowserViewModel(this._client) : super(const MenuBrowserState());
+  MenuBrowserViewModel(this._client, this.ref) : super(const MenuBrowserState());
 
   final SupabaseClient _client;
+  final Ref ref;
   static const _menuItemsSelect =
       'id,name,price,image_url,category_id,is_active,position,tax_mode,menu_item_taxes(tax_id,taxes(rate))';
   static const _menuListSelect =
       'id,name,price,image_url,category_id,menu_id,is_active,position,tax_mode,effective_tax_rate';
-  String? _businessId;
-
   Future<String> _resolveBusinessId() async {
-    if (_businessId != null && _businessId!.isNotEmpty) {
-      return _businessId!;
+    final sessionBusinessId = ref.read(sessionProvider).activeBusinessId;
+    if (sessionBusinessId != null && sessionBusinessId.isNotEmpty) {
+      return sessionBusinessId;
     }
 
     final resolved = await resolveBusinessIdOrNull(_client, 'auto');
@@ -190,7 +192,6 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
       throw Exception('No se pudo resolver el negocio actual');
     }
 
-    _businessId = resolved;
     return resolved;
   }
 

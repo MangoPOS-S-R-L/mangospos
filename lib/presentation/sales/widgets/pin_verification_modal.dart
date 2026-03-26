@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../services/session/session_controller.dart';
@@ -181,7 +180,7 @@ class _PinVerificationDialogState extends State<_PinVerificationDialog> {
                   child: TextField(
                     controller: _controller,
                     focusNode: _focusNode,
-                    keyboardType: TextInputType.number,
+                    keyboardType: TextInputType.none, // Evita que aparezca el teclado virtual en Windows/Android
                     maxLength: 4,
                     autofocus: true,
                     onChanged: (val) {

@@ -15,6 +15,25 @@ class SalesRepositoryImproved {
   final SupabaseClient _client;
   SalesRepositoryImproved(this._client);
 
+  Future<void> _assertOrderInBusinessScope(
+    String orderId, {
+    String? businessId,
+  }) async {
+    final scopedBusinessId = businessId?.trim();
+    if (scopedBusinessId == null || scopedBusinessId.isEmpty) return;
+
+    final row = await _client
+        .from('orders')
+        .select('id, table_sessions!inner(business_id)')
+        .eq('id', orderId)
+        .eq('table_sessions.business_id', scopedBusinessId)
+        .maybeSingle();
+
+    if (row == null) {
+      throw Exception('ORDER_OUT_OF_SCOPE');
+    }
+  }
+
   // ============================================================
   // 📊 SESIONES DE MESA
   // ============================================================
@@ -159,10 +178,12 @@ class SalesRepositoryImproved {
   // ============================================================
 
   /// Obtener orden completa con items
-  Future<Order?> getOrder(String orderId) async {
+  Future<Order?> getOrder(String orderId, {String? businessId}) async {
     return DatabaseOperationWrapper.read(
       operationName: 'Obtener Orden',
       operation: () async {
+        await _assertOrderInBusinessScope(orderId, businessId: businessId);
+
         final data = await _client
             .from('orders')
             .select()
@@ -181,10 +202,13 @@ class SalesRepositoryImproved {
     String orderId, {
     bool includeModifiers = true,
     bool onlyOpen = false,
+    String? businessId,
   }) async {
     return DatabaseOperationWrapper.read(
       operationName: 'Obtener Items de Orden',
       operation: () async {
+        await _assertOrderInBusinessScope(orderId, businessId: businessId);
+
         if (onlyOpen) {
           final data = await _client
               .from('order_items')
@@ -284,6 +308,7 @@ class SalesRepositoryImproved {
     String? reference,
     String? customerId,
     String? customerRnc,
+    String? fiscalType,
     String? cashierSessionId,
     double changeAmount = 0,
     bool closeOrder = true,
@@ -301,6 +326,7 @@ class SalesRepositoryImproved {
           'p_change_amount': changeAmount,
           'p_customer_id': customerId,
           'p_customer_rnc': customerRnc,
+          'p_requested_ncf_type': fiscalType,
           'p_cashier_session_id': cashierSessionId,
         },
       );

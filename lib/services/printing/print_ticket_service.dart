@@ -1,6 +1,7 @@
 import '../../data/models/printing_models.dart';
 import '../../data/models/sales_models.dart';
 import '../../data/models/payment_models.dart';
+import '../../data/utils/order_pricing_utils.dart';
 import 'esc_pos_generator.dart';
 
 /// 🖨️ Servicio de generación de tickets
@@ -214,8 +215,8 @@ class PrintTicketService {
     for (int i = 0; i < consolidatedItems.length; i++) {
       final item = consolidatedItems[i];
       final unitPrice = item.quantity == 0
-          ? item.unitPrice
-          : item.total / item.quantity;
+          ? itemDisplayTotal(order, item)
+          : itemDisplayUnitPrice(order, item);
 
       // Nombre del producto en negrita
       gen.setBold(true);
@@ -226,7 +227,7 @@ class PrintTicketService {
       final displayQty = _formatQty(item.quantity);
 
       final leftPart = '$displayQty x RD\$ ${_formatMoney(unitPrice)}';
-      final rightPart = 'RD\$ ${_formatMoney(item.total)}';
+      final rightPart = 'RD\$ ${_formatMoney(itemDisplayTotal(order, item))}';
       gen.dotRow(leftPart, rightPart);
 
       // Modificadores con indentación
@@ -256,29 +257,12 @@ class PrintTicketService {
     // ════════════════════════════════════════════
     gen.lineFeed();
 
-    final printableSubtotal = consolidatedItems.fold<double>(
-      0,
-      (sum, item) => sum + item.subtotal,
-    );
-    final printableDiscounts = consolidatedItems.fold<double>(
-      0,
-      (sum, item) => sum + item.discounts,
-    );
-    final printableTax = consolidatedItems.fold<double>(
-      0,
-      (sum, item) => sum + item.tax,
-    );
-    final printableItemsTotal = consolidatedItems.fold<double>(
-      0,
-      (sum, item) => sum + item.total,
-    );
-    final printableServiceFee = order.subtotal > 0
-        ? double.parse(
-            (order.serviceFee * (printableSubtotal / order.subtotal))
-                .toStringAsFixed(2),
-          )
-        : 0.0;
-    final printableGrandTotal = printableItemsTotal + printableServiceFee;
+    final printableSummary = summarizeOrderPricing(order, consolidatedItems);
+    final printableSubtotal = printableSummary.subtotal;
+    final printableDiscounts = printableSummary.discounts;
+    final printableTax = printableSummary.tax;
+    final printableServiceFee = printableSummary.serviceFee;
+    final printableGrandTotal = printableSummary.total;
 
     // Subtotal
     gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(printableSubtotal)}');
@@ -472,7 +456,7 @@ class PrintTicketService {
 
     for (int i = 0; i < consolidatedItems.length; i++) {
       final item = consolidatedItems[i];
-      final unitPrice = item.total / item.quantity;
+      final unitPrice = itemDisplayUnitPrice(order, item);
 
       gen.setBold(true);
       gen.text(item.productName);
@@ -481,7 +465,7 @@ class PrintTicketService {
       final displayQty = _formatQty(item.quantity);
 
       final leftPart = '$displayQty x RD\$ ${_formatMoney(unitPrice)}';
-      final rightPart = 'RD\$ ${_formatMoney(item.total)}';
+      final rightPart = 'RD\$ ${_formatMoney(itemDisplayTotal(order, item))}';
       gen.dotRow(leftPart, rightPart);
 
       if (item.modifiers.isNotEmpty) {
@@ -505,19 +489,26 @@ class PrintTicketService {
     gen.lineFeed();
 
     // Totals
-    gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(order.subtotal)}');
-    if (order.discounts > 0) {
-      gen.textRow('DESCUENTO:', '-RD\$ ${_formatMoney(order.discounts)}');
-    }
-    if (order.serviceFee > 0) {
-      final servicePct = ((order.serviceFee / order.subtotal) * 100)
-          .toStringAsFixed(0);
+    final printableSummary = summarizeOrderPricing(order, consolidatedItems);
+
+    gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(printableSummary.subtotal)}');
+    if (printableSummary.discounts > 0) {
       gen.textRow(
-        'SERVICIO ($servicePct%):',
-        'RD\$ ${_formatMoney(order.serviceFee)}',
+        'DESCUENTO:',
+        '-RD\$ ${_formatMoney(printableSummary.discounts)}',
       );
     }
-    gen.textRow('ITBIS (18%):', 'RD\$ ${_formatMoney(order.tax)}');
+    if (printableSummary.serviceFee > 0) {
+      final servicePct = printableSummary.subtotal > 0
+          ? ((printableSummary.serviceFee / printableSummary.subtotal) * 100)
+                .toStringAsFixed(0)
+          : '0';
+      gen.textRow(
+        'SERVICIO ($servicePct%):',
+        'RD\$ ${_formatMoney(printableSummary.serviceFee)}',
+      );
+    }
+    gen.textRow('ITBIS (18%):', 'RD\$ ${_formatMoney(printableSummary.tax)}');
 
     gen.lineFeed();
     _thickSeparator(gen);
@@ -525,7 +516,7 @@ class PrintTicketService {
 
     gen.setBold(true);
     gen.setTextSize(width: 2, height: 2);
-    gen.textRow('TOTAL:', 'RD\$ ${_formatMoney(order.total)}');
+    gen.textRow('TOTAL:', 'RD\$ ${_formatMoney(printableSummary.total)}');
     gen.setTextSize();
     gen.setBold(false);
 

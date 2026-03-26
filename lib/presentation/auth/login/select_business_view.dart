@@ -8,6 +8,8 @@ import 'package:flutter_animate/flutter_animate.dart';
 
 import '../../../core/utils/logger.dart';
 import '../../../core/auth/session_bridge.dart';
+import '../../../core/business/business_resolver.dart';
+import '../../../core/storage/storage_service.dart';
 
 class SelectBusinessView extends ConsumerStatefulWidget {
   const SelectBusinessView({super.key});
@@ -62,6 +64,16 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
           SessionBridge.redirectToTenant(domain);
           return; // El browser navega al tenant
         }
+        
+        // En Windows/Native, si solo hay uno, también podríamos seleccionar automáticamente
+        if (!kIsWeb) {
+          final businessId = item['business_id'] as String?;
+          if (businessId != null) {
+            AppLogger.i('[SelectBusiness] Windows: Un solo negocio, seleccionando $businessId');
+            _handleSelect(item);
+            return;
+          }
+        }
       }
 
       // Múltiples negocios → mostrar el selector
@@ -83,17 +95,35 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
     }
   }
 
-  void _handleSelect(Map<String, dynamic> item) {
-    if (!kIsWeb) return;
-    
-    final biz = item['businesses'];
-    if (biz == null) return;
-    
-    final domain = biz['domain'] as String?;
-    if (domain == null || domain.isEmpty) return;
+  void _handleSelect(Map<String, dynamic> item) async {
+    final businessId = item['business_id'] as String?;
+    if (businessId == null) return;
 
-    AppLogger.i('Negocio seleccionado, transfiriendo sesión a tenant: $domain');
-    SessionBridge.redirectToTenant(domain);
+    if (kIsWeb) {
+      final biz = item['businesses'];
+      if (biz == null) return;
+      
+      final domain = biz['domain'] as String?;
+      if (domain == null || domain.isEmpty) return;
+
+      AppLogger.i('Negocio seleccionado, transfiriendo sesión a tenant: $domain');
+      SessionBridge.redirectToTenant(domain);
+    } else {
+      // Windows / Desktop / Mobile
+      AppLogger.i('Negocio seleccionado en Windows: $businessId. Guardando y entrando...');
+      
+      // 1. Guardar en storage persistente para futuros inicios
+      final storage = await StorageService.getInstance();
+      await storage.write(StorageKeys.activeBusinessId, businessId);
+      
+      // 2. Notificar al resolver actual (en memoria)
+      BusinessResolver.setActiveBusinessId(businessId);
+      
+      // 3. Entrar a la app
+      if (mounted) {
+        context.go('/');
+      }
+    }
   }
 
   @override

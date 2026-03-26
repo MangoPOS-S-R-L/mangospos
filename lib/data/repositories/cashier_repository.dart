@@ -1,5 +1,6 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/payment_models.dart';
+import '../utils/payment_amount_utils.dart';
 
 class CashierRepository {
   final SupabaseClient _client;
@@ -282,6 +283,10 @@ class CashierRepository {
             ...payment,
             'method_name': method?['name'],
             'method_code': method?['code'],
+            'net_amount': netPaymentAmount(
+              payment['amount'],
+              payment['change_amount'],
+            ),
             'customer_name':
                 fiscalData?['customer_name'] ?? tableSession?['customer_name'],
             'customer_tax_id': fiscalData?['customer_rnc'],

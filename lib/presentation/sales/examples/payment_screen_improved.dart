@@ -56,7 +56,7 @@ class _PaymentScreenImprovedExampleState
                 Text('Pago procesado exitosamente'),
               ],
             ),
-            backgroundColor: const Color(0xFF22C55E),
+            backgroundColor: Color(0xFF22C55E),
           ),
         );
 

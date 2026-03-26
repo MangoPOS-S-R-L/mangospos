@@ -118,20 +118,6 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
               symbol: 'RD\$',
               decimalDigits: 2,
             );
-            final totalSales =
-                (data.summary['total_sales'] as num?)?.toDouble() ?? 0.0;
-            final totalDeposits =
-                (data.summary['total_deposits'] as num?)?.toDouble() ?? 0.0;
-            final totalWithdrawals =
-                (data.summary['total_withdrawals'] as num?)?.toDouble() ?? 0.0;
-            final totalExpenses =
-                (data.summary['total_expenses'] as num?)?.toDouble() ?? 0.0;
-            final startAmount =
-                (data.summary['start_amount'] as num?)?.toDouble() ?? 0.0;
-            final expectedAmount =
-                (data.summary['expected_amount'] as num?)?.toDouble() ??
-                (totalSales + totalDeposits - totalWithdrawals - totalExpenses);
-
             return Padding(
               padding: const EdgeInsets.all(24),
               child: Column(
@@ -228,7 +214,7 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
                                   )
                                 : ListView.separated(
                                     itemCount: data.payments.length,
-                                    separatorBuilder: (_, __) =>
+                                    separatorBuilder: (_, _) =>
                                         const Divider(height: 1),
                                     itemBuilder: (context, index) =>
                                         _PaymentTableRow(
@@ -336,7 +322,9 @@ class _PaymentTableRow extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final amount = (payment['amount'] as num?)?.toDouble() ?? 0;
+    final amount =
+        (payment['net_amount'] as num?)?.toDouble() ??
+        ((payment['amount'] as num?)?.toDouble() ?? 0);
     final createdAt = DateTime.tryParse(
       payment['created_at']?.toString() ?? '',
     );
@@ -498,7 +486,11 @@ class _PaymentTableRow extends ConsumerWidget {
       );
 
       final salesRepo = ref.read(salesRepositoryProvider);
-      final bundle = await salesRepo.getOrderBundle(orderId);
+      final businessId = ref.read(sessionProvider).activeBusinessId;
+      final bundle = await salesRepo.getOrderBundle(
+        orderId,
+        businessId: businessId,
+      );
       if (bundle.order == null) throw Exception('No se encontró la orden.');
 
       // Para historial/reimpresión necesitamos TODOS los productos de la venta,
@@ -508,6 +500,7 @@ class _PaymentTableRow extends ConsumerWidget {
         orderId,
         includeModifiers: true,
         onlyOpen: false,
+        businessId: businessId,
       );
 
       // Fetch payments for this order
@@ -529,8 +522,6 @@ class _PaymentTableRow extends ConsumerWidget {
       }).toList();
 
       // Loading business profile (simplified, usually from a provider)
-      final session = ref.read(sessionProvider);
-      final businessId = session.activeBusinessId;
       if (businessId == null || businessId.isEmpty) {
         throw Exception('No se pudo resolver el negocio activo.');
       }
@@ -674,8 +665,9 @@ class _PaymentTableRow extends ConsumerWidget {
 
     // 2. Pedir motivo de anulación (Requerido por el usuario)
     final reason = await _showAnulacionReasonDialog(context);
-    if (reason == null)
+    if (reason == null) {
       return; // El usuario canceló o cerró el diálogo de nota.
+    }
 
     // 3. Ejecutar anulación
     try {
@@ -886,7 +878,12 @@ class _PaymentTableRow extends ConsumerWidget {
           'Productos Orden #${orderId.substring(0, 8).toUpperCase()}',
         ),
         content: FutureBuilder<List<OrderItem>>(
-          future: ref.read(salesRepositoryProvider).getOrderItems(orderId),
+          future: ref
+              .read(salesRepositoryProvider)
+              .getOrderItems(
+                orderId,
+                businessId: ref.read(sessionProvider).activeBusinessId,
+              ),
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const SizedBox(
@@ -908,7 +905,7 @@ class _PaymentTableRow extends ConsumerWidget {
                   : ListView.separated(
                       shrinkWrap: true,
                       itemCount: items.length,
-                      separatorBuilder: (_, __) => const Divider(),
+                      separatorBuilder: (_, _) => const Divider(),
                       itemBuilder: (context, i) {
                         final item = items[i];
                         return ListTile(

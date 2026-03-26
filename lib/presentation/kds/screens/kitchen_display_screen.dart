@@ -49,7 +49,7 @@ class _KitchenDisplayScreenState extends ConsumerState<KitchenDisplayScreen>
         backgroundColor: Colors.black,
         title: Row(
           children: [
-            const Icon(Icons.restaurant_menu, color: const Color(0xFFF97316)),
+            const Icon(Icons.restaurant_menu, color: Color(0xFFF97316)),
             const SizedBox(width: 12),
             const Text(
               'Kitchen Display System',
@@ -128,7 +128,7 @@ class _KitchenDisplayScreenState extends ConsumerState<KitchenDisplayScreen>
         ],
       ),
       body: state.loading
-          ? const Center(child: CircularProgressIndicator(color: const Color(0xFFF97316)))
+          ? const Center(child: CircularProgressIndicator(color: Color(0xFFF97316)))
           : Column(
               children: [
                 // Stats bar

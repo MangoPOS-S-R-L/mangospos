@@ -1,8 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
-// ignore: avoid_web_libraries_in_dot_dart
-import 'package:web/web.dart' as web;
+import 'package:mangopos/core/utils/web_utils/web_utils.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -97,23 +96,23 @@ class AppRouter {
   static String _initialLocation() {
     if (kIsWeb) {
       try {
-        final href = web.window.location.href;
-        final hash = web.window.location.hash;
-        final search = web.window.location.search;
-        print('[MangoPOS:Router] href=$href');
-        print('[MangoPOS:Router] hash=$hash  search=$search');
+        final href = WebUtils.href;
+        final hash = WebUtils.hash;
+        final search = WebUtils.search;
+        AppLogger.d('[Router] href=$href');
+        AppLogger.d('[Router] hash=$hash  search=$search');
         if (hash.startsWith('#')) {
           final fromHash = hash.substring(1);
           if (fromHash.isNotEmpty && fromHash != '/') {
-            print('[MangoPOS:Router] initialLocation from hash: $fromHash');
+            AppLogger.d('[Router] initialLocation from hash: $fromHash');
             return fromHash;
           }
         }
       } catch (e) {
-        print('[MangoPOS:Router] Error reading hash: $e');
+        AppLogger.w('[Router] Error reading hash: $e');
       }
     }
-    print('[MangoPOS:Router] initialLocation fallback: ${AppRoutes.login}');
+    AppLogger.d('[Router] initialLocation fallback: ${AppRoutes.login}');
     return AppRoutes.login;
   }
 
@@ -126,8 +125,8 @@ class AppRouter {
       final path = state.uri.path;
       final requestedBusinessId = state.uri.queryParameters['business_id'];
 
-      // LOG DIAGNÓSTICO — siempre visible en consola del browser
-      print('[MangoPOS:Router] redirect → path="$path" isAuthenticated=$isAuthenticated mode=${TenantResolver.mode.name} uri=${state.uri}');
+      // LOG DIAGNÓSTICO
+      AppLogger.d('[Router] redirect → path="$path" isAuthenticated=$isAuthenticated mode=${TenantResolver.mode.name} uri=${state.uri}');
 
       final isAuthRoute =
           path == AppRoutes.login ||
@@ -147,8 +146,8 @@ class AppRouter {
 
         if (!isAuthenticated) {
           // Sin sesión → mandar al portal principal para hacer login
-          print('[MangoPOS:Router] Tenant sin sesión → redirigiendo a app.mangopos.do');
-          web.window.location.assign('https://app.mangopos.do/');
+          AppLogger.i('[Router] Tenant sin sesión → redirigiendo a app.mangopos.do');
+          WebUtils.assign('https://app.mangopos.do/');
           // Retornamos null para no causar un loop de GoRouter mientras el browser navega
           return null;
         }
@@ -167,7 +166,7 @@ class AppRouter {
       // ── MODO APP SHELL (app.mangopos.do) — portal de login/registro ─────
       // En el app shell NUNCA mostramos el dashboard directamente.
       // Siempre pasamos por /select-business que decide a qué tenant ir.
-      print('[MangoPOS:Router] isAuthRoute=$isAuthRoute  isAuthenticated=$isAuthenticated');
+      AppLogger.d('[Router] isAuthRoute=$isAuthRoute  isAuthenticated=$isAuthenticated');
 
       if (!isAuthenticated) {
         if (isAuthRoute) return null;
@@ -179,9 +178,13 @@ class AppRouter {
         ).toString();
       }
 
-      // Autenticado en appShell → siempre a select-business (nunca al dashboard local)
+      // Autenticado → en WEB (portal) siempre a select-business.
+      // En WINDOWS/NATIVE, dejar que siga al dashboard si ya inició sesión.
       if (isAuthRoute || path == '/' || path == AppRoutes.dashboard) {
-        return AppRoutes.selectBusiness;
+        if (kIsWeb) {
+          return AppRoutes.selectBusiness;
+        }
+        return null;
       }
 
       return null;
@@ -201,11 +204,11 @@ class AppRouter {
               ?? state.uri.queryParameters['access_token'];
           final rt = state.uri.queryParameters['rt']
               ?? state.uri.queryParameters['refresh_token'];
-          // LOG DIAGNÓSTICO — siempre visible en consola del browser
-          print('[MangoPOS:CrossAuth] GoRoute builder disparado!');
-          print('[MangoPOS:CrossAuth] state.uri = ${state.uri}');
-          print('[MangoPOS:CrossAuth] at = ${at != null ? "[len=${at.length} inicio=${at.length > 10 ? at.substring(0, 10) : at}]" : "NULL"}');
-          print('[MangoPOS:CrossAuth] rt = ${rt != null ? "[presente]" : "NULL"}');
+          // LOG DIAGNÓSTICO
+          AppLogger.i('[CrossAuth] GoRoute builder disparado!');
+          AppLogger.d('[CrossAuth] state.uri = ${state.uri}');
+          AppLogger.d('[CrossAuth] at = ${at != null ? "[len=${at.length} inicio=${at.length > 10 ? at.substring(0, 10) : at}]" : "NULL"}');
+          AppLogger.d('[CrossAuth] rt = ${rt != null ? "[presente]" : "NULL"}');
           return CrossAuthView(
             accessToken: at,
             refreshToken: rt,

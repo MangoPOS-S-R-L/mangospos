@@ -7,8 +7,7 @@ import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/core/security/access_control_catalog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-// ignore: avoid_web_libraries_in_dot_dart
-import 'package:web/web.dart' as web;
+import 'package:mangopos/core/utils/web_utils/web_utils.dart';
 
 enum AuthStatus { unauthenticated, authenticated, loading }
 
@@ -395,7 +394,7 @@ class SessionController extends Notifier<SessionState> {
       
       String? matchedByDomainId;
       if (kIsWeb) {
-        final currentHost = web.window.location.hostname;
+        final currentHost = WebUtils.hostname;
         try {
           final matchedDomain = availableBusinesses.firstWhere(
             (b) => b.domain == currentHost,

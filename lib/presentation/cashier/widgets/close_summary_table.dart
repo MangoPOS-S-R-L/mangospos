@@ -32,9 +32,9 @@ class CloseSummaryTable extends StatelessWidget {
         reported: result.numericTransfer,
       ),
       _SummaryRowData(
-        concept: 'TOTAL',
-        expected: result.expectedTotal,
-        reported: result.totalReported,
+        concept: 'CIERRE CAJA',
+        expected: input.expectedClosureAmount,
+        reported: result.totalCounted,
       ),
     ];
 

@@ -171,7 +171,7 @@ begin
     p_menu_item_id,
     v_name,
     v_qty,
-    v_qty,
+    greatest(round(v_qty), 1)::int,
     v_price,
     coalesce(v_tax_mode, 'exclusive'),
     coalesce(v_tax_rate, 0),

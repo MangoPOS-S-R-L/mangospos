@@ -150,12 +150,30 @@ class _TableCardState extends State<TableCard> {
         // Lado derecho: Total (solo si está ocupada)
         if (widget.table.isOccupied && widget.table.total != null)
           Flexible(
-            child: Text(
-              _formatCurrency(widget.table.total!),
-              style: AppTextStyles.tableTotal.copyWith(
-                color: AppColors.foreground,
-              ),
-              overflow: TextOverflow.ellipsis,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _formatCurrency(widget.table.total!),
+                  style: AppTextStyles.tableTotal.copyWith(
+                    color: AppColors.foreground,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (widget.table.customerName?.trim().isNotEmpty == true) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    widget.table.customerName!.trim(),
+                    style: AppTextStyles.tableWaiter.copyWith(
+                      color: AppColors.foreground,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.end,
+                  ),
+                ],
+              ],
             ),
           ),
       ],
@@ -236,25 +254,30 @@ class _TableCardState extends State<TableCard> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              // Mesero
               Expanded(
-                child: Row(
+                child: Column(
                   mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(
-                      Icons.person_outline,
-                      size: 14,
-                      color: AppColors.mutedForeground,
-                    ),
-                    const SizedBox(width: 6),
-                    Flexible(
-                      child: Text(
-                        widget.table.waiterName ?? 'Sin mesero',
-                        style: AppTextStyles.tableWaiter.copyWith(
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.person_outline,
+                          size: 14,
                           color: AppColors.mutedForeground,
                         ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            widget.table.waiterName ?? 'Sin mesero',
+                            style: AppTextStyles.tableWaiter.copyWith(
+                              color: AppColors.mutedForeground,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),

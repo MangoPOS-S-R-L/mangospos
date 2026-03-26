@@ -3,21 +3,28 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../data/models/sales_models.dart';
 import '../../../data/repositories/sales_repository.dart';
+import '../../../services/session/session_controller.dart';
 import '../../sales/viewmodel/sales_viewmodel.dart';
 import '../state/split_bill_state.dart';
 
 // Provider
 final splitBillViewModelProvider =
     StateNotifierProvider.autoDispose<SplitBillViewModel, SplitBillState>(
-      (ref) => SplitBillViewModel(ref.read(salesRepositoryProvider)),
+      (ref) => SplitBillViewModel(ref),
     );
 
 /// 📄 ViewModel para división de cuenta
 class SplitBillViewModel extends StateNotifier<SplitBillState> {
-  final SalesRepository _salesRepo;
+  final Ref _ref;
   Map<String, String?> _initialCheckIdByItemId = const {};
 
-  SplitBillViewModel(this._salesRepo) : super(const SplitBillState());
+  SplitBillViewModel(this._ref)
+    : _salesRepo = _ref.read(salesRepositoryProvider),
+      super(const SplitBillState());
+
+  final SalesRepository _salesRepo;
+
+  String? get _activeBusinessId => _ref.read(sessionProvider).activeBusinessId;
 
   // ============================================================
   // 🚀 INICIALIZACIÓN
@@ -29,7 +36,10 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
 
     try {
       // Carga compacta en una sola llamada RPC: order + checks + items abiertos.
-      final bundle = await _salesRepo.getOrderBundle(order.id);
+      final bundle = await _salesRepo.getOrderBundle(
+        order.id,
+        businessId: _activeBusinessId,
+      );
       if (!mounted) return;
       final items = bundle.items;
       final existingChecks = List<OrderCheck>.from(bundle.checks);
@@ -100,6 +110,7 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
       isClosed: false,
       subtotal: 0,
       discounts: 0,
+      serviceFee: 0,
       tax: 0,
       total: 0,
     );
@@ -179,6 +190,7 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
         isClosed: false,
         subtotal: 0,
         discounts: 0,
+        serviceFee: 0,
         tax: 0,
         total: 0,
       ),
@@ -276,6 +288,7 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
         isClosed: false,
         subtotal: 0,
         discounts: 0,
+        serviceFee: 0,
         tax: 0,
         total: 0,
       ),
@@ -290,6 +303,7 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
         isClosed: false,
         subtotal: 0,
         discounts: 0,
+        serviceFee: 0,
         tax: 0,
         total: 0,
       ),
@@ -446,6 +460,7 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
             isClosed: c.isClosed,
             subtotal: total / 1.18, // Rough est
             discounts: 0,
+            serviceFee: 0,
             tax: total - (total / 1.18),
             total: total,
             items: checkItems,
@@ -650,7 +665,10 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
       }
 
       if (affectedPositions.isNotEmpty) {
-        final consolidatedChecks = await _salesRepo.getOrderChecks(orderId);
+        final consolidatedChecks = await _salesRepo.getOrderChecks(
+          orderId,
+          businessId: _activeBusinessId,
+        );
         final affectedCheckIds = consolidatedChecks
             .where((c) => !c.isClosed && affectedPositions.contains(c.position))
             .map((c) => c.id)

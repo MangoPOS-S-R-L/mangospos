@@ -6,8 +6,7 @@
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:supabase_flutter/supabase_flutter.dart';
-// ignore: avoid_web_libraries_in_dot_dart
-import 'package:web/web.dart' as web;
+import 'package:mangopos/core/utils/web_utils/web_utils.dart';
 
 import '../tenant/tenant_resolver.dart';
 import '../utils/logger.dart';
@@ -44,7 +43,7 @@ class SessionBridge {
     final targetUrl = 'https://$cleanDomain/#/auth?at=${Uri.encodeComponent(at)}&rt=${Uri.encodeComponent(rt)}';
 
     AppLogger.i('[SessionBridge] → Redirigiendo al tenant: https://$cleanDomain/');
-    web.window.location.assign(targetUrl);
+    WebUtils.assign(targetUrl);
   }
 
   // ────────────────────────────────────────────────────────────
@@ -61,7 +60,7 @@ class SessionBridge {
     if (!TenantResolver.isTenant) return false;
 
     try {
-      final href = web.window.location.href;
+      final href = WebUtils.href;
       final uri = Uri.parse(href);
       final fragment = uri.fragment; // "/auth?at=...&rt=..."
 
@@ -108,11 +107,11 @@ class SessionBridge {
 
   static void _cleanUrl() {
     try {
-      final currentUri = Uri.parse(web.window.location.href);
+      final currentUri = Uri.parse(WebUtils.href);
       final port = currentUri.port;
       final portStr = (port != 0 && port != 80 && port != 443) ? ':$port' : '';
       final cleanPath = '${currentUri.scheme}://${currentUri.host}$portStr/#/';
-      web.window.history.replaceState(null, '', cleanPath);
+      WebUtils.replaceState(null, '', cleanPath);
       AppLogger.d('[SessionBridge] URL limpiada → $cleanPath');
     } catch (e) {
       AppLogger.w('[SessionBridge] No se pudo limpiar la URL: $e');

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/data/models/sales_models.dart';
+import 'package:mangopos/data/utils/order_pricing_utils.dart';
 
 String _formatQty(double qty) {
   if ((qty - qty.roundToDouble()).abs() < 0.001) {
@@ -136,9 +137,10 @@ class InvoiceModal extends StatelessWidget {
                   .reduce((a, b) => a.isAfter(b) ? a : b)
             : order.createdAt);
 
-    final subtotal = filteredItems.fold<double>(0, (s, i) => s + i.subtotal);
-    final tax = filteredItems.fold<double>(0, (s, i) => s + i.tax);
-    final total = filteredItems.fold<double>(0, (s, i) => s + i.total);
+    final pricingSummary = summarizeOrderPricing(order, filteredItems);
+    final subtotal = pricingSummary.subtotal;
+    final tax = pricingSummary.tax;
+    final total = pricingSummary.total;
 
     return Dialog(
       backgroundColor: Colors.white,
@@ -280,7 +282,9 @@ class InvoiceModal extends StatelessWidget {
                                 ],
                               ),
                             ),
-                            Text('RD\$ ${currency.format(item.total)}'),
+                            Text(
+                              'RD\$ ${currency.format(itemDisplayTotal(order, item))}',
+                            ),
                           ],
                         ),
                       ),
@@ -291,12 +295,10 @@ class InvoiceModal extends StatelessWidget {
                     // Financial Breakdown (filtrado al check si aplica)
                     _SummaryRow('Subtotal', subtotal),
                     _SummaryRow('ITBIS (18%)', tax),
-                    if (order.serviceFee > 0)
+                    if (pricingSummary.serviceFee > 0)
                       _SummaryRow(
                         'Propina Ley (10%)',
-                        order.subtotal > 0
-                            ? order.serviceFee * (subtotal / order.subtotal)
-                            : 0,
+                        pricingSummary.serviceFee,
                       ),
                     const SizedBox(height: 8),
                     _SummaryRow('TOTAL', total, isBold: true, fontSize: 18),

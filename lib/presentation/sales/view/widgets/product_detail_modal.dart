@@ -145,7 +145,7 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
             TextField(
               controller: reasonController,
               maxLines: 3,
-              autofocus: true,
+              autofocus: false,
               decoration: InputDecoration(
                 filled: true,
                 fillColor: const Color(0xFFF8FAFC),

@@ -63,7 +63,7 @@ class SplitPreviewCard extends StatelessWidget {
           ),
           // Actions
           if (isPaid)
-            const Icon(Icons.check_circle, color: const Color(0xFF22C55E), size: 20)
+            const Icon(Icons.check_circle, color: Color(0xFF22C55E), size: 20)
           else
             ElevatedButton(
               onPressed: onPay,

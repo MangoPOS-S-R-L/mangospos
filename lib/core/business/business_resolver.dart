@@ -1,5 +1,6 @@
-// lib/core/business/business_resolver.dart
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../storage/storage_service.dart';
 
 class BusinessResolver {
   static final _client = Supabase.instance.client;
@@ -18,6 +19,21 @@ class BusinessResolver {
     if (_activeBusinessId != null && _activeBusinessId!.isNotEmpty) {
       _cached = _activeBusinessId;
       return _activeBusinessId!;
+    }
+
+    // En Windows/Native, intentar cargar del storage persistente
+    if (!kIsWeb) {
+      try {
+        final storage = await StorageService.getInstance();
+        final storedId = await storage.read(StorageKeys.activeBusinessId);
+        if (storedId != null && storedId.isNotEmpty) {
+          _activeBusinessId = storedId;
+          _cached = storedId;
+          return storedId;
+        }
+      } catch (e) {
+        // Silenciosamente ignorar errores de storage y seguir al fallback
+      }
     }
 
     final user = _client.auth.currentUser;

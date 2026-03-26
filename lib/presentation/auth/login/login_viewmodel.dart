@@ -4,8 +4,6 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-// ignore: avoid_web_libraries_in_dot_dart
-import 'package:web/web.dart' as web;
 
 import '../../../services/session/session_controller.dart';
 import '../../../core/utils/logger.dart';
@@ -87,13 +85,13 @@ class LoginViewModel extends Notifier<LoginState> {
         return;
       }
 
-      // Si tiene más de un negocio → mostrar selector en app.mangopos.do
+      // Si tiene más de un negocio → mostrar selector
       if (businessesList.length > 1) {
-        AppLogger.i('Multi-tenant detectado (${businessesList.length} negocios). Redirigiendo a selector...');
-        _safeSet(state.copyWith(isLoading: false));
-        if (kIsWeb && TenantResolver.isAppShell) {
-          web.window.location.assign('/#/select-business');
-        }
+        AppLogger.i('Multi-tenant detectado (${businessesList.length} negocios). Notificando para navegación a selector...');
+        _safeSet(state.copyWith(
+          isLoading: false,
+          needsBusinessSelection: true,
+        ));
         return;
       }
 

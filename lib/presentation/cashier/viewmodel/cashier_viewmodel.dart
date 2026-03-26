@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mangopos/data/repositories/cashier_repository.dart';
 import 'package:mangopos/data/repositories/sales_repository.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
+import 'package:mangopos/data/utils/payment_amount_utils.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/core/cache/cache_manager.dart';
@@ -155,7 +156,7 @@ class CashierViewModel extends ChangeNotifier {
       // Get payments for today
       final paymentsData = await client
           .from('payments')
-          .select('amount, created_at')
+          .select('amount, change_amount, created_at')
           .gte('created_at', startOfDay)
           .lt('created_at', endOfDay)
           .eq('status', 'completed')
@@ -166,14 +167,10 @@ class CashierViewModel extends ChangeNotifier {
 
       transactionCount = paymentsData.length;
       for (var payment in paymentsData) {
-        final amount = payment['amount'];
-        if (amount != null) {
-          if (amount is num) {
-            totalIncome += amount.toDouble();
-          } else if (amount is String) {
-            totalIncome += double.tryParse(amount) ?? 0.0;
-          }
-        }
+        totalIncome += netPaymentAmount(
+          payment['amount'],
+          payment['change_amount'],
+        );
       }
 
       // Get expenses for today (cash movements)
@@ -236,7 +233,9 @@ class CashierViewModel extends ChangeNotifier {
       // Get recent payments (income) - simplified query
       final paymentsData = await client
           .from('payments')
-          .select('id, amount, payment_method_id, created_at, order_id')
+          .select(
+            'id, amount, change_amount, payment_method_id, created_at, order_id',
+          )
           .gte('created_at', startOfDay)
           .lt('created_at', endOfDay)
           .eq('status', 'completed')
@@ -289,15 +288,10 @@ class CashierViewModel extends ChangeNotifier {
           }
         }
 
-        double amount = 0.0;
-        final paymentAmount = payment['amount'];
-        if (paymentAmount != null) {
-          if (paymentAmount is num) {
-            amount = paymentAmount.toDouble();
-          } else if (paymentAmount is String) {
-            amount = double.tryParse(paymentAmount) ?? 0.0;
-          }
-        }
+        final amount = netPaymentAmount(
+          payment['amount'],
+          payment['change_amount'],
+        );
 
         movements.add({
           'type': 'income',
@@ -398,7 +392,7 @@ class CashierViewModel extends ChangeNotifier {
 
         final payments = await client
             .from('payments')
-            .select('amount, created_at')
+            .select('amount, change_amount, created_at')
             .gte('created_at', startOfDayDate(startOfWeekDate))
             .lt('created_at', startOfDayDate(endOfWeekDate))
             .eq('status', 'completed')
@@ -407,7 +401,10 @@ class CashierViewModel extends ChangeNotifier {
         List<double> weeklySales = List.filled(7, 0.0);
 
         for (var payment in payments) {
-          final amount = (payment['amount'] as num?)?.toDouble() ?? 0.0;
+          final amount = netPaymentAmount(
+            payment['amount'],
+            payment['change_amount'],
+          );
           final dateStr = payment['created_at'] as String;
           final date = DateTime.parse(dateStr).toLocal();
           final dayIndex = date.weekday - 1;

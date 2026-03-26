@@ -87,7 +87,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('División aplicada exitosamente'),
-            backgroundColor: const Color(0xFF22C55E),
+            backgroundColor: Color(0xFF22C55E),
           ),
         );
       }
@@ -431,7 +431,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                                       style: TextStyle(
                                         fontSize: 10,
                                         fontWeight: FontWeight.bold,
-                                        color: const Color(0xFFF97316),
+                                        color: Color(0xFFF97316),
                                       ),
                                     ),
                                   ),
@@ -606,7 +606,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
           Icon(
             Icons.check_circle_outline,
             size: 64,
-            color: const Color(0xFF22C55E),
+            color: Color(0xFF22C55E),
           ),
           SizedBox(height: 16),
           Text(
@@ -615,7 +615,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w500,
-              color: const Color(0xFF22C55E),
+              color: Color(0xFF22C55E),
             ),
           ),
         ],
@@ -773,10 +773,12 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                               final customerName = selected['name']
                                   ?.toString()
                                   .trim();
-                              if (customerId == null || customerId.isEmpty)
+                              if (customerId == null || customerId.isEmpty) {
                                 return;
-                              if (customerName == null || customerName.isEmpty)
+                              }
+                              if (customerName == null || customerName.isEmpty) {
                                 return;
+                              }
                               await viewModel.assignCustomerToCheck(
                                 checkId: check.id,
                                 customerId: customerId,

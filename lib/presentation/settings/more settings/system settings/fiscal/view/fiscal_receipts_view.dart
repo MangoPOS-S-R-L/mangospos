@@ -211,7 +211,7 @@ class _FiscalReceiptsViewState extends ConsumerState<FiscalReceiptsView> {
                 onChanged: (v) => ref
                     .read(fiscalVmProvider.notifier)
                     .toggleElectronicBilling(widget.businessId, v),
-                activeColor: MangoColors.primaryOrange,
+                activeThumbColor: MangoColors.primaryOrange,
               ),
             ],
           ),
@@ -545,7 +545,7 @@ class _FiscalFormDialogState extends ConsumerState<_FiscalFormDialog> {
                   child: _buildLabelField(
                     'Serie',
                     DropdownButtonFormField<String>(
-                      value: selectedSerie,
+                      initialValue: selectedSerie,
                       decoration: _inputDeco(),
                       items: ['B', 'E']
                           .map(
@@ -569,7 +569,7 @@ class _FiscalFormDialogState extends ConsumerState<_FiscalFormDialog> {
                   child: _buildLabelField(
                     'Tipo',
                     DropdownButtonFormField<String>(
-                      value: selectedTipo,
+                      initialValue: selectedTipo,
                       decoration: _inputDeco(),
                       items:
                           (selectedSerie == 'B'
@@ -644,7 +644,7 @@ class _FiscalFormDialogState extends ConsumerState<_FiscalFormDialog> {
                 Switch(
                   value: _activo,
                   onChanged: (v) => setState(() => _activo = v),
-                  activeColor: MangoColors.primaryOrange,
+                  activeThumbColor: MangoColors.primaryOrange,
                 ),
               ],
             ),

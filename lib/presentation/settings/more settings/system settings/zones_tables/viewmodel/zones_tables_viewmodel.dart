@@ -8,6 +8,7 @@ import '../../../../../../data/models/dining_table.dart';
 import '../../../../../../data/repositories/pos_settings_repository.dart';
 import '../../../../../../data/repositories/zones_repository.dart';
 import '../../../../../../data/utils/business_id_resolver.dart';
+import '../../../../../../core/utils/sorting_utils.dart';
 import '../state/zones_tables_state.dart';
 
 final zonesRepoProvider = Provider(
@@ -145,6 +146,9 @@ class ZonesTablesViewModel extends Notifier<ZonesTablesState> {
   Future<void> refreshTables(String zoneId) async {
     final repo = ref.read(zonesRepoProvider);
     final rows = await repo.fetchTablesByZone(zoneId);
+    // 🔥 Natural Sort (Mesa 1, Mesa 2, ..., Mesa 10)
+    rows.sort((a, b) => SortingUtils.naturalCompare(a.code, b.code));
+
     final map = Map<String, List<DiningTable>>.from(state.tablesByZone);
     map[zoneId] = rows;
     state = state.copyWith(tablesByZone: map);

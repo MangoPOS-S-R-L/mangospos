@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../data/models/table_status.dart';
 import '../../../data/repositories/zones_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
+import '../../../core/utils/sorting_utils.dart';
 import '../state/by_zone_state.dart';
 
 final zonesRepoProvider = Provider(
@@ -63,7 +64,11 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
 
       final repo = ref.read(zonesRepoProvider);
 
-      final zones = await repo.fetchZones(bizId);
+      final zones = (await repo.fetchZones(bizId)).where((z) {
+        final name = z.name.toLowerCase();
+        return name != 'ventas manuales' && name != 'ventas rápidas';
+      }).toList();
+
       zones.sort((a, b) {
         final sortCompare = a.sortIndex.compareTo(b.sortIndex);
         return sortCompare != 0 ? sortCompare : a.name.compareTo(b.name);
@@ -93,7 +98,10 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
   Future<void> loadZoneStatus(String zoneId, {bool emitError = true}) async {
     final repo = ref.read(zonesRepoProvider);
     try {
-      final rows = await repo.fetchByZone(zoneId);
+      final rows = await repo.fetchByZone(zoneId, businessId: state.businessId);
+      // 🔥 Natural Sort (Mesa 1, Mesa 2, ..., Mesa 10)
+      rows.sort((a, b) => SortingUtils.naturalCompare(a.code, b.code));
+
       state = state.copyWith(
         statusByZone: {...state.statusByZone, zoneId: rows},
       );
@@ -119,6 +127,13 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
           callback: (payload) {
             final newRecord = payload.newRecord;
             final oldRecord = payload.oldRecord;
+            final changedBusinessId =
+                _toStringOrNull(newRecord['business_id']) ??
+                _toStringOrNull(oldRecord['business_id']);
+
+            if (changedBusinessId != null && changedBusinessId != businessId) {
+              return;
+            }
 
             final tableId =
                 _toStringOrNull(newRecord['table_id']) ??
@@ -278,13 +293,21 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
     try {
       final rows = await sb
           .from('orders')
-          .select('id, session_id')
+          .select('id, session_id, table_sessions!inner(business_id)')
           .inFilter('id', orderIds.toList(growable: false));
 
       final zones = <String>{};
       var requiresFullReload = false;
 
       for (final row in rows) {
+        final session = row['table_sessions'] as Map<String, dynamic>?;
+        final rowBusinessId = _toStringOrNull(session?['business_id']);
+        if (state.businessId != null &&
+            rowBusinessId != null &&
+            rowBusinessId != state.businessId) {
+          continue;
+        }
+
         final sessionId = _toStringOrNull(row['session_id']);
         if (sessionId == null) {
           requiresFullReload = true;

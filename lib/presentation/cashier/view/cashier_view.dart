@@ -10,6 +10,7 @@ import 'package:mangopos/utils/responsive_utils.dart';
 import 'package:mangopos/presentation/cashier/widgets/blind_cash_close_dialog.dart';
 import 'package:mangopos/presentation/cashier/widgets/open_cash_dialog.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import 'package:mangopos/data/utils/payment_amount_utils.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:async';
 
@@ -245,31 +246,40 @@ class _CashierViewState extends ConsumerState<CashierView> {
     var totalSales = toInt(summary['total_sales_all_methods']);
     var transactionCount = toInt(summary['transaction_count']);
 
-    if (expectedCard <= 0 && expectedTransfer <= 0 && totalSales <= 0) {
-      final payments = await repository.getSessionPaymentsDetailed(sessionId);
-      int cardPayments = 0;
-      int transferPayments = 0;
-      int totalPaid = 0;
+    final payments = await repository.getSessionPaymentsDetailed(sessionId);
+    int cardPayments = 0;
+    int transferPayments = 0;
+    int totalPaid = 0;
 
-      for (final payment in payments) {
-        final amount = toInt(payment['amount']);
-        totalPaid += amount;
-        final code = (payment['method_code'] ?? '').toString().toLowerCase();
-        final methodName = (payment['method_name'] ?? '')
-            .toString()
-            .toLowerCase();
+    for (final payment in payments) {
+      final amount = netPaymentAmount(
+        payment['amount'],
+        payment['change_amount'],
+      ).round();
+      totalPaid += amount;
+      final code = (payment['method_code'] ?? '').toString().toLowerCase();
+      final methodName = (payment['method_name'] ?? '')
+          .toString()
+          .toLowerCase();
 
-        if (code == 'card' || methodName.contains('tarjet')) {
-          cardPayments += amount;
-        } else if (code == 'transfer' || methodName.contains('transfer')) {
-          transferPayments += amount;
-        }
+      if (code == 'card' || methodName.contains('tarjet')) {
+        cardPayments += amount;
+      } else if (code == 'transfer' || methodName.contains('transfer')) {
+        transferPayments += amount;
       }
+    }
 
+    if (cardPayments > 0 || expectedCard <= 0) {
       expectedCard = cardPayments;
+    }
+    if (transferPayments > 0 || expectedTransfer <= 0) {
       expectedTransfer = transferPayments;
-      if (totalSales <= 0) totalSales = totalPaid;
-      if (transactionCount <= 0) transactionCount = payments.length;
+    }
+    if (totalPaid > 0 || totalSales <= 0) {
+      totalSales = totalPaid;
+    }
+    if (transactionCount <= 0) {
+      transactionCount = payments.length;
     }
 
     final fallback = _fallbackInput();

@@ -122,8 +122,7 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
     final vm = ref.watch(byZoneVmProvider);
     final cashierVm = ref.watch(cashierViewModelProvider);
     final isCashOpen = cashierVm.lastSession?['status'] == 'open';
-    // Filter out 'Ventas manuales' as it is not a physical zone with tables
-    final zones = vm.zones.where((z) => z.name != 'Ventas manuales').toList();
+    final zones = vm.zones;
     final hasZones = zones.isNotEmpty;
 
     _updateTabController(zones);
@@ -522,8 +521,8 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
                       .floor()
                       .clamp(
                         1,
-                        5,
-                      ); // Máximo 5 columnas según tabla de referencia
+                        10,
+                      ); // Máximo 10 columnas para aprovechar pantallas anchas
 
               // Calcular el ancho REAL de cada card
               final totalGaps = (columns - 1) * SalesTheme.gridGap;
@@ -620,7 +619,10 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
       if (sessionId != null && sessionId.isNotEmpty) {
         try {
           final repo = ref.read(salesRepositoryProvider);
-          final currentSession = await repo.getSessionCustomer(sessionId);
+          final currentSession = await repo.getSessionCustomer(
+            sessionId,
+            businessId: session.activeBusinessId,
+          );
           final currentNote = currentSession.note?.trim();
           final actorName = session.userName?.trim().isNotEmpty == true
               ? session.userName!.trim()
@@ -634,7 +636,11 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
           final nextNote = (currentNote == null || currentNote.isEmpty)
               ? auditLine
               : '$currentNote\n$auditLine';
-          await repo.updateSessionNote(sessionId: sessionId, note: nextNote);
+          await repo.updateSessionNote(
+            sessionId: sessionId,
+            note: nextNote,
+            businessId: session.activeBusinessId,
+          );
         } catch (_) {
           // No bloqueamos la operación si falla la auditoría.
         }
@@ -707,7 +713,7 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
             child: TextField(
               controller: controller,
               focusNode: focusNode,
-              autofocus: true,
+              autofocus: false,
               keyboardType: TextInputType.number,
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
               decoration: const InputDecoration(
@@ -782,6 +788,7 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
       total: ts.total > 0 ? ts.total : null,
       waiterId: ts.sessionId, // Usamos sessionId como waiterId temporalmente
       waiterName: ts.waiterName,
+      customerName: ts.customerName,
     );
   }
 }

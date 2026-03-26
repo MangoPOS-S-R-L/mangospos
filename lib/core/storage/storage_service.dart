@@ -13,6 +13,7 @@ class StorageKeys {
   static const String cacheVersion = 'system_cache_version';
   static const String lastCleanup = 'system_last_cleanup';
   static const String totalCacheSize = 'system_total_cache_size';
+  static const String activeBusinessId = 'active_business_id';
 
   // Generar key para datos
   static String cacheKey(String module, String key) =>

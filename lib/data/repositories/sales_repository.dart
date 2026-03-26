@@ -15,6 +15,63 @@ class SalesRepository {
   static const _itemFields =
       'id,order_id,product_id,product_name,sku,quantity,qty,unit_price,subtotal,discounts,tax,total,check_id,is_takeout,status,notes,created_at';
 
+  Future<void> _assertOrderInBusinessScope(
+    String orderId, {
+    String? businessId,
+  }) async {
+    final scopedBusinessId = businessId?.trim();
+    if (scopedBusinessId == null || scopedBusinessId.isEmpty) return;
+
+    final row = await _client
+        .from('orders')
+        .select('id, table_sessions!inner(business_id)')
+        .eq('id', orderId)
+        .eq('table_sessions.business_id', scopedBusinessId)
+        .maybeSingle();
+
+    if (row == null) {
+      throw Exception('ORDER_OUT_OF_SCOPE');
+    }
+  }
+
+  Future<void> _assertSessionInBusinessScope(
+    String sessionId, {
+    String? businessId,
+  }) async {
+    final scopedBusinessId = businessId?.trim();
+    if (scopedBusinessId == null || scopedBusinessId.isEmpty) return;
+
+    final row = await _client
+        .from('table_sessions')
+        .select('id')
+        .eq('id', sessionId)
+        .eq('business_id', scopedBusinessId)
+        .maybeSingle();
+
+    if (row == null) {
+      throw Exception('SESSION_OUT_OF_SCOPE');
+    }
+  }
+
+  Future<void> _assertTableInBusinessScope(
+    String tableId, {
+    String? businessId,
+  }) async {
+    final scopedBusinessId = businessId?.trim();
+    if (scopedBusinessId == null || scopedBusinessId.isEmpty) return;
+
+    final row = await _client
+        .from('dining_tables')
+        .select('id, zones!inner(business_id)')
+        .eq('id', tableId)
+        .eq('zones.business_id', scopedBusinessId)
+        .maybeSingle();
+
+    if (row == null) {
+      throw Exception('TABLE_OUT_OF_SCOPE');
+    }
+  }
+
   // ============================================================
   // 📊 SESIONES DE MESA
   // ============================================================
@@ -116,13 +173,21 @@ class SalesRepository {
   }
 
   Future<({String? customerId, String? customerName, String? note})>
-  getSessionCustomer(String sessionId) async {
+  getSessionCustomer(String sessionId, {String? businessId}) async {
     try {
-      final data = await _client
+      await _assertSessionInBusinessScope(sessionId, businessId: businessId);
+
+      var query = _client
           .from('table_sessions')
           .select('customer_id, customer_name, note')
-          .eq('id', sessionId)
-          .maybeSingle();
+          .eq('id', sessionId);
+
+      final scopedBusinessId = businessId?.trim();
+      if (scopedBusinessId != null && scopedBusinessId.isNotEmpty) {
+        query = query.eq('business_id', scopedBusinessId);
+      }
+
+      final data = await query.maybeSingle();
 
       return (
         customerId: data?['customer_id'] as String?,
@@ -138,8 +203,11 @@ class SalesRepository {
     required String sessionId,
     required String customerId,
     required String customerName,
+    String? businessId,
   }) async {
     try {
+      await _assertSessionInBusinessScope(sessionId, businessId: businessId);
+
       await _client.rpc(
         'fn_assign_customer_to_session',
         params: {
@@ -158,12 +226,22 @@ class SalesRepository {
   Future<void> updateSessionNote({
     required String sessionId,
     String? note,
+    String? businessId,
   }) async {
     try {
-      await _client
+      await _assertSessionInBusinessScope(sessionId, businessId: businessId);
+
+      var query = _client
           .from('table_sessions')
           .update({'note': note?.trim().isEmpty == true ? null : note?.trim()})
           .eq('id', sessionId);
+
+      final scopedBusinessId = businessId?.trim();
+      if (scopedBusinessId != null && scopedBusinessId.isNotEmpty) {
+        query = query.eq('business_id', scopedBusinessId);
+      }
+
+      await query;
     } catch (e) {
       throw Exception('Error al actualizar nota de la sesión: $e');
     }
@@ -384,8 +462,10 @@ class SalesRepository {
   // ============================================================
 
   /// Obtener orden completa con items
-  Future<Order?> getOrder(String orderId) async {
+  Future<Order?> getOrder(String orderId, {String? businessId}) async {
     try {
+      await _assertOrderInBusinessScope(orderId, businessId: businessId);
+
       final data = await _client
           .from('orders')
           .select()
@@ -411,8 +491,10 @@ class SalesRepository {
       String? customerName,
     })
   >
-  getOrderBundle(String orderId) async {
+  getOrderBundle(String orderId, {String? businessId}) async {
     try {
+      await _assertOrderInBusinessScope(orderId, businessId: businessId);
+
       final response = await _client.rpc(
         SalesQueries.rpcGetOrderBundle,
         params: {'p_order_id': orderId},
@@ -469,8 +551,11 @@ class SalesRepository {
     bool includeModifiers = true,
     int limit = 500,
     bool onlyOpen = false,
+    String? businessId,
   }) async {
     try {
+      await _assertOrderInBusinessScope(orderId, businessId: businessId);
+
       final baseSelect = includeModifiers
           ? '$_itemFields,order_item_modifiers(*)'
           : _itemFields;
@@ -555,8 +640,13 @@ class SalesRepository {
   }
 
   /// Obtener payload compacto de una mesa (usa RPC get_table_live)
-  Future<Map<String, dynamic>?> getTableLive(String tableId) async {
+  Future<Map<String, dynamic>?> getTableLive(
+    String tableId, {
+    String? businessId,
+  }) async {
     try {
+      await _assertTableInBusinessScope(tableId, businessId: businessId);
+
       final res = await _client.rpc(
         'get_table_live',
         params: {'p_table_id': tableId},
@@ -797,8 +887,13 @@ class SalesRepository {
   }
 
   /// Obtener checks de una orden
-  Future<List<OrderCheck>> getOrderChecks(String orderId) async {
+  Future<List<OrderCheck>> getOrderChecks(
+    String orderId, {
+    String? businessId,
+  }) async {
     try {
+      await _assertOrderInBusinessScope(orderId, businessId: businessId);
+
       final data = await _client
           .from('order_checks')
           .select()
@@ -824,6 +919,7 @@ class SalesRepository {
     String? reference,
     String? customerId,
     String? customerRnc,
+    String? fiscalType,
     String? cashierSessionId,
     double changeAmount = 0,
     bool closeOrder = true,
@@ -841,6 +937,7 @@ class SalesRepository {
           'p_change_amount': changeAmount,
           'p_customer_id': customerId,
           'p_customer_rnc': customerRnc,
+          'p_requested_ncf_type': fiscalType,
           'p_cashier_session_id': cashierSessionId,
         },
       );

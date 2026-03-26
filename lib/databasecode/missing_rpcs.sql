@@ -97,7 +97,7 @@ begin
     qty, quantity, unit_price, is_takeout, notes, status
   ) values (
     p_order_id, v_check, p_menu_item_id, v_name,
-    v_qty, v_qty, v_price, coalesce(p_is_takeout, false), p_notes, 'draft'
+    v_qty, greatest(round(v_qty), 1)::int, v_price, coalesce(p_is_takeout, false), p_notes, 'draft'
   )
   returning id into v_item_id;
 

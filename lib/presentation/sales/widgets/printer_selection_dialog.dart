@@ -70,7 +70,7 @@ class PrinterSelectionDialog extends StatelessWidget {
                       trailing: printer.online
                           ? const Icon(
                               Icons.check_circle,
-                              color: const Color(0xFF22C55E),
+                              color: Color(0xFF22C55E),
                               size: 16,
                             )
                           : const Icon(

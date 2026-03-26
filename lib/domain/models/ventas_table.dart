@@ -55,6 +55,7 @@ class VentasTable {
   final double? total;
   final String? waiterId;
   final String? waiterName;
+  final String? customerName;
 
   const VentasTable({
     required this.id,
@@ -66,6 +67,7 @@ class VentasTable {
     this.total,
     this.waiterId,
     this.waiterName,
+    this.customerName,
   });
 
   /// Verifica si la mesa está ocupada
@@ -91,6 +93,7 @@ class VentasTable {
     double? total,
     String? waiterId,
     String? waiterName,
+    String? customerName,
   }) {
     return VentasTable(
       id: id ?? this.id,
@@ -102,6 +105,7 @@ class VentasTable {
       total: total ?? this.total,
       waiterId: waiterId ?? this.waiterId,
       waiterName: waiterName ?? this.waiterName,
+      customerName: customerName ?? this.customerName,
     );
   }
 
@@ -117,6 +121,7 @@ class VentasTable {
       total: map['total'] != null ? (map['total'] as num).toDouble() : null,
       waiterId: map['waiter_id'],
       waiterName: map['waiter_name'],
+      customerName: map['customer_name'],
     );
   }
 
@@ -132,6 +137,7 @@ class VentasTable {
       if (total != null) 'total': total,
       if (waiterId != null) 'waiter_id': waiterId,
       if (waiterName != null) 'waiter_name': waiterName,
+      if (customerName != null) 'customer_name': customerName,
     };
   }
 
@@ -153,7 +159,8 @@ class VentasTable {
         other.time == time &&
         other.total == total &&
         other.waiterId == waiterId &&
-        other.waiterName == waiterName;
+        other.waiterName == waiterName &&
+        other.customerName == customerName;
   }
 
   @override
@@ -168,6 +175,7 @@ class VentasTable {
       total,
       waiterId,
       waiterName,
+      customerName,
     );
   }
 }

@@ -7,6 +7,7 @@ import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/data/repositories/sales_repository.dart';
+import 'package:mangopos/data/utils/order_pricing_utils.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../state/sales_state.dart';
@@ -28,6 +29,8 @@ final currentOrderProvider =
 
 class SalesViewModel extends Notifier<CurrentOrderState> {
   static const _courtesyPrefix = '[CORTESIA:';
+  static const _defaultTaxRatePct = 18.0;
+  static const _defaultServiceFeeRatePct = 10.0;
   final Map<String, CurrentOrderState> _tableCache = {};
   final OfflinePosService _offlinePos = OfflinePosService();
   final ConnectivityService _connectivity = ConnectivityService();
@@ -37,6 +40,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   bool _queuedClearIfPaid = false;
   bool _refreshOrderInFlight = false;
   bool _syncInFlight = false;
+  String? _taxSettingsBusinessId;
+  double _cachedTaxRatePct = _defaultTaxRatePct;
+  double _cachedServiceFeeRatePct = _defaultServiceFeeRatePct;
+  bool _cachedServiceFeeEnabled = false;
+
+  double _roundMoney(double value) => double.parse(value.toStringAsFixed(2));
 
   Future<void> refreshOfflineMonitor() => _refreshOfflineMonitor();
 
@@ -94,6 +103,146 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
   String? get _activeBusinessId => ref.read(sessionProvider).activeBusinessId;
 
+  Future<void> _ensureBusinessTaxSettingsLoaded() async {
+    final businessId = _activeBusinessId;
+    if (businessId == null || businessId.isEmpty) {
+      _taxSettingsBusinessId = null;
+      _cachedTaxRatePct = _defaultTaxRatePct;
+      _cachedServiceFeeRatePct = _defaultServiceFeeRatePct;
+      _cachedServiceFeeEnabled = false;
+      return;
+    }
+
+    if (_taxSettingsBusinessId == businessId) return;
+
+    try {
+      final row = await Supabase.instance.client
+          .from('business_settings')
+          .select('default_tax_rate,service_fee_enabled,service_fee_rate')
+          .eq('business_id', businessId)
+          .maybeSingle();
+
+      _cachedTaxRatePct =
+          (row?['default_tax_rate'] as num?)?.toDouble() ?? _defaultTaxRatePct;
+      _cachedServiceFeeEnabled = row?['service_fee_enabled'] == true;
+      _cachedServiceFeeRatePct =
+          (row?['service_fee_rate'] as num?)?.toDouble() ??
+          _defaultServiceFeeRatePct;
+      _taxSettingsBusinessId = businessId;
+    } catch (_) {
+      _cachedTaxRatePct = _defaultTaxRatePct;
+      _cachedServiceFeeRatePct = _defaultServiceFeeRatePct;
+      _cachedServiceFeeEnabled = false;
+      _taxSettingsBusinessId = businessId;
+    }
+  }
+
+  double _sanitizeProductTaxRatePct({
+    required double? rawTaxRatePct,
+    required String taxMode,
+    required bool takeout,
+  }) {
+    final resolvedRawTaxRate = (rawTaxRatePct ?? _cachedTaxRatePct)
+        .clamp(0, 100)
+        .toDouble();
+
+    if (taxMode != 'inclusive' || takeout || !_cachedServiceFeeEnabled) {
+      return resolvedRawTaxRate;
+    }
+
+    final combinedRate = _cachedTaxRatePct + _cachedServiceFeeRatePct;
+    if ((resolvedRawTaxRate - combinedRate).abs() <= 0.01) {
+      return _cachedTaxRatePct;
+    }
+
+    return resolvedRawTaxRate;
+  }
+
+  Order _pricingOrderContext(Order order, List<OrderItem> items) {
+    if (!_cachedServiceFeeEnabled) {
+      return order.copyWith(serviceFee: 0);
+    }
+
+    final serviceableSubtotal = items
+        .where((item) => item.status != 'void' && !item.isTakeout)
+        .fold<double>(0, (sum, item) => sum + item.subtotal);
+    final normalizedServiceableSubtotal = _roundMoney(serviceableSubtotal);
+
+    if (normalizedServiceableSubtotal <= 0) {
+      return order.copyWith(serviceFee: 0);
+    }
+
+    final serviceFee = _roundMoney(
+      normalizedServiceableSubtotal * (_cachedServiceFeeRatePct / 100.0),
+    );
+
+    return order.copyWith(
+      subtotal: normalizedServiceableSubtotal,
+      serviceFee: serviceFee,
+    );
+  }
+
+  CurrentOrderState _normalizeHydratedState(CurrentOrderState source) {
+    final order = source.order;
+    if (order == null || source.items.isEmpty) {
+      return source;
+    }
+
+    final activeItems = source.items
+        .where((item) => item.status != 'void')
+        .toList(growable: false);
+    if (activeItems.isEmpty) {
+      return source.copyWith(
+        order: order.copyWith(
+          subtotal: 0,
+          discounts: 0,
+          serviceFee: 0,
+          tax: 0,
+          total: 0,
+        ),
+      );
+    }
+
+    final pricingOrder = _pricingOrderContext(order, activeItems);
+    final orderSummary = summarizeOrderPricing(pricingOrder, activeItems);
+    final normalizedOrder = order.copyWith(
+      subtotal: orderSummary.subtotal,
+      discounts: orderSummary.discounts,
+      serviceFee: orderSummary.serviceFee,
+      tax: orderSummary.tax,
+      total: orderSummary.total,
+    );
+
+    final normalizedChecks = source.checks
+        .map((check) {
+          final checkItems = activeItems
+              .where((item) => item.checkId == check.id)
+              .toList(growable: false);
+          if (checkItems.isEmpty) {
+            return check;
+          }
+
+          final checkSummary = summarizeOrderPricing(
+            _pricingOrderContext(
+              check.toOrder(createdAt: order.createdAt),
+              checkItems,
+            ),
+            checkItems,
+          );
+
+          return check.copyWith(
+            subtotal: checkSummary.subtotal,
+            discounts: checkSummary.discounts,
+            serviceFee: checkSummary.serviceFee,
+            tax: checkSummary.tax,
+            total: checkSummary.total,
+          );
+        })
+        .toList(growable: false);
+
+    return source.copyWith(order: normalizedOrder, checks: normalizedChecks);
+  }
+
   Future<void> _persistCurrentState({
     String? tableId,
     bool localOnly = false,
@@ -146,17 +295,20 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     if (hasCashierAccess) {
       if (!await ensureCashSessionOpen()) return;
     }
+    await _ensureBusinessTaxSettingsLoaded();
 
     // Mostrar inmediatamente la última versión conocida si existe
     final cached = _tableCache[tableId];
     if (cached != null) {
       // Evita pestañeo de subcuentas cerradas por cache obsoleto.
       // Los checks autoritativos llegan en _loadOrderDetail().
-      state = cached.copyWith(
-        loading: true,
-        error: null,
-        checks: const [],
-        clearSelectedCheck: true,
+      state = _normalizeHydratedState(
+        cached.copyWith(
+          loading: true,
+          error: null,
+          checks: const [],
+          clearSelectedCheck: true,
+        ),
       );
     } else {
       state = const CurrentOrderState(loading: true, origin: 'table');
@@ -179,7 +331,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       try {
         final payload = await ref
             .read(salesRepositoryProvider)
-            .getTableLive(tableId);
+            .getTableLive(tableId, businessId: _activeBusinessId);
         if (payload != null) {
           _applyTableLivePayload(payload, tableId: tableId);
         }
@@ -197,10 +349,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           slotId: tableId,
         );
         if (offlineState != null) {
-          state = offlineState.copyWith(
-            loading: false,
-            error: 'Modo offline: usando copia local de la mesa.',
-            origin: 'table',
+          state = _normalizeHydratedState(
+            offlineState.copyWith(
+              loading: false,
+              error: 'Modo offline: usando copia local de la mesa.',
+              origin: 'table',
+            ),
           );
           _tableCache[tableId] = state;
           return;
@@ -263,6 +417,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             sessionId: order.sessionId,
             customerId: customerId,
             customerName: customerName,
+            businessId: _activeBusinessId,
           );
       state = state.copyWith(
         customerId: customerId,
@@ -287,7 +442,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     try {
       await ref
           .read(salesRepositoryProvider)
-          .updateSessionNote(sessionId: order.sessionId, note: note);
+          .updateSessionNote(
+            sessionId: order.sessionId,
+            note: note,
+            businessId: _activeBusinessId,
+          );
       state = state.copyWith(
         sessionNote: note?.trim(),
         clearSessionNote: note == null,
@@ -322,6 +481,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     String origin, {
     bool forceReset = false,
   }) async {
+    await _ensureBusinessTaxSettingsLoaded();
     if (!await ensureCashSessionOpen()) return;
 
     state = forceReset
@@ -344,10 +504,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           slotId: origin,
         );
         if (cached != null) {
-          state = cached.copyWith(
-            loading: false,
-            error: 'Modo offline: usando venta local persistida.',
-            origin: origin,
+          state = _normalizeHydratedState(
+            cached.copyWith(
+              loading: false,
+              error: 'Modo offline: usando venta local persistida.',
+              origin: origin,
+            ),
           );
           return;
         }
@@ -405,19 +567,31 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         productPrice != null &&
         previousOrder != null &&
         qty > 0) {
+      await _ensureBusinessTaxSettingsLoaded();
       final tempId = 'tmp_${DateTime.now().microsecondsSinceEpoch}';
       final grossAmount = productPrice * qty;
-      final inferredTaxRate = productTaxRate != null && productTaxRate > 0
-          ? productTaxRate / 100
-          : (previousOrder.subtotal > 0
-                ? previousOrder.tax / previousOrder.subtotal
-                : 0.0);
-      final addService = 0.0;
+      // Si productTaxRate es null (desconocido), intentamos inferirlo de la orden.
+      // Si es 0 explícitamente, el producto NO tiene impuesto -> respetamos el 0.
+      final effectiveTaxRatePct = _sanitizeProductTaxRatePct(
+        rawTaxRatePct: productTaxRate,
+        taxMode: productTaxMode,
+        takeout: takeout,
+      );
+      // El estimador recibe la tasa como fracción decimal (0.18 = 18%)
+      final taxRateDecimal = effectiveTaxRatePct / 100.0;
+      final optimisticServiceRate = takeout || !_cachedServiceFeeEnabled
+          ? 0.0
+          : (_cachedServiceFeeRatePct / 100.0);
       final optimisticAmounts = _estimateOptimisticItemAmounts(
         grossAmount: grossAmount,
         taxMode: productTaxMode,
-        taxRate: inferredTaxRate,
+        taxRate: taxRateDecimal,
+        serviceRate: optimisticServiceRate,
+        includeServiceInInclusivePrice: !takeout,
       );
+      final addService = optimisticServiceRate > 0
+          ? (optimisticAmounts.subtotal * optimisticServiceRate)
+          : 0.0;
 
       optimisticItem = OrderItem(
         id: tempId,
@@ -435,15 +609,29 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         isTakeout: takeout,
         status: 'draft',
         notes: notes,
+        taxMode: productTaxMode,
+        taxRate: effectiveTaxRatePct,
         createdAt: DateTime.now(),
         modifiers: const [],
       );
 
+      final optimisticItems = [...state.items, optimisticItem];
+      final updatedSummary = summarizeOrderPricing(
+        previousOrder,
+        optimisticItems,
+      );
+      final resolvedServiceFee = updatedSummary.serviceFee > 0
+          ? updatedSummary.serviceFee
+          : addService;
+      final resolvedTotal = updatedSummary.serviceFee > 0
+          ? updatedSummary.total
+          : updatedSummary.total +
+                (productTaxMode == 'inclusive' ? 0 : addService);
       final updatedOrder = previousOrder.copyWith(
-        subtotal: previousOrder.subtotal + optimisticAmounts.subtotal,
-        tax: previousOrder.tax + optimisticAmounts.tax,
-        serviceFee: previousOrder.serviceFee + addService,
-        total: previousOrder.total + optimisticAmounts.total + addService,
+        subtotal: updatedSummary.subtotal,
+        tax: updatedSummary.tax,
+        serviceFee: resolvedServiceFee,
+        total: resolvedTotal,
       );
 
       state = state.copyWith(
@@ -463,7 +651,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             isTakeout: takeout,
             notes: notes,
           );
-      unawaited(_loadOrderDetail(orderId));
+      refreshOrder();
     } catch (e) {
       final businessId = _activeBusinessId;
       final isOffline =
@@ -513,11 +701,23 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     required double grossAmount,
     required String taxMode,
     required double taxRate,
+    required double serviceRate,
+    bool includeServiceInInclusivePrice = false,
   }) {
     final normalizedTaxRate = taxRate.clamp(0, 1).toDouble();
+    final normalizedServiceRate = serviceRate.clamp(0, 1).toDouble();
     if (taxMode == 'inclusive' && normalizedTaxRate > 0) {
-      final subtotal = grossAmount / (1 + normalizedTaxRate);
-      final tax = grossAmount - subtotal;
+      final divisor =
+          1 +
+          normalizedTaxRate +
+          (includeServiceInInclusivePrice ? normalizedServiceRate : 0);
+      final subtotal = grossAmount / divisor;
+      final tax =
+          grossAmount -
+          subtotal -
+          (includeServiceInInclusivePrice
+              ? (subtotal * normalizedServiceRate)
+              : 0);
       return (
         subtotal: double.parse(subtotal.toStringAsFixed(2)),
         tax: double.parse(tax.toStringAsFixed(2)),
@@ -545,7 +745,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       await ref
           .read(salesRepositoryProvider)
           .markOrderTakeout(orderId: orderId, takeout: value);
-      await _loadOrderDetail(orderId);
+      refreshOrder();
     } catch (e) {
       final businessId = _activeBusinessId;
       final isOffline =
@@ -594,14 +794,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // 2. Optimistic Local Update
     final updatedItems = state.items.where((i) => i.id != itemId).toList();
 
-    final newTotal = updatedItems.fold(0.0, (sum, i) => sum + i.total);
-    final newSubtotal = updatedItems.fold(0.0, (sum, i) => sum + i.subtotal);
-    final newTax = updatedItems.fold(0.0, (sum, i) => sum + i.tax);
+    final updatedSummary = summarizeOrderPricing(state.order, updatedItems);
 
     final updatedOrder = state.order?.copyWith(
-      total: newTotal,
-      subtotal: newSubtotal,
-      tax: newTax,
+      total: updatedSummary.total,
+      subtotal: updatedSummary.subtotal,
+      tax: updatedSummary.tax,
+      serviceFee: updatedSummary.serviceFee,
     );
 
     state = state.copyWith(
@@ -612,7 +811,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
     try {
       await ref.read(salesRepositoryProvider).deleteItem(itemId: itemId);
-      await _loadOrderDetail(orderId);
+      refreshOrder();
     } catch (e) {
       final businessId = _activeBusinessId;
       final isOffline =
@@ -662,7 +861,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       await ref
           .read(salesRepositoryProvider)
           .updateItemQuantity(itemId: itemId, quantity: quantity);
-      await _loadOrderDetail(orderId);
+      refreshOrder();
     } catch (e) {
       final businessId = _activeBusinessId;
       final isOffline =
@@ -671,22 +870,37 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         final updatedItems = state.items
             .map((item) {
               if (item.id != itemId) return item;
-              final subtotal = item.unitPrice * quantity;
               final taxRate = item.subtotal > 0
                   ? (item.tax / item.subtotal)
                   : 0.0;
-              final tax = subtotal * taxRate;
-              final total = subtotal + tax;
+              final serviceRate = item.isTakeout ? 0.0 : 0.10;
+              final optimisticAmounts = _estimateOptimisticItemAmounts(
+                grossAmount: item.unitPrice * quantity,
+                taxMode: item.taxMode,
+                taxRate: taxRate,
+                serviceRate: serviceRate,
+                includeServiceInInclusivePrice: !item.isTakeout,
+              );
               return item.copyWith(
                 quantity: quantity,
-                subtotal: double.parse(subtotal.toStringAsFixed(2)),
-                tax: double.parse(tax.toStringAsFixed(2)),
-                total: double.parse(total.toStringAsFixed(2)),
+                subtotal: optimisticAmounts.subtotal,
+                tax: optimisticAmounts.tax,
+                total: optimisticAmounts.total,
               );
             })
             .toList(growable: false);
 
-        state = state.copyWith(items: updatedItems);
+        final updatedSummary = summarizeOrderPricing(state.order, updatedItems);
+
+        state = state.copyWith(
+          items: updatedItems,
+          order: state.order?.copyWith(
+            subtotal: updatedSummary.subtotal,
+            tax: updatedSummary.tax,
+            serviceFee: updatedSummary.serviceFee,
+            total: updatedSummary.total,
+          ),
+        );
         await _offlinePos.enqueueAction(
           businessId: businessId,
           action: {
@@ -728,7 +942,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       await ref
           .read(salesRepositoryProvider)
           .updateItemNotes(itemId: itemId, notes: notes);
-      await _loadOrderDetail(orderId);
+      refreshOrder();
     } catch (e) {
       final businessId = _activeBusinessId;
       final isOffline =
@@ -781,7 +995,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       await ref
           .read(salesRepositoryProvider)
           .toggleItemTakeout(itemId: itemId, isTakeout: isTakeout);
-      await _loadOrderDetail(orderId);
+      refreshOrder();
     } catch (e) {
       final businessId = _activeBusinessId;
       final isOffline =
@@ -838,7 +1052,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
                 ? null
                 : updatedItem.notes?.trim(),
           );
-      await _loadOrderDetail(orderId);
+      refreshOrder();
     } catch (e) {
       state = state.copyWith(error: 'Error al actualizar item: $e');
       rethrow;
@@ -885,7 +1099,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
               );
         }),
       );
-      await _loadOrderDetail(orderId, origin: state.origin);
+      refreshOrder();
     } catch (e) {
       state = state.copyWith(
         loading: false,
@@ -921,7 +1135,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
     final freshOpenItems = await ref
         .read(salesRepositoryProvider)
-        .getOrderItems(orderId, includeModifiers: true, onlyOpen: true);
+        .getOrderItems(
+          orderId,
+          includeModifiers: true,
+          onlyOpen: true,
+          businessId: _activeBusinessId,
+        );
 
     final targetItems = freshOpenItems
         .where(
@@ -949,7 +1168,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
               );
         }),
       );
-      await _loadOrderDetail(orderId, origin: state.origin);
+      refreshOrder();
     } catch (e) {
       state = state.copyWith(
         loading: false,
@@ -975,7 +1194,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       await ref
           .read(salesRepositoryProvider)
           .moveItemToCheck(itemId: itemId, checkPosition: pos);
-      await _loadOrderDetail(orderId);
+      refreshOrder();
     } catch (e) {
       final businessId = _activeBusinessId;
       final isOffline =
@@ -1145,7 +1364,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             fallbackTableName: tableName,
             fallbackWaiterName: waiterName ?? session.userName,
           );
-      await _loadOrderDetail(orderId);
+      refreshOrder();
     } catch (e) {
       state = state.copyWith(loading: false, error: e.toString());
       rethrow;
@@ -1295,6 +1514,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     String? origin,
     String? tableId,
   }) async {
+    _refreshOrderDebounceTimer?.cancel();
+    await _ensureBusinessTaxSettingsLoaded();
     final repo = ref.read(salesRepositoryProvider);
     Order? order;
     List<OrderItem> items = const [];
@@ -1306,7 +1527,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
     var loadedByBundle = false;
     try {
-      final bundle = await repo.getOrderBundle(orderId);
+      final bundle = await repo.getOrderBundle(
+        orderId,
+        businessId: _activeBusinessId,
+      );
       order = bundle.order;
       items = bundle.items;
       checks = bundle.checks;
@@ -1314,7 +1538,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       customerName = bundle.customerName;
       if (order != null) {
         try {
-          final session = await repo.getSessionCustomer(order.sessionId);
+          final session = await repo.getSessionCustomer(
+            order.sessionId,
+            businessId: _activeBusinessId,
+          );
           customerId = session.customerId ?? customerId;
           customerName = session.customerName ?? customerName;
           sessionNote = session.note;
@@ -1326,21 +1553,28 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
 
     if (!loadedByBundle) {
-      final orderFuture = repo.getOrder(orderId);
+      final orderFuture = repo.getOrder(orderId, businessId: _activeBusinessId);
       final itemsFuture = repo.getOrderItems(
         orderId,
         includeModifiers: false,
         limit: 500,
         onlyOpen: true,
+        businessId: _activeBusinessId,
       );
-      final checksFuture = repo.getOrderChecks(orderId);
+      final checksFuture = repo.getOrderChecks(
+        orderId,
+        businessId: _activeBusinessId,
+      );
       Future<({String? customerId, String? customerName, String? note})>?
       customerFuture;
 
       try {
         order = await orderFuture;
         if (order != null) {
-          customerFuture = repo.getSessionCustomer(order.sessionId);
+          customerFuture = repo.getSessionCustomer(
+            order.sessionId,
+            businessId: _activeBusinessId,
+          );
         }
         checks = await checksFuture;
       } catch (e) {
@@ -1403,22 +1637,24 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
     }
 
-    state = state.copyWith(
-      loading: false,
-      order: order ?? state.order,
-      items: items,
-      checks: checks,
-      origin: origin ?? state.origin,
-      error: items.isEmpty ? (loadError ?? state.error) : null,
-      selectedCheckId: newSelectedCheckId,
-      clearSelectedCheck:
-          newSelectedCheckId == null && state.selectedCheckId != null,
-      customerId: customerId,
-      customerName: customerName,
-      clearCustomer: customerId == null && customerName == null,
-      sessionNote: sessionNote,
-      clearSessionNote: sessionNote == null,
-      fiscalSequences: fiscalSequences,
+    state = _normalizeHydratedState(
+      state.copyWith(
+        loading: false,
+        order: order ?? state.order,
+        items: items,
+        checks: checks,
+        origin: origin ?? state.origin,
+        error: items.isEmpty ? (loadError ?? state.error) : null,
+        selectedCheckId: newSelectedCheckId,
+        clearSelectedCheck:
+            newSelectedCheckId == null && state.selectedCheckId != null,
+        customerId: customerId,
+        customerName: customerName,
+        clearCustomer: customerId == null && customerName == null,
+        sessionNote: sessionNote,
+        clearSessionNote: sessionNote == null,
+        fiscalSequences: fiscalSequences,
+      ),
     );
 
     // Cachear última versión por mesa para apertura optimista
@@ -1539,6 +1775,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
                 isClosed: isClosed,
                 subtotal: (m['subtotal'] ?? 0).toDouble(),
                 discounts: (m['discounts'] ?? 0).toDouble(),
+                serviceFee: (m['service_fee'] ?? 0).toDouble(),
                 tax: (m['tax'] ?? 0).toDouble(),
                 total: (m['total'] ?? 0).toDouble(),
                 items: const [],
@@ -1561,16 +1798,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         }
       }
 
-      final newState = state.copyWith(
-        loading: false,
-        origin: 'table',
-        order: order,
-        items: items,
-        checks: checks,
-        error: null,
-        selectedCheckId: nextSelectedCheckId,
-        clearSelectedCheck:
-            nextSelectedCheckId == null && state.selectedCheckId != null,
+      final newState = _normalizeHydratedState(
+        state.copyWith(
+          loading: false,
+          origin: 'table',
+          order: order,
+          items: items,
+          checks: checks,
+          error: null,
+          selectedCheckId: nextSelectedCheckId,
+          clearSelectedCheck:
+              nextSelectedCheckId == null && state.selectedCheckId != null,
+        ),
       );
 
       state = newState;

@@ -8,26 +8,36 @@ class TableStatus {
   final double total;
   final int peopleCount;
   final String? waiterName;
+  final String? customerName;
   final bool isOwn;
   TableStatus({
-    required this.tableId, required this.zoneId, required this.code,
-    required this.sessionId, required this.ordersCount, required this.minutesOpen,
+    required this.tableId,
+    required this.zoneId,
+    required this.code,
+    required this.sessionId,
+    required this.ordersCount,
+    required this.minutesOpen,
     this.itemsCount = 0,
     this.total = 0,
     this.peopleCount = 0,
     this.status,
     this.waiterName,
+    this.customerName,
     this.isOwn = false,
   });
-  factory TableStatus.fromMap(Map<String,dynamic> r) => TableStatus(
-    tableId: r['table_id'], zoneId: r['zone_id'], code: r['code'],
-    sessionId: r['session_id'], ordersCount: r['orders_count'] ?? 0,
+  factory TableStatus.fromMap(Map<String, dynamic> r) => TableStatus(
+    tableId: r['table_id'],
+    zoneId: r['zone_id'],
+    code: r['code'],
+    sessionId: r['session_id'],
+    ordersCount: r['orders_count'] ?? 0,
     minutesOpen: r['minutes_open'],
     itemsCount: r['items_count'] ?? 0,
     total: (r['total'] ?? 0).toDouble(),
     peopleCount: r['people_count'] ?? 0,
     status: r['status'],
     waiterName: r['waiter_name'] ?? r['server_name'],
+    customerName: r['customer_name'],
     isOwn: r['is_own'] ?? false,
   );
 }

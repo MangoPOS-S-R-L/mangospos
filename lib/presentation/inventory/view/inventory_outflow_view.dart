@@ -335,7 +335,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                     ),
                                     Expanded(
                                       child: Text(
-                                        '${item.stock.toStringAsFixed(2)}',
+                                        item.stock.toStringAsFixed(2),
                                         style: TextStyle(
                                           fontWeight: FontWeight.w700,
                                           color: item.isLowStock
@@ -727,7 +727,7 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
                 children: [
                   Expanded(
                     child: DropdownButtonFormField<String>(
-                      value: _selectedPresentation,
+                      initialValue: _selectedPresentation,
                       dropdownColor: MangoColors.white,
                       decoration: InputDecoration(
                         labelText: 'Presentacion',
@@ -807,7 +807,7 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
                 const SizedBox(height: 12),
                 SwitchListTile(
                   value: _isActive,
-                  activeColor: MangoColors.primaryOrange,
+                  activeThumbColor: MangoColors.primaryOrange,
                   contentPadding: EdgeInsets.zero,
                   title: const Text('Insumo activo'),
                   onChanged: (value) => setState(() => _isActive = value),

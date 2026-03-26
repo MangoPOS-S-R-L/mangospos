@@ -9,6 +9,7 @@ import '../../../data/models/sales_models.dart';
 import '../../../data/repositories/sales_repository_improved.dart';
 import '../../cashier/viewmodel/cashier_viewmodel.dart';
 import '../viewmodel/sales_viewmodel.dart';
+import '../../../services/session/session_controller.dart';
 
 // ==============================================================================
 // 📦 MODELS
@@ -111,6 +112,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   final String _orderId;
   final String? _checkId;
   final String? _customerId;
+  final String? _fiscalType;
   final String? _cashierSessionId;
   final Ref _ref;
 
@@ -125,6 +127,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     required Ref ref,
   }) : _checkId = checkId,
        _customerId = customerId,
+       _fiscalType = fiscalType,
        _cashierSessionId = cashierSessionId,
        _ref = ref,
        super(PaymentSplitState(totalAmount: total)) {
@@ -152,8 +155,12 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
 
   Future<void> _loadOrderForReceipt() async {
     try {
-      final order = await _salesRepo.getOrder(_orderId);
-      final items = await _salesRepo.getOrderItems(_orderId);
+      final businessId = _ref.read(sessionProvider).activeBusinessId;
+      final order = await _salesRepo.getOrder(_orderId, businessId: businessId);
+      final items = await _salesRepo.getOrderItems(
+        _orderId,
+        businessId: businessId,
+      );
       state = state.copyWith(orderDetails: order, orderItems: items);
     } catch (e) {
       debugPrint('Error loading order details: $e');
@@ -342,6 +349,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
               customerRnc: isLast
                   ? _ref.read(currentOrderProvider).customerTaxId
                   : null,
+              fiscalType: _fiscalType,
               cashierSessionId: cashierSessionId,
               reference: null,
             )

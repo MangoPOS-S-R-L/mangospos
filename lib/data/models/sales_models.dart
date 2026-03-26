@@ -246,15 +246,16 @@ class OrderItem extends Equatable {
     final discounts = (map['discounts'] ?? 0).toDouble();
     final tax = (map['tax'] ?? 0).toDouble();
     final rawTotal = (map['total'] ?? 0).toDouble();
+    final taxMode = map['tax_mode']?.toString() ?? 'exclusive';
     final derivedTotal = subtotal + tax - discounts;
-    final totalsDiffer = (rawTotal - derivedTotal).abs() > 0.01;
     final hasBreakdown =
         subtotal.abs() > 0.0001 ||
         tax.abs() > 0.0001 ||
         discounts.abs() > 0.0001;
-    final effectiveTotal = (hasBreakdown && totalsDiffer)
-        ? derivedTotal
-        : (hasBreakdown ? derivedTotal : rawTotal);
+    final shouldPreserveRawTotal =
+        rawTotal > 0 &&
+        (taxMode == 'inclusive' || !hasBreakdown || derivedTotal <= 0);
+    final effectiveTotal = shouldPreserveRawTotal ? rawTotal : derivedTotal;
 
     return OrderItem(
       id: map['id'] ?? '',
@@ -272,7 +273,7 @@ class OrderItem extends Equatable {
       isTakeout: map['is_takeout'] ?? false,
       status: map['status'] ?? 'draft',
       notes: map['notes'],
-      taxMode: map['tax_mode']?.toString() ?? 'exclusive',
+      taxMode: taxMode,
       taxRate: (map['tax_rate'] ?? 0).toDouble(),
       createdAt: DateTime.tryParse(map['created_at'] ?? '') ?? DateTime.now(),
       modifiers: [], // Se cargan aparte
@@ -387,6 +388,7 @@ class OrderCheck extends Equatable {
   final bool isClosed;
   final double subtotal;
   final double discounts;
+  final double serviceFee;
   final double tax;
   final double total;
   final String? customerId;
@@ -401,6 +403,7 @@ class OrderCheck extends Equatable {
     required this.isClosed,
     required this.subtotal,
     required this.discounts,
+    required this.serviceFee,
     required this.tax,
     required this.total,
     this.customerId,
@@ -417,6 +420,7 @@ class OrderCheck extends Equatable {
       isClosed: map['is_closed'] ?? false,
       subtotal: (map['subtotal'] ?? 0).toDouble(),
       discounts: (map['discounts'] ?? 0).toDouble(),
+      serviceFee: (map['service_fee'] ?? 0).toDouble(),
       tax: (map['tax'] ?? 0).toDouble(),
       total: (map['total'] ?? 0).toDouble(),
       customerId: map['customer_id']?.toString(),
@@ -433,6 +437,7 @@ class OrderCheck extends Equatable {
     bool? isClosed,
     double? subtotal,
     double? discounts,
+    double? serviceFee,
     double? tax,
     double? total,
     String? customerId,
@@ -448,11 +453,26 @@ class OrderCheck extends Equatable {
       isClosed: isClosed ?? this.isClosed,
       subtotal: subtotal ?? this.subtotal,
       discounts: discounts ?? this.discounts,
+      serviceFee: serviceFee ?? this.serviceFee,
       tax: tax ?? this.tax,
       total: total ?? this.total,
       customerId: clearCustomer ? null : (customerId ?? this.customerId),
       customerName: clearCustomer ? null : (customerName ?? this.customerName),
       items: items ?? this.items,
+    );
+  }
+
+  Order toOrder({required DateTime createdAt}) {
+    return Order(
+      id: id,
+      sessionId: orderId,
+      status: isClosed ? 'closed' : 'open',
+      subtotal: subtotal,
+      discounts: discounts,
+      serviceFee: serviceFee,
+      tax: tax,
+      total: total,
+      createdAt: createdAt,
     );
   }
 
@@ -465,6 +485,7 @@ class OrderCheck extends Equatable {
     isClosed,
     subtotal,
     discounts,
+    serviceFee,
     tax,
     total,
     customerId,

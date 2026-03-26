@@ -2,10 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mangopos/app/router/routes.dart';
-import 'package:mangopos/core/utils/logger.dart';
 
-// ignore: avoid_web_libraries_in_dot_dart
-import 'package:web/web.dart' as web;
+import 'package:mangopos/core/utils/web_utils/web_utils.dart';
 
 class CrossAuthView extends StatefulWidget {
   final String? accessToken;
@@ -49,7 +47,7 @@ class _CrossAuthViewState extends State<CrossAuthView> {
 
     if (at == null || at.isEmpty) {
       try {
-        final href = web.window.location.href;
+        final href = WebUtils.href;
         _addLog('URL BROWSER: $href');
         final uri = Uri.parse(href);
 
@@ -111,11 +109,11 @@ class _CrossAuthViewState extends State<CrossAuthView> {
 
   void _clearUrl() {
     try {
-      final currentUri = Uri.parse(web.window.location.href);
+      final currentUri = Uri.parse(WebUtils.href);
       final newUrl =
           '${currentUri.scheme}://${currentUri.host}'
           '${currentUri.port != 80 && currentUri.port != 443 ? ":${currentUri.port}" : ""}/#/';
-      web.window.history.replaceState(null, '', newUrl);
+      WebUtils.replaceState(null, '', newUrl);
     } catch (e) {
       _addLog('Error ocultando URL: $e');
     }

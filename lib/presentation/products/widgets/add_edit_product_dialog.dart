@@ -101,7 +101,18 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     _barcodeController = TextEditingController(text: p?['barcode'] ?? '');
 
     _selectedCategoryId = p?['category_id']?.toString();
-    _selectedMenuId = p?['menu_id']?.toString();
+
+    // Extract menuId from menu_item_links if not directly on product
+    if (p?['menu_id'] != null) {
+      _selectedMenuId = p!['menu_id'].toString();
+    } else {
+      final links = p?['menu_item_links'] as List<dynamic>?;
+      if (links != null && links.isNotEmpty) {
+        final firstLink = links.first as Map<String, dynamic>;
+        _selectedMenuId = firstLink['menu_id']?.toString();
+      }
+    }
+
     _taxMode = (p?['tax_mode']?.toString() == 'inclusive')
         ? 'inclusive'
         : 'exclusive';

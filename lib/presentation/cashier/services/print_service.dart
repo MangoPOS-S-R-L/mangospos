@@ -10,8 +10,8 @@ class CashClosePrintService {
   final PrintingRepository _printingRepository;
 
   CashClosePrintService(SupabaseClient client)
-      : _client = client,
-        _printingRepository = PrintingRepository(client);
+    : _client = client,
+      _printingRepository = PrintingRepository(client);
 
   Future<void> printCloseTicket({
     required CashCloseInput input,
@@ -51,10 +51,7 @@ class CashClosePrintService {
     gen.text('CONTEO DE EFECTIVO');
     gen.setBold(false);
     for (final d in denominations.where((e) => e.count > 0)) {
-      gen.textRow(
-        '${formatRD(d.value)} x ${d.count}',
-        formatRD(d.subtotal),
-      );
+      gen.textRow('${formatRD(d.value)} x ${d.count}', formatRD(d.subtotal));
     }
     gen.separator();
     gen.textRow('Total efectivo', formatRD(result.totalCounted));
@@ -68,7 +65,8 @@ class CashClosePrintService {
 
     void row(String concept, int expected, int reported) {
       final diff = reported - expected;
-      final diffLabel = '${diff >= 0 ? '+' : '-'}${formatRD(diff.abs()).replaceFirst('RD\$ ', '')}';
+      final diffLabel =
+          '${diff >= 0 ? '+' : '-'}${formatRD(diff.abs()).replaceFirst('RD\$ ', '')}';
       final line =
           '${concept.padRight(10)} ${_shortMoney(expected).padLeft(8)} ${_shortMoney(reported).padLeft(9)} ${diffLabel.padLeft(8)}';
       gen.text(line);
@@ -77,10 +75,11 @@ class CashClosePrintService {
     row('Efectivo', input.expectedCash, result.totalCounted);
     row('Tarjetas', input.expectedCard, result.numericCard);
     row('Transf.', input.expectedTransfer, result.numericTransfer);
-    row('TOTAL', result.expectedTotal, result.totalReported);
+    row('CIERRE', input.expectedClosureAmount, result.totalCounted);
     gen.doubleSeparator();
 
-    gen.textRow('TOTAL ESPERADO', formatRD(result.expectedTotal));
+    gen.textRow('CIERRE ESPERADO', formatRD(input.expectedClosureAmount));
+    gen.textRow('CIERRE REPORTADO', formatRD(result.totalCounted));
     gen.textRow('TOTAL REPORTADO', formatRD(result.totalReported));
     gen.separator();
 
@@ -100,7 +99,9 @@ class CashClosePrintService {
     gen.textRow('Transacciones', input.transactionCount.toString());
     gen.doubleSeparator();
     gen.text('Cajero: ${input.cashierName}');
-    gen.text('Impreso: ${formatDateEsDo(printedAt)} ${formatTimeEsDo(printedAt)}');
+    gen.text(
+      'Impreso: ${formatDateEsDo(printedAt)} ${formatTimeEsDo(printedAt)}',
+    );
     gen.textCentered('www.mangopos.do');
     gen.lineFeed(2);
     gen.cut();
@@ -110,21 +111,30 @@ class CashClosePrintService {
   Future<void> _printThermalOrThrow(List<int> bytes) async {
     final businessId = await resolveBusinessIdOrNull(_client, 'auto');
     if (businessId == null) {
-      throw Exception('No se pudo resolver el negocio activo para imprimir el cierre.');
+      throw Exception(
+        'No se pudo resolver el negocio activo para imprimir el cierre.',
+      );
     }
 
-    final preferredPrinter = await _printingRepository.getAssignedPrinterForType(
-      businessId: businessId,
-      preferredAreaCodes: const ['cashier', 'receipt', 'receipts', 'fiscal'],
-      printsReceipts: true,
-    );
+    final preferredPrinter = await _printingRepository
+        .getAssignedPrinterForType(
+          businessId: businessId,
+          preferredAreaCodes: const [
+            'cashier',
+            'receipt',
+            'receipts',
+            'fiscal',
+          ],
+          printsReceipts: true,
+        );
 
     final printers = await _printingRepository.getPrinters(businessId);
     final networkPrinters = printers
         .where((p) => (p.ipAddress?.trim().isNotEmpty ?? false) && p.isActive)
         .toList(growable: false);
 
-    final printer = preferredPrinter != null &&
+    final printer =
+        preferredPrinter != null &&
             (preferredPrinter.ipAddress?.trim().isNotEmpty ?? false)
         ? preferredPrinter
         : (networkPrinters.isNotEmpty ? networkPrinters.first : null);
@@ -138,9 +148,17 @@ class CashClosePrintService {
 
     final port = printer.port ?? 9100;
     if (await _printingRepository.isAgentUp()) {
-      await _printingRepository.printRawViaAgent(ip: ip, port: port, data: bytes);
+      await _printingRepository.printRawViaAgent(
+        ip: ip,
+        port: port,
+        data: bytes,
+      );
     } else {
-      await _printingRepository.printRawDirectTcp(ip: ip, port: port, data: bytes);
+      await _printingRepository.printRawDirectTcp(
+        ip: ip,
+        port: port,
+        data: bytes,
+      );
     }
   }
 

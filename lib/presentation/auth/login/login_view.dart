@@ -5,11 +5,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
-// ignore: avoid_web_libraries_in_dot_dart
-import 'package:web/web.dart' as web;
+import 'package:mangopos/core/utils/web_utils/web_utils.dart';
 
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import 'login_state.dart';
 import 'login_viewmodel.dart';
 
 const _orange = Color(0xFFF97316);
@@ -26,6 +26,12 @@ class LoginView extends ConsumerStatefulWidget {
 class _LoginViewState extends ConsumerState<LoginView> {
   @override
   Widget build(BuildContext context) {
+    ref.listen<LoginState>(loginVmProvider, (prev, next) {
+      if (next.needsBusinessSelection && context.mounted) {
+        context.go(AppRoutes.selectBusiness);
+      }
+    });
+
     ref.listen<SessionState>(sessionProvider, (prev, next) {
       if (next.status == AuthStatus.authenticated && context.mounted) {
         context.go(AppRoutes.dashboard);
@@ -154,7 +160,9 @@ class _LoginViewState extends ConsumerState<LoginView> {
 
                 const SizedBox(height: 12),
                 TextButton(
-                  onPressed: isLoading ? null : () => context.go(AppRoutes.register),
+                  onPressed: isLoading
+                      ? null
+                      : () => context.go(AppRoutes.register),
                   style: TextButton.styleFrom(
                     foregroundColor: _orange,
                     padding: const EdgeInsets.symmetric(vertical: 10),
@@ -178,7 +186,10 @@ class _LoginViewState extends ConsumerState<LoginView> {
                 const SizedBox(height: 8),
                 Text(
                   'Ingresa desde app.mangopos.do y luego podras conectar la redirección al subdominio de cada negocio.',
-                  style: TextStyle(color: _dark.withValues(alpha: .65), fontSize: 11),
+                  style: TextStyle(
+                    color: _dark.withValues(alpha: .65),
+                    fontSize: 11,
+                  ),
                   textAlign: TextAlign.center,
                 ),
 
@@ -190,11 +201,12 @@ class _LoginViewState extends ConsumerState<LoginView> {
                       String debugStr = 'N/A';
                       if (kIsWeb) {
                         try {
-                          final href = web.window.location.href;
-                          final hash = web.window.location.hash;
-                          final pathname = web.window.location.pathname;
-                          final search = web.window.location.search;
-                          debugStr = 'href: $href\nhash: $hash\npath: $pathname\nsearch: $search';
+                          final href = WebUtils.href;
+                          final hash = WebUtils.hash;
+                          final pathname = WebUtils.pathname;
+                          final search = WebUtils.search;
+                          debugStr =
+                              'href: $href\nhash: $hash\npath: $pathname\nsearch: $search';
                         } catch (e) {
                           debugStr = 'Error leyendo URL: $e';
                         }
@@ -202,13 +214,20 @@ class _LoginViewState extends ConsumerState<LoginView> {
                       return Container(
                         margin: const EdgeInsets.symmetric(vertical: 8),
                         padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(color: Colors.amber.withValues(alpha: .2), borderRadius: BorderRadius.circular(8)),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.withValues(alpha: .2),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                         child: Text(
                           '🔍 URL DETECTADA POR FLUTTER:\n$debugStr',
-                          style: const TextStyle(fontSize: 10, fontFamily: 'monospace', color: Colors.blueGrey),
+                          style: const TextStyle(
+                            fontSize: 10,
+                            fontFamily: 'monospace',
+                            color: Colors.blueGrey,
+                          ),
                         ),
                       );
-                    }
+                    },
                   ),
                   const Center(
                     child: Text(
@@ -387,23 +406,57 @@ class _VideoPaneState extends State<_VideoPane> {
     if (!_useNativeVideo) {
       final placeholderText = kIsWeb
           ? 'Video no disponible en Web'
-          : 'Video no disponible en Windows';
+          : 'Video desactivado temporalmente en Windows';
       videoWidget = Container(
-        color: _dark.withValues(alpha: .06),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              _orange.withValues(alpha: .16),
+              _white,
+              _dark.withValues(alpha: .08),
+            ],
+          ),
+        ),
         child: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(
-                Icons.play_circle_outline,
-                size: 64,
-                color: Colors.grey,
+              Container(
+                width: 84,
+                height: 84,
+                decoration: BoxDecoration(
+                  color: _white,
+                  borderRadius: BorderRadius.circular(24),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: .08),
+                      blurRadius: 18,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.storefront_rounded,
+                  size: 44,
+                  color: _orange,
+                ),
               ),
               const SizedBox(height: 16),
               Text(
                 placeholderText,
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.grey),
+                style: const TextStyle(
+                  color: _dark,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'La pantalla de acceso seguira funcionando con fondo estatico.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: _dark.withValues(alpha: .65)),
               ),
             ],
           ),
