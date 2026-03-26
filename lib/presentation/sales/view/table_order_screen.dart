@@ -257,6 +257,14 @@ double _effectiveItemTax(OrderItem item) {
   );
 }
 
+double _uiItemDisplayAmount(OrderItem item) {
+  if (item.taxMode == 'inclusive') {
+    return _effectiveItemTotal(item);
+  } else {
+    return _effectiveItemSubtotal(item);
+  }
+}
+
 enum OrderOrigin { table, manual, quick }
 
 class OrderScreen extends ConsumerStatefulWidget {
@@ -1258,7 +1266,7 @@ class _CartView extends ConsumerWidget {
     for (final item in sentItems) {
       final name = item.productName;
       final qty = item.quantity.toDouble();
-      final totalItem = _effectiveItemTotal(item);
+      final totalItem = _uiItemDisplayAmount(item);
       final groupKey = '${name.toLowerCase().trim()}|${item.isTakeout}';
       if (groupedSent.containsKey(groupKey)) {
         groupedSent[groupKey] = groupedSent[groupKey]!.copyWith(
@@ -2794,7 +2802,7 @@ class _CartLineItem extends StatelessWidget {
   Widget build(BuildContext context) {
     final name = item.productName;
     final qty = item.quantity.toStringAsFixed(1);
-    final totalItem = _effectiveItemTotal(item).toStringAsFixed(2);
+    final totalItem = _uiItemDisplayAmount(item).toStringAsFixed(2);
 
     return Material(
       color: Colors.transparent,
