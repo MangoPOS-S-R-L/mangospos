@@ -47,6 +47,8 @@ class _ModifiersViewState extends ConsumerState<ModifiersView> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _HeaderRow(
+                  totalGroups: state.groups.length,
+                  totalModifiers: state.modifiers.length,
                   onBack: () => context.go(AppRoutes.settings),
                   onRefresh: state.saving
                       ? null
@@ -233,9 +235,16 @@ class _ModifiersViewState extends ConsumerState<ModifiersView> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Eliminar grupo'),
+        backgroundColor: MangoTokens.card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: const _DialogHeader(
+          icon: Icons.delete_outline,
+          title: 'Eliminar grupo',
+          subtitle: 'Esta acción también eliminará sus modificadores y asignaciones.',
+        ),
         content: Text(
-          'Se eliminara "${group.name}" junto con sus modificadores y asignaciones.',
+          'Se eliminará "${group.name}" de forma permanente. Verifica que ya no lo necesitas antes de continuar.',
+          style: MangoTokens.body(),
         ),
         actions: [
           TextButton(
@@ -243,8 +252,9 @@ class _ModifiersViewState extends ConsumerState<ModifiersView> {
             child: const Text('Cancelar'),
           ),
           FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: MangoTokens.destructive),
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Eliminar'),
+            child: const Text('Eliminar grupo'),
           ),
         ],
       ),
@@ -298,16 +308,26 @@ class _ModifiersViewState extends ConsumerState<ModifiersView> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Eliminar modificador'),
-        content: Text('Se eliminara "${modifier.name}" del grupo actual.'),
+        backgroundColor: MangoTokens.card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: const _DialogHeader(
+          icon: Icons.delete_sweep_outlined,
+          title: 'Eliminar modificador',
+          subtitle: 'Quitarás esta opción del grupo actual.',
+        ),
+        content: Text(
+          'Se eliminará "${modifier.name}" y dejará de estar disponible para los productos vinculados a este grupo.',
+          style: MangoTokens.body(),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
             child: const Text('Cancelar'),
           ),
           FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: MangoTokens.destructive),
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Eliminar'),
+            child: const Text('Eliminar modificador'),
           ),
         ],
       ),
@@ -319,11 +339,15 @@ class _ModifiersViewState extends ConsumerState<ModifiersView> {
 }
 
 class _HeaderRow extends StatelessWidget {
+  final int totalGroups;
+  final int totalModifiers;
   final VoidCallback onBack;
   final VoidCallback? onRefresh;
   final VoidCallback? onAddGroup;
 
   const _HeaderRow({
+    required this.totalGroups,
+    required this.totalModifiers,
     required this.onBack,
     required this.onRefresh,
     required this.onAddGroup,
@@ -331,31 +355,164 @@ class _HeaderRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    return Container(
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        color: MangoTokens.card,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: MangoTokens.border),
+        boxShadow: MangoTokens.shadowCard,
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 820;
+          return compact
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    IconButton(
+                      onPressed: onBack,
+                      icon: const Icon(Icons.arrow_back),
+                    ),
+                    const SizedBox(height: 8),
+                    _HeaderSummary(
+                      totalGroups: totalGroups,
+                      totalModifiers: totalModifiers,
+                    ),
+                    const SizedBox(height: 16),
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: onRefresh,
+                          icon: const Icon(Icons.refresh, size: 18),
+                          label: const Text('Actualizar'),
+                        ),
+                        FilledButton.icon(
+                          onPressed: onAddGroup,
+                          icon: const Icon(Icons.add, size: 18),
+                          label: const Text('Nuevo grupo'),
+                        ),
+                      ],
+                    ),
+                  ],
+                )
+              : Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    IconButton(
+                      onPressed: onBack,
+                      icon: const Icon(Icons.arrow_back),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _HeaderSummary(
+                        totalGroups: totalGroups,
+                        totalModifiers: totalModifiers,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    OutlinedButton.icon(
+                      onPressed: onRefresh,
+                      icon: const Icon(Icons.refresh, size: 18),
+                      label: const Text('Actualizar'),
+                    ),
+                    const SizedBox(width: 12),
+                    FilledButton.icon(
+                      onPressed: onAddGroup,
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('Nuevo grupo'),
+                    ),
+                  ],
+                );
+        },
+      ),
+    );
+  }
+}
+
+class _HeaderSummary extends StatelessWidget {
+  final int totalGroups;
+  final int totalModifiers;
+
+  const _HeaderSummary({
+    required this.totalGroups,
+    required this.totalModifiers,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        IconButton(onPressed: onBack, icon: const Icon(Icons.arrow_back)),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Modificadores', style: MangoTokens.h1()),
-              const SizedBox(height: 2),
-              Text(
-                'Crea grupos, opciones y vinculos con productos.',
-                style: MangoTokens.subtitle(),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: MangoTokens.primary.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(12),
               ),
-            ],
-          ),
+              child: const Icon(
+                Icons.tune_rounded,
+                color: MangoTokens.primary,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Flexible(child: Text('Modificadores', style: MangoTokens.h1())),
+          ],
         ),
-        IconButton(onPressed: onRefresh, icon: const Icon(Icons.refresh)),
-        const SizedBox(width: 8),
-        FilledButton.icon(
-          onPressed: onAddGroup,
-          icon: const Icon(Icons.add, size: 18),
-          label: const Text('Nuevo grupo'),
+        const SizedBox(height: 8),
+        Text(
+          'Organiza grupos de opciones, controla reglas de selección y asigna modificadores a los productos correctos.',
+          style: MangoTokens.subtitle(),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _HeaderPill(
+              icon: Icons.layers_outlined,
+              label: '$totalGroups grupos',
+            ),
+            _HeaderPill(
+              icon: Icons.extension_outlined,
+              label: '$totalModifiers opciones',
+            ),
+          ],
         ),
       ],
+    );
+  }
+}
+
+class _HeaderPill extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _HeaderPill({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: MangoTokens.secondary,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: MangoTokens.border),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: MangoTokens.mutedForeground),
+          const SizedBox(width: 8),
+          Text(label, style: MangoTokens.label(color: MangoTokens.foreground)),
+        ],
+      ),
     );
   }
 }
@@ -418,24 +575,23 @@ class _GroupsPanel extends StatelessWidget {
         ],
       ),
       child: state.groups.isEmpty
-          ? const Text('No hay grupos creados.')
+          ? const _EmptyPanelState(message: 'No hay grupos creados todavía.')
           : Column(
               children: state.groups
                   .map(
-                    (group) => ListTile(
-                      onTap: () => onSelect(group.id),
-                      selected: state.selectedGroup?.id == group.id,
-                      title: Text(group.name),
-                      subtitle: Text(
-                        'Min ${group.minSelect} · Max ${group.maxSelect}',
-                      ),
-                      trailing: Text(
-                        group.isActive ? 'Activo' : 'Inactivo',
-                        style: TextStyle(
+                    (group) => Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: _SelectableCard(
+                        selected: state.selectedGroup?.id == group.id,
+                        onTap: () => onSelect(group.id),
+                        title: group.name,
+                        subtitle:
+                            'Selección mínima ${group.minSelect} · máxima ${group.maxSelect}',
+                        trailing: _StatusBadge(
+                          label: group.isActive ? 'Activo' : 'Inactivo',
                           color: group.isActive
                               ? MangoTokens.success
                               : MangoTokens.warning,
-                          fontWeight: FontWeight.w600,
                         ),
                       ),
                     ),
@@ -475,29 +631,77 @@ class _ModifiersPanel extends StatelessWidget {
         label: const Text('Agregar'),
       ),
       child: selectedGroup == null
-          ? const Text('Selecciona un grupo para ver sus opciones.')
+          ? const _EmptyPanelState(
+              message: 'Selecciona un grupo para administrar sus opciones.',
+            )
           : modifiers.isEmpty
-          ? const Text('Este grupo no tiene modificadores todavía.')
+          ? const _EmptyPanelState(
+              message: 'Este grupo todavía no tiene modificadores.',
+            )
           : Column(
               children: modifiers
                   .map(
-                    (modifier) => ListTile(
-                      title: Text(modifier.name),
-                      subtitle: Text(
-                        modifier.isActive ? 'Activo' : 'Inactivo',
+                    (modifier) => Container(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: MangoTokens.secondary,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: MangoTokens.border),
                       ),
-                      trailing: Wrap(
-                        spacing: 8,
-                        crossAxisAlignment: WrapCrossAlignment.center,
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(currency.format(modifier.priceDelta)),
-                          IconButton(
-                            onPressed: () => onEdit(modifier),
-                            icon: const Icon(Icons.edit_outlined),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  modifier.name,
+                                  style: MangoTokens.body().copyWith(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                Row(
+                                  children: [
+                                    _StatusBadge(
+                                      label: modifier.isActive
+                                          ? 'Activo'
+                                          : 'Inactivo',
+                                      color: modifier.isActive
+                                          ? MangoTokens.success
+                                          : MangoTokens.warning,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      currency.format(modifier.priceDelta),
+                                      style: MangoTokens.body().copyWith(
+                                        color: MangoTokens.primary,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
                           ),
-                          IconButton(
-                            onPressed: () => onDelete(modifier),
-                            icon: const Icon(Icons.delete_outline),
+                          const SizedBox(width: 12),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                tooltip: 'Editar modificador',
+                                onPressed: () => onEdit(modifier),
+                                icon: const Icon(Icons.edit_outlined),
+                              ),
+                              IconButton(
+                                tooltip: 'Eliminar modificador',
+                                onPressed: () => onDelete(modifier),
+                                icon: const Icon(Icons.delete_outline),
+                              ),
+                            ],
                           ),
                         ],
                       ),
@@ -555,26 +759,48 @@ class _AssignmentsPanelState extends State<_AssignmentsPanel> {
         child: const Text('Guardar'),
       ),
       child: widget.selectedGroup == null
-          ? const Text('Selecciona un grupo para asignarlo a productos.')
+          ? const _EmptyPanelState(
+              message: 'Selecciona un grupo para asignarlo a productos.',
+            )
           : widget.products.isEmpty
-          ? const Text('No hay productos disponibles.')
+          ? const _EmptyPanelState(message: 'No hay productos disponibles.')
           : Column(
               children: widget.products
                   .map(
-                    (product) => CheckboxListTile(
-                      value: _localAssigned.contains(product.id),
-                      controlAffinity: ListTileControlAffinity.leading,
-                      title: Text(product.name),
-                      subtitle: Text(product.isActive ? 'Activo' : 'Inactivo'),
-                      onChanged: (value) {
-                        setState(() {
-                          if (value == true) {
-                            _localAssigned.add(product.id);
-                          } else {
-                            _localAssigned.remove(product.id);
-                          }
-                        });
-                      },
+                    (product) => Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      decoration: BoxDecoration(
+                        color: MangoTokens.secondary,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: MangoTokens.border),
+                      ),
+                      child: CheckboxListTile(
+                        value: _localAssigned.contains(product.id),
+                        controlAffinity: ListTileControlAffinity.leading,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 4,
+                        ),
+                        title: Text(
+                          product.name,
+                          style: MangoTokens.body().copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        subtitle: Text(
+                          product.isActive ? 'Disponible para venta' : 'Inactivo',
+                          style: MangoTokens.label(),
+                        ),
+                        onChanged: (value) {
+                          setState(() {
+                            if (value == true) {
+                              _localAssigned.add(product.id);
+                            } else {
+                              _localAssigned.remove(product.id);
+                            }
+                          });
+                        },
+                      ),
                     ),
                   )
                   .toList(growable: false),
@@ -599,7 +825,7 @@ class _Panel extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: MangoTokens.card,
-        borderRadius: BorderRadius.circular(MangoTokens.radius),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(color: MangoTokens.border),
         boxShadow: MangoTokens.shadowCard,
       ),
@@ -611,20 +837,150 @@ class _Panel extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: Text(
-                    title,
-                    style: MangoTokens.body().copyWith(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 16,
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: MangoTokens.body().copyWith(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 16,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Gestiona esta sección con cambios claros y controlados.',
+                        style: MangoTokens.label(),
+                      ),
+                    ],
                   ),
                 ),
                 if (action != null) action!,
               ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
             child,
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyPanelState extends StatelessWidget {
+  final String message;
+
+  const _EmptyPanelState({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: MangoTokens.secondary,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: MangoTokens.border),
+      ),
+      child: Column(
+        children: [
+          const Icon(
+            Icons.inbox_outlined,
+            size: 26,
+            color: MangoTokens.mutedForeground,
+          ),
+          const SizedBox(height: 10),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: MangoTokens.body(color: MangoTokens.mutedForeground),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SelectableCard extends StatelessWidget {
+  final bool selected;
+  final VoidCallback onTap;
+  final String title;
+  final String subtitle;
+  final Widget? trailing;
+
+  const _SelectableCard({
+    required this.selected,
+    required this.onTap,
+    required this.title,
+    required this.subtitle,
+    this.trailing,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: selected
+              ? MangoTokens.primary.withValues(alpha: 0.08)
+              : MangoTokens.secondary,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: selected ? MangoTokens.primary : MangoTokens.border,
+            width: selected ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: MangoTokens.body().copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(subtitle, style: MangoTokens.label()),
+                ],
+              ),
+            ),
+            if (trailing != null) ...[
+              const SizedBox(width: 12),
+              trailing!,
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StatusBadge extends StatelessWidget {
+  final String label;
+  final Color color;
+
+  const _StatusBadge({required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: MangoTokens.label(color: color).copyWith(
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
         ),
       ),
     );
@@ -685,24 +1041,37 @@ class _GroupFormDialogState extends State<_GroupFormDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text(widget.initialGroup == null ? 'Nuevo grupo' : 'Editar grupo'),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      backgroundColor: MangoTokens.card,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
+      contentPadding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      title: _DialogHeader(
+        icon: Icons.layers_outlined,
+        title: widget.initialGroup == null ? 'Nuevo grupo' : 'Editar grupo',
+        subtitle: 'Define la regla de selección y el estado del grupo.',
+      ),
       content: SizedBox(
-        width: 420,
+        width: 460,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             TextField(
               controller: _nameController,
-              decoration: const InputDecoration(labelText: 'Nombre'),
+              decoration: const InputDecoration(
+                labelText: 'Nombre del grupo',
+                hintText: 'Ej. Extras, toppings, sabores',
+              ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 14),
             Row(
               children: [
                 Expanded(
                   child: TextField(
                     controller: _minController,
                     keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: 'Minimo'),
+                    decoration: const InputDecoration(labelText: 'Mínimo'),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -710,16 +1079,30 @@ class _GroupFormDialogState extends State<_GroupFormDialog> {
                   child: TextField(
                     controller: _maxController,
                     keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: 'Maximo'),
+                    decoration: const InputDecoration(labelText: 'Máximo'),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            SwitchListTile(
-              value: _isActive,
-              onChanged: (value) => setState(() => _isActive = value),
-              title: const Text('Activo'),
+            const SizedBox(height: 14),
+            Container(
+              decoration: BoxDecoration(
+                color: MangoTokens.secondary,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: MangoTokens.border),
+              ),
+              child: SwitchListTile(
+                value: _isActive,
+                onChanged: (value) => setState(() => _isActive = value),
+                title: Text(
+                  'Grupo activo',
+                  style: MangoTokens.body().copyWith(fontWeight: FontWeight.w600),
+                ),
+                subtitle: Text(
+                  'Solo los grupos activos estarán disponibles al vender.',
+                  style: MangoTokens.label(),
+                ),
+              ),
             ),
           ],
         ),
@@ -729,9 +1112,10 @@ class _GroupFormDialogState extends State<_GroupFormDialog> {
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Cancelar'),
         ),
-        FilledButton(
+        FilledButton.icon(
           onPressed: _submit,
-          child: const Text('Guardar'),
+          icon: const Icon(Icons.save_outlined, size: 18),
+          label: const Text('Guardar grupo'),
         ),
       ],
     );
@@ -749,6 +1133,47 @@ class _GroupFormDialogState extends State<_GroupFormDialog> {
         maxSelect: maxSelect < minSelect ? minSelect : maxSelect,
         isActive: _isActive,
       ),
+    );
+  }
+}
+
+class _DialogHeader extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+
+  const _DialogHeader({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            color: MangoTokens.primary.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Icon(icon, color: MangoTokens.primary),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: MangoTokens.h1().copyWith(fontSize: 20)),
+              const SizedBox(height: 6),
+              Text(subtitle, style: MangoTokens.label()),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -804,36 +1229,83 @@ class _ModifierFormDialogState extends State<_ModifierFormDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text(
-        widget.initialModifier == null
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      backgroundColor: MangoTokens.card,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
+      contentPadding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      title: _DialogHeader(
+        icon: Icons.extension_outlined,
+        title: widget.initialModifier == null
             ? 'Nuevo modificador'
             : 'Editar modificador',
+        subtitle: 'Ajusta el nombre, el impacto en precio y su disponibilidad.',
       ),
       content: SizedBox(
-        width: 420,
+        width: 460,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              'Grupo: ${widget.group.name}',
-              style: const TextStyle(fontWeight: FontWeight.w600),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: MangoTokens.secondary,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: MangoTokens.border),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.account_tree_outlined, size: 18),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Grupo: ${widget.group.name}',
+                      style: MangoTokens.body().copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 14),
             TextField(
               controller: _nameController,
-              decoration: const InputDecoration(labelText: 'Nombre'),
+              decoration: const InputDecoration(
+                labelText: 'Nombre del modificador',
+                hintText: 'Ej. Queso extra, sin cebolla, término 3/4',
+              ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 14),
             TextField(
               controller: _priceController,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: 'Delta de precio'),
+              decoration: const InputDecoration(
+                labelText: 'Delta de precio',
+                prefixText: 'RD\$ ',
+              ),
             ),
-            const SizedBox(height: 12),
-            SwitchListTile(
-              value: _isActive,
-              onChanged: (value) => setState(() => _isActive = value),
-              title: const Text('Activo'),
+            const SizedBox(height: 14),
+            Container(
+              decoration: BoxDecoration(
+                color: MangoTokens.secondary,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: MangoTokens.border),
+              ),
+              child: SwitchListTile(
+                value: _isActive,
+                onChanged: (value) => setState(() => _isActive = value),
+                title: Text(
+                  'Modificador activo',
+                  style: MangoTokens.body().copyWith(fontWeight: FontWeight.w600),
+                ),
+                subtitle: Text(
+                  'Si lo desactivas, no aparecerá al momento de vender.',
+                  style: MangoTokens.label(),
+                ),
+              ),
             ),
           ],
         ),
@@ -843,9 +1315,10 @@ class _ModifierFormDialogState extends State<_ModifierFormDialog> {
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Cancelar'),
         ),
-        FilledButton(
+        FilledButton.icon(
           onPressed: _submit,
-          child: const Text('Guardar'),
+          icon: const Icon(Icons.save_outlined, size: 18),
+          label: const Text('Guardar modificador'),
         ),
       ],
     );

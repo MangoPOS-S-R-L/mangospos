@@ -1153,6 +1153,62 @@ class _PreviewRow extends StatelessWidget {
   }
 }
 
+class _SalesModifierDialogHeader extends StatelessWidget {
+  final String title;
+  final String subtitle;
+
+  const _SalesModifierDialogHeader({
+    required this.title,
+    required this.subtitle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            color: const Color(0xFFF97316).withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: const Icon(
+            Icons.tune_rounded,
+            color: Color(0xFFF97316),
+          ),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 21,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF111827),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                subtitle,
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: Color(0xFF6B7280),
+                  height: 1.35,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _ItemModifiersEditorDialog extends StatefulWidget {
   final MenuProduct product;
   final List<Map<String, dynamic>> groups;
@@ -1198,21 +1254,20 @@ class _ItemModifiersEditorDialogState
   @override
   Widget build(BuildContext context) {
     return Dialog(
+      backgroundColor: const Color(0xFFFFFFFF),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 680, maxHeight: 720),
+        constraints: const BoxConstraints(maxWidth: 720, maxHeight: 760),
         child: Padding(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.all(24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'Editar modificadores · ${widget.product.name}',
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                ),
+              _SalesModifierDialogHeader(
+                title: 'Editar modificadores · ${widget.product.name}',
+                subtitle: 'Actualiza la selección de opciones del artículo actual.',
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 18),
               Expanded(
                 child: SingleChildScrollView(
                   child: Column(
@@ -1239,21 +1294,56 @@ class _ItemModifiersEditorDialogState
                           return Container(
                             width: double.infinity,
                             margin: const EdgeInsets.only(bottom: 12),
-                            padding: const EdgeInsets.all(14),
+                            padding: const EdgeInsets.all(16),
                             decoration: BoxDecoration(
+                              color: const Color(0xFFFFFFFF),
                               border: Border.all(
                                 color: const Color(0xFFE2E8F0),
                               ),
-                              borderRadius: BorderRadius.circular(14),
+                              borderRadius: BorderRadius.circular(18),
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Color(0x10000000),
+                                  blurRadius: 6,
+                                  offset: Offset(0, 2),
+                                ),
+                              ],
                             ),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  group['name']?.toString() ?? 'Grupo',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                  ),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        group['name']?.toString() ?? 'Grupo',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w800,
+                                          fontSize: 15,
+                                        ),
+                                      ),
+                                    ),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 6,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFF3F4F6),
+                                        borderRadius: BorderRadius.circular(999),
+                                      ),
+                                      child: Text(
+                                        displayType == 'single'
+                                            ? '1 opción'
+                                            : 'Múltiple',
+                                        style: const TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w700,
+                                          color: Color(0xFF6B7280),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                                 const SizedBox(height: 10),
                                 Wrap(
@@ -1267,9 +1357,37 @@ class _ItemModifiersEditorDialogState
                                             (modifier['price_delta'] as num?)
                                                 ?.toDouble() ??
                                             0.0;
+                                        final isSelected = selected.contains(
+                                          modifierId,
+                                        );
                                         return FilterChip(
-                                          selected: selected.contains(
-                                            modifierId,
+                                          selected: isSelected,
+                                          showCheckmark: false,
+                                          selectedColor: const Color(0xFFFFEDD5),
+                                          backgroundColor: const Color(0xFFF8FAFC),
+                                          side: BorderSide(
+                                            color: isSelected
+                                                ? const Color(0xFFF97316)
+                                                : const Color(0xFFE2E8F0),
+                                            width: isSelected ? 1.5 : 1,
+                                          ),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(14),
+                                          ),
+                                          avatar: Icon(
+                                            isSelected
+                                                ? Icons.check_circle_rounded
+                                                : Icons.add_circle_outline_rounded,
+                                            size: 18,
+                                            color: isSelected
+                                                ? const Color(0xFFF97316)
+                                                : const Color(0xFF9CA3AF),
+                                          ),
+                                          labelStyle: TextStyle(
+                                            color: isSelected
+                                                ? const Color(0xFF9A3412)
+                                                : const Color(0xFF111827),
+                                            fontWeight: FontWeight.w600,
                                           ),
                                           label: Text(
                                             price > 0
@@ -1325,7 +1443,7 @@ class _ItemModifiersEditorDialogState
                     child: const Text('Cancelar'),
                   ),
                   const SizedBox(width: 8),
-                  FilledButton(
+                  FilledButton.icon(
                     onPressed: () {
                       final result = <SelectedModifierInput>[];
                       for (final row in widget.groups) {
@@ -1362,7 +1480,8 @@ class _ItemModifiersEditorDialogState
                       }
                       Navigator.of(context).pop(result);
                     },
-                    child: const Text('Guardar cambios'),
+                    icon: const Icon(Icons.save_outlined, size: 18),
+                    label: const Text('Guardar cambios'),
                   ),
                 ],
               ),

@@ -99,21 +99,19 @@ OrderItemPricingSummary summarizeItemPricing(Order? order, OrderItem item) {
   final isFractionalQty =
       (item.quantity - item.quantity.roundToDouble()).abs() > 0.001;
   final storedGrossAmount = _positiveMoney(item.total + item.discounts);
-  final shouldPreferCatalogGrossAmount =
-      serviceIncluded &&
-      isFractionalQty &&
-      storedGrossAmount > 0 &&
-      (storedGrossAmount - catalogGrossAmount).abs() > 0.01;
-  final effectiveGrossAmount = shouldPreferCatalogGrossAmount
-      ? catalogGrossAmount
-      : (storedGrossAmount >= catalogGrossAmount
-            ? storedGrossAmount
-            : catalogGrossAmount);
+  final isInclusive = item.taxMode == 'inclusive' || serviceIncluded;
+
+  // For inclusive items, the catalogGrossAmount (Menu Price) is the authoritative Gross base.
+  // Using storedGrossAmount (item.total + disc) often re-grosses the discount if the total wasn't yet updated in DB.
+  final effectiveGrossAmount = isInclusive
+      ? (isFractionalQty ? catalogGrossAmount : (catalogGrossAmount > 0 ? catalogGrossAmount : storedGrossAmount))
+      : (storedGrossAmount >= catalogGrossAmount ? storedGrossAmount : catalogGrossAmount);
 
   if (serviceIncluded) {
     final divisor = 1 + taxRate + serviceRate;
     if (divisor > 1) {
-      final subtotal = effectiveGrossAmount / divisor;
+      final netGross = _positiveMoney(effectiveGrossAmount - item.discounts);
+      final subtotal = netGross / divisor;
       final tax = subtotal * taxRate;
       final serviceFee = subtotal * serviceRate;
       final total = _roundMoney(

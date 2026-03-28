@@ -1153,6 +1153,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
     state = state.copyWith(loading: true, error: null);
     try {
+      final discountByItemId = <String, double>{};
+
       await Future.wait(
         targetItems.map((item) {
           final base = (item.subtotal + item.tax)
@@ -1161,6 +1163,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           final discount = (base * (clampedPercent / 100))
               .clamp(0, base)
               .toDouble();
+          discountByItemId[item.id] = discount;
           final notesWithoutCourtesy = _stripCourtesyFromNotes(item.notes);
           return ref
               .read(salesRepositoryProvider)
@@ -1173,6 +1176,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
               );
         }),
       );
+
+      state = state.copyWith(
+        loading: false,
+        items: state.items
+            .map(
+              (item) => discountByItemId.containsKey(item.id)
+                  ? item.copyWith(discounts: discountByItemId[item.id])
+                  : item,
+            )
+            .toList(growable: false),
+      );
+
       refreshOrder();
     } catch (e) {
       state = state.copyWith(
