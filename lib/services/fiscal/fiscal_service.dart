@@ -82,9 +82,26 @@ class FiscalService {
   }
 
   Future<void> updateSequence(String id, Map<String, dynamic> data) async {
-    await _db
-        .from('ncf_sequences')
-        .update({...data, 'updated_at': DateTime.now().toIso8601String()})
-        .eq('id', id);
+    final payload = <String, dynamic>{};
+
+    if (data.containsKey('current_number')) {
+      payload['current_number'] = data['current_number'];
+    }
+    if (data.containsKey('range_end')) {
+      payload['range_end'] = data['range_end'];
+    }
+    if (data.containsKey('is_active')) {
+      payload['is_active'] = data['is_active'];
+    }
+    if (data.containsKey('expiration_date')) {
+      payload['expiration_date'] = data['expiration_date'];
+    }
+    if (data.containsKey('authorized_by')) {
+      payload['authorized_by'] = data['authorized_by'];
+    }
+
+    if (payload.isEmpty) return;
+
+    await _db.from('ncf_sequences').update(payload).eq('id', id);
   }
 }

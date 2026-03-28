@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -107,8 +108,20 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
       );
       _indexZone(zoneId, rows);
     } catch (e) {
+      developer.log(
+        'Error loading zone status',
+        name: 'ByZoneViewModel',
+        error: e,
+      );
       if (emitError) {
-        state = state.copyWith(error: '$e');
+        state = state.copyWith(
+          statusByZone: {...state.statusByZone, zoneId: const <TableStatus>[]},
+          error: '$e',
+        );
+      } else {
+        state = state.copyWith(
+          statusByZone: {...state.statusByZone, zoneId: const <TableStatus>[]},
+        );
       }
     }
   }
@@ -188,6 +201,44 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
           event: PostgresChangeEvent.all,
           schema: 'public',
           table: 'order_items',
+          callback: (payload) {
+            final newRecord = payload.newRecord;
+            final oldRecord = payload.oldRecord;
+            final orderId =
+                _toStringOrNull(newRecord['order_id']) ??
+                _toStringOrNull(oldRecord['order_id']);
+
+            if (orderId == null) {
+              _queueRealtimeRefresh(fullReload: true);
+              return;
+            }
+
+            _queueRealtimeRefresh(orderId: orderId);
+          },
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'order_checks',
+          callback: (payload) {
+            final newRecord = payload.newRecord;
+            final oldRecord = payload.oldRecord;
+            final orderId =
+                _toStringOrNull(newRecord['order_id']) ??
+                _toStringOrNull(oldRecord['order_id']);
+
+            if (orderId == null) {
+              _queueRealtimeRefresh(fullReload: true);
+              return;
+            }
+
+            _queueRealtimeRefresh(orderId: orderId);
+          },
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'payments',
           callback: (payload) {
             final newRecord = payload.newRecord;
             final oldRecord = payload.oldRecord;

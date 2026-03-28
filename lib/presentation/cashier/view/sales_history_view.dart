@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/data/models/payment_models.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
@@ -185,7 +186,7 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
                             const Icon(Icons.calendar_today_outlined, size: 18),
                             const SizedBox(width: 12),
                             Text(
-                              '${DateFormat('dd MMM. yyyy').format(DateTime.now())} → ${DateFormat('dd MMM. yyyy').format(DateTime.now())}',
+                              '${DateFormat('dd MMM. yyyy').format(AppTime.nowAst())} → ${DateFormat('dd MMM. yyyy').format(AppTime.nowAst())}',
                               style: const TextStyle(
                                 fontWeight: FontWeight.w600,
                               ),
@@ -325,15 +326,13 @@ class _PaymentTableRow extends ConsumerWidget {
     final amount =
         (payment['net_amount'] as num?)?.toDouble() ??
         ((payment['amount'] as num?)?.toDouble() ?? 0);
-    final createdAt = DateTime.tryParse(
-      payment['created_at']?.toString() ?? '',
-    );
+    final createdAt = AppTime.tryParseServerToAst(payment['created_at']);
     final dateStr = createdAt == null
         ? '-'
-        : DateFormat('dd/MM/yyyy').format(createdAt.toLocal());
+        : DateFormat('dd/MM/yyyy').format(createdAt);
     final timeStr = createdAt == null
         ? '-'
-        : DateFormat('hh:mm a').format(createdAt.toLocal());
+        : DateFormat('hh:mm a').format(createdAt);
 
     final customerName =
         payment['customer_name']?.toString() ?? 'Público General';
@@ -341,7 +340,9 @@ class _PaymentTableRow extends ConsumerWidget {
     final ncfType = payment['ncf_type_name']?.toString() ?? 'Boleta';
     final taxId = payment['customer_tax_id']?.toString() ?? '';
     final waiterName = payment['waiter_name']?.toString() ?? 'Servicio';
+    final paymentId = payment['id']?.toString() ?? '';
     final orderId = payment['order_id']?.toString() ?? '';
+    final checkId = payment['check_id']?.toString();
     final isVoided =
         payment['status'] == 'void' || payment['status'] == 'cancelled';
 
@@ -439,7 +440,12 @@ class _PaymentTableRow extends ConsumerWidget {
                 if (!isVoided) ...[
                   IconButton(
                     icon: const Icon(Icons.print_outlined, size: 20),
-                    onPressed: () => _reprintInvoice(context, ref, orderId),
+                    onPressed: () => _reprintInvoice(
+                      context,
+                      ref,
+                      orderId,
+                      checkId: checkId,
+                    ),
                     tooltip: 'Reimprimir',
                     color: Colors.blue,
                   ),
@@ -449,7 +455,13 @@ class _PaymentTableRow extends ConsumerWidget {
                       size: 20,
                       color: Colors.redAccent,
                     ),
-                    onPressed: () => _voidSale(context, ref, orderId),
+                    onPressed: () => _voidSale(
+                      context,
+                      ref,
+                      paymentId,
+                      orderId,
+                      checkId: checkId,
+                    ),
                     tooltip: 'Anular',
                   ),
                 ] else
@@ -475,8 +487,9 @@ class _PaymentTableRow extends ConsumerWidget {
   void _reprintInvoice(
     BuildContext context,
     WidgetRef ref,
-    String orderId,
-  ) async {
+    String orderId, {
+    String? checkId,
+  }) async {
     if (orderId.isEmpty) return;
 
     try {
@@ -520,6 +533,25 @@ class _PaymentTableRow extends ConsumerWidget {
           'payment_method_code': method?['code'],
         });
       }).toList();
+      var printOrder = bundle.order!;
+      var printItems = List<OrderItem>.from(allItems);
+      var printPayments = List<Payment>.from(payments);
+
+      final trimmedCheckId = checkId?.trim();
+      if (trimmedCheckId != null && trimmedCheckId.isNotEmpty) {
+        printItems = allItems
+            .where((item) => item.checkId == trimmedCheckId)
+            .toList(growable: false);
+        printPayments = payments
+            .where((payment) => payment.checkId == trimmedCheckId)
+            .toList(growable: false);
+        try {
+          final check = bundle.checks.firstWhere((c) => c.id == trimmedCheckId);
+          printOrder = check.toOrder(createdAt: bundle.order!.createdAt);
+        } catch (_) {
+          printOrder = bundle.order!;
+        }
+      }
 
       // Loading business profile (simplified, usually from a provider)
       if (businessId == null || businessId.isEmpty) {
@@ -550,9 +582,9 @@ class _PaymentTableRow extends ConsumerWidget {
           .getReceiptItemDisplayMode(businessId);
 
       final ticket = PrintTicketService.generateInvoice(
-        order: bundle.order!,
-        items: allItems,
-        payments: payments,
+        order: printOrder,
+        items: printItems,
+        payments: printPayments,
         tableName: payment['table_code']?.toString() ?? 'Mesa',
         waiterName: waiterName,
         businessName: profileRaw?['name'] ?? profileRaw?['business_name'],
@@ -612,8 +644,14 @@ class _PaymentTableRow extends ConsumerWidget {
     }
   }
 
-  void _voidSale(BuildContext context, WidgetRef ref, String orderId) async {
-    if (orderId.isEmpty) return;
+  void _voidSale(
+    BuildContext context,
+    WidgetRef ref,
+    String paymentId,
+    String orderId, {
+    String? checkId,
+  }) async {
+    if (paymentId.isEmpty || orderId.isEmpty) return;
 
     final session = ref.read(sessionProvider);
     final currentRole = session.activeRole;
@@ -677,8 +715,10 @@ class _PaymentTableRow extends ConsumerWidget {
       ).showSnackBar(const SnackBar(content: Text('Anulando venta...')));
 
       final salesRepo = ref.read(salesRepositoryProvider);
-      await salesRepo.annulOrder(
+      await salesRepo.annulPayment(
+        paymentId: paymentId,
         orderId: orderId,
+        checkId: checkId,
         reason: reason.isEmpty ? 'Anulación desde historial' : reason,
       );
 

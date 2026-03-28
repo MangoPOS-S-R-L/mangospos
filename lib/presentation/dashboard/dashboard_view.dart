@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_radius.dart';
 import 'package:mangopos/core/theme/app_shadows.dart';
@@ -179,7 +180,7 @@ class _WelcomeCard extends StatelessWidget {
           DateFormat(
             'EEEE, d de MMMM yyyy',
             'es',
-          ).format(DateTime.now()).toUpperCase(),
+          ).format(AppTime.nowAst()).toUpperCase(),
           style: const TextStyle(
             color: AppColors.mutedForeground,
             fontSize: 12,
@@ -1172,7 +1173,9 @@ class _ActiveTablesWidget extends StatelessWidget {
           final total = viewModel.sessionTotals[s.id] ?? 0.0;
           final formattedTotal =
               'RD\$ ${NumberFormat('#,##0', 'en_US').format(total)}';
-          final duration = DateTime.now().difference(s.openedAt);
+          final duration = AppTime.nowAst().difference(
+            AppTime.astFromInstant(s.openedAt),
+          );
 
           return _ActiveTableRow(
             tableCode: _resolveTableCode(s, index),
@@ -1193,7 +1196,9 @@ class _ActiveTablesWidget extends StatelessWidget {
               zoneName: _resolveZoneName(visibleSessions[i]),
               peopleCount: visibleSessions[i].peopleCount,
               timeStr: _formatDuration(
-                DateTime.now().difference(visibleSessions[i].openedAt),
+                AppTime.nowAst().difference(
+                  AppTime.astFromInstant(visibleSessions[i].openedAt),
+                ),
               ),
               formattedTotal:
                   'RD\$ ${NumberFormat('#,##0', 'en_US').format(viewModel.sessionTotals[visibleSessions[i].id] ?? 0.0)}',

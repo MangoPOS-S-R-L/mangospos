@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:mangopos/app/router/routes.dart';
+import 'package:mangopos/core/utils/display_name_utils.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/models/fiscal_models.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
@@ -140,15 +141,32 @@ Future<String?> _loadWaiterName(WidgetRef ref, String orderId) async {
   try {
     final data = await Supabase.instance.client
         .from('orders')
-        .select('table_sessions(users(full_name))')
+        .select('table_sessions(opened_by,business_id,users(full_name))')
         .eq('id', orderId)
         .maybeSingle();
 
     final tableSession = data?['table_sessions'] as Map<String, dynamic>?;
+    final openedBy = tableSession?['opened_by']?.toString();
+    final businessId = tableSession?['business_id']?.toString();
     final user = tableSession?['users'] as Map<String, dynamic>?;
     final fullName = user?['full_name']?.toString().trim();
+    if (openedBy != null &&
+        openedBy.isNotEmpty &&
+        businessId != null &&
+        businessId.isNotEmpty) {
+      final employee = await Supabase.instance.client
+          .from('employees')
+          .select('first_name')
+          .eq('user_id', openedBy)
+          .eq('business_id', businessId)
+          .maybeSingle();
+      final firstName = employee?['first_name']?.toString();
+      if (firstName != null && firstName.trim().isNotEmpty) {
+        return preferredDisplayName(firstName: firstName);
+      }
+    }
     if (fullName != null && fullName.isNotEmpty) {
-      return fullName;
+      return preferredDisplayName(fullName: fullName);
     }
   } catch (_) {}
 
@@ -262,8 +280,16 @@ double _catalogItemGrossAmount(OrderItem item) {
     0,
     double.infinity,
   );
+  final useCatalogTotalForFractionalInclusive =
+      item.taxMode == 'inclusive' &&
+      isFractionalQty &&
+      item.total > 0 &&
+      (item.total - catalogTotal).abs() > 0.01;
   final storedTotal = item.taxMode == 'inclusive'
-      ? (item.total >= catalogTotal ? item.total : catalogTotal).toDouble()
+      ? (useCatalogTotalForFractionalInclusive
+                ? catalogTotal
+                : (item.total >= catalogTotal ? item.total : catalogTotal))
+            .toDouble()
       : (item.total - item.discounts).clamp(0, double.infinity).toDouble();
   if (item.taxMode == 'inclusive' &&
       item.total > 0 &&
@@ -317,10 +343,24 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
 
   Future<void> _handleBack(BuildContext context) async {
     final orderState = ref.read(currentOrderProvider);
-    if (!orderState.loading &&
-        orderState.order != null &&
-        orderState.items.isEmpty) {
-      await ref.read(currentOrderProvider.notifier).cancelCurrentOrder();
+    final order = orderState.order;
+    if (order != null && orderState.items.isEmpty) {
+      final salesRepo = ref.read(salesRepositoryProvider);
+      final businessId = ref.read(sessionProvider).activeBusinessId;
+      try {
+        await salesRepo.releaseEmptyTableIfNeeded(
+          order.id,
+          businessId: businessId,
+        );
+      } catch (_) {
+        await ref.read(currentOrderProvider.notifier).cancelCurrentOrder();
+      }
+      final zoneVm = ref.read(byZoneVmProvider.notifier);
+      if (widget.zoneId != null && widget.zoneId!.isNotEmpty) {
+        await zoneVm.loadZoneStatus(widget.zoneId!, emitError: false);
+      } else if (businessId != null && businessId.isNotEmpty) {
+        await zoneVm.load(businessId);
+      }
     }
     if (context.mounted) {
       context.go(AppRoutes.salesByZone);
@@ -909,6 +949,21 @@ class _CartView extends ConsumerWidget {
     final finalCustomerName = currentOrderState.customerName;
     final finalFiscalType = currentOrderState.fiscalType;
     final finalCustomerTaxId = currentOrderState.customerTaxId;
+    final finalCustomerLegalName = currentOrderState.customerLegalName;
+    final prePaymentItems = checkId == null
+        ? List<OrderItem>.from(currentOrderState.items)
+        : currentOrderState.items.where((i) => i.checkId == checkId).toList();
+    var prePaymentOrder = order;
+    if (checkId != null) {
+      try {
+        final check = currentOrderState.checks.firstWhere(
+          (c) => c.id == checkId,
+        );
+        prePaymentOrder = check.toOrder(createdAt: order.createdAt);
+      } catch (_) {
+        prePaymentOrder = order;
+      }
+    }
 
     // Usamos el tableCode disponible en la vista
     final tableName = tableCode;
@@ -931,21 +986,8 @@ class _CartView extends ConsumerWidget {
 
         // INSTANT LOAD: Use data from result + local state
         final payments = result;
-        final currentOrderState = ref.read(currentOrderProvider);
-        var items = currentOrderState.items;
-        var printOrder = order;
-
-        if (checkId != null) {
-          items = items.where((i) => i.checkId == checkId).toList();
-          try {
-            final check = currentOrderState.checks.firstWhere(
-              (c) => c.id == checkId,
-            );
-            printOrder = check.toOrder(createdAt: order.createdAt);
-          } catch (_) {
-            // Fallback: items are filtered, but totals remain global (incorrect but avoids crash)
-          }
-        }
+        final items = List<OrderItem>.from(prePaymentItems);
+        final printOrder = prePaymentOrder;
 
         final businessProfile = await _loadBusinessReceiptProfile(ref);
         final fiscalDoc = await _loadFiscalDocument(ref, order.id);
@@ -964,6 +1006,7 @@ class _CartView extends ConsumerWidget {
         final ncfFromPayment = payments.isNotEmpty
             ? payments.last.reference
             : null;
+        final printedFiscalType = fiscalDoc?.ncfType ?? finalFiscalType;
 
         if (context.mounted) {
           final invoiceData = {
@@ -974,9 +1017,9 @@ class _CartView extends ConsumerWidget {
             'phone': businessProfile.phone,
             'address': businessProfile.address,
             'ncf': ncfFromPayment ?? fiscalDoc?.ncfNumber,
-            'fiscalType': finalFiscalType,
+            'fiscalType': printedFiscalType,
             'customerName': finalCustomerName,
-            'customerLegalName': currentOrderState.customerLegalName,
+            'customerLegalName': finalCustomerLegalName,
             'customerTaxId': finalCustomerTaxId,
             'issuedAt': issuedAt.toIso8601String(),
             'tableName': tableName,
@@ -986,7 +1029,7 @@ class _CartView extends ConsumerWidget {
                   (i) => {
                     'quantity': i.quantity,
                     'name': i.productName,
-                    'price': i.total,
+                    'price': itemDisplayTotal(printOrder, i),
                   },
                 )
                 .toList(),
@@ -3503,6 +3546,7 @@ class _AssignCustomerDialog extends ConsumerStatefulWidget {
 
 class _AssignCustomerDialogState extends ConsumerState<_AssignCustomerDialog> {
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _customersScrollController = ScrollController();
 
   @override
   void initState() {
@@ -3514,6 +3558,7 @@ class _AssignCustomerDialogState extends ConsumerState<_AssignCustomerDialog> {
 
   @override
   void dispose() {
+    _customersScrollController.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -3747,7 +3792,9 @@ class _AssignCustomerDialogState extends ConsumerState<_AssignCustomerDialog> {
                                 ),
                               )
                             : Scrollbar(
+                                controller: _customersScrollController,
                                 child: ListView.separated(
+                                  controller: _customersScrollController,
                                   padding: const EdgeInsets.all(14),
                                   itemCount: vm.customers.length,
                                   separatorBuilder: (context, index) =>
@@ -3896,6 +3943,7 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
   final TextEditingController _creditLimitController = TextEditingController();
   final TextEditingController _maxCreditController = TextEditingController();
   final TextEditingController _taxIdController = TextEditingController();
+  final ScrollController _formScrollController = ScrollController();
 
   bool _isSaving = false;
   bool _isAdvancedMode = false;
@@ -3905,6 +3953,7 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
 
   @override
   void dispose() {
+    _formScrollController.dispose();
     _firstNameController.dispose();
     _lastNameController.dispose();
     _phoneController.dispose();
@@ -4232,7 +4281,9 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
                     border: Border.all(color: _salesDivider),
                   ),
                   child: Scrollbar(
+                    controller: _formScrollController,
                     child: SingleChildScrollView(
+                      controller: _formScrollController,
                       padding: const EdgeInsets.all(18),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,

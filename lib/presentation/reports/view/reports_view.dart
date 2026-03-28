@@ -1,8 +1,11 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/presentation/reports/services/reports_csv_export_service.dart';
 import 'package:mangopos/presentation/reports/services/reports_export_service.dart';
 import 'package:mangopos/presentation/reports/viewmodel/reports_viewmodel.dart';
@@ -21,18 +24,51 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
   String? _lastBusinessId;
   bool _appliedInitialCategory = false;
 
+  void _syncCategoryFromRoute() {
+    final viewModel = ref.read(reportsViewModelProvider.notifier);
+    viewModel.selectCategory(widget.initialCategory);
+  }
+
+  void _handleBack(ReportsState state, ReportsViewModel viewModel) {
+    if (state.selectedCategory == null) {
+      if (context.canPop()) {
+        context.pop();
+      } else {
+        context.go(AppRoutes.dashboard);
+      }
+      return;
+    }
+
+    // Si vino de una ruta directa con categoría, ir a la pantalla principal de informes
+    if (widget.initialCategory != null) {
+      viewModel.selectCategory(null);
+      context.go(AppRoutes.reports);
+      return;
+    }
+
+    // Si la categoría se seleccionó desde el grid interno, solo limpiarla
+    viewModel.selectCategory(null);
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _appliedInitialCategory) return;
-      if (widget.initialCategory != null) {
-        ref
-            .read(reportsViewModelProvider.notifier)
-            .selectCategory(widget.initialCategory);
-      }
+      _syncCategoryFromRoute();
       _appliedInitialCategory = true;
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant ReportsView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialCategory != widget.initialCategory) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _syncCategoryFromRoute();
+      });
+    }
   }
 
   @override
@@ -51,9 +87,9 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
 
     return PopScope(
       canPop: state.selectedCategory == null,
-      onPopInvoked: (didPop) {
+      onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
-        viewModel.selectCategory(null);
+        _handleBack(state, viewModel);
       },
       child: Scaffold(
         backgroundColor: Colors.white,
@@ -68,17 +104,16 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
                   children: [
                     Row(
                       children: [
-                        if (state.selectedCategory != null)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 16.0),
-                            child: IconButton(
-                              icon: const Icon(
-                                Icons.arrow_back,
-                                color: MangoColors.darkGray,
-                              ),
-                              onPressed: () => viewModel.selectCategory(null),
+                        Padding(
+                          padding: const EdgeInsets.only(right: 16.0),
+                          child: IconButton(
+                            icon: const Icon(
+                              Icons.arrow_back,
+                              color: MangoColors.darkGray,
                             ),
+                            onPressed: () => _handleBack(state, viewModel),
                           ),
+                        ),
                         Text(
                           state.selectedCategory == null
                               ? 'Informes'
@@ -274,7 +309,7 @@ class _ReportsToolbar extends StatelessWidget {
             final picked = await showDateRangePicker(
               context: context,
               firstDate: DateTime(2024, 1, 1),
-              lastDate: DateTime.now().add(const Duration(days: 365)),
+              lastDate: AppTime.nowAst().add(const Duration(days: 365)),
               initialDateRange: DateTimeRange(
                 start: state.salesFrom,
                 end: displayedTo,

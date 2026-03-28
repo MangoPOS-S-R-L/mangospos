@@ -1,6 +1,7 @@
 import '../../data/models/printing_models.dart';
 import '../../data/models/sales_models.dart';
 import '../../data/models/payment_models.dart';
+import '../../core/utils/app_time.dart';
 import '../../data/utils/order_pricing_utils.dart';
 import 'esc_pos_generator.dart';
 
@@ -921,17 +922,20 @@ class PrintTicketService {
 
   /// Formatear fecha (solo día/mes/año)
   static String _formatDate(DateTime dt) {
-    return '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}';
+    final ast = AppTime.astFromInstant(dt);
+    return '${ast.day.toString().padLeft(2, '0')}/${ast.month.toString().padLeft(2, '0')}/${ast.year}';
   }
 
   /// Formatear hora (solo hora:minuto:segundo)
   static String _formatTime(DateTime dt) {
-    return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}:${dt.second.toString().padLeft(2, '0')}';
+    final ast = AppTime.astFromInstant(dt);
+    return '${ast.hour.toString().padLeft(2, '0')}:${ast.minute.toString().padLeft(2, '0')}:${ast.second.toString().padLeft(2, '0')}';
   }
 
   /// Formatear fecha y hora completa (para otros usos)
   static String _formatDateTime(DateTime dt) {
-    return '${_formatDate(dt)} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    final ast = AppTime.astFromInstant(dt);
+    return '${_formatDate(ast)} ${ast.hour.toString().padLeft(2, '0')}:${ast.minute.toString().padLeft(2, '0')}';
   }
 
   /// Formatear dinero con comas como separador de miles y punto para decimales

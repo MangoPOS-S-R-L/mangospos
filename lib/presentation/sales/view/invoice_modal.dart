@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
 
@@ -232,7 +233,12 @@ class InvoiceModal extends StatelessWidget {
                         customerTaxId != null &&
                         customerTaxId!.isNotEmpty)
                       _DetailRow('RNC/Cédula:', customerTaxId!),
-                    _DetailRow('Fecha:', dateFormat.format(effectiveIssuedAt)),
+                    _DetailRow(
+                      'Fecha:',
+                      dateFormat.format(
+                        AppTime.astFromInstant(effectiveIssuedAt),
+                      ),
+                    ),
                     if (tableName != null) _DetailRow('Mesa:', tableName!),
                     if (serverName != null)
                       _DetailRow('Camarero:', serverName!),

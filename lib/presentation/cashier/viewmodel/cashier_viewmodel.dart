@@ -6,9 +6,10 @@ import 'package:mangopos/data/repositories/sales_repository.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
 import 'package:mangopos/data/utils/payment_amount_utils.dart';
 import 'package:mangopos/data/models/sales_models.dart';
-import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/core/cache/cache_manager.dart';
 import 'package:mangopos/core/cache/cache_config.dart';
+import 'package:mangopos/core/utils/app_time.dart';
+import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 
 final cashierRepositoryProvider = Provider<CashierRepository>((ref) {
   return CashierRepository(Supabase.instance.client);
@@ -106,7 +107,7 @@ class CashierViewModel extends ChangeNotifier {
         }
         if (_currentRegisterId != null) {
           _lastSession = await _repository.getLastSession(_currentRegisterId!);
-          _lastCashOpenValidationAt = DateTime.now();
+          _lastCashOpenValidationAt = AppTime.nowAst();
           _pendingTables = await _salesRepository.getOpenTablesCount(
             _businessId!,
           );
@@ -145,11 +146,9 @@ class CashierViewModel extends ChangeNotifier {
       }
 
       final client = Supabase.instance.client;
-      final now = DateTime.now();
-      final startOfDayDate = DateTime.utc(now.year, now.month, now.day);
-      final endOfDayDate = startOfDayDate.add(const Duration(days: 1));
-      final startOfDay = startOfDayDate.toIso8601String();
-      final endOfDay = endOfDayDate.toIso8601String();
+      final dayRange = AppTime.todayRangeUtc();
+      final startOfDay = dayRange.fromUtc.toIso8601String();
+      final endOfDay = dayRange.toUtc.toIso8601String();
 
       debugPrint('Loading summary for business: $_businessId');
 
@@ -224,11 +223,9 @@ class CashierViewModel extends ChangeNotifier {
       }
 
       final client = Supabase.instance.client;
-      final today = DateTime.now();
-      final startOfDayDate = DateTime.utc(today.year, today.month, today.day);
-      final endOfDayDate = startOfDayDate.add(const Duration(days: 1));
-      final startOfDay = startOfDayDate.toIso8601String();
-      final endOfDay = endOfDayDate.toIso8601String();
+      final dayRange = AppTime.todayRangeUtc();
+      final startOfDay = dayRange.fromUtc.toIso8601String();
+      final endOfDay = dayRange.toUtc.toIso8601String();
 
       // Get recent payments (income) - simplified query
       final paymentsData = await client
@@ -339,10 +336,10 @@ class CashierViewModel extends ChangeNotifier {
       movements.sort((a, b) {
         try {
           final aDate = DateTime.parse(
-            a['created_at'] ?? DateTime.now().toIso8601String(),
+            a['created_at'] ?? AppTime.astToUtcIso(AppTime.nowAst()),
           );
           final bDate = DateTime.parse(
-            b['created_at'] ?? DateTime.now().toIso8601String(),
+            b['created_at'] ?? AppTime.astToUtcIso(AppTime.nowAst()),
           );
           return bDate.compareTo(aDate);
         } catch (e) {
@@ -356,8 +353,6 @@ class CashierViewModel extends ChangeNotifier {
       _recentMovements = [];
     }
   }
-
-  String startOfDayDate(DateTime d) => d.toIso8601String();
 
   Future<void> _loadWeeklySales() async {
     try {
@@ -381,7 +376,7 @@ class CashierViewModel extends ChangeNotifier {
       // Función para obtener desde API
       Future<Map<String, dynamic>> fetchFromApi() async {
         final client = Supabase.instance.client;
-        final now = DateTime.now();
+        final now = AppTime.nowAst();
         final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
         final startOfWeekDate = DateTime(
           startOfWeek.year,
@@ -393,8 +388,8 @@ class CashierViewModel extends ChangeNotifier {
         final payments = await client
             .from('payments')
             .select('amount, change_amount, created_at')
-            .gte('created_at', startOfDayDate(startOfWeekDate))
-            .lt('created_at', startOfDayDate(endOfWeekDate))
+            .gte('created_at', AppTime.astToUtcIso(startOfWeekDate))
+            .lt('created_at', AppTime.astToUtcIso(endOfWeekDate))
             .eq('status', 'completed')
             .eq('business_id', _businessId!);
 
@@ -406,7 +401,8 @@ class CashierViewModel extends ChangeNotifier {
             payment['change_amount'],
           );
           final dateStr = payment['created_at'] as String;
-          final date = DateTime.parse(dateStr).toLocal();
+          final date = AppTime.tryParseServerToAst(dateStr);
+          if (date == null) continue;
           final dayIndex = date.weekday - 1;
           if (dayIndex >= 0 && dayIndex < 7) {
             weeklySales[dayIndex] += amount;
@@ -611,7 +607,7 @@ class CashierViewModel extends ChangeNotifier {
     try {
       if (_currentRegisterId != null && _businessId != null) {
         _lastSession = await _repository.getLastSession(_currentRegisterId!);
-        _lastCashOpenValidationAt = DateTime.now();
+        _lastCashOpenValidationAt = AppTime.nowAst();
         _pendingTables = await _salesRepository.getOpenTablesCount(
           _businessId!,
         );
@@ -644,7 +640,7 @@ class CashierViewModel extends ChangeNotifier {
     Duration ttl = const Duration(seconds: 12),
     bool force = false,
   }) async {
-    final now = DateTime.now();
+    final now = AppTime.nowAst();
     final hasRecentValidation =
         _lastCashOpenValidationAt != null &&
         now.difference(_lastCashOpenValidationAt!) < ttl;

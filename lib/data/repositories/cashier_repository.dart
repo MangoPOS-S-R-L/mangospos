@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:mangopos/core/utils/display_name_utils.dart';
 import '../models/payment_models.dart';
 import '../utils/payment_amount_utils.dart';
 
@@ -46,15 +47,23 @@ class CashierRepository {
     required String userId,
     required double startAmount,
   }) async {
-    final response = await _client.rpc(
-      'fn_open_cash_session',
-      params: {
-        'p_cash_register_id': cashRegisterId,
-        'p_user_id': userId,
-        'p_start_amount': startAmount,
-      },
+    final response = Map<String, dynamic>.from(
+      await _client.rpc(
+        'fn_open_cash_session',
+        params: {
+          'p_cash_register_id': cashRegisterId,
+          'p_user_id': userId,
+          'p_start_amount': startAmount,
+        },
+      ),
     );
-    return Map<String, dynamic>.from(response);
+
+    final error = response['error']?.toString().trim();
+    if (error != null && error.isNotEmpty) {
+      throw Exception(error);
+    }
+
+    return response;
   }
 
   Future<Map<String, dynamic>> closeSession({
@@ -228,7 +237,7 @@ class CashierRepository {
             await _client
                 .from('table_sessions')
                 .select(
-                  'id, customer_name, table_id, waiter:profiles!opened_by(full_name)',
+                  'id, customer_name, table_id, business_id, opened_by, waiter:profiles!opened_by(full_name)',
                 )
                 .inFilter('id', tableSessionIds),
           );
@@ -241,6 +250,32 @@ class CashierRepository {
         .whereType<String>()
         .toSet()
         .toList(growable: false);
+    final openerIds = tableSessions
+        .map((s) => s['opened_by']?.toString())
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    final businessIds = tableSessions
+        .map((s) => s['business_id']?.toString())
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    final employees = openerIds.isEmpty || businessIds.isEmpty
+        ? const <Map<String, dynamic>>[]
+        : List<Map<String, dynamic>>.from(
+            await _client
+                .from('employees')
+                .select('user_id, business_id, first_name')
+                .inFilter('user_id', openerIds)
+                .inFilter('business_id', businessIds),
+          );
+    final employeeNamesByKey = {
+      for (final employee in employees)
+        '${employee['business_id']}|${employee['user_id']}':
+            preferredDisplayName(firstName: employee['first_name']?.toString()),
+    };
 
     final tables = tableIds.isEmpty
         ? const <Map<String, dynamic>>[]
@@ -274,10 +309,16 @@ class CashierRepository {
           final fiscalData = fiscal is List && fiscal.isNotEmpty
               ? fiscal.first
               : (fiscal is Map ? fiscal : null);
-
+          final waiterProfileName =
+              (tableSession?['waiter'] as Map?)?['full_name']?.toString();
+          final waiterNameKey =
+              '${tableSession?['business_id']}|${tableSession?['opened_by']}';
           final waiterName =
-              (tableSession?['waiter'] as Map?)?['full_name']?.toString() ??
-              'Servicio';
+              employeeNamesByKey[waiterNameKey] ??
+              preferredDisplayName(
+                fullName: waiterProfileName,
+                fallback: 'Servicio',
+              );
 
           return <String, dynamic>{
             ...payment,

@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/core/security/access_control_catalog.dart';
+import 'package:mangopos/core/utils/display_name_utils.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mangopos/core/utils/web_utils/web_utils.dart';
@@ -309,7 +310,9 @@ class SessionController extends Notifier<SessionState> {
         employeeId: employeeId,
         activeBusinessId: businessId,
         activeBusinessName: businessName,
-        userName: userName,
+        userName: userName == null
+            ? null
+            : preferredDisplayName(fullName: userName),
         activeRole: role,
         availableRoles: availableRoles,
         availableBusinesses: availableBusinesses,
@@ -373,25 +376,28 @@ class SessionController extends Notifier<SessionState> {
           row['id'].toString(): row,
       };
 
-      final availableBusinesses = (memberships).map<SessionBusiness>((row) {
-        final businessId = row['business_id'].toString();
-        final business = businessMap[businessId] ?? const <String, dynamic>{};
-        final displayName =
-            (business['branch_name']?.toString().trim().isNotEmpty == true)
-            ? business['branch_name'].toString().trim()
-            : (business['business_name']?.toString().trim() ?? 'Negocio');
-        return SessionBusiness(
-          id: businessId,
-          name: displayName,
-          companyName: business['business_name']?.toString(),
-          role: row['role']?.toString() ?? 'owner',
-          status: business['status']?.toString(),
-          domain: business['domain']?.toString(),
-        );
-      }).toList(growable: false);
+      final availableBusinesses = (memberships)
+          .map<SessionBusiness>((row) {
+            final businessId = row['business_id'].toString();
+            final business =
+                businessMap[businessId] ?? const <String, dynamic>{};
+            final displayName =
+                (business['branch_name']?.toString().trim().isNotEmpty == true)
+                ? business['branch_name'].toString().trim()
+                : (business['business_name']?.toString().trim() ?? 'Negocio');
+            return SessionBusiness(
+              id: businessId,
+              name: displayName,
+              companyName: business['business_name']?.toString(),
+              role: row['role']?.toString() ?? 'owner',
+              status: business['status']?.toString(),
+              domain: business['domain']?.toString(),
+            );
+          })
+          .toList(growable: false);
 
       final requestedBusinessId = _requestedBusinessIdFromUrl();
-      
+
       String? matchedByDomainId;
       if (kIsWeb) {
         final currentHost = WebUtils.hostname;
@@ -405,12 +411,14 @@ class SessionController extends Notifier<SessionState> {
         }
       }
 
-      final preferredBusinessId = requestedBusinessId != null &&
+      final preferredBusinessId =
+          requestedBusinessId != null &&
               businessIds.contains(requestedBusinessId)
           ? requestedBusinessId
           : matchedByDomainId != null && businessIds.contains(matchedByDomainId)
           ? matchedByDomainId
-          : state.activeBusinessId != null && businessIds.contains(state.activeBusinessId)
+          : state.activeBusinessId != null &&
+                businessIds.contains(state.activeBusinessId)
           ? state.activeBusinessId!
           : businessIds.first;
 
@@ -469,11 +477,12 @@ class SessionController extends Notifier<SessionState> {
 
     final empResp = await client
         .from('employees')
-        .select('id')
+        .select('id, first_name')
         .eq('user_id', userId)
         .eq('business_id', businessId)
         .maybeSingle();
     final employeeId = empResp?['id'] as String?;
+    final employeeFirstName = empResp?['first_name']?.toString();
 
     final businessResp = await client
         .from('businesses')
@@ -497,7 +506,10 @@ class SessionController extends Notifier<SessionState> {
       employeeId: employeeId,
       businessId: businessId,
       businessName: businessName,
-      userName: userName,
+      userName: preferredDisplayName(
+        firstName: employeeFirstName,
+        fullName: userName,
+      ),
       activeRole: posRole,
       availableRoles: [posRole],
       availableBusinesses: availableBusinesses,
@@ -532,7 +544,7 @@ class SessionController extends Notifier<SessionState> {
       found.id,
       businessId: found.businessId,
       businessName: 'Negocio demo',
-      userName: found.fullName,
+      userName: preferredDisplayName(fullName: found.fullName),
       activeRole: found.roles.first,
       availableRoles: found.roles,
       availableBusinesses: [

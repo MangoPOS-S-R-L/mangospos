@@ -31,6 +31,46 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
   bool _processingClose = false;
   bool _processingPrint = false;
 
+  Future<void> _showCloseErrorModal(
+    BlindCashCloseState state,
+    Object error,
+  ) async {
+    final details = error.toString();
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Error al cerrar caja'),
+        content: SizedBox(
+          width: 720,
+          child: SingleChildScrollView(
+            child: SelectableText(
+              'session_id=${widget.sessionId}\n'
+              'expected_cash=${state.input.expectedCash}\n'
+              'expected_card=${state.input.expectedCard}\n'
+              'expected_transfer=${state.input.expectedTransfer}\n'
+              'reported_cash=${state.result.totalCounted}\n'
+              'reported_card=${state.result.numericCard}\n'
+              'reported_transfer=${state.result.numericTransfer}\n'
+              'reported_total=${state.result.totalReported}\n'
+              'cash_difference=${state.result.cashDifference}\n'
+              'card_difference=${state.result.cardDifference}\n'
+              'transfer_difference=${state.result.transferDifference}\n'
+              'total_difference=${state.result.totalDifference}\n\n'
+              '$details',
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Cerrar'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final provider = blindCashCloseProvider(widget.input);
@@ -451,6 +491,9 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
     final statusText = result.isBalanced
         ? 'Caja cuadrada'
         : (result.hasSurplus ? 'Sobrante detectado' : 'Faltante detectado');
+    final statusDetail = result.isBalanced
+        ? 'Efectivo, tarjetas y transferencias coinciden exactamente.'
+        : '${result.hasSurplus ? 'A favor' : 'En contra'}: ${formatRD(result.totalDifference.abs())}';
 
     return SingleChildScrollView(
       child: Column(
@@ -477,9 +520,7 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  result.isBalanced
-                      ? 'No hay diferencia entre esperado y reportado.'
-                      : '${result.hasSurplus ? 'A favor' : 'En contra'}: ${formatRD(result.difference.abs())}',
+                  statusDetail,
                   style: TextStyle(
                     color: statusColor,
                     fontWeight: FontWeight.w600,
@@ -640,13 +681,7 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('No se pudo completar el cierre/impresión: $e'),
-          backgroundColor: Colors.red.shade600,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      await _showCloseErrorModal(state, e);
     } finally {
       if (mounted) {
         setState(() => _processingClose = false);

@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/data/models/payment_models.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 
@@ -40,7 +41,7 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
 
     // 1. Primero intentamos usar la última sesión cargada en el ViewModel si está abierta
     Map<String, dynamic>? activeSessionData = cashierVM.lastSession;
-    
+
     // 2. Si no es 'open', buscamos directamente la última sesión de la caja actual para confirmar su estado
     if (activeSessionData == null || activeSessionData['status'] != 'open') {
       final registerId = cashierVM.currentRegisterId;
@@ -81,17 +82,17 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
 
     final amount = double.tryParse(_amountController.text.replaceAll(',', '.'));
     if (amount == null || amount <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Ingresa un monto válido')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Ingresa un monto válido')));
       return;
     }
 
     final description = _descriptionController.text.trim();
     if (description.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Agrega una descripción')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Agrega una descripción')));
       return;
     }
 
@@ -100,12 +101,14 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
     });
 
     try {
-      await ref.read(cashierRepositoryProvider).createManualTransaction(
-        sessionId: data.session.id,
-        amount: amount,
-        type: _selectedType,
-        description: description,
-      );
+      await ref
+          .read(cashierRepositoryProvider)
+          .createManualTransaction(
+            sessionId: data.session.id,
+            amount: amount,
+            type: _selectedType,
+            description: description,
+          );
 
       _amountController.clear();
       _descriptionController.clear();
@@ -114,7 +117,9 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('${_labelForType(_selectedType)} registrado correctamente'),
+          content: Text(
+            '${_labelForType(_selectedType)} registrado correctamente',
+          ),
           backgroundColor: MangoColors.successGreen,
         ),
       );
@@ -253,13 +258,13 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
         children: [
           Text(
             'Registrar movimiento',
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(
-              fontWeight: FontWeight.w700,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 6),
           Text(
-            'Sesión ${data.session.id.substring(0, 8).toUpperCase()} abierta el ${DateFormat('dd/MM/yyyy HH:mm').format(data.session.openedAt.toLocal())}',
+            'Sesión ${data.session.id.substring(0, 8).toUpperCase()} abierta el ${DateFormat('dd/MM/yyyy HH:mm').format(AppTime.astFromInstant(data.session.openedAt))}',
             style: TextStyle(color: Colors.grey[600]),
           ),
           const SizedBox(height: 20),
@@ -329,9 +334,11 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
                       ),
                     )
                   : Icon(_iconForType(_selectedType)),
-              label: Text(_isSubmitting
-                  ? 'Guardando...'
-                  : 'Registrar ${_labelForType(_selectedType)}'),
+              label: Text(
+                _isSubmitting
+                    ? 'Guardando...'
+                    : 'Registrar ${_labelForType(_selectedType)}',
+              ),
             ),
           ),
         ],
@@ -351,9 +358,9 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
         children: [
           Text(
             'Movimientos manuales de la sesión',
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(
-              fontWeight: FontWeight.w700,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 16),
           if (data.transactions.isEmpty)
@@ -429,10 +436,7 @@ class _ManualCashData {
   final CashRegisterSession session;
   final List<CashTransaction> transactions;
 
-  const _ManualCashData({
-    required this.session,
-    required this.transactions,
-  });
+  const _ManualCashData({required this.session, required this.transactions});
 }
 
 class _MetricCard extends StatelessWidget {
@@ -484,7 +488,10 @@ class _MetricCard extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           Text(
-            NumberFormat.currency(symbol: 'RD\$ ', decimalDigits: 2).format(value),
+            NumberFormat.currency(
+              symbol: 'RD\$ ',
+              decimalDigits: 2,
+            ).format(value),
             style: TextStyle(
               fontSize: 22,
               fontWeight: FontWeight.w900,
@@ -541,10 +548,13 @@ class _ManualMovementTile extends StatelessWidget {
         ),
         title: Text(
           transaction.description ?? 'Movimiento',
-          style: const TextStyle(fontWeight: FontWeight.w700, color: MangoColors.darkGray),
+          style: const TextStyle(
+            fontWeight: FontWeight.w700,
+            color: MangoColors.darkGray,
+          ),
         ),
         subtitle: Text(
-          '${DateFormat('dd MMM hh:mm a').format(transaction.createdAt.toLocal())} · ${_typeLabel(transaction.type)}',
+          '${DateFormat('dd MMM hh:mm a').format(AppTime.astFromInstant(transaction.createdAt))} · ${_typeLabel(transaction.type)}',
           style: const TextStyle(fontSize: 12, color: MangoColors.muted),
         ),
         trailing: Text(
@@ -561,10 +571,14 @@ class _ManualMovementTile extends StatelessWidget {
 
   String _typeLabel(String type) {
     switch (type) {
-      case 'deposit': return 'Ingreso';
-      case 'withdrawal': return 'Retiro';
-      case 'expense': return 'Gasto';
-      default: return type;
+      case 'deposit':
+        return 'Ingreso';
+      case 'withdrawal':
+        return 'Retiro';
+      case 'expense':
+        return 'Gasto';
+      default:
+        return type;
     }
   }
 }
@@ -610,11 +624,7 @@ class _InfoState extends StatelessWidget {
                   color: MangoColors.primaryOrange.withValues(alpha: 0.08),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(
-                  icon,
-                  size: 56,
-                  color: MangoColors.primaryOrange,
-                ),
+                child: Icon(icon, size: 56, color: MangoColors.primaryOrange),
               ),
               const SizedBox(height: 32),
               Text(
@@ -647,10 +657,15 @@ class _InfoState extends StatelessWidget {
                       backgroundColor: MangoColors.primaryOrange,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 18),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
                       elevation: 0,
                     ),
-                    child: const Text('Ir a Apertura de Caja', style: TextStyle(fontWeight: FontWeight.w800)),
+                    child: const Text(
+                      'Ir a Apertura de Caja',
+                      style: TextStyle(fontWeight: FontWeight.w800),
+                    ),
                   ),
                 ),
               ],

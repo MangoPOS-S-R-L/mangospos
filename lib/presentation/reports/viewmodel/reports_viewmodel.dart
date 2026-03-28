@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../core/utils/app_time.dart';
 import '../../../data/repositories/reports_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 
@@ -80,7 +81,11 @@ class ReportsState {
     final range = ReportsViewModel.resolveRange(
       SalesReportRangePreset.thisWeek,
     );
-    return ReportsState(salesFrom: range.from, salesTo: range.to);
+    return ReportsState(
+      salesFrom: range.from,
+      salesTo: range.to,
+      selectedCategory: null,
+    );
   }
 
   ReportsState copyWith({
@@ -95,9 +100,12 @@ class ReportsState {
     DateTime? salesFrom,
     DateTime? salesTo,
     bool clearError = false,
+    bool clearCategory = false,
   }) {
     return ReportsState(
-      selectedCategory: selectedCategory ?? this.selectedCategory,
+      selectedCategory: clearCategory
+          ? null
+          : (selectedCategory ?? this.selectedCategory),
       loading: loading ?? this.loading,
       error: clearError ? null : (error ?? this.error),
       salesSummary: salesSummary ?? this.salesSummary,
@@ -115,6 +123,12 @@ final reportsRepositoryProvider = Provider<ReportsRepository>((ref) {
   return ReportsRepository(Supabase.instance.client);
 });
 
+final reportsViewModelProvider =
+    StateNotifierProvider<ReportsViewModel, ReportsState>((ref) {
+      final reportsRepository = ref.watch(reportsRepositoryProvider);
+      return ReportsViewModel(reportsRepository);
+    });
+
 class ReportsViewModel extends StateNotifier<ReportsState> {
   final ReportsRepository _repository;
 
@@ -125,7 +139,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
   static ({DateTime from, DateTime to}) resolveRange(
     SalesReportRangePreset preset,
   ) {
-    final now = DateTime.now();
+    final now = AppTime.nowAst();
     final todayStart = DateTime(now.year, now.month, now.day);
 
     switch (preset) {
@@ -227,7 +241,11 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
   }
 
   void selectCategory(ReportCategory? category) {
-    state = state.copyWith(selectedCategory: category);
+    if (category == null) {
+      state = state.copyWith(clearCategory: true);
+    } else {
+      state = state.copyWith(selectedCategory: category, clearCategory: false);
+    }
   }
 
   List<ReportItem> getReportsForCategory(ReportCategory category) {
@@ -693,8 +711,3 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
     }
   }
 }
-
-final reportsViewModelProvider =
-    StateNotifierProvider<ReportsViewModel, ReportsState>((ref) {
-      return ReportsViewModel(ref.read(reportsRepositoryProvider));
-    });

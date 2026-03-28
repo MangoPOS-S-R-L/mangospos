@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../../../services/session/session_controller.dart';
 import '../../../core/utils/logger.dart';
+import '../../../core/utils/display_name_utils.dart';
 import '../../../core/auth/session_bridge.dart';
 import '../../../core/tenant/tenant_resolver.dart';
 import 'login_state.dart';
@@ -52,10 +53,12 @@ class LoginViewModel extends Notifier<LoginState> {
         AppLogger.w(
           'Login exitoso pero usuario es null en la respuesta de Supabase',
         );
-        _safeSet(state.copyWith(
-          isLoading: false,
-          error: 'Credenciales inválidas o usuario no encontrado',
-        ));
+        _safeSet(
+          state.copyWith(
+            isLoading: false,
+            error: 'Credenciales inválidas o usuario no encontrado',
+          ),
+        );
         return;
       }
 
@@ -66,6 +69,10 @@ class LoginViewModel extends Notifier<LoginState> {
           .eq('id', user.id)
           .maybeSingle();
       final fullName = profileResp?['full_name'] as String? ?? 'Usuario';
+      final displayName = preferredDisplayName(
+        fullName: fullName,
+        email: user.email,
+      );
 
       // Obtener todos los roles y negocios asignados en lugar de solo uno (Soporta multi-sucursal)
       final userBizResp = await supabase
@@ -76,22 +83,28 @@ class LoginViewModel extends Notifier<LoginState> {
       final businessesList = userBizResp as List<dynamic>;
 
       if (businessesList.isEmpty) {
-        AppLogger.w('Usuario sin perfil de negocio asignado (user_businesses está vacía)');
+        AppLogger.w(
+          'Usuario sin perfil de negocio asignado (user_businesses está vacía)',
+        );
         await supabase.auth.signOut();
-        _safeSet(state.copyWith(
-          isLoading: false,
-          error: 'Tu usuario no tiene negocio/rol asignado. Contacta al administrador.',
-        ));
+        _safeSet(
+          state.copyWith(
+            isLoading: false,
+            error:
+                'Tu usuario no tiene negocio/rol asignado. Contacta al administrador.',
+          ),
+        );
         return;
       }
 
       // Si tiene más de un negocio → mostrar selector
       if (businessesList.length > 1) {
-        AppLogger.i('Multi-tenant detectado (${businessesList.length} negocios). Notificando para navegación a selector...');
-        _safeSet(state.copyWith(
-          isLoading: false,
-          needsBusinessSelection: true,
-        ));
+        AppLogger.i(
+          'Multi-tenant detectado (${businessesList.length} negocios). Notificando para navegación a selector...',
+        );
+        _safeSet(
+          state.copyWith(isLoading: false, needsBusinessSelection: true),
+        );
         return;
       }
 
@@ -102,12 +115,16 @@ class LoginViewModel extends Notifier<LoginState> {
       final posRole = _mapRole(roleStr);
 
       if (businessId == null || businessId.isEmpty || posRole == null) {
-        AppLogger.e('Atributos críticos faltantes en Login -> businessId: $businessId');
+        AppLogger.e(
+          'Atributos críticos faltantes en Login -> businessId: $businessId',
+        );
         await supabase.auth.signOut();
-        _safeSet(state.copyWith(
-          isLoading: false,
-          error: 'Tu acceso no está configurado correctamente.',
-        ));
+        _safeSet(
+          state.copyWith(
+            isLoading: false,
+            error: 'Tu acceso no está configurado correctamente.',
+          ),
+        );
         return;
       }
 
@@ -127,13 +144,15 @@ class LoginViewModel extends Notifier<LoginState> {
 
       // Si NO estamos en app.mangopos.do (ej: desktop, mobile, desarrollo local)
       // autenticamos localmente de forma normal.
-      ref.read(sessionProvider.notifier).setAuthenticated(
-        user.id,
-        businessId: businessId,
-        userName: fullName,
-        activeRole: posRole,
-        availableRoles: [posRole],
-      );
+      ref
+          .read(sessionProvider.notifier)
+          .setAuthenticated(
+            user.id,
+            businessId: businessId,
+            userName: displayName,
+            activeRole: posRole,
+            availableRoles: [posRole],
+          );
 
       AppLogger.i('[$businessId] Login exitoso para $fullName ($roleStr)');
 
@@ -143,16 +162,17 @@ class LoginViewModel extends Notifier<LoginState> {
       _safeSet(state.copyWith(isLoading: false, error: e.message));
     } on TimeoutException catch (e, st) {
       AppLogger.w('Timeout en auth', error: e, stackTrace: st);
-      _safeSet(state.copyWith(
-        isLoading: false,
-        error: 'Tiempo de espera agotado. Revisa tu conexión de red.',
-      ));
+      _safeSet(
+        state.copyWith(
+          isLoading: false,
+          error: 'Tiempo de espera agotado. Revisa tu conexión de red.',
+        ),
+      );
     } catch (e, st) {
       AppLogger.e('Error no controlado en login', error: e, stackTrace: st);
-      _safeSet(state.copyWith(
-        isLoading: false,
-        error: 'Ocurrió un error inesperado',
-      ));
+      _safeSet(
+        state.copyWith(isLoading: false, error: 'Ocurrió un error inesperado'),
+      );
     }
   }
 

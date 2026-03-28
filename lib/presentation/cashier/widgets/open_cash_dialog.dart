@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/utils/responsive_utils.dart';
@@ -22,7 +23,7 @@ class _OpenCashDialogState extends ConsumerState<OpenCashDialog> {
   @override
   void initState() {
     super.initState();
-    initializeDateFormatting('es');
+    initializeDateFormatting('es_DO');
     _keyboardFocusNode = FocusNode(debugLabel: 'open-cash-keyboard');
     _keyboardFocusNode.addListener(() {
       if (mounted) {
@@ -279,7 +280,10 @@ class _OpenCashDialogState extends ConsumerState<OpenCashDialog> {
                     ),
                     SizedBox(width: context.wp(1)),
                     Text(
-                      DateFormat('d MMMM, yyyy', 'es').format(DateTime.now()),
+                      DateFormat(
+                        'd MMMM, yyyy',
+                        'es_DO',
+                      ).format(AppTime.nowAst()),
                       style: TextStyle(
                         color: MangoColors.primaryOrange,
                         fontSize: context.sp(13),

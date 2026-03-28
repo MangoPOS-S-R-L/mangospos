@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/data/models/payment_models.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -19,13 +20,14 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
   late Future<List<CashRegisterSession>> _future;
   Map<String, String> _cashierNames = const {};
 
-  ({double cash, double card, double transfer, double total}) _reportedBreakdown(
-    CashRegisterSession session,
-  ) {
+  ({double cash, double card, double transfer, double total})
+  _reportedBreakdown(CashRegisterSession session) {
     final notes = session.notes ?? '';
 
     double extract(String label) {
-      final match = RegExp('$label:\\s*([0-9]+(?:\\.[0-9]+)?)').firstMatch(notes);
+      final match = RegExp(
+        '$label:\\s*([0-9]+(?:\\.[0-9]+)?)',
+      ).firstMatch(notes);
       if (match == null) return 0;
       return double.tryParse(match.group(1) ?? '') ?? 0;
     }
@@ -253,7 +255,7 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
                 final closedAt = session.closedAt != null
                     ? DateFormat(
                         'dd/MM/yyyy HH:mm',
-                      ).format(session.closedAt!.toLocal())
+                      ).format(AppTime.astFromInstant(session.closedAt!))
                     : 'Pendiente';
                 final cashierName = _resolveCashierName(session);
 
@@ -281,7 +283,7 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
                       children: [
                         const SizedBox(height: 6),
                         Text(
-                          'Apertura: ${DateFormat('dd/MM/yyyy HH:mm').format(session.openedAt.toLocal())}',
+                          'Apertura: ${DateFormat('dd/MM/yyyy HH:mm').format(AppTime.astFromInstant(session.openedAt))}',
                         ),
                         Text('Cierre: $closedAt'),
                         Text('Cajero: $cashierName'),

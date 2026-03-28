@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import '../../core/utils/app_time.dart';
 import '../../data/models/printing_models.dart';
 import '../../data/repositories/printing_repository.dart';
 import 'esc_pos_generator.dart';
@@ -201,7 +202,7 @@ class PrintService {
     gen.textCentered('MangoPOS');
     gen.textCentered('Sistema de Punto de Venta');
     gen.lineFeed();
-    gen.textCentered('Fecha: ${DateTime.now()}');
+    gen.textCentered('Fecha: ${AppTime.nowAst()}');
 
     gen.lineFeed();
     gen.separator();

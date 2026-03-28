@@ -1,5 +1,6 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/utils/app_time.dart';
 import '../datasources/queries/reports_queries.dart';
 
 class ReportsRepository {
@@ -17,8 +18,8 @@ class ReportsRepository {
     required DateTime from,
     required DateTime to,
   }) async {
-    final fromIso = from.toUtc().toIso8601String();
-    final toIso = to.toUtc().toIso8601String();
+    final fromIso = AppTime.astToUtcIso(from);
+    final toIso = AppTime.astToUtcIso(to);
 
     final payments = await _client
         .from(ReportsQueries.tablePayments)
@@ -111,7 +112,7 @@ class ReportsRepository {
         payment['created_at']?.toString() ?? '',
       );
       if (createdAt != null) {
-        final hour = createdAt.toLocal().hour;
+        final hour = AppTime.astFromInstant(createdAt).hour;
         final hourBucket = byHour.putIfAbsent(
           hour,
           () => {
@@ -160,8 +161,8 @@ class ReportsRepository {
     required DateTime from,
     required DateTime to,
   }) async {
-    final fromIso = from.toUtc().toIso8601String();
-    final toIso = to.toUtc().toIso8601String();
+    final fromIso = AppTime.astToUtcIso(from);
+    final toIso = AppTime.astToUtcIso(to);
 
     final sessions = await _client
         .from(ReportsQueries.tableCashSessions)
@@ -298,8 +299,8 @@ class ReportsRepository {
     required DateTime from,
     required DateTime to,
   }) async {
-    final fromIso = from.toUtc().toIso8601String();
-    final toIso = to.toUtc().toIso8601String();
+    final fromIso = AppTime.astToUtcIso(from);
+    final toIso = AppTime.astToUtcIso(to);
 
     final orders = List<Map<String, dynamic>>.from(
       await _client
@@ -443,8 +444,8 @@ class ReportsRepository {
                 .inFilter('item_id', itemIds),
           );
 
-    final fromIso = from.toUtc().toIso8601String();
-    final toIso = to.toUtc().toIso8601String();
+    final fromIso = AppTime.astToUtcIso(from);
+    final toIso = AppTime.astToUtcIso(to);
 
     final movementRows = itemIds.isEmpty
         ? <Map<String, dynamic>>[]

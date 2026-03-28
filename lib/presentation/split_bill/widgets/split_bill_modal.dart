@@ -123,6 +123,41 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                 // Header
                 _buildModalHeader(context),
                 const Divider(height: 1, color: _border),
+                if (state.error != null && state.error!.trim().isNotEmpty)
+                  Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 12,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFEF2F2),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFFECACA)),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(
+                          Icons.error_outline_rounded,
+                          color: Color(0xFFDC2626),
+                          size: 18,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            state.error!,
+                            style: const TextStyle(
+                              color: Color(0xFF991B1B),
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
 
                 // Contenido Principal
                 Expanded(
@@ -603,11 +638,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: const [
-          Icon(
-            Icons.check_circle_outline,
-            size: 64,
-            color: Color(0xFF22C55E),
-          ),
+          Icon(Icons.check_circle_outline, size: 64, color: Color(0xFF22C55E)),
           SizedBox(height: 16),
           Text(
             'Todos los items asignados',
@@ -776,7 +807,8 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                               if (customerId == null || customerId.isEmpty) {
                                 return;
                               }
-                              if (customerName == null || customerName.isEmpty) {
+                              if (customerName == null ||
+                                  customerName.isEmpty) {
                                 return;
                               }
                               await viewModel.assignCustomerToCheck(

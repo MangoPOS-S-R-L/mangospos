@@ -96,10 +96,19 @@ OrderItemPricingSummary summarizeItemPricing(Order? order, OrderItem item) {
   final taxRate = _resolveEffectiveTaxRate(order, item);
   final serviceIncluded = isServiceIncludedInItemTotal(order, item);
   final catalogGrossAmount = _catalogGrossAmount(item);
+  final isFractionalQty =
+      (item.quantity - item.quantity.roundToDouble()).abs() > 0.001;
   final storedGrossAmount = _positiveMoney(item.total + item.discounts);
-  final effectiveGrossAmount = storedGrossAmount >= catalogGrossAmount
-      ? storedGrossAmount
-      : catalogGrossAmount;
+  final shouldPreferCatalogGrossAmount =
+      serviceIncluded &&
+      isFractionalQty &&
+      storedGrossAmount > 0 &&
+      (storedGrossAmount - catalogGrossAmount).abs() > 0.01;
+  final effectiveGrossAmount = shouldPreferCatalogGrossAmount
+      ? catalogGrossAmount
+      : (storedGrossAmount >= catalogGrossAmount
+            ? storedGrossAmount
+            : catalogGrossAmount);
 
   if (serviceIncluded) {
     final divisor = 1 + taxRate + serviceRate;
@@ -123,10 +132,20 @@ OrderItemPricingSummary summarizeItemPricing(Order? order, OrderItem item) {
     }
   }
 
+  final expectedSubtotal = _roundMoney(catalogGrossAmount);
+  final dbSubtotal = _roundMoney(item.subtotal);
+  final useExpectedSubtotal =
+      isFractionalQty &&
+      dbSubtotal > 0 &&
+      (dbSubtotal - expectedSubtotal).abs() > 0.01;
   final subtotal = _roundMoney(
-    item.subtotal > 0 ? item.subtotal : _catalogGrossAmount(item),
+    useExpectedSubtotal
+        ? expectedSubtotal
+        : (dbSubtotal > 0 ? dbSubtotal : expectedSubtotal),
   );
-  final tax = _resolveExclusiveTaxAmount(order, item, taxRate);
+  final tax = useExpectedSubtotal && dbSubtotal > 0
+      ? _roundMoney(_positiveMoney(item.tax) * (subtotal / dbSubtotal))
+      : _resolveExclusiveTaxAmount(order, item, taxRate);
   final serviceFee = (serviceRate <= 0 || item.isTakeout)
       ? 0.0
       : _roundMoney(subtotal * serviceRate);

@@ -76,19 +76,21 @@ class CashClosePrintService {
     row('Tarjetas', input.expectedCard, result.numericCard);
     row('Transf.', input.expectedTransfer, result.numericTransfer);
     row('CIERRE', input.expectedClosureAmount, result.totalCounted);
+    row('TOTAL', input.expectedTotal, result.totalReported);
     gen.doubleSeparator();
 
     gen.textRow('CIERRE ESPERADO', formatRD(input.expectedClosureAmount));
     gen.textRow('CIERRE REPORTADO', formatRD(result.totalCounted));
+    gen.textRow('TOTAL ESPERADO', formatRD(input.expectedTotal));
     gen.textRow('TOTAL REPORTADO', formatRD(result.totalReported));
     gen.separator();
 
     if (result.isBalanced) {
-      gen.textCentered('✓ CAJA CUADRADA');
+      gen.textCentered('CAJA CUADRADA');
     } else if (result.hasSurplus) {
-      gen.textCentered('SOBRANTE: ${formatRD(result.difference.abs())}');
+      gen.textCentered('SOBRANTE: ${formatRD(result.totalDifference.abs())}');
     } else {
-      gen.textCentered('FALTANTE: ${formatRD(result.difference.abs())}');
+      gen.textCentered('FALTANTE: ${formatRD(result.totalDifference.abs())}');
     }
 
     gen.doubleSeparator();
@@ -163,7 +165,6 @@ class CashClosePrintService {
   }
 
   String _shortMoney(int amount) {
-    final full = formatRD(amount).replaceFirst('RD\$ ', '');
-    return full;
+    return formatRD(amount).replaceFirst('RD\$ ', '');
   }
 }

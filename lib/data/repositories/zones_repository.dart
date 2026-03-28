@@ -1,7 +1,9 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../models/sales_models.dart';
 import '../models/zone.dart';
 import '../models/table_status.dart';
+import '../utils/order_pricing_utils.dart';
 import '../models/dining_table.dart'; // ⬅️ importa el modelo de mesas
 
 class ZonesRepository {
@@ -142,35 +144,94 @@ class ZonesRepository {
     if (sessionIds.isNotEmpty) {
       var orderTotalsQuery = sb
           .from('orders')
-          .select('session_id,subtotal,tax,service_fee,discounts,total')
+          .select(
+            'id,session_id,status_ext,subtotal,tax,service_fee,discounts,total,created_at,closed_at',
+          )
           .inFilter('session_id', sessionIds)
           .isFilter('closed_at', null)
           .not('status_ext', 'in', '(paid,void)');
 
       final orderRows = List<Map<String, dynamic>>.from(await orderTotalsQuery);
+      final orderIds = orderRows
+          .map((order) => order['id']?.toString().trim())
+          .whereType<String>()
+          .where((orderId) => orderId.isNotEmpty)
+          .toList(growable: false);
       final totalBySessionId = <String, double>{};
+      final sessionIdByOrderId = <String, String>{};
+      final ordersById = <String, Order>{};
+
       for (final order in orderRows) {
+        final orderId = order['id']?.toString().trim();
         final sessionId = order['session_id']?.toString().trim();
+        if (orderId == null || orderId.isEmpty) continue;
         if (sessionId == null || sessionId.isEmpty) continue;
-        final total = (order['total'] as num?)?.toDouble() ?? 0.0;
-        final subtotal = (order['subtotal'] as num?)?.toDouble() ?? 0.0;
-        final tax = (order['tax'] as num?)?.toDouble() ?? 0.0;
-        final serviceFee = (order['service_fee'] as num?)?.toDouble() ?? 0.0;
-        final discounts = (order['discounts'] as num?)?.toDouble() ?? 0.0;
-        final rebuiltTotal = _roundMoney(
-          (subtotal + tax + serviceFee - discounts).clamp(0, double.infinity),
+
+        sessionIdByOrderId[orderId] = sessionId;
+        ordersById[orderId] = Order.fromMap(order);
+      }
+
+      if (orderIds.isNotEmpty) {
+        final itemRows = List<Map<String, dynamic>>.from(
+          await sb
+              .from('order_items')
+              .select(
+                'id,order_id,product_id,product_name,sku,qty,quantity,unit_price,subtotal,discounts,tax,total,check_id,is_takeout,status,notes,tax_mode,tax_rate,created_at',
+              )
+              .inFilter('order_id', orderIds)
+              .not('status', 'in', '(paid,void)'),
         );
-        final effectiveTotal = total >= rebuiltTotal ? total : rebuiltTotal;
-        totalBySessionId[sessionId] = _roundMoney(
-          (totalBySessionId[sessionId] ?? 0.0) + effectiveTotal,
+
+        final checkRows = List<Map<String, dynamic>>.from(
+          await sb
+              .from('order_checks')
+              .select('id,order_id,is_closed')
+              .inFilter('order_id', orderIds),
         );
+
+        final itemsByOrderId = <String, List<OrderItem>>{};
+        final closedCheckIdsByOrderId = <String, Set<String>>{};
+
+        for (final itemRow in itemRows) {
+          final item = OrderItem.fromMap(itemRow);
+          final orderId = item.orderId.trim();
+          if (orderId.isEmpty) continue;
+          itemsByOrderId.putIfAbsent(orderId, () => <OrderItem>[]).add(item);
+        }
+
+        for (final checkRow in checkRows) {
+          final checkId = checkRow['id']?.toString().trim();
+          final orderId = checkRow['order_id']?.toString().trim();
+          if (orderId == null || orderId.isEmpty) continue;
+          if (checkRow['is_closed'] != true) continue;
+          if (checkId == null || checkId.isEmpty) continue;
+          closedCheckIdsByOrderId
+              .putIfAbsent(orderId, () => <String>{})
+              .add(checkId);
+        }
+
+        for (final orderId in orderIds) {
+          final sessionId = sessionIdByOrderId[orderId];
+          if (sessionId == null || sessionId.isEmpty) continue;
+          final order = ordersById[orderId];
+          if (order == null) continue;
+          final closedCheckIds =
+              closedCheckIdsByOrderId[orderId] ?? const <String>{};
+          final pendingItems = (itemsByOrderId[orderId] ?? const <OrderItem>[])
+              .where((item) => !closedCheckIds.contains(item.checkId))
+              .toList(growable: false);
+
+          final pendingTotal = summarizeOrderPricing(order, pendingItems).total;
+          totalBySessionId[sessionId] = _roundMoney(
+            (totalBySessionId[sessionId] ?? 0.0) + pendingTotal,
+          );
+        }
       }
 
       for (final row in rows) {
         final sessionId = row['session_id']?.toString().trim();
         if (sessionId == null || sessionId.isEmpty) continue;
-        if (!totalBySessionId.containsKey(sessionId)) continue;
-        row['total'] = totalBySessionId[sessionId]!;
+        row['total'] = totalBySessionId[sessionId] ?? 0.0;
       }
     }
 
@@ -208,6 +269,24 @@ class ZonesRepository {
         event: PostgresChangeEvent.all,
         schema: 'public',
         table: 'orders',
+        callback: (_) => onChange(),
+      )
+      ..onPostgresChanges(
+        event: PostgresChangeEvent.all,
+        schema: 'public',
+        table: 'order_items',
+        callback: (_) => onChange(),
+      )
+      ..onPostgresChanges(
+        event: PostgresChangeEvent.all,
+        schema: 'public',
+        table: 'order_checks',
+        callback: (_) => onChange(),
+      )
+      ..onPostgresChanges(
+        event: PostgresChangeEvent.all,
+        schema: 'public',
+        table: 'payments',
         callback: (_) => onChange(),
       )
       ..onPostgresChanges(

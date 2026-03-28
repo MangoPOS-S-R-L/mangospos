@@ -65,7 +65,10 @@ class CashCloseResult extends Equatable {
   final int numericTransfer;
   final int totalReported;
   final int expectedTotal;
-  final int difference;
+  final int cashDifference;
+  final int cardDifference;
+  final int transferDifference;
+  final int totalDifference;
 
   const CashCloseResult({
     required this.totalCounted,
@@ -73,12 +76,20 @@ class CashCloseResult extends Equatable {
     required this.numericTransfer,
     required this.totalReported,
     required this.expectedTotal,
-    required this.difference,
+    required this.cashDifference,
+    required this.cardDifference,
+    required this.transferDifference,
+    required this.totalDifference,
   });
 
-  bool get isBalanced => difference == 0;
-  bool get hasSurplus => difference > 0;
-  bool get hasShortage => difference < 0;
+  int get difference => totalDifference;
+  bool get isBalanced =>
+      cashDifference == 0 &&
+      cardDifference == 0 &&
+      transferDifference == 0 &&
+      totalDifference == 0;
+  bool get hasSurplus => totalDifference > 0;
+  bool get hasShortage => totalDifference < 0;
 
   @override
   List<Object?> get props => [
@@ -87,7 +98,10 @@ class CashCloseResult extends Equatable {
     numericTransfer,
     totalReported,
     expectedTotal,
-    difference,
+    cashDifference,
+    cardDifference,
+    transferDifference,
+    totalDifference,
   ];
 }
 
@@ -113,7 +127,10 @@ class CashCloseCalculator {
     final numericTransfer = parseAmount(transferInput);
     final totalReported = totalCounted + numericCard + numericTransfer;
     final expectedTotal = input.expectedTotal;
-    final difference = totalCounted - input.expectedClosureAmount;
+    final cashDifference = totalCounted - input.expectedCash;
+    final cardDifference = numericCard - input.expectedCard;
+    final transferDifference = numericTransfer - input.expectedTransfer;
+    final totalDifference = totalReported - expectedTotal;
 
     return CashCloseResult(
       totalCounted: totalCounted,
@@ -121,7 +138,10 @@ class CashCloseCalculator {
       numericTransfer: numericTransfer,
       totalReported: totalReported,
       expectedTotal: expectedTotal,
-      difference: difference,
+      cashDifference: cashDifference,
+      cardDifference: cardDifference,
+      transferDifference: transferDifference,
+      totalDifference: totalDifference,
     );
   }
 }

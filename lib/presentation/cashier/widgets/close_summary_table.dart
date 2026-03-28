@@ -36,6 +36,11 @@ class CloseSummaryTable extends StatelessWidget {
         expected: input.expectedClosureAmount,
         reported: result.totalCounted,
       ),
+      _SummaryRowData(
+        concept: 'TOTAL GENERAL',
+        expected: input.expectedTotal,
+        reported: result.totalReported,
+      ),
     ];
 
     return ClipRRect(
@@ -63,7 +68,7 @@ class CloseSummaryTable extends StatelessWidget {
             return TableRow(
               decoration: const BoxDecoration(color: Colors.white),
               children: [
-                _BodyCell(row.concept, isBold: row.concept == 'TOTAL'),
+                _BodyCell(row.concept, isBold: row.concept == 'TOTAL GENERAL'),
                 _BodyCell(formatRD(row.expected), alignEnd: true),
                 _BodyCell(formatRD(row.reported), alignEnd: true),
                 _BodyCell(

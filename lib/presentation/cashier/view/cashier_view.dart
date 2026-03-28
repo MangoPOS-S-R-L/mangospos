@@ -6,6 +6,7 @@ import 'package:mangopos/presentation/cashier/state/blind_cash_close_models.dart
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/app/router/routes.dart';
+import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/utils/responsive_utils.dart';
 import 'package:mangopos/presentation/cashier/widgets/blind_cash_close_dialog.dart';
 import 'package:mangopos/presentation/cashier/widgets/open_cash_dialog.dart';
@@ -13,6 +14,18 @@ import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/data/utils/payment_amount_utils.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:async';
+
+bool _isTransientSupabaseAuthRefreshError(Object error) {
+  final message = error.toString();
+  if (!message.contains('AuthRetryableFetchException')) {
+    return false;
+  }
+
+  return message.contains('missing destination name oauth_client_id') ||
+      message.contains('Bad Gateway') ||
+      message.contains('statusCode: 500') ||
+      message.contains('statusCode: 502');
+}
 
 class CashierView extends ConsumerStatefulWidget {
   const CashierView({super.key});
@@ -176,7 +189,7 @@ class _CashierViewState extends ConsumerState<CashierView> {
     try {
       input = await _buildCloseInput(session['id'].toString());
     } catch (_) {
-      input = _fallbackInput();
+      input = _emptyCloseInput();
     } finally {
       if (rootNavigator.canPop()) {
         rootNavigator.pop();
@@ -195,7 +208,8 @@ class _CashierViewState extends ConsumerState<CashierView> {
           final notes =
               'Cierre ciego | Efectivo: ${result.totalCounted} | Tarjetas: ${result.numericCard} | '
               'Transferencias: ${result.numericTransfer} | Total reportado: ${result.totalReported} | '
-              'Diferencia: ${result.difference}';
+              'Dif. efectivo: ${result.cashDifference} | Dif. tarjeta: ${result.cardDifference} | '
+              'Dif. transferencia: ${result.transferDifference} | Dif. total: ${result.totalDifference}';
 
           try {
             await ref
@@ -206,17 +220,32 @@ class _CashierViewState extends ConsumerState<CashierView> {
                   notes: notes,
                   forceWithOpenTables: forceWithOpenTables,
                 );
-            await ref.read(cashierViewModelProvider).init();
+            try {
+              await ref.read(cashierViewModelProvider).init();
+            } catch (e) {
+              if (!_isTransientSupabaseAuthRefreshError(e)) {
+                rethrow;
+              }
+            }
             if (!mounted) return;
             GoRouter.of(context).replace(AppRoutes.cashier);
           } catch (e) {
-            if (!mounted) return;
             final msg = e.toString();
             final friendly = msg.contains('OPEN_TABLES_EXIST')
                 ? 'Todavía hay mesas abiertas. Si deseas cerrar por cambio de turno, confirma el cierre con mesas abiertas.'
-                : 'No se pudo cerrar la caja: $e';
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(friendly), backgroundColor: Colors.red),
+                : _isTransientSupabaseAuthRefreshError(e)
+                ? 'Supabase Auth devolvio un error transitorio al refrescar la sesion. Verifica si la caja ya se cerro.'
+                : 'No se pudo cerrar la caja.';
+            throw Exception(
+              '$friendly\n\n'
+              'session_id=${session['id']}\n'
+              'force_with_open_tables=$forceWithOpenTables\n'
+              'reported_cash=${result.totalCounted}\n'
+              'reported_card=${result.numericCard}\n'
+              'reported_transfer=${result.numericTransfer}\n'
+              'reported_total=${result.totalReported}\n'
+              'difference=${result.difference}\n'
+              'raw_error=$e',
             );
           }
         },
@@ -282,27 +311,36 @@ class _CashierViewState extends ConsumerState<CashierView> {
       transactionCount = payments.length;
     }
 
-    final fallback = _fallbackInput();
+    debugPrint(
+      '[CashClose] session=$sessionId '
+      'expected_cash=${summary['expected_cash']} '
+      'expected_amount=${summary['expected_amount']} '
+      'expected_card=${summary['expected_card']} '
+      'expected_transfer=${summary['expected_transfer']} '
+      'total_sales_all_methods=${summary['total_sales_all_methods']} '
+      'transaction_count=${summary['transaction_count']} '
+      'payments=${payments.length}',
+    );
+
+    final emptyInput = _emptyCloseInput();
     final hasRealData =
         expectedCash > 0 ||
         expectedCard > 0 ||
         expectedTransfer > 0 ||
         totalSales > 0;
 
-    if (!hasRealData) return fallback;
+    if (!hasRealData) return emptyInput;
 
     return CashCloseInput(
       expectedCash: expectedCash,
       expectedCard: expectedCard,
       expectedTransfer: expectedTransfer,
       totalSales: totalSales,
-      transactionCount: transactionCount > 0
-          ? transactionCount
-          : fallback.transactionCount,
+      transactionCount: transactionCount > 0 ? transactionCount : 0,
       cashierName: _resolveCashierName(),
       businessName: vm.businessName.trim().isNotEmpty
           ? vm.businessName
-          : fallback.businessName,
+          : emptyInput.businessName,
     );
   }
 
@@ -319,14 +357,14 @@ class _CashierViewState extends ConsumerState<CashierView> {
     return rawName.trim().isEmpty ? 'Admin' : rawName.trim();
   }
 
-  CashCloseInput _fallbackInput() {
+  CashCloseInput _emptyCloseInput() {
     final vm = ref.read(cashierViewModelProvider);
     return CashCloseInput(
-      expectedCash: 28500,
-      expectedCard: 12500,
-      expectedTransfer: 4200,
-      totalSales: 45200,
-      transactionCount: 28,
+      expectedCash: 0,
+      expectedCard: 0,
+      expectedTransfer: 0,
+      totalSales: 0,
+      transactionCount: 0,
       cashierName: _resolveCashierName(),
       businessName: vm.businessName.trim().isNotEmpty
           ? vm.businessName
@@ -355,7 +393,10 @@ class _HeaderSection extends StatelessWidget {
       final dateStr = session['closed_at'] ?? session['opened_at'];
       if (dateStr != null) {
         try {
-          final date = DateTime.parse(dateStr);
+          final date = AppTime.tryParseServerToAst(dateStr);
+          if (date == null) {
+            throw const FormatException('invalid date');
+          }
           lastClosedText = DateFormat('dd/MM/yyyy, HH:mm').format(date);
         } catch (e) {
           lastClosedText = 'Fecha no disponible';
@@ -1114,8 +1155,9 @@ class _MovementItem extends StatelessWidget {
     final isIncome = movement['type'] == 'income';
     final description = movement['description'] ?? 'Sin descripción';
     final amount = movement['amount'] ?? 0.0;
-    final time = movement['created_at'] != null
-        ? DateFormat('HH:mm').format(DateTime.parse(movement['created_at']))
+    final movementAt = AppTime.tryParseServerToAst(movement['created_at']);
+    final time = movementAt != null
+        ? DateFormat('HH:mm').format(movementAt)
         : '--:--';
 
     return Row(

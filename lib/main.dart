@@ -1,31 +1,34 @@
 // lib/main.dart
 import 'dart:async';
-import 'dart:io' show Platform, Process, File, Directory, ProcessStartMode;
+import 'dart:convert';
+import 'dart:io' show Directory, File, Platform, Process, ProcessStartMode;
+import 'dart:ui' show PlatformDispatcher;
+
 import 'package:flutter/foundation.dart'
-    show kIsWeb, defaultTargetPlatform, TargetPlatform;
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // <-- NECESARIO para bloquear orientacion
-import 'package:path/path.dart'
-    as p; // Necesitas agregar path a pubspec.yaml si no está
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+// ignore: depend_on_referenced_packages
+import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:media_kit/media_kit.dart';
+import 'package:path/path.dart' as p;
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:window_manager/window_manager.dart';
 
-import 'env/env.dart';
 import 'app/router/app_router.dart';
-import 'core/network/supabase_config.dart';
-import 'core/cache/cache_manager.dart';
-import 'core/utils/logger.dart';
+import 'app/router/routes.dart';
 import 'core/auth/session_bridge.dart';
-// ignore: depend_on_referenced_packages
-import 'package:flutter_web_plugins/url_strategy.dart';
+import 'core/cache/cache_manager.dart';
+import 'core/network/supabase_config.dart';
+import 'core/utils/logger.dart';
+import 'env/env.dart';
 
-/// === CONFIG DEL AGENTE ===
 const String agentHost = '127.0.0.1';
-const int agentPort =
-    4000; // El agente local corre en 4000 por defecto en index.js
+const int agentPort = 4000;
+bool _authRecoveryScheduled = false;
 
 Future<bool> _pingAgentOnce({
   Duration timeout = const Duration(milliseconds: 1000),
@@ -39,9 +42,7 @@ Future<bool> _pingAgentOnce({
   }
 }
 
-/// Intenta arrancar el agente (solo desktop). En Web no se puede.
 Future<void> _ensurePrinterAgentStarted() async {
-  // 1) Si ya esta arriba, listo.
   if (await _pingAgentOnce()) {
     debugPrint('[Agent] Ya esta activo en http://$agentHost:$agentPort');
     return;
@@ -52,43 +53,29 @@ Future<void> _ensurePrinterAgentStarted() async {
     return;
   }
 
-  // 2) Desktop: intentar localizar el agente
   String exec;
   List<String> args;
   String workingDir;
 
-  // Ruta base de la aplicación (donde está el .exe de Flutter)
-  final String appDir = p.dirname(Platform.resolvedExecutable);
-
-  // Ruta esperada del agente en PRODUCCIÓN: ../Agent/mangopos-agent.exe
-  final String prodAgentPath = p.normalize(
+  final appDir = p.dirname(Platform.resolvedExecutable);
+  final prodAgentPath = p.normalize(
     p.join(appDir, '..', 'Agent', 'mangopos-agent.exe'),
   );
-  final bool hasProdAgent = File(prodAgentPath).existsSync();
+  final hasProdAgent = File(prodAgentPath).existsSync();
 
   if (hasProdAgent) {
-    // MODO PRODUCCIÓN (Instalador)
     exec = prodAgentPath;
     args = [];
     workingDir = p.dirname(prodAgentPath);
-    debugPrint('[Agent] Detectado agente en producción: $exec');
+    debugPrint('[Agent] Detectado agente en produccion: $exec');
   } else {
-    // MODO DESARROLLO (Vscode/Android Studio)
-    // Buscamos la carpeta /agent relativa al proyecto
-    // Asumimos que estamos corriendo desde el root del proyecto
     workingDir = p.normalize(p.join(Directory.current.path, 'agent'));
-
-    if (Platform.isWindows) {
-      exec = 'node';
-      args = ['src/index.js'];
-    } else {
-      exec = 'node';
-      args = ['src/index.js'];
-    }
+    exec = 'node';
+    args = ['src/index.js'];
 
     if (!Directory(workingDir).existsSync()) {
       debugPrint(
-        '[Agent] Error: No se encontró la carpeta del agente en $workingDir',
+        '[Agent] Error: No se encontro la carpeta del agente en $workingDir',
       );
       return;
     }
@@ -102,14 +89,12 @@ Future<void> _ensurePrinterAgentStarted() async {
       args,
       workingDirectory: workingDir,
       runInShell: true,
-      mode: ProcessStartMode
-          .detached, // Para que el agente siga vivo si la app se reinicia en hot reload
+      mode: ProcessStartMode.detached,
     );
   } catch (e) {
     debugPrint('[Agent] Error al iniciar el agente: $e');
   }
 
-  // 3) Esperar a que responda /health (retry loop)
   for (int i = 0; i < 10; i++) {
     await Future.delayed(const Duration(milliseconds: 800));
     if (await _pingAgentOnce()) {
@@ -117,13 +102,13 @@ Future<void> _ensurePrinterAgentStarted() async {
       return;
     }
   }
+
   debugPrint(
     '[Agent] No se pudo confirmar el arranque del agente. Revisa logs o puerto ocupado.',
   );
 }
 
 Future<void> _lockLandscapeIfMobile() async {
-  // Bloquea SOLO en Android/iOS. No afecta Web ni Desktop.
   if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
     await SystemChrome.setPreferredOrientations(const [
       DeviceOrientation.landscapeLeft,
@@ -132,23 +117,46 @@ Future<void> _lockLandscapeIfMobile() async {
   }
 }
 
-void main() async {
+void main() {
+  runZonedGuarded(
+    () async {
+      WidgetsFlutterBinding.ensureInitialized();
+      _installGlobalErrorHandlers();
+      await _bootstrapApp();
+    },
+    (error, stackTrace) {
+      if (_isTransientSupabaseAuthRefreshError(error)) {
+        _scheduleExpiredAuthRecovery(error, stackTrace);
+        AppLogger.w(
+          'Supabase Auth devolvio un error transitorio de refresh. La app continuara mientras el backend se recupera.',
+          error: error,
+          stackTrace: stackTrace,
+        );
+        return;
+      }
+
+      AppLogger.f(
+        'Error FATAL no controlado',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    },
+  );
+}
+
+Future<void> _bootstrapApp() async {
   try {
-    WidgetsFlutterBinding.ensureInitialized();
     AppLogger.i('Arrancando MangoPOS...');
 
-    // Usar path-based routing en web (sin # en la URL)
     if (kIsWeb) usePathUrlStrategy();
 
     if (!kIsWeb && Platform.isWindows) {
       await windowManager.ensureInitialized();
     }
 
-    // Inicializar datos de localización para español
-    await initializeDateFormatting('es', null);
-    AppLogger.d('Localización (es) inicializada');
+    await initializeDateFormatting('es_DO', null);
+    AppLogger.d('Localizacion (es_DO) inicializada');
 
-    // Inicializar Supabase con configuración personalizada
     await SupabaseConfig.initialize(
       url: Env.supabaseUrl,
       anonKey: Env.supabaseAnonKey,
@@ -157,9 +165,6 @@ void main() async {
       'Supabase inicializado correctamente conectando a: ${Env.supabaseUrl}',
     );
 
-    // Si estamos en un subdominio tenant (*.mangopos.do) y la URL trae tokens
-    // de una redirección desde app.mangopos.do, los consumimos aquí antes de
-    // montar la UI para que el router ya vea la sesión activa.
     await SessionBridge.handleIncoming();
 
     if (!kIsWeb && defaultTargetPlatform != TargetPlatform.windows) {
@@ -169,25 +174,122 @@ void main() async {
       AppLogger.d('MediaKit omitido en esta plataforma');
     }
 
-    // Bloquear orientacion a horizontal (Android/iOS)
     await _lockLandscapeIfMobile();
-
-    // Arranca o "precalienta" el agente ANTES de montar el arbol de widgets
     await _ensurePrinterAgentStarted();
-
-    // Inicializar CacheManager
     await CacheManager.initialize();
     AppLogger.d('CacheManager inicializado');
 
-    AppLogger.i('MangoPOS inicialización completa. Montando UI.');
+    AppLogger.i('MangoPOS inicializacion completa. Montando UI.');
     runApp(const ProviderScope(child: MyApp()));
   } catch (e, st) {
     AppLogger.f(
-      'Error FATAL durante la inicialización de la app',
+      'Error FATAL durante la inicializacion de la app',
       error: e,
       stackTrace: st,
     );
     rethrow;
+  }
+}
+
+void _installGlobalErrorHandlers() {
+  FlutterError.onError = (details) {
+    if (_isTransientSupabaseAuthRefreshError(details.exception)) {
+      _scheduleExpiredAuthRecovery(details.exception, details.stack);
+      AppLogger.w(
+        'FlutterError recuperable de Supabase Auth refresh.',
+        error: details.exception,
+        stackTrace: details.stack,
+      );
+      return;
+    }
+
+    FlutterError.presentError(details);
+    AppLogger.e(
+      'FlutterError no controlado',
+      error: details.exception,
+      stackTrace: details.stack,
+    );
+  };
+
+  PlatformDispatcher.instance.onError = (error, stackTrace) {
+    if (_isTransientSupabaseAuthRefreshError(error)) {
+      _scheduleExpiredAuthRecovery(error, stackTrace);
+      AppLogger.w(
+        'PlatformDispatcher capturo un error transitorio de Supabase Auth refresh.',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      return true;
+    }
+
+    AppLogger.e(
+      'Error asincrono no controlado',
+      error: error,
+      stackTrace: stackTrace,
+    );
+    return false;
+  };
+}
+
+bool _isTransientSupabaseAuthRefreshError(Object error) {
+  final message = error.toString();
+  if (!message.contains('AuthRetryableFetchException')) {
+    return false;
+  }
+
+  return message.contains('missing destination name oauth_client_id') ||
+      message.contains('Bad Gateway') ||
+      message.contains('statusCode: 500') ||
+      message.contains('statusCode: 502');
+}
+
+void _scheduleExpiredAuthRecovery(Object error, StackTrace? stackTrace) {
+  if (_authRecoveryScheduled) return;
+
+  final auth = Supabase.instance.client.auth;
+  final session = auth.currentSession;
+  final accessToken = session?.accessToken;
+  if (accessToken == null || !_isJwtExpired(accessToken)) {
+    return;
+  }
+
+  _authRecoveryScheduled = true;
+  Future<void>.microtask(() async {
+    try {
+      AppLogger.w(
+        'La sesion expiro y el refresh fallo. Cerrando sesion local para evitar requests abortados en cascada.',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      await auth.signOut(scope: SignOutScope.local);
+    } catch (signOutError, signOutStack) {
+      AppLogger.e(
+        'No se pudo completar el logout local tras fallo de refresh.',
+        error: signOutError,
+        stackTrace: signOutStack,
+      );
+    } finally {
+      AppRouter.router.go(AppRoutes.login);
+      _authRecoveryScheduled = false;
+    }
+  });
+}
+
+bool _isJwtExpired(String accessToken) {
+  try {
+    final parts = accessToken.split('.');
+    if (parts.length < 2) return false;
+
+    final payload =
+        jsonDecode(utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))))
+            as Map<String, dynamic>;
+    final exp = payload['exp'];
+    if (exp is! num) return false;
+
+    final nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    return exp.toInt() <= nowSeconds;
+  } catch (_) {
+    return false;
   }
 }
 

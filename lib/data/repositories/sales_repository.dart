@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../datasources/queries/sales_queries.dart';
 import '../models/sales_models.dart';
 import '../utils/business_id_resolver.dart';
+import '../utils/payment_amount_utils.dart';
 
 /// 🥭 MangoPOS - Sales Repository
 /// Repositorio completo para el módulo de ventas
@@ -69,6 +70,140 @@ class SalesRepository {
 
     if (row == null) {
       throw Exception('TABLE_OUT_OF_SCOPE');
+    }
+  }
+
+  /// Anular un pago puntual. Si el pago corresponde a una subcuenta,
+  /// reabre solamente ese check; de lo contrario mantiene la anulacion total.
+  Future<void> annulPayment({
+    required String paymentId,
+    required String orderId,
+    String? checkId,
+    String? reason,
+  }) async {
+    final trimmedPaymentId = paymentId.trim();
+    final trimmedOrderId = orderId.trim();
+    final trimmedCheckId = checkId?.trim();
+
+    if (trimmedPaymentId.isEmpty) {
+      throw Exception('PAYMENT_ID_REQUIRED');
+    }
+    if (trimmedOrderId.isEmpty) {
+      throw Exception('ORDER_ID_REQUIRED');
+    }
+
+    if (trimmedCheckId == null || trimmedCheckId.isEmpty) {
+      await annulOrder(orderId: trimmedOrderId, reason: reason);
+      return;
+    }
+
+    try {
+      final paymentRaw = await _client
+          .from('payments')
+          .select(
+            'id, order_id, check_id, payment_method_id, amount, change_amount, session_id, status',
+          )
+          .eq('id', trimmedPaymentId)
+          .maybeSingle();
+
+      if (paymentRaw == null) {
+        throw Exception('PAYMENT_NOT_FOUND');
+      }
+
+      final payment = Map<String, dynamic>.from(paymentRaw);
+      if ((payment['status']?.toString() ?? '') != 'completed') {
+        return;
+      }
+
+      final orderRaw = await _client
+          .from('orders')
+          .select('session_id')
+          .eq('id', trimmedOrderId)
+          .maybeSingle();
+      final orderSessionId = orderRaw?['session_id']?.toString();
+
+      String? tableId;
+      if (orderSessionId != null && orderSessionId.isNotEmpty) {
+        final sessionRaw = await _client
+            .from('table_sessions')
+            .select('table_id')
+            .eq('id', orderSessionId)
+            .maybeSingle();
+        tableId = sessionRaw?['table_id']?.toString();
+      }
+
+      String? paymentMethodCode;
+      final paymentMethodId = payment['payment_method_id']?.toString();
+      if (paymentMethodId != null && paymentMethodId.isNotEmpty) {
+        final methodRaw = await _client
+            .from('payment_methods')
+            .select('code')
+            .eq('id', paymentMethodId)
+            .maybeSingle();
+        paymentMethodCode = methodRaw?['code']?.toString();
+      }
+
+      await _client
+          .from('payments')
+          .update({'status': 'cancelled'})
+          .eq('id', trimmedPaymentId);
+
+      await _client
+          .from('fiscal_documents')
+          .update({'status': 'cancelled'})
+          .eq('payment_id', trimmedPaymentId);
+
+      await _client
+          .from('order_items')
+          .update({'status': 'served'})
+          .eq('order_id', trimmedOrderId)
+          .eq('check_id', trimmedCheckId)
+          .eq('status', 'paid');
+
+      await _client
+          .from('order_checks')
+          .update({'is_closed': false, 'closed_at': null})
+          .eq('id', trimmedCheckId);
+
+      await _client
+          .from('orders')
+          .update({'status_ext': 'partially_paid', 'closed_at': null})
+          .eq('id', trimmedOrderId);
+
+      if (orderSessionId != null && orderSessionId.isNotEmpty) {
+        await _client
+            .from('table_sessions')
+            .update({'closed_at': null})
+            .eq('id', orderSessionId);
+      }
+
+      if (tableId != null && tableId.isNotEmpty) {
+        await _client
+            .from('dining_tables')
+            .update({'state': 'occupied'})
+            .eq('id', tableId);
+      }
+
+      if (paymentMethodCode == 'cash') {
+        final cashierSessionId = payment['session_id']?.toString();
+        final netAmount = netPaymentAmount(
+          payment['amount'],
+          payment['change_amount'],
+        );
+        if (cashierSessionId != null &&
+            cashierSessionId.isNotEmpty &&
+            netAmount > 0) {
+          await _client.from('cash_transactions').insert({
+            'session_id': cashierSessionId,
+            'amount': -netAmount,
+            'type': 'sale',
+            'description': 'Anulacion pago ${trimmedPaymentId.substring(0, 8)}',
+            'related_order_id': trimmedOrderId,
+          });
+        }
+      }
+    } catch (e) {
+      throw Exception('Error al anular pago: $e');
     }
   }
 
@@ -169,6 +304,79 @@ class SalesRepository {
       return data.map((json) => TableSession.fromMap(json)).toList();
     } catch (e) {
       throw Exception('Error al obtener sesiones activas: $e');
+    }
+  }
+
+  /// Libera defensivamente una mesa si la orden ya no tiene productos vigentes.
+  Future<bool> releaseEmptyTableIfNeeded(
+    String orderId, {
+    String? businessId,
+  }) async {
+    try {
+      await _assertOrderInBusinessScope(orderId, businessId: businessId);
+
+      final orderRow = await _client
+          .from('orders')
+          .select('id, session_id, closed_at')
+          .eq('id', orderId)
+          .maybeSingle();
+      if (orderRow == null) return false;
+
+      final sessionId = orderRow['session_id']?.toString();
+      if (sessionId == null || sessionId.isEmpty) return false;
+
+      final liveItems = await _client
+          .from('order_items')
+          .select('id')
+          .eq('order_id', orderId)
+          .neq('status', 'void')
+          .limit(1);
+      if ((liveItems as List).isNotEmpty) {
+        return false;
+      }
+
+      final sessionRow = await _client
+          .from('table_sessions')
+          .select('id, table_id, closed_at')
+          .eq('id', sessionId)
+          .maybeSingle();
+      final tableId = sessionRow?['table_id']?.toString();
+
+      await _client
+          .from('orders')
+          .update({
+            'status_ext': 'void',
+            'closed_at': DateTime.now().toIso8601String(),
+          })
+          .eq('id', orderId)
+          .isFilter('closed_at', null);
+
+      final otherOpenOrders = await _client
+          .from('orders')
+          .select('id')
+          .eq('session_id', sessionId)
+          .isFilter('closed_at', null)
+          .not('status_ext', 'in', '(paid,void)')
+          .limit(1);
+
+      if ((otherOpenOrders as List).isEmpty) {
+        await _client
+            .from('table_sessions')
+            .update({'closed_at': DateTime.now().toIso8601String()})
+            .eq('id', sessionId)
+            .isFilter('closed_at', null);
+
+        if (tableId != null && tableId.isNotEmpty) {
+          await _client
+              .from('dining_tables')
+              .update({'state': 'available'})
+              .eq('id', tableId);
+        }
+      }
+
+      return true;
+    } catch (e) {
+      throw Exception('Error al liberar mesa vacia: $e');
     }
   }
 
