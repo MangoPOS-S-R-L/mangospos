@@ -127,6 +127,7 @@ class LocalPrintService {
     try {
       final printer = jobData['printer'] as Map<String, dynamic>?;
       final printerId = (jobData['printerId'] ??
+              printer?['id'] ??
               (printer != null && printer['ip'] != null
                   ? _normalizePrinterId(
                       printer['ip'].toString(),

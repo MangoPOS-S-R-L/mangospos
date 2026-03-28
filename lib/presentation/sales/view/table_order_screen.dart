@@ -1354,7 +1354,8 @@ class _CartView extends ConsumerWidget {
       orderState.order,
       displayedItems,
     );
-    final displayTotal = pricingSummary.total;
+    final displayDiscounts = pricingSummary.discounts;
+    // Show Gross Subtotal to justify the Discount line below it
     final displaySubtotal = pricingSummary.subtotal;
     final displayTax = pricingSummary.tax;
     final displayServiceFee =
@@ -1362,6 +1363,7 @@ class _CartView extends ConsumerWidget {
         (pricingSummary.serviceFee > 0
             ? pricingSummary.serviceFee
             : (orderState.order?.serviceFee ?? 0.0));
+    final displayTotal = pricingSummary.total;
 
     final pendingOrderItems = openItems.where((i) {
       final checkIsClosed = allChecks.any(
@@ -1428,7 +1430,9 @@ class _CartView extends ConsumerWidget {
                         children: [
                           Text(
                             origin == OrderOrigin.table
-                                ? 'Mesa $tableCode'
+                                ? (tableCode.toLowerCase().startsWith('mesa')
+                                    ? tableCode
+                                    : 'Mesa $tableCode')
                                 : origin == OrderOrigin.manual
                                 ? 'Venta Manual ${tableCode.isNotEmpty ? " • $tableCode" : ""}'
                                 : 'Venta Rápida',
@@ -1440,7 +1444,7 @@ class _CartView extends ConsumerWidget {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            '${_formatQtyBadge(itemsCount)} productos',
+                            '${_formatQtyBadge(itemsCount)} ${itemsCount == 1 ? "producto" : "productos"}',
                             style: const TextStyle(
                               fontSize: 14,
                               color: _salesTextSecondary,
@@ -1951,6 +1955,15 @@ class _CartView extends ConsumerWidget {
                 _SummaryRow(
                   label: 'Propina Ley (10%)',
                   value: 'RD\$ ${currency.format(displayServiceFee)}',
+                ),
+              ],
+              if (displayDiscounts > 0) ...[
+                const SizedBox(height: 8),
+                _SummaryRow(
+                  label: 'Descuento',
+                  value: '- RD\$ ${currency.format(displayDiscounts)}',
+                  valueColor: const Color(0xFF16A34A),
+                  valueWeight: FontWeight.w700,
                 ),
               ],
               const SizedBox(height: 12),
@@ -5297,20 +5310,28 @@ class _ModifiersSelectionDialogState extends State<_ModifiersSelectionDialog> {
       decimalDigits: 2,
     );
 
-    return AlertDialog(
-      title: Text(widget.product.name),
-      content: SizedBox(
-        width: 620,
-        child: SingleChildScrollView(
+    return Dialog(
+      backgroundColor: _salesSurface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 720, maxHeight: 760),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'Personaliza el producto antes de agregarlo',
-                style: TextStyle(color: _salesTextSecondary),
+              _SalesModifierDialogHeader(
+                title: widget.product.name,
+                subtitle: 'Personaliza el producto antes de agregarlo a la orden.',
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 18),
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
               ...widget.groups.map((row) {
                 final group = Map<String, dynamic>.from(
                   row['modifier_groups'] as Map,
@@ -5334,23 +5355,49 @@ class _ModifiersSelectionDialogState extends State<_ModifiersSelectionDialog> {
 
                 return Container(
                   margin: const EdgeInsets.only(bottom: 14),
-                  padding: const EdgeInsets.all(14),
+                  padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(14),
+                    color: _salesSurface,
+                    borderRadius: BorderRadius.circular(18),
                     border: Border.all(color: _salesDivider),
+                    boxShadow: _salesSoftShadow,
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        groupName,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w700,
-                          color: _salesTextPrimary,
-                        ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              groupName,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: 15,
+                                color: _salesTextPrimary,
+                              ),
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF3F0ED),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              displayType == 'single' ? '1 opción' : 'Múltiple',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: _salesTextSecondary,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: 6),
                       Text(
                         _groupHint(
                           displayType: displayType,
@@ -5377,6 +5424,37 @@ class _ModifiersSelectionDialogState extends State<_ModifiersSelectionDialog> {
                               final isSelected = selected.contains(modifierId);
                               return FilterChip(
                                 selected: isSelected,
+                                showCheckmark: false,
+                                selectedColor: const Color(0xFFFFEDD5),
+                                backgroundColor: const Color(0xFFF8FAFC),
+                                side: BorderSide(
+                                  color: isSelected
+                                      ? _salesTotalColor
+                                      : _salesDivider,
+                                  width: isSelected ? 1.5 : 1,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 10,
+                                ),
+                                labelStyle: TextStyle(
+                                  color: isSelected
+                                      ? const Color(0xFF9A3412)
+                                      : _salesTextPrimary,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                avatar: Icon(
+                                  isSelected
+                                      ? Icons.check_circle_rounded
+                                      : Icons.add_circle_outline_rounded,
+                                  size: 18,
+                                  color: isSelected
+                                      ? _salesTotalColor
+                                      : _salesTextHint,
+                                ),
                                 label: Text(
                                   price > 0
                                       ? '${modifier['name']} (+${currency.format(price)})'
@@ -5396,17 +5474,30 @@ class _ModifiersSelectionDialogState extends State<_ModifiersSelectionDialog> {
                   ),
                 );
               }),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('Cancelar'),
+                  ),
+                  const SizedBox(width: 10),
+                  FilledButton.icon(
+                    onPressed: _submit,
+                    icon: const Icon(Icons.add_shopping_cart_outlined, size: 18),
+                    label: const Text('Agregar'),
+                  ),
+                ],
+              ),
             ],
           ),
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancelar'),
-        ),
-        FilledButton(onPressed: _submit, child: const Text('Agregar')),
-      ],
     );
   }
 
@@ -5492,6 +5583,62 @@ class _ModifiersSelectionDialogState extends State<_ModifiersSelectionDialog> {
 }
 
 enum _DiscountScope { table, products }
+
+class _SalesModifierDialogHeader extends StatelessWidget {
+  final String title;
+  final String subtitle;
+
+  const _SalesModifierDialogHeader({
+    required this.title,
+    required this.subtitle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            color: _salesTotalColor.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: const Icon(
+            Icons.tune_rounded,
+            color: _salesTotalColor,
+          ),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 21,
+                  fontWeight: FontWeight.w800,
+                  color: _salesTextPrimary,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                subtitle,
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: _salesTextSecondary,
+                  height: 1.35,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
 
 class _DiscountDialogResult {
   final _DiscountScope scope;
