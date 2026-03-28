@@ -15,13 +15,22 @@ class PrinterManager {
     }
 
     addJob(job) {
-        job.id = uuidv4();
-        job.status = 'queued';
-        job.createdAt = new Date();
-        this.jobs.push(job);
-        logger.info(`Job ${job.id} queued for printer ${job.printerId}`);
+        const normalizedJob = {
+            ...job,
+            id: uuidv4(),
+            status: 'queued',
+            createdAt: new Date(),
+            retries: job.retries || 0,
+            data: job.data || {
+                type: job.type || 'text',
+                content: job.content,
+            },
+        };
+
+        this.jobs.push(normalizedJob);
+        logger.info(`Job ${normalizedJob.id} queued for printer ${normalizedJob.printerId}`);
         process.nextTick(() => this.processQueue());
-        return job.id;
+        return normalizedJob.id;
     }
 
     async processQueue() {
@@ -41,9 +50,20 @@ class PrinterManager {
 
         try {
             // Find printer config
-            const printerConfig = this.printers.find(p => p.id === job.printerId);
+            let printerConfig = this.printers.find(p => p.id === job.printerId);
+
+            if (!printerConfig && typeof job.printerId === 'string' && job.printerId.includes(':')) {
+                printerConfig = {
+                    id: job.printerId,
+                    name: job.printerId,
+                    type: 'network',
+                    endpoint: job.printerId,
+                };
+            }
+
             if (!printerConfig) throw new Error(`Printer ${job.printerId} not found`);
 
+            logger.info(`Processing job ${job.id} -> printer=${printerConfig.name || printerConfig.id} endpoint=${printerConfig.endpoint || 'n/a'} type=${job.data?.type}`);
             await this.printToDevice(printerConfig, job.data);
 
             job.status = 'completed';
@@ -79,6 +99,7 @@ class PrinterManager {
             try {
                 if (printerConfig.type === 'network') {
                     const [ip, port] = printerConfig.endpoint.split(':');
+                    logger.info(`Opening network printer connection -> ${ip}:${parseInt(port) || 9100}`);
                     device = new Network(ip, parseInt(port) || 9100);
                 } else if (printerConfig.type === 'usb') {
                     // Native USB detection/printing requires correct VID/PID
@@ -120,16 +141,21 @@ class PrinterManager {
             const printer = new escpos.Printer(device, options);
 
             device.open((err) => {
-                if (err) return reject(err);
+                if (err) {
+                    logger.error(`Failed opening device for printer ${printerConfig.id || printerConfig.name}: ${err.message || err}`);
+                    return reject(err);
+                }
 
                 // If sending raw hex/base64
                 if (data.type === 'raw') {
                     const buffer = Buffer.from(data.content, 'base64');
+                    logger.info(`Sending RAW job to printer ${printerConfig.id || printerConfig.name} -> bytes=${buffer.length}`);
                     printer
                         .raw(buffer)
                         .close();
                     resolve();
                 } else if (data.type === 'text') {
+                    logger.info(`Sending TEXT job to printer ${printerConfig.id || printerConfig.name} -> chars=${(data.content || '').length}`);
                     printer
                         .text(data.content)
                         .cut()

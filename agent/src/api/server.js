@@ -19,7 +19,7 @@ const authenticate = (req, res, next) => {
     if (token === `Bearer ${config.security.api_token}` || token === config.security.api_token) {
         return next();
     }
-    logger.warn(`Unauthorized access attempt from ${req.ip}`);
+    logger.warn(`Unauthorized access attempt from ${req.ip} to ${req.method} ${req.originalUrl}`);
     res.status(401).json({ error: 'Verify API Token' });
 };
 
@@ -48,16 +48,38 @@ app.get('/printers', authenticate, async (req, res) => {
     }
 });
 
+// Compatibilidad con cliente Flutter legado/nuevo
+app.get('/api/printers/discover', authenticate, async (req, res) => {
+    try {
+        const discovered = await discoveryService.scan();
+        res.json({ items: discovered, discovered });
+    } catch (e) {
+        logger.error(`Discovery failed: ${e.message}`);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // Print Job
 app.post('/print', authenticate, async (req, res) => {
     const job = req.body;
-    // job object: { printerId, type: 'raw'|'text', content: 'Base64...' }
-    if (!job.printerId || !job.content) {
+    // Contrato normalizado:
+    // { printerId, type: 'raw'|'text', content: '...' }
+    if (!job.printerId || job.content == null) {
         return res.status(400).json({ error: 'Missing printerId or content' });
     }
 
     try {
-        const jobId = printerManager.addJob(job);
+        logger.info(`Incoming /print request -> printerId=${job.printerId} type=${job.type || 'text'} from ${req.ip}`);
+
+        const normalizedJob = {
+            printerId: job.printerId,
+            data: {
+                type: job.type || 'text',
+                content: job.content,
+            },
+        };
+
+        const jobId = printerManager.addJob(normalizedJob);
         res.json({ success: true, jobId, status: 'queued' });
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -72,8 +94,9 @@ app.post('/test-print', authenticate, async (req, res) => {
     // Internal test job
     const testJob = {
         printerId,
-        type: 'text',
-        content: `
+        data: {
+            type: 'text',
+            content: `
 --------------------------------
 MANGO POS TEST PRINT
 --------------------------------
@@ -81,11 +104,64 @@ Date: ${new Date().toLocaleString()}
 Printer ID: ${printerId}
 Service Status: ONLINE
 --------------------------------
-`
+`,
+        },
+    };
+
+    logger.info(`Incoming /test-print request -> printerId=${printerId} from ${req.ip}`);
+    const jobId = printerManager.addJob(testJob);
+    res.json({ success: true, jobId, message: 'Test print queued' });
+});
+
+// Compatibilidad con cliente Flutter legado/nuevo
+app.post('/api/printers/test', authenticate, async (req, res) => {
+    const { printerId, ip, port } = req.body;
+    const normalizedPrinterId = printerId || (ip ? `${ip}:${port || 9100}` : null);
+
+    if (!normalizedPrinterId) {
+        return res.status(400).json({ error: 'Printer ID required' });
+    }
+
+    const testJob = {
+        printerId: normalizedPrinterId,
+        data: {
+            type: 'text',
+            content: `
+--------------------------------
+MANGO POS TEST PRINT
+--------------------------------
+Date: ${new Date().toLocaleString()}
+Printer ID: ${normalizedPrinterId}
+Service Status: ONLINE
+--------------------------------
+`,
+        },
     };
 
     const jobId = printerManager.addJob(testJob);
-    res.json({ success: true, jobId, message: 'Test print queued' });
+    res.json({ ok: true, success: true, jobId, message: 'Test print queued' });
+});
+
+app.post('/api/printers/raw', authenticate, async (req, res) => {
+    const { printerId, ip, port, dataBase64 } = req.body;
+    const normalizedPrinterId = printerId || (ip ? `${ip}:${port || 9100}` : null);
+
+    if (!normalizedPrinterId || !dataBase64) {
+        return res.status(400).json({ error: 'Missing printerId/ip or dataBase64' });
+    }
+
+    try {
+        const jobId = printerManager.addJob({
+            printerId: normalizedPrinterId,
+            data: {
+                type: 'raw',
+                content: dataBase64,
+            },
+        });
+        res.json({ ok: true, success: true, jobId, status: 'queued' });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
 
