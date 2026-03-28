@@ -237,8 +237,10 @@ class PrintingService {
             'id': printer.id,
             'type': 'usb',
             'name': printer.name,
+            'endpoint': printer.devicePath,
             'devicePath': printer.devicePath,
             'path': printer.devicePath,
+            'deviceId': printer.devicePath,
           },
           'content': {
             'type': 'raw_base64',

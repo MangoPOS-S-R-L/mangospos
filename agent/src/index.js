@@ -198,6 +198,68 @@ const getSafeDate = () => {
     return `${d}/${m}/${y} ${h}:${min} ${ampm}`;
 };
 
+const parseUsbNumber = (value) => {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+
+    const raw = String(value).trim();
+    if (!raw) return null;
+    if (/^0x[0-9a-f]+$/i.test(raw)) return parseInt(raw, 16);
+    if (/^[0-9a-f]{4}$/i.test(raw)) return parseInt(raw, 16);
+    if (/^\d+$/.test(raw)) return parseInt(raw, 10);
+    return null;
+};
+
+const extractUsbIdsFromText = (value) => {
+    if (!value) return { vid: null, pid: null };
+    const raw = String(value);
+    const vidMatch = raw.match(/VID[_:= -]?([0-9A-F]{4})/i);
+    const pidMatch = raw.match(/PID[_:= -]?([0-9A-F]{4})/i);
+    return {
+        vid: vidMatch ? parseInt(vidMatch[1], 16) : null,
+        pid: pidMatch ? parseInt(pidMatch[1], 16) : null,
+    };
+};
+
+const describePrinter = (printerConfig = {}) => JSON.stringify({
+    id: printerConfig.id || null,
+    name: printerConfig.name || null,
+    type: printerConfig.type || null,
+    ip: printerConfig.ip || null,
+    port: printerConfig.port || null,
+    endpoint: printerConfig.endpoint || null,
+    devicePath: printerConfig.devicePath || null,
+    path: printerConfig.path || null,
+    deviceId: printerConfig.deviceId || null,
+    vid: printerConfig.vid || null,
+    pid: printerConfig.pid || null,
+});
+
+const resolveUsbSelection = (printerConfig = {}) => {
+    const directVid = parseUsbNumber(printerConfig.vid);
+    const directPid = parseUsbNumber(printerConfig.pid);
+    if (directVid !== null && directPid !== null) {
+        return { vid: directVid, pid: directPid, source: 'printerConfig.vid/pid' };
+    }
+
+    const candidates = [
+        ['printerConfig.endpoint', printerConfig.endpoint],
+        ['printerConfig.devicePath', printerConfig.devicePath],
+        ['printerConfig.path', printerConfig.path],
+        ['printerConfig.deviceId', printerConfig.deviceId],
+        ['printerConfig.mac', printerConfig.mac],
+    ];
+
+    for (const [source, value] of candidates) {
+        const parsed = extractUsbIdsFromText(value);
+        if (parsed.vid !== null && parsed.pid !== null) {
+            return { vid: parsed.vid, pid: parsed.pid, source };
+        }
+    }
+
+    return { vid: null, pid: null, source: null };
+};
+
 
 async function processPrintJob(job) {
     return new Promise(async (resolve, reject) => {
@@ -210,6 +272,8 @@ async function processPrintJob(job) {
 
         if (!printerConfig) return reject(new Error("No printer configuration provided in job"));
 
+        logger.info(`?? Printer payload ${describePrinter(printerConfig)}`);
+
 
         try {
             let device;
@@ -219,7 +283,14 @@ async function processPrintJob(job) {
                 logger.info(`?? Conectando a impresora de red: ${sanitizedIp}:${printerConfig.port || 9100}`);
                 device = new escpos.Network(sanitizedIp, printerConfig.port || 9100);
             } else if (printerConfig.type === 'usb') {
-                device = new escpos.USB();
+                const usbSelection = resolveUsbSelection(printerConfig);
+                if (usbSelection.vid !== null && usbSelection.pid !== null) {
+                    logger.info(`?? Conectando a impresora USB ${printerConfig.name || ''} por VID/PID ${usbSelection.vid.toString(16)}:${usbSelection.pid.toString(16)} (${usbSelection.source})`);
+                    device = new escpos.USB(usbSelection.vid, usbSelection.pid);
+                } else {
+                    logger.warn(`?? Impresora USB sin VID/PID resoluble. Intentando auto-detect. payload=${describePrinter(printerConfig)}`);
+                    device = new escpos.USB();
+                }
             } else {
                 logger.info("?? Usando Consola (Printer Type no reconocido o 'test')");
                 device = new escpos.Console();
@@ -231,6 +302,11 @@ async function processPrintJob(job) {
 
             device.open(async function (error) {
                 if (error) {
+                    const message = error?.message || String(error);
+                    logger.error(`? Error abriendo conexion con impresora: ${message} payload=${describePrinter(printerConfig)}`);
+                    return reject(new Error(`No se pudo abrir la impresora ${printerConfig.name || ''}. ${message}`.trim()));
+                }
+                if (false && error) {
                     logger.error(`? Error abriendo conexión con impresora: ${error}`);
                     return reject(error);
                 }
