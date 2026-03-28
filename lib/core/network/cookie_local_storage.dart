@@ -51,9 +51,9 @@ class SharedCookieLocalStorage extends LocalStorage {
     final encoded = Uri.encodeComponent(persistSessionString);
     final domain = _getCookieDomain();
 
-    // Cookie expira en 7 días (604800 segundos)
+    // Cookie expira en 30 días para evitar cierres de sesión demasiado agresivos en web.
     WebUtils.cookie =
-        '$cookieName=$encoded; Max-Age=604800; Domain=$domain; Path=/; Secure; SameSite=Lax';
+        '$cookieName=$encoded; Max-Age=2592000; Domain=$domain; Path=/; Secure; SameSite=Lax';
   }
 
   @override

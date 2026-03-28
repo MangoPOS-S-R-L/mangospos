@@ -28,6 +28,8 @@ import 'env/env.dart';
 const String agentHost = '127.0.0.1';
 const int agentPort = 4000;
 bool _authRecoveryScheduled = false;
+int _authRecoveryAttempts = 0;
+const int _maxAuthRecoveryAttempts = 3;
 
 Future<bool> _pingAgentOnce({
   Duration timeout = const Duration(milliseconds: 1000),
@@ -253,20 +255,65 @@ void _scheduleExpiredAuthRecovery(Object error, StackTrace? stackTrace) {
   _authRecoveryScheduled = true;
   Future<void>.microtask(() async {
     try {
+      _authRecoveryAttempts += 1;
       AppLogger.w(
-        'La sesion expiro y el refresh fallo. Cerrando sesion local para evitar requests abortados en cascada.',
+        'La sesion expiro y el refresh fallo. Intentando recuperar la sesion sin cerrar al usuario. Intento $_authRecoveryAttempts/$_maxAuthRecoveryAttempts.',
+        error: error,
+        stackTrace: stackTrace,
+      );
+
+      final refreshToken = session?.refreshToken;
+      if (refreshToken != null && refreshToken.isNotEmpty) {
+        await auth.refreshSession(refreshToken);
+      }
+
+      final recoveredSession = auth.currentSession;
+      final recoveredAccessToken = recoveredSession?.accessToken;
+      final recovered =
+          recoveredAccessToken != null && !_isJwtExpired(recoveredAccessToken);
+
+      if (recovered) {
+        _authRecoveryAttempts = 0;
+        AppLogger.i('Sesion recuperada correctamente tras refresh fallido transitorio.');
+        return;
+      }
+
+      if (_authRecoveryAttempts < _maxAuthRecoveryAttempts) {
+        AppLogger.w(
+          'No se pudo recuperar la sesion en este intento. Se mantendra la app activa y se reintentara cuando vuelva a dispararse el flujo de auth.',
+        );
+        return;
+      }
+
+      AppLogger.e(
+        'No se pudo recuperar la sesion tras $_authRecoveryAttempts intentos. Cerrando sesion local como ultimo recurso.',
         error: error,
         stackTrace: stackTrace,
       );
       await auth.signOut(scope: SignOutScope.local);
-    } catch (signOutError, signOutStack) {
-      AppLogger.e(
-        'No se pudo completar el logout local tras fallo de refresh.',
-        error: signOutError,
-        stackTrace: signOutStack,
-      );
-    } finally {
       AppRouter.router.go(AppRoutes.login);
+      _authRecoveryAttempts = 0;
+    } catch (recoveryError, recoveryStack) {
+      AppLogger.e(
+        'Fallo el intento de recuperar la sesion expirada.',
+        error: recoveryError,
+        stackTrace: recoveryStack,
+      );
+
+      if (_authRecoveryAttempts >= _maxAuthRecoveryAttempts) {
+        try {
+          await auth.signOut(scope: SignOutScope.local);
+        } catch (signOutError, signOutStack) {
+          AppLogger.e(
+            'No se pudo completar el logout local tras fallo repetido de recovery.',
+            error: signOutError,
+            stackTrace: signOutStack,
+          );
+        }
+        AppRouter.router.go(AppRoutes.login);
+        _authRecoveryAttempts = 0;
+      }
+    } finally {
       _authRecoveryScheduled = false;
     }
   });

@@ -18,8 +18,16 @@ class SelectBusinessView extends ConsumerStatefulWidget {
 
 class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
   bool _isLoading = true;
+  bool _isSelecting = false;
+  String? _selectingBusinessId;
   String? _error;
   List<Map<String, dynamic>> _businesses = [];
+
+  static const _loadingMessages = <String>[
+    'Validando tu acceso...',
+    'Buscando tus negocios...',
+    'Preparando tu espacio de trabajo...',
+  ];
 
   @override
   void initState() {
@@ -89,15 +97,33 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
     final businessId = item['business_id'] as String?;
     if (businessId == null) return;
 
+    if (mounted) {
+      setState(() {
+        _isSelecting = true;
+        _selectingBusinessId = businessId;
+      });
+    }
+
     AppLogger.i('Negocio seleccionado internamente: $businessId');
 
-    final storage = await StorageService.getInstance();
-    await storage.write(StorageKeys.activeBusinessId, businessId);
-    BusinessResolver.setActiveBusinessId(businessId);
-    ref.read(sessionProvider.notifier).setActiveBusiness(businessId);
+    try {
+      final storage = await StorageService.getInstance();
+      await storage.write(StorageKeys.activeBusinessId, businessId);
+      BusinessResolver.setActiveBusinessId(businessId);
+      ref.read(sessionProvider.notifier).setActiveBusiness(businessId);
 
-    if (mounted) {
+      await Future.delayed(const Duration(milliseconds: 450));
+      if (!mounted) return;
       context.go('/dashboard');
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isSelecting = false;
+          _selectingBusinessId = null;
+          _error = 'No pudimos entrar a ese negocio. Intenta otra vez.';
+        });
+      }
+      AppLogger.w('Error seleccionando negocio: $e');
     }
   }
 
@@ -196,19 +222,7 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
 
   Widget _buildContent() {
     if (_isLoading) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 40),
-        child: Column(
-          children: [
-            CircularProgressIndicator(color: Color(0xFFF97316)),
-            SizedBox(height: 16),
-            Text(
-              'Cargando tus accesos...',
-              style: TextStyle(color: Color(0xFF64748B)),
-            ),
-          ],
-        ),
-      ).animate().fadeIn();
+      return const _BusinessLoadingState().animate().fadeIn();
     }
 
     if (_error != null) {
@@ -270,6 +284,9 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
         final i = entry.key;
         final item = entry.value;
         final biz = item['businesses'] ?? {};
+        final businessId = item['business_id']?.toString();
+        final isCurrentSelection =
+            _isSelecting && _selectingBusinessId == businessId;
 
         final branchName = biz['branch_name']?.toString() ?? '';
         final businessName =
@@ -284,23 +301,45 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
           child: Material(
             color: Colors.transparent,
             child: InkWell(
-              onTap: () => _handleSelect(item),
+              onTap: _isSelecting ? null : () => _handleSelect(item),
               borderRadius: BorderRadius.circular(16),
               hoverColor: const Color(0xFFF97316).withValues(alpha: 0.04),
-              child: Container(
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 260),
+                curve: Curves.easeOutCubic,
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
-                  border: Border.all(color: const Color(0xFFE2E8F0)),
+                  border: Border.all(
+                    color: isCurrentSelection
+                        ? const Color(0xFFF97316)
+                        : const Color(0xFFE2E8F0),
+                    width: isCurrentSelection ? 1.8 : 1,
+                  ),
                   borderRadius: BorderRadius.circular(16),
-                  color: Colors.white,
+                  color: isCurrentSelection
+                      ? const Color(0xFFFFF7ED)
+                      : Colors.white,
+                  boxShadow: isCurrentSelection
+                      ? const [
+                          BoxShadow(
+                            color: Color(0x14F97316),
+                            blurRadius: 18,
+                            offset: Offset(0, 8),
+                          ),
+                        ]
+                      : null,
                 ),
                 child: Row(
                   children: [
-                    Container(
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 260),
+                      curve: Curves.easeOutCubic,
                       width: 48,
                       height: 48,
                       decoration: BoxDecoration(
-                        color: const Color(0xFFF8FAFC),
+                        color: isCurrentSelection
+                            ? const Color(0xFFF97316)
+                            : const Color(0xFFF8FAFC),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Center(
@@ -308,10 +347,12 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
                           businessName.isNotEmpty
                               ? businessName.substring(0, 1).toUpperCase()
                               : 'B',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
-                            color: Color(0xFF334155),
+                            color: isCurrentSelection
+                                ? Colors.white
+                                : const Color(0xFF334155),
                           ),
                         ),
                       ),
@@ -342,28 +383,48 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
                         ],
                       ),
                     ),
-                    Container(
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 260),
+                      curve: Curves.easeOutCubic,
                       padding: const EdgeInsets.symmetric(
                         horizontal: 10,
                         vertical: 4,
                       ),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFF1F5F9),
+                        color: isCurrentSelection
+                            ? const Color(0xFFFED7AA)
+                            : const Color(0xFFF1F5F9),
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text(
                         role,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w600,
-                          color: Color(0xFF475569),
+                          color: isCurrentSelection
+                              ? const Color(0xFF9A3412)
+                              : const Color(0xFF475569),
                         ),
                       ),
                     ),
                     const SizedBox(width: 12),
-                    const Icon(
-                      Icons.chevron_right_rounded,
-                      color: Color(0xFF94A3B8),
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 220),
+                      child: isCurrentSelection
+                          ? const SizedBox(
+                              key: ValueKey('loading-business'),
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.2,
+                                color: Color(0xFFF97316),
+                              ),
+                            )
+                          : const Icon(
+                              Icons.chevron_right_rounded,
+                              key: ValueKey('chevron-business'),
+                              color: Color(0xFF94A3B8),
+                            ),
                     ),
                   ],
                 ),
@@ -372,6 +433,83 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
           ).animate().fadeIn(delay: (100 * i).ms).slideX(begin: 0.1),
         );
       }).toList(),
+    );
+  }
+}
+
+class _BusinessLoadingState extends StatefulWidget {
+  const _BusinessLoadingState();
+
+  @override
+  State<_BusinessLoadingState> createState() => _BusinessLoadingStateState();
+}
+
+class _BusinessLoadingStateState extends State<_BusinessLoadingState>
+    with SingleTickerProviderStateMixin {
+  int _messageIndex = 0;
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1400),
+    )..addStatusListener((status) {
+        if (status == AnimationStatus.completed) {
+          _controller.forward(from: 0);
+          if (!mounted) return;
+          setState(() {
+            _messageIndex = (_messageIndex + 1) %
+                _SelectBusinessViewState._loadingMessages.length;
+          });
+        }
+      })
+      ..forward();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 40),
+      child: Column(
+        children: [
+          const SizedBox(
+            width: 34,
+            height: 34,
+            child: CircularProgressIndicator(
+              color: Color(0xFFF97316),
+              strokeWidth: 3,
+            ),
+          ),
+          const SizedBox(height: 18),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 280),
+            transitionBuilder: (child, animation) => FadeTransition(
+              opacity: animation,
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: const Offset(0, 0.18),
+                  end: Offset.zero,
+                ).animate(animation),
+                child: child,
+              ),
+            ),
+            child: Text(
+              _SelectBusinessViewState._loadingMessages[_messageIndex],
+              key: ValueKey(_messageIndex),
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Color(0xFF64748B)),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
