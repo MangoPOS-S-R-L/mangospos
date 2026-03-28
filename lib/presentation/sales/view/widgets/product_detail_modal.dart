@@ -999,18 +999,34 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
   double _baseSubtotalForQuantity(double quantity) =>
       (widget.item.unitPrice * quantity) + _modifiersTotalForQuantity(quantity);
 
-  double _estimatedSubtotal() => _baseSubtotalForQuantity(_quantity);
+  double _estimatedSubtotal() {
+    final rawAmount = _baseSubtotalForQuantity(_quantity);
+    if (widget.item.taxMode == 'inclusive') {
+      return rawAmount / (1 + _taxRateDecimal());
+    }
+    return rawAmount;
+  }
 
-  double _taxRate() {
+  double _taxRateDecimal() {
+    if (widget.item.taxRate > 0) return widget.item.taxRate / 100.0;
     if (widget.item.subtotal <= 0) return 0;
     return widget.item.tax / widget.item.subtotal;
   }
 
-  double _estimatedTax() => _baseSubtotalForQuantity(_quantity) * _taxRate();
+  double _estimatedTax() {
+    final rawAmount = _baseSubtotalForQuantity(_quantity);
+    if (widget.item.taxMode == 'inclusive') {
+      return rawAmount - _estimatedSubtotal();
+    }
+    return rawAmount * _taxRateDecimal();
+  }
 
   double _fullAmountForQuantity(double quantity) {
+    if (widget.item.taxMode == 'inclusive') {
+      return _baseSubtotalForQuantity(quantity);
+    }
     final subtotal = _baseSubtotalForQuantity(quantity);
-    final tax = subtotal * _taxRate();
+    final tax = subtotal * _taxRateDecimal();
     return subtotal + tax;
   }
 
@@ -1038,7 +1054,7 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     if (_isCourtesy) {
       return _fullAmountForQuantity(_quantity);
     }
-    return _enteredDiscount().clamp(0, _estimatedSubtotal());
+    return _enteredDiscount().clamp(0, _fullAmountForQuantity(_quantity));
   }
 
   ({String notes, String? courtesyReason}) _splitStoredNotes(String? rawNotes) {

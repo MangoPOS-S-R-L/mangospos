@@ -282,6 +282,40 @@ class PrintingRepository {
     }
   }
 
+  Future<List<PrinterConfig>> getReadyPrintersForArea(String areaId) async {
+    try {
+      final data = await _client
+          .from('print_area_printers')
+          .select('priority, printers(*)')
+          .eq('area_id', areaId)
+          .eq('enabled', true)
+          .eq('prints_receipts', true)
+          .order('priority', ascending: true);
+
+      return data
+          .map((json) => PrinterConfig.fromMap(json['printers']))
+          .toList();
+    } catch (e) {
+      throw Exception('Error al obtener impresoras de listos del área: $e');
+    }
+  }
+
+  Future<List<PrintAreaPrinter>> getAreaPrinterAssignments(String areaId) async {
+    try {
+      final data = await _client
+          .from('print_area_printers')
+          .select()
+          .eq('area_id', areaId)
+          .order('priority', ascending: true);
+
+      return data
+          .map((row) => PrintAreaPrinter.fromMap(Map<String, dynamic>.from(row)))
+          .toList(growable: false);
+    } catch (e) {
+      throw Exception('Error al obtener asignaciones del área: $e');
+    }
+  }
+
   Future<Map<String, String>> getOrderPrinterSelections(
     String businessId,
   ) async {
@@ -384,6 +418,27 @@ class PrintingRepository {
       });
     } catch (e) {
       throw Exception('Error al asignar impresora: $e');
+    }
+  }
+
+  Future<void> updateAreaPrinterModes({
+    required String areaId,
+    required String printerId,
+    required bool printsOrders,
+    required bool printsReceipts,
+  }) async {
+    try {
+      await _client
+          .from('print_area_printers')
+          .update({
+            'prints_orders': printsOrders,
+            'prints_receipts': printsReceipts,
+            'enabled': printsOrders || printsReceipts,
+          })
+          .eq('area_id', areaId)
+          .eq('printer_id', printerId);
+    } catch (e) {
+      throw Exception('Error al actualizar la configuración de impresión: $e');
     }
   }
 

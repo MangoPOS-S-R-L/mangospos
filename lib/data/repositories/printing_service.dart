@@ -104,11 +104,10 @@ class PrintingService {
         }
       }
 
-      if (missingPrinterAreas.isNotEmpty) {
-        throw NoAssignedKitchenPrinterException(missingPrinterAreas);
-      }
+      // Si no hay impresoras configuradas para "enviar a cocina",
+      // la orden igual debe pasar a cocina; simplemente se omite la impresión.
 
-      // 6. Marcar orden como enviada a cocina solo cuando hay impresoras.
+      // 6. Marcar orden como enviada a cocina.
       await _salesRepo.sendToKitchen(orderId);
 
       final createdJobs = <String, String>{}; // areaCode -> local dispatch id
@@ -123,6 +122,10 @@ class PrintingService {
         );
 
         final printers = printersByAreaCode[areaCode] ?? const [];
+        if (printers.isEmpty) {
+          continue;
+        }
+
         final dispatchId = _createLocalDispatchId(areaCode);
         createdJobs[areaCode] = dispatchId;
 
@@ -200,10 +203,64 @@ class PrintingService {
     required String areaCode,
     required Map<String, dynamic> fallbackData,
   }) async {
-    if (printer.printerType == PrinterType.bluetooth) {
-      throw Exception(
-        'La autoimpresión de cocina no soporta Bluetooth todavía.',
-      );
+    switch (printer.type) {
+      case 'network':
+        final ip = printer.ipAddress?.trim();
+        if (ip == null || ip.isEmpty) {
+          throw Exception('La impresora de red no tiene IP configurada.');
+        }
+        debugPrint('🖨️ Ruta seleccionada -> NETWORK assigned printer ${printer.name} (${printer.id}) @ $ip:${printer.port ?? 9100}');
+        if (kIsWeb) {
+          await _printingRepo.printRawViaAgent(
+            ip: ip,
+            port: printer.port ?? 9100,
+            data: bytes,
+          );
+          return;
+        }
+        try {
+          await _printingRepo.printRawDirectTcp(
+            ip: ip,
+            port: printer.port ?? 9100,
+            data: bytes,
+          );
+        } catch (e) {
+          debugPrint('⚠️ Direct TCP failed for ${printer.name}, using LAN agent fallback: $e');
+          await _printingRepo.printRawViaAgent(
+            ip: ip,
+            port: printer.port ?? 9100,
+            data: bytes,
+          );
+        }
+        return;
+      case 'usb':
+        debugPrint('🖨️ Ruta seleccionada -> LOCAL/USB assigned printer ${printer.name} (${printer.id}) path=${printer.devicePath ?? 'n/a'}');
+        await _printingRepo.printJobViaAgent({
+          'id': 'KITCHEN-${DateTime.now().millisecondsSinceEpoch}',
+          'printerId': printer.id,
+          'printer': {
+            'id': printer.id,
+            'type': 'usb',
+            'name': printer.name,
+            'devicePath': printer.devicePath,
+            'path': printer.devicePath,
+          },
+          'type': 'raw',
+          'content': base64Encode(bytes),
+          'meta': {
+            'areaCode': areaCode,
+            'fallback': fallbackData,
+            'route': 'local-usb-priority',
+          },
+        });
+        return;
+      case 'bluetooth':
+        debugPrint('🖨️ Ruta seleccionada -> BLUETOOTH assigned printer ${printer.name} (${printer.id})');
+        throw Exception(
+          'La autoimpresión de cocina no soporta Bluetooth todavía.',
+        );
+      default:
+        throw Exception('Tipo de impresora no soportado: ${printer.type}.');
     }
 
     await _printingRepo.printEscPos(printer: printer, data: bytes);
@@ -534,6 +591,67 @@ class PrintingService {
     return 'LAN-$areaCode-${DateTime.now().microsecondsSinceEpoch}';
   }
 
+  Future<void> printReadyOrderTicket({
+    required String orderId,
+    required String businessId,
+    required List<String> itemIds,
+  }) async {
+    try {
+      final order = await _salesRepo.getOrder(orderId);
+      if (order == null) throw Exception('Orden no encontrada');
+
+      final items = await _salesRepo.getOrderItems(orderId, includeModifiers: true);
+      final readyItems = items
+          .where((item) => itemIds.contains(item.id))
+          .toList(growable: false);
+      if (readyItems.isEmpty) return;
+
+      final orderData = await _getOrderDisplayData(orderId);
+      final businessName = await _getBusinessName(businessId);
+      final receiptItemDisplayMode = await PosSettingsRepository(
+        _client,
+      ).getReceiptItemDisplayMode(businessId);
+      final itemsByArea = await _groupItemsByPrintArea(readyItems);
+
+      for (final entry in itemsByArea.entries) {
+        final areaCode = entry.key;
+        final areaItems = entry.value;
+        final area = await _ensureAreaForCode(businessId, areaCode);
+        final printers = await _getReadyPrintersWithOfflineFallback(
+          businessId: businessId,
+          areaId: area.id,
+          areaCode: areaCode,
+        );
+        if (printers.isEmpty) continue;
+
+        final ticket = PrintTicketService.generateKitchenTicket(
+          order: order,
+          items: areaItems,
+          tableName: orderData['tableName']?.toString() ?? 'N/A',
+          waiterName: orderData['waiterName']?.toString(),
+          businessName: businessName,
+          isReprint: true,
+          receiptItemDisplayMode: receiptItemDisplayMode,
+        );
+
+        await _dispatchKitchenTicket(
+          printers: printers,
+          bytes: ticket.escPosCommands,
+          areaCode: areaCode,
+          fallbackData: {
+            'title': 'LISTO ${orderData['tableName'] ?? 'COCINA'}',
+            'body':
+                'Orden ${orderData['orderNumber'] ?? ''}\n'
+                'Mesa: ${orderData['tableName'] ?? 'N/A'}\n'
+                'Estado: LISTO',
+          },
+        );
+      }
+    } catch (e) {
+      throw Exception('Error al imprimir comandas de listos: $e');
+    }
+  }
+
   Future<List<PrinterConfig>> _getOrderPrintersWithOfflineFallback({
     required String businessId,
     required String areaId,
@@ -568,6 +686,28 @@ class PrintingService {
     );
   }
 
+  Future<List<PrinterConfig>> _getReadyPrintersWithOfflineFallback({
+    required String businessId,
+    required String areaId,
+    required String areaCode,
+  }) async {
+    try {
+      final printers = await _printingRepo.getReadyPrintersForArea(areaId);
+      await _cacheReadyPrinters(
+        businessId: businessId,
+        areaCode: areaCode,
+        printers: printers,
+      );
+      return printers;
+    } catch (e) {
+      debugPrint('⚠️ Usando cache local de impresoras READY para $areaCode: $e');
+      return _readCachedReadyPrinters(
+        businessId: businessId,
+        areaCode: areaCode,
+      );
+    }
+  }
+
   Future<List<PrinterConfig>> _readCachedOrderPrinters({
     required String businessId,
     required String areaCode,
@@ -575,6 +715,34 @@ class PrintingService {
     final storage = await StorageService.getInstance();
     final cached = await storage.readList(
       'printing_cached_printers_${businessId}_$areaCode',
+    );
+    if (cached == null) return const [];
+    return cached
+        .map(
+          (row) => PrinterConfig.fromMap(Map<String, dynamic>.from(row as Map)),
+        )
+        .toList(growable: false);
+  }
+
+  Future<void> _cacheReadyPrinters({
+    required String businessId,
+    required String areaCode,
+    required List<PrinterConfig> printers,
+  }) async {
+    final storage = await StorageService.getInstance();
+    await storage.writeList(
+      'printing_cached_ready_printers_${businessId}_$areaCode',
+      printers.map((printer) => printer.toMap()).toList(growable: false),
+    );
+  }
+
+  Future<List<PrinterConfig>> _readCachedReadyPrinters({
+    required String businessId,
+    required String areaCode,
+  }) async {
+    final storage = await StorageService.getInstance();
+    final cached = await storage.readList(
+      'printing_cached_ready_printers_${businessId}_$areaCode',
     );
     if (cached == null) return const [];
     return cached

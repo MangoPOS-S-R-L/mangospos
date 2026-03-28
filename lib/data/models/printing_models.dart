@@ -38,12 +38,20 @@ class PrintAreaPrinter extends Equatable {
   final String areaId;
   final String printerId;
   final int priority;
+  final bool enabled;
+  final bool printsOrders;
+  final bool printsPrebills;
+  final bool printsReceipts;
 
   const PrintAreaPrinter({
     required this.id,
     required this.areaId,
     required this.printerId,
     required this.priority,
+    this.enabled = true,
+    this.printsOrders = true,
+    this.printsPrebills = false,
+    this.printsReceipts = false,
   });
 
   factory PrintAreaPrinter.fromMap(Map<String, dynamic> map) {
@@ -52,9 +60,22 @@ class PrintAreaPrinter extends Equatable {
       areaId: map['area_id'] ?? '',
       printerId: map['printer_id'] ?? '',
       priority: map['priority'] ?? 1,
+      enabled: map['enabled'] == null ? true : map['enabled'] == true,
+      printsOrders: map['prints_orders'] == null ? true : map['prints_orders'] == true,
+      printsPrebills: map['prints_prebills'] == true,
+      printsReceipts: map['prints_receipts'] == true,
     );
   }
 
   @override
-  List<Object?> get props => [id, areaId, printerId, priority];
+  List<Object?> get props => [
+    id,
+    areaId,
+    printerId,
+    priority,
+    enabled,
+    printsOrders,
+    printsPrebills,
+    printsReceipts,
+  ];
 }

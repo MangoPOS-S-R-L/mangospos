@@ -147,19 +147,27 @@ class LocalPrintService {
       if (rawContent is String) {
         content = rawContent;
       } else if (rawContent is Map<String, dynamic>) {
-        final lines = <String>[];
-        final title = rawContent['title']?.toString();
-        final body = rawContent['body']?.toString();
-        final extraLines = rawContent['lines'];
+        final rawType = rawContent['type']?.toString();
 
-        if (title != null && title.isNotEmpty) lines.add(title);
-        if (body != null && body.isNotEmpty) lines.add(body);
-        if (extraLines is List) {
-          lines.addAll(extraLines.map((e) => e.toString()));
+        if (rawType == 'raw_base64' && rawContent['dataBase64'] != null) {
+          content = rawContent['dataBase64'].toString();
+          type = 'raw';
+          _log('Using local assigned printer route -> printerId=$printerId mode=raw_base64');
+        } else {
+          final lines = <String>[];
+          final title = rawContent['title']?.toString();
+          final body = rawContent['body']?.toString();
+          final extraLines = rawContent['lines'];
+
+          if (title != null && title.isNotEmpty) lines.add(title);
+          if (body != null && body.isNotEmpty) lines.add(body);
+          if (extraLines is List) {
+            lines.addAll(extraLines.map((e) => e.toString()));
+          }
+
+          content = lines.join('\n');
+          type = 'text';
         }
-
-        content = lines.join('\n');
-        type = 'text';
       } else {
         throw Exception('Contenido de impresión inválido.');
       }
