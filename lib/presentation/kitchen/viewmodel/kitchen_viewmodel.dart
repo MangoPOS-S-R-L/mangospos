@@ -135,15 +135,19 @@ class KitchenViewModel extends ChangeNotifier {
   }
 
   Future<void> markOrderReady(String orderId) async {
+    final affectedIds = _items
+        .where(
+          (item) =>
+              item.orderId == orderId &&
+              (item.status == 'pending' || item.status == 'preparing'),
+        )
+        .map((item) => item.id)
+        .toSet();
     _applyLocalOrderStatus(
       orderId,
       from: {'pending', 'preparing'},
       to: 'ready',
     );
-    final affectedIds = _items
-        .where((item) => item.orderId == orderId && item.status == 'ready')
-        .map((item) => item.id)
-        .toSet();
     try {
       await _repository.markOrderReady(orderId);
       if (_businessId != null && affectedIds.isNotEmpty) {

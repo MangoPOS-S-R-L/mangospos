@@ -32,6 +32,9 @@ class LocalPrintService {
 
   String _normalizePrinterId(String ip, [int port = 9100]) => '$ip:$port';
 
+  bool _isLegacyAgentBaseUrl(String baseUrl) =>
+      baseUrl.endsWith(':4000') || baseUrl.endsWith(':3000');
+
   void _log(String message) {
     debugPrint('[LocalPrintService] $message');
   }
@@ -79,7 +82,9 @@ class LocalPrintService {
     final baseUrl = await _resolveBaseUrl();
     final available = baseUrl != null;
     if (!available) {
-      _log('Local Agent not available on known local ports: ${_baseUrls.join(', ')}');
+      _log(
+        'Local Agent not available on known local ports: ${_baseUrls.join(', ')}',
+      );
     } else {
       _log('Local Agent detected at $_resolvedBaseUrl');
     }
@@ -126,15 +131,16 @@ class LocalPrintService {
 
     try {
       final printer = jobData['printer'] as Map<String, dynamic>?;
-      final printerId = (jobData['printerId'] ??
-              printer?['id'] ??
-              (printer != null && printer['ip'] != null
-                  ? _normalizePrinterId(
-                      printer['ip'].toString(),
-                      (printer['port'] as num?)?.toInt() ?? 9100,
-                    )
-                  : null))
-          ?.toString();
+      final printerId =
+          (jobData['printerId'] ??
+                  printer?['id'] ??
+                  (printer != null && printer['ip'] != null
+                      ? _normalizePrinterId(
+                          printer['ip'].toString(),
+                          (printer['port'] as num?)?.toInt() ?? 9100,
+                        )
+                      : null))
+              ?.toString();
 
       if (printerId == null || printerId.isEmpty) {
         throw Exception('Falta identificar la impresora destino (printerId).');
@@ -152,7 +158,9 @@ class LocalPrintService {
         if (rawType == 'raw_base64' && rawContent['dataBase64'] != null) {
           content = rawContent['dataBase64'].toString();
           type = 'raw';
-          _log('Using local assigned printer route -> printerId=$printerId mode=raw_base64');
+          _log(
+            'Using local assigned printer route -> printerId=$printerId mode=raw_base64',
+          );
         } else {
           final lines = <String>[];
           final title = rawContent['title']?.toString();
@@ -178,12 +186,31 @@ class LocalPrintService {
         'content': content,
       };
 
-      _log('POST $baseUrl/print -> printerId=$printerId type=$type contentLength=${content.length}');
+      final legacyPayload = {
+        'id': jobData['id']?.toString().trim().isNotEmpty == true
+            ? jobData['id'].toString()
+            : 'LOCAL-${DateTime.now().millisecondsSinceEpoch}',
+        'printerId': printerId,
+        if (printer != null) 'printer': Map<String, dynamic>.from(printer),
+        if (jobData['meta'] != null) 'meta': jobData['meta'],
+        'content': type == 'raw'
+            ? {'type': 'raw_base64', 'dataBase64': content}
+            : {'type': 'text', 'title': '', 'body': content},
+      };
+
+      final payload = _isLegacyAgentBaseUrl(baseUrl)
+          ? legacyPayload
+          : normalizedPayload;
+
+      _log(
+        'POST $baseUrl/print -> printerId=$printerId type=$type '
+        'contentLength=${content.length} legacy=${_isLegacyAgentBaseUrl(baseUrl)}',
+      );
 
       final response = await http.post(
         Uri.parse('$baseUrl/print'),
         headers: _headers(),
-        body: json.encode(normalizedPayload),
+        body: json.encode(payload),
       );
 
       if (response.statusCode == 200) {
@@ -199,7 +226,9 @@ class LocalPrintService {
       } catch (_) {
         if (response.body.isNotEmpty) errorMsg = response.body;
       }
-      _log('Agent rejected print job -> status=${response.statusCode} error=$errorMsg');
+      _log(
+        'Agent rejected print job -> status=${response.statusCode} error=$errorMsg',
+      );
       throw Exception(errorMsg);
     } catch (e) {
       _log('Error printing job: $e');
@@ -234,7 +263,9 @@ class LocalPrintService {
       } catch (_) {
         if (response.body.isNotEmpty) errorMsg = response.body;
       }
-      _log('Agent rejected test print -> status=${response.statusCode} error=$errorMsg');
+      _log(
+        'Agent rejected test print -> status=${response.statusCode} error=$errorMsg',
+      );
       throw Exception(errorMsg);
     } catch (e) {
       _log('Error testing print: $e');
@@ -257,13 +288,25 @@ class LocalPrintService {
       }
 
       final printerId = _normalizePrinterId(ip, port);
-      final payload = {
-        'printerId': printerId,
-        'type': 'raw',
-        'content': base64Encode(data),
-      };
+      final rawContent = base64Encode(data);
+      final payload = _isLegacyAgentBaseUrl(baseUrl)
+          ? {
+              'id': 'RAW-${DateTime.now().millisecondsSinceEpoch}',
+              'printerId': printerId,
+              'printer': {
+                'id': printerId,
+                'type': 'network',
+                'ip': ip,
+                'port': port,
+              },
+              'content': {'type': 'raw_base64', 'dataBase64': rawContent},
+            }
+          : {'printerId': printerId, 'type': 'raw', 'content': rawContent};
 
-      _log('POST $baseUrl/print (raw) -> printerId=$printerId bytes=${data.length}');
+      _log(
+        'POST $baseUrl/print (raw) -> printerId=$printerId '
+        'bytes=${data.length} legacy=${_isLegacyAgentBaseUrl(baseUrl)}',
+      );
 
       final response = await http.post(
         Uri.parse('$baseUrl/print'),
@@ -301,7 +344,9 @@ class LocalPrintService {
           );
         }
 
-        _log('Agent rejected raw print -> status=${response.statusCode} error=$errorMsg');
+        _log(
+          'Agent rejected raw print -> status=${response.statusCode} error=$errorMsg',
+        );
         throw Exception('El agente rechazó la impresión: $errorMsg');
       }
     } catch (e) {
@@ -324,10 +369,7 @@ class LocalPrintService {
 
       _log('GET $baseUrl/printers');
       final response = await http
-          .get(
-            Uri.parse('$baseUrl/printers'),
-            headers: _headers(),
-          )
+          .get(Uri.parse('$baseUrl/printers'), headers: _headers())
           .timeout(const Duration(seconds: 12));
 
       if (response.statusCode == 200) {
@@ -342,7 +384,9 @@ class LocalPrintService {
           return data;
         }
       }
-      _log('Agent rejected discover printers -> status=${response.statusCode} body=${response.body}');
+      _log(
+        'Agent rejected discover printers -> status=${response.statusCode} body=${response.body}',
+      );
       return [];
     } catch (e) {
       _log('Error discovering printers: $e');

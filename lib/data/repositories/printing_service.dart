@@ -1,5 +1,4 @@
 // lib/data/repositories/printing_service.dart
-import 'dart:convert';
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/printing_models.dart';
@@ -242,24 +241,12 @@ class PrintingService {
         debugPrint(
           '🖨️ Ruta seleccionada -> LOCAL/USB assigned printer ${printer.name} (${printer.id}) path=${printer.devicePath ?? 'n/a'}',
         );
-        await _printingRepo.printJobViaAgent({
-          'id': 'KITCHEN-${DateTime.now().millisecondsSinceEpoch}',
-          'printerId': printer.id,
-          'printer': {
-            'id': printer.id,
-            'type': 'usb',
-            'name': printer.name,
-            'devicePath': printer.devicePath,
-            'path': printer.devicePath,
-          },
-          'type': 'raw',
-          'content': base64Encode(bytes),
-          'meta': {
-            'areaCode': areaCode,
-            'fallback': fallbackData,
-            'route': 'local-usb-priority',
-          },
-        });
+        if (kIsWeb) {
+          throw Exception(
+            'Las impresoras USB no se usan desde la Web. Usa la app local de Windows o una impresora de red.',
+          );
+        }
+        await _printingRepo.printRawDirectUsb(printer: printer, data: bytes);
         return;
       case 'bluetooth':
         debugPrint(
