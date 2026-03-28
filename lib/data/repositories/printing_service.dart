@@ -1,5 +1,6 @@
 // lib/data/repositories/printing_service.dart
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'dart:convert';
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/printing_models.dart';
 import '../models/sales_models.dart';
@@ -209,7 +210,9 @@ class PrintingService {
         if (ip == null || ip.isEmpty) {
           throw Exception('La impresora de red no tiene IP configurada.');
         }
-        debugPrint('🖨️ Ruta seleccionada -> NETWORK assigned printer ${printer.name} (${printer.id}) @ $ip:${printer.port ?? 9100}');
+        debugPrint(
+          '🖨️ Ruta seleccionada -> NETWORK assigned printer ${printer.name} (${printer.id}) @ $ip:${printer.port ?? 9100}',
+        );
         if (kIsWeb) {
           await _printingRepo.printRawViaAgent(
             ip: ip,
@@ -225,7 +228,9 @@ class PrintingService {
             data: bytes,
           );
         } catch (e) {
-          debugPrint('⚠️ Direct TCP failed for ${printer.name}, using LAN agent fallback: $e');
+          debugPrint(
+            '⚠️ Direct TCP failed for ${printer.name}, using LAN agent fallback: $e',
+          );
           await _printingRepo.printRawViaAgent(
             ip: ip,
             port: printer.port ?? 9100,
@@ -234,7 +239,9 @@ class PrintingService {
         }
         return;
       case 'usb':
-        debugPrint('🖨️ Ruta seleccionada -> LOCAL/USB assigned printer ${printer.name} (${printer.id}) path=${printer.devicePath ?? 'n/a'}');
+        debugPrint(
+          '🖨️ Ruta seleccionada -> LOCAL/USB assigned printer ${printer.name} (${printer.id}) path=${printer.devicePath ?? 'n/a'}',
+        );
         await _printingRepo.printJobViaAgent({
           'id': 'KITCHEN-${DateTime.now().millisecondsSinceEpoch}',
           'printerId': printer.id,
@@ -255,15 +262,15 @@ class PrintingService {
         });
         return;
       case 'bluetooth':
-        debugPrint('🖨️ Ruta seleccionada -> BLUETOOTH assigned printer ${printer.name} (${printer.id})');
+        debugPrint(
+          '🖨️ Ruta seleccionada -> BLUETOOTH assigned printer ${printer.name} (${printer.id})',
+        );
         throw Exception(
           'La autoimpresión de cocina no soporta Bluetooth todavía.',
         );
       default:
         throw Exception('Tipo de impresora no soportado: ${printer.type}.');
     }
-
-    await _printingRepo.printEscPos(printer: printer, data: bytes);
   }
 
   /// Agrupar items por área de impresión
@@ -600,7 +607,10 @@ class PrintingService {
       final order = await _salesRepo.getOrder(orderId);
       if (order == null) throw Exception('Orden no encontrada');
 
-      final items = await _salesRepo.getOrderItems(orderId, includeModifiers: true);
+      final items = await _salesRepo.getOrderItems(
+        orderId,
+        includeModifiers: true,
+      );
       final readyItems = items
           .where((item) => itemIds.contains(item.id))
           .toList(growable: false);
@@ -700,7 +710,9 @@ class PrintingService {
       );
       return printers;
     } catch (e) {
-      debugPrint('⚠️ Usando cache local de impresoras READY para $areaCode: $e');
+      debugPrint(
+        '⚠️ Usando cache local de impresoras READY para $areaCode: $e',
+      );
       return _readCachedReadyPrinters(
         businessId: businessId,
         areaCode: areaCode,
