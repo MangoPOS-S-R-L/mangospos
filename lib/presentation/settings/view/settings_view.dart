@@ -156,6 +156,7 @@ class SettingsView extends ConsumerWidget {
             subtitle: 'Paquetes y ofertas especiales',
             icon: Icons.widgets_rounded,
             color: const Color(0xFFE6F7EE),
+            route: AppRoutes.menuCombos,
           ),
           _SettingsOption(
             title: 'Menú',
@@ -939,7 +940,8 @@ class _SettingsCardItemState extends State<_SettingsCardItem> {
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center, // Centrado vertical del contenido
+                  crossAxisAlignment: CrossAxisAlignment
+                      .center, // Centrado vertical del contenido
                   children: [
                     Container(
                       width: 40,
@@ -965,7 +967,8 @@ class _SettingsCardItemState extends State<_SettingsCardItem> {
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min, // Ocupa solo el espacio necesario
+                        mainAxisSize:
+                            MainAxisSize.min, // Ocupa solo el espacio necesario
                         children: [
                           Text(
                             data.title,

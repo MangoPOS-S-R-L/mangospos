@@ -55,6 +55,7 @@ class ProductsRepository {
     String? barcode,
     bool hasVariants = false,
     bool isActive = true,
+    String itemType = 'standard',
     String? imagePath,
     String? imageUrl,
     List<String> taxIds = const [],
@@ -74,6 +75,7 @@ class ProductsRepository {
             'cost': cost,
             'barcode': barcode,
             'has_variants': hasVariants,
+            'item_type': itemType,
             'image_path': imagePath,
             'image_url': imageUrl,
           }..removeWhere((key, value) => value == null),
@@ -114,6 +116,7 @@ class ProductsRepository {
     double? cost,
     String? barcode,
     bool hasVariants = false,
+    String itemType = 'standard',
     String? imagePath,
     String? imageUrl,
     List<String> taxIds = const [],
@@ -129,6 +132,7 @@ class ProductsRepository {
       'cost': cost,
       'barcode': barcode,
       'has_variants': hasVariants,
+      'item_type': itemType,
     };
 
     if (imagePath != null) {

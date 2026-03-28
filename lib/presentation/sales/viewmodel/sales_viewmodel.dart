@@ -27,8 +27,23 @@ final printingServiceProvider = Provider<PrintingService>(
 final currentOrderProvider =
     NotifierProvider<SalesViewModel, CurrentOrderState>(SalesViewModel.new);
 
+class SelectedModifierInput {
+  final String name;
+  final double qty;
+  final double price;
+
+  const SelectedModifierInput({
+    required this.name,
+    this.qty = 1,
+    this.price = 0,
+  });
+
+  Map<String, dynamic> toMap() => {'name': name, 'qty': qty, 'price': price};
+}
+
 class SalesViewModel extends Notifier<CurrentOrderState> {
   static const _courtesyPrefix = '[CORTESIA:';
+  static const _promoPrefix = '[PROMO_AUTO:';
   static const _defaultTaxRatePct = 18.0;
   static const _defaultServiceFeeRatePct = 10.0;
   final Map<String, CurrentOrderState> _tableCache = {};
@@ -537,6 +552,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     double? productPrice,
     String productTaxMode = 'exclusive',
     double? productTaxRate,
+    List<SelectedModifierInput> selectedModifiers = const [],
   }) async {
     final orderId = state.order?.id;
     if (orderId == null) {
@@ -569,7 +585,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         qty > 0) {
       await _ensureBusinessTaxSettingsLoaded();
       final tempId = 'tmp_${DateTime.now().microsecondsSinceEpoch}';
-      final grossAmount = productPrice * qty;
+      final modifiersGross = selectedModifiers.fold<double>(
+        0,
+        (sum, modifier) => sum + (modifier.price * modifier.qty),
+      );
+      final grossAmount = (productPrice * qty) + modifiersGross;
       // Si productTaxRate es null (desconocido), intentamos inferirlo de la orden.
       // Si es 0 explícitamente, el producto NO tiene impuesto -> respetamos el 0.
       final effectiveTaxRatePct = _sanitizeProductTaxRatePct(
@@ -612,7 +632,17 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         taxMode: productTaxMode,
         taxRate: effectiveTaxRatePct,
         createdAt: DateTime.now(),
-        modifiers: const [],
+        modifiers: selectedModifiers
+            .map(
+              (modifier) => OrderItemModifier(
+                id: 'tmp_mod_${DateTime.now().microsecondsSinceEpoch}_${modifier.name}',
+                itemId: tempId,
+                name: modifier.name,
+                qty: modifier.qty,
+                price: modifier.price,
+              ),
+            )
+            .toList(growable: false),
       );
 
       final optimisticItems = [...state.items, optimisticItem];
@@ -641,7 +671,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
 
     try {
-      await ref
+      final itemId = await ref
           .read(salesRepositoryProvider)
           .addItemFromMenu(
             orderId: orderId,
@@ -651,7 +681,17 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             isTakeout: takeout,
             notes: notes,
           );
-      refreshOrder();
+      if (selectedModifiers.isNotEmpty) {
+        await ref
+            .read(salesRepositoryProvider)
+            .addOrderItemModifiers(
+              itemId: itemId,
+              modifiers: selectedModifiers
+                  .map((modifier) => modifier.toMap())
+                  .toList(growable: false),
+            );
+      }
+      await refreshOrder();
     } catch (e) {
       final businessId = _activeBusinessId;
       final isOffline =
@@ -1032,6 +1072,40 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
 
       state = state.copyWith(error: 'Error al cambiar takeout del item: $e');
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getMenuItemComboGroups(String menuItemId) {
+    return ref
+        .read(salesRepositoryProvider)
+        .getComboGroupsForMenuItem(menuItemId);
+  }
+
+  Future<List<Map<String, dynamic>>> getMenuItemModifierGroups(
+    String menuItemId,
+  ) {
+    return ref
+        .read(salesRepositoryProvider)
+        .getModifierGroupsForMenuItem(menuItemId);
+  }
+
+  Future<void> replaceItemModifiers({
+    required String itemId,
+    required List<SelectedModifierInput> selectedModifiers,
+  }) async {
+    try {
+      await ref
+          .read(salesRepositoryProvider)
+          .replaceOrderItemModifiers(
+            itemId: itemId,
+            modifiers: selectedModifiers
+                .map((modifier) => modifier.toMap())
+                .toList(growable: false),
+          );
+      refreshOrder();
+    } catch (e) {
+      state = state.copyWith(error: 'Error actualizando modificadores: $e');
+      rethrow;
     }
   }
 
@@ -1662,6 +1736,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       _tableCache[tableId] = state;
     }
 
+    final promotionsChanged = await _applyAutomaticPromotionsIfNeeded();
+    if (promotionsChanged) {
+      refreshOrder();
+      return;
+    }
+
     await _persistCurrentState(tableId: tableId);
     _subscribeToOrderUpdates(orderId);
   }
@@ -1862,6 +1942,41 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     return double.parse(total.toStringAsFixed(2));
   }
 
+  bool _hasCourtesyNote(String? rawNotes) {
+    if (rawNotes == null || rawNotes.trim().isEmpty) return false;
+    return rawNotes
+        .split('\n')
+        .map((line) => line.trim())
+        .any((line) => line.startsWith(_courtesyPrefix) && line.endsWith(']'));
+  }
+
+  String? _extractAutoPromoId(String? rawNotes) {
+    if (rawNotes == null || rawNotes.trim().isEmpty) return null;
+    for (final line in rawNotes.split('\n').map((line) => line.trim())) {
+      if (line.startsWith(_promoPrefix) && line.endsWith(']')) {
+        return line.substring(_promoPrefix.length, line.length - 1).trim();
+      }
+    }
+    return null;
+  }
+
+  String _stripManagedNotes(String? rawNotes) {
+    if (rawNotes == null || rawNotes.trim().isEmpty) return '';
+
+    final lines = rawNotes
+        .split('\n')
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .where(
+          (line) =>
+              !(line.startsWith(_courtesyPrefix) && line.endsWith(']')) &&
+              !(line.startsWith(_promoPrefix) && line.endsWith(']')),
+        )
+        .toList(growable: false);
+
+    return lines.join('\n');
+  }
+
   String _stripCourtesyFromNotes(String? rawNotes) {
     if (rawNotes == null || rawNotes.trim().isEmpty) return '';
 
@@ -1881,7 +1996,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     required String? originalNotes,
     required String reason,
   }) {
-    final baseNotes = _stripCourtesyFromNotes(originalNotes);
+    final baseNotes = _stripManagedNotes(originalNotes);
     final parts = <String>[];
     if (baseNotes.isNotEmpty) {
       parts.add(baseNotes);
@@ -1891,5 +2006,253 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
     if (parts.isEmpty) return null;
     return parts.join('\n');
+  }
+
+  String? _buildAutoPromoNotes({
+    required String? originalNotes,
+    required String promoId,
+  }) {
+    final baseNotes = _stripManagedNotes(originalNotes);
+    final parts = <String>[];
+    if (baseNotes.isNotEmpty) {
+      parts.add(baseNotes);
+    }
+    parts.add('$_promoPrefix$promoId]');
+    return parts.join('\n');
+  }
+
+  Future<bool> _applyAutomaticPromotionsIfNeeded() async {
+    final order = state.order;
+    final businessId = _activeBusinessId;
+    if (order == null || businessId == null || businessId.isEmpty) {
+      return false;
+    }
+
+    final now = DateTime.now();
+    final weekday = now.weekday % 7;
+    final openItems = state.items
+        .where((item) => item.status != 'paid' && item.status != 'void')
+        .toList(growable: false);
+    if (openItems.isEmpty) return false;
+
+    final promosRaw = await Supabase.instance.client
+        .from('promotions')
+        .select(
+          'id,name,promo_type,discount_type,discount_value,min_purchase,target_scope,applies_to,target_ids,days_of_week,auto_apply,is_active,start_date,end_date,buy_quantity,pay_quantity,reward_quantity,priority,stackable',
+        )
+        .eq('business_id', businessId)
+        .eq('is_active', true)
+        .eq('auto_apply', true)
+        .order('priority', ascending: false)
+        .order('created_at', ascending: false);
+
+    final promos = List<Map<String, dynamic>>.from(promosRaw)
+        .where((promo) {
+          final start = DateTime.tryParse(
+            promo['start_date']?.toString() ?? '',
+          );
+          final end = DateTime.tryParse(promo['end_date']?.toString() ?? '');
+          final days =
+              (promo['days_of_week'] as List?)
+                  ?.map(
+                    (value) => value is num
+                        ? value.toInt()
+                        : int.tryParse(value.toString()),
+                  )
+                  .whereType<int>()
+                  .toList() ??
+              const <int>[];
+          final inDateRange =
+              (start == null || !now.isBefore(start)) &&
+              (end == null || !now.isAfter(end.add(const Duration(days: 1))));
+          final inWeekday = days.isEmpty || days.contains(weekday);
+          return inDateRange && inWeekday;
+        })
+        .toList(growable: false);
+
+    if (promos.isEmpty) {
+      final managedItems = openItems
+          .where((item) => _extractAutoPromoId(item.notes) != null)
+          .toList(growable: false);
+      if (managedItems.isEmpty) return false;
+
+      await Future.wait(
+        managedItems.map(
+          (item) => ref
+              .read(salesRepositoryProvider)
+              .updateItemDiscountAndNotes(
+                itemId: item.id,
+                discounts: 0,
+                notes: _stripManagedNotes(item.notes).isEmpty
+                    ? null
+                    : _stripManagedNotes(item.notes),
+              ),
+        ),
+      );
+      return true;
+    }
+
+    final eligibleBaseItems = openItems
+        .where((item) {
+          if (_hasCourtesyNote(item.notes)) return false;
+          final existingPromoId = _extractAutoPromoId(item.notes);
+          if (existingPromoId != null) return true;
+          return item.discounts <= 0.009;
+        })
+        .toList(growable: false);
+
+    if (eligibleBaseItems.isEmpty) return false;
+
+    final updates = <({String itemId, double discount, String? notes})>[];
+    final touchedItemIds = <String>{};
+
+    List<OrderItem> itemsForPromo(Map<String, dynamic> promo) {
+      final scope =
+          promo['target_scope']?.toString() ??
+          promo['applies_to']?.toString() ??
+          'all';
+      final targetIds =
+          (promo['target_ids'] as List?)
+              ?.map((value) => value?.toString() ?? '')
+              .where((value) => value.isNotEmpty)
+              .toSet() ??
+          <String>{};
+      return eligibleBaseItems
+          .where((item) {
+            if (touchedItemIds.contains(item.id)) return false;
+            if (scope == 'product') {
+              final productId = item.productId?.trim();
+              return productId != null &&
+                  productId.isNotEmpty &&
+                  targetIds.contains(productId);
+            }
+            return true;
+          })
+          .toList(growable: false);
+    }
+
+    double grossAmount(OrderItem item) => _courtesyLineAmount(item);
+
+    for (final promo in promos) {
+      final promoId = promo['id']?.toString() ?? '';
+      if (promoId.isEmpty) continue;
+      final promoType =
+          promo['promo_type']?.toString() ??
+          promo['discount_type']?.toString() ??
+          'percentage';
+      final minPurchase = (promo['min_purchase'] as num?)?.toDouble() ?? 0.0;
+      final targetItems = itemsForPromo(promo);
+      if (targetItems.isEmpty) continue;
+
+      final grossTotal = targetItems.fold<double>(
+        0,
+        (sum, item) => sum + grossAmount(item),
+      );
+      if (grossTotal + 0.001 < minPurchase) continue;
+
+      if (promoType == 'bogo') {
+        final buyQty = (promo['buy_quantity'] as num?)?.toInt() ?? 2;
+        final payQty = (promo['pay_quantity'] as num?)?.toInt() ?? 1;
+        final freeQty = (buyQty - payQty) > 0
+            ? (buyQty - payQty)
+            : ((promo['reward_quantity'] as num?)?.toInt() ?? 1);
+        if (buyQty <= 1 || freeQty <= 0) continue;
+
+        final sorted = [...targetItems]
+          ..sort((a, b) => grossAmount(a).compareTo(grossAmount(b)));
+        final groups = sorted.length ~/ buyQty;
+        final freeItemsCount = groups * freeQty;
+        for (var i = 0; i < freeItemsCount && i < sorted.length; i++) {
+          final item = sorted[i];
+          final discount = grossAmount(
+            item,
+          ).clamp(0, double.infinity).toDouble();
+          updates.add((
+            itemId: item.id,
+            discount: double.parse(discount.toStringAsFixed(2)),
+            notes: _buildAutoPromoNotes(
+              originalNotes: item.notes,
+              promoId: promoId,
+            ),
+          ));
+          touchedItemIds.add(item.id);
+        }
+        continue;
+      }
+
+      for (final item in targetItems) {
+        final gross = grossAmount(item);
+        final discountValue =
+            (promo['discount_value'] as num?)?.toDouble() ?? 0.0;
+        double discount = 0;
+        if (promoType == 'fixed') {
+          discount = discountValue.clamp(0, gross).toDouble();
+        } else if (promoType == 'percentage') {
+          discount = (gross * (discountValue.clamp(0, 100) / 100.0))
+              .clamp(0, gross)
+              .toDouble();
+        } else if (promoType == 'bundle_price') {
+          discount = (gross - discountValue).clamp(0, gross).toDouble();
+        }
+        if (discount <= 0.009) continue;
+        updates.add((
+          itemId: item.id,
+          discount: double.parse(discount.toStringAsFixed(2)),
+          notes: _buildAutoPromoNotes(
+            originalNotes: item.notes,
+            promoId: promoId,
+          ),
+        ));
+        touchedItemIds.add(item.id);
+      }
+    }
+
+    final staleManagedItems = openItems
+        .where((item) {
+          final promoId = _extractAutoPromoId(item.notes);
+          return promoId != null &&
+              !updates.any((update) => update.itemId == item.id);
+        })
+        .toList(growable: false);
+
+    if (updates.isEmpty && staleManagedItems.isEmpty) return false;
+
+    var changed = false;
+    for (final update in updates) {
+      final current = openItems.firstWhere((item) => item.id == update.itemId);
+      final currentPromoId = _extractAutoPromoId(current.notes);
+      final expectedPromoId = _extractAutoPromoId(update.notes);
+      final normalizedCurrentNotes = _stripManagedNotes(current.notes);
+      final normalizedNewNotes = _stripManagedNotes(update.notes);
+      final sameDiscount = (current.discounts - update.discount).abs() <= 0.009;
+      final samePromo =
+          currentPromoId == expectedPromoId &&
+          normalizedCurrentNotes == normalizedNewNotes;
+      if (sameDiscount && samePromo) continue;
+
+      await ref
+          .read(salesRepositoryProvider)
+          .updateItemDiscountAndNotes(
+            itemId: update.itemId,
+            discounts: update.discount,
+            notes: update.notes,
+          );
+      changed = true;
+    }
+
+    for (final item in staleManagedItems) {
+      await ref
+          .read(salesRepositoryProvider)
+          .updateItemDiscountAndNotes(
+            itemId: item.id,
+            discounts: 0,
+            notes: _stripManagedNotes(item.notes).isEmpty
+                ? null
+                : _stripManagedNotes(item.notes),
+          );
+      changed = true;
+    }
+
+    return changed;
   }
 }

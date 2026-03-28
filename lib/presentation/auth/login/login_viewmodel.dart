@@ -3,13 +3,10 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../../../services/session/session_controller.dart';
 import '../../../core/utils/logger.dart';
 import '../../../core/utils/display_name_utils.dart';
-import '../../../core/auth/session_bridge.dart';
-import '../../../core/tenant/tenant_resolver.dart';
 import 'login_state.dart';
 
 class LoginViewModel extends Notifier<LoginState> {
@@ -97,10 +94,10 @@ class LoginViewModel extends Notifier<LoginState> {
         return;
       }
 
-      // Si tiene más de un negocio → mostrar selector
+      // Si tiene más de un negocio → mostrar selector interno
       if (businessesList.length > 1) {
         AppLogger.i(
-          'Multi-tenant detectado (${businessesList.length} negocios). Notificando para navegación a selector...',
+          'Usuario con múltiples negocios (${businessesList.length}). Mostrando selector interno.',
         );
         _safeSet(
           state.copyWith(isLoading: false, needsBusinessSelection: true),
@@ -128,22 +125,6 @@ class LoginViewModel extends Notifier<LoginState> {
         return;
       }
 
-      // Lógica de redirección a subdominio si estamos en app.mangopos.do
-      // — ANTES de setAuthenticated para que GoRouter no intervenga.
-      if (kIsWeb && TenantResolver.isAppShell) {
-        final businessObj = singleBiz['businesses'];
-        final domain = businessObj?['domain'] as String?;
-
-        if (domain != null && domain.isNotEmpty) {
-          AppLogger.i('[$businessId] Transfiriendo sesión al tenant: $domain');
-          _safeSet(state.copyWith(isLoading: false));
-          SessionBridge.redirectToTenant(domain);
-          return; // El browser navega al tenant; no seguimos montando nada local.
-        }
-      }
-
-      // Si NO estamos en app.mangopos.do (ej: desktop, mobile, desarrollo local)
-      // autenticamos localmente de forma normal.
       ref
           .read(sessionProvider.notifier)
           .setAuthenticated(

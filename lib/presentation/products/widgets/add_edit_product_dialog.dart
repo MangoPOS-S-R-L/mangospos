@@ -25,6 +25,7 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     String? barcode,
     bool hasVariants,
     bool isActive,
+    String itemType,
     File? imageFile,
     Uint8List? imageBytes,
     List<String> taxIds,
@@ -44,6 +45,7 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     double? cost,
     String? barcode,
     bool hasVariants,
+    String itemType,
     File? imageFile,
     Uint8List? imageBytes,
     List<String> taxIds,
@@ -79,6 +81,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
   String _taxMode = 'exclusive';
   bool _isActive = true;
   bool _hasVariants = false;
+  String _itemType = 'standard';
 
   File? _pickedImageFile;
   Uint8List? _pickedImageBytes;
@@ -118,6 +121,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         : 'exclusive';
     _isActive = p?['is_active'] ?? true;
     _hasVariants = p?['has_variants'] ?? false;
+    _itemType = p?['item_type']?.toString() ?? 'standard';
 
     Future.microtask(() async {
       try {
@@ -467,6 +471,24 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
           file: _pickedImageFile,
           existingUrl: widget.product?['image_url']?.toString(),
           onTap: _pickImage,
+        ),
+        const SizedBox(height: 14),
+        _fieldLabel('Tipo de elemento'),
+        _buildDropdown<String>(
+          value: _itemType,
+          hint: 'Tipo de elemento',
+          items: const [
+            DropdownMenuItem(value: 'standard', child: Text('Producto normal')),
+            DropdownMenuItem(value: 'combo', child: Text('Combo')),
+            DropdownMenuItem(
+              value: 'extra_only',
+              child: Text('Extra / add-on'),
+            ),
+          ],
+          onChanged: (value) {
+            if (value == null) return;
+            setState(() => _itemType = value);
+          },
         ),
         const SizedBox(height: 14),
         _switchRow(
@@ -883,6 +905,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         cost: cost,
         barcode: barcode,
         hasVariants: _hasVariants,
+        itemType: _itemType,
         imageFile: _pickedImageFile,
         imageBytes: _pickedImageBytes,
         taxIds: _selectedTaxIds.toList(),
@@ -900,6 +923,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         barcode: barcode,
         hasVariants: _hasVariants,
         isActive: _isActive,
+        itemType: _itemType,
         imageFile: _pickedImageFile,
         imageBytes: _pickedImageBytes,
         taxIds: _selectedTaxIds.toList(),
@@ -956,8 +980,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
                 backgroundColor: MangoColors.primaryOrange,
                 foregroundColor: MangoColors.white,
               ),
-              onPressed: () =>
-                  Navigator.pop(dialogCtx, controller.text.trim()),
+              onPressed: () => Navigator.pop(dialogCtx, controller.text.trim()),
               child: const Text('Crear'),
             ),
           ],

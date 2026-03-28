@@ -33,7 +33,9 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
   @override
   void initState() {
     super.initState();
-    ref.read(registerStep1VmProvider.notifier).setSelectedPlan(widget.initialPlan);
+    ref
+        .read(registerStep1VmProvider.notifier)
+        .setSelectedPlan(widget.initialPlan);
     final state = ref.read(registerStep1VmProvider);
     _fullNameCtl = TextEditingController(text: state.fullName ?? '');
     _emailCtl = TextEditingController(text: state.email ?? '');
@@ -51,7 +53,10 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(registerStep1VmProvider);
-    final selectedPlan = PlansConfig.plans.firstWhere((p) => p.id == state.selectedPlan, orElse: () => PlansConfig.plans.first);
+    final selectedPlan = PlansConfig.plans.firstWhere(
+      (p) => p.id == state.selectedPlan,
+      orElse: () => PlansConfig.plans.first,
+    );
     final planLabel = selectedPlan.name;
 
     return AuthShell(
@@ -64,7 +69,9 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _eyebrow('Cuenta principal').animate().fadeIn(duration: 400.ms).slideX(begin: -0.1),
+              _eyebrow(
+                'Cuenta principal',
+              ).animate().fadeIn(duration: 400.ms).slideX(begin: -0.1),
               const SizedBox(height: 18),
               Text(
                 'Crea tu acceso',
@@ -85,9 +92,9 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
               ).animate().fadeIn(delay: 200.ms).slideX(begin: -0.1),
               const SizedBox(height: 24),
               // Selector de Planes interactivo
-              _FieldLabel('Elige el plan ideal para tu negocio')
-                  .animate()
-                  .fadeIn(delay: 300.ms),
+              _FieldLabel(
+                'Elige el plan ideal para tu negocio',
+              ).animate().fadeIn(delay: 300.ms),
               const SizedBox(height: 10),
               Container(
                 constraints: const BoxConstraints(maxWidth: double.infinity),
@@ -105,25 +112,33 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
                           width: 260,
                           padding: const EdgeInsets.all(20),
                           decoration: BoxDecoration(
-                            color: isSelected ? const Color(0xFFFFF7F1) : Colors.white,
+                            color: isSelected
+                                ? const Color(0xFFFFF7F1)
+                                : Colors.white,
                             borderRadius: BorderRadius.circular(20),
                             border: Border.all(
-                              color: isSelected ? MangoTokens.primary : MangoTokens.border,
+                              color: isSelected
+                                  ? MangoTokens.primary
+                                  : MangoTokens.border,
                               width: isSelected ? 2 : 1,
                             ),
                             boxShadow: isSelected
                                 ? [
                                     BoxShadow(
-                                      color: MangoTokens.primary.withValues(alpha: 0.1),
+                                      color: MangoTokens.primary.withValues(
+                                        alpha: 0.1,
+                                      ),
                                       blurRadius: 15,
                                       offset: const Offset(0, 5),
-                                    )
+                                    ),
                                   ]
                                 : [],
                           ),
                           child: InkWell(
                             onTap: () {
-                              ref.read(registerStep1VmProvider.notifier).setSelectedPlan(plan.id);
+                              ref
+                                  .read(registerStep1VmProvider.notifier)
+                                  .setSelectedPlan(plan.id);
                             },
                             borderRadius: BorderRadius.circular(18),
                             child: Column(
@@ -131,10 +146,15 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
                               children: [
                                 if (plan.isPopular)
                                   Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 4,
+                                    ),
                                     margin: const EdgeInsets.only(bottom: 12),
                                     decoration: BoxDecoration(
-                                      color: MangoTokens.primary.withValues(alpha: 0.1),
+                                      color: MangoTokens.primary.withValues(
+                                        alpha: 0.1,
+                                      ),
                                       borderRadius: BorderRadius.circular(20),
                                     ),
                                     child: const Text(
@@ -164,25 +184,38 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
                                   ),
                                 ),
                                 const SizedBox(height: 16),
-                                ...plan.features.take(3).map((f) => Padding(
-                                      padding: const EdgeInsets.only(bottom: 8),
-                                      child: Row(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          const Icon(Icons.check_circle, size: 14, color: MangoTokens.primary),
-                                          const SizedBox(width: 8),
-                                          Expanded(
-                                            child: Text(
-                                              f.title,
-                                              style: GoogleFonts.plusJakartaSans(
-                                                fontSize: 12,
-                                                color: MangoTokens.mutedForeground,
+                                ...plan.features
+                                    .take(3)
+                                    .map(
+                                      (f) => Padding(
+                                        padding: const EdgeInsets.only(
+                                          bottom: 8,
+                                        ),
+                                        child: Row(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            const Icon(
+                                              Icons.check_circle,
+                                              size: 14,
+                                              color: MangoTokens.primary,
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Expanded(
+                                              child: Text(
+                                                f.title,
+                                                style:
+                                                    GoogleFonts.plusJakartaSans(
+                                                      fontSize: 12,
+                                                      color: MangoTokens
+                                                          .mutedForeground,
+                                                    ),
                                               ),
                                             ),
-                                          ),
-                                        ],
+                                          ],
+                                        ),
                                       ),
-                                    )),
+                                    ),
                               ],
                             ),
                           ),
@@ -193,7 +226,9 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
                 ),
               ).animate().fadeIn(delay: 350.ms).slideX(begin: 0.1),
               const SizedBox(height: 30),
-              _FieldLabel('Nombre del responsable').animate().fadeIn(delay: 400.ms),
+              _FieldLabel(
+                'Nombre del responsable',
+              ).animate().fadeIn(delay: 400.ms),
               TextFormField(
                 controller: _fullNameCtl,
                 validator: _required,
@@ -223,7 +258,9 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
               ).animate().fadeIn(delay: 550.ms).slideY(begin: 0.2),
               const SizedBox(height: 18),
               _FieldLabel('Contraseña').animate().fadeIn(delay: 600.ms),
-              _PasswordField(controller: _passwordCtl).animate().fadeIn(delay: 650.ms).slideY(begin: 0.2),
+              _PasswordField(
+                controller: _passwordCtl,
+              ).animate().fadeIn(delay: 650.ms).slideY(begin: 0.2),
               const SizedBox(height: 14),
               Text(
                 'Mínimo 6 caracteres.',
@@ -285,7 +322,7 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
                 AuthSummaryRow(label: 'Plan', value: planLabel),
                 AuthSummaryRow(label: 'Prueba', value: '14 días gratis'),
                 AuthSummaryRow(label: 'Acceso principal', value: 'Propietario'),
-                AuthSummaryRow(label: 'Subdominio', value: 'tunegocio.mangopos.do'),
+                AuthSummaryRow(label: 'Acceso web', value: 'app.mangopos.do'),
                 AuthSummaryRow(
                   label: 'Permisos iniciales',
                   value: 'Administrador completo',
@@ -326,21 +363,21 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
   }
 
   Widget _eyebrow(String text) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        decoration: BoxDecoration(
-          color: const Color(0xFFFFF7F1),
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: const Color(0xFFFFE3CD)),
-        ),
-        child: Text(
-          text,
-          style: GoogleFonts.plusJakartaSans(
-            fontSize: 12,
-            fontWeight: FontWeight.w700,
-            color: MangoTokens.primary,
-          ),
-        ),
-      );
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+    decoration: BoxDecoration(
+      color: const Color(0xFFFFF7F1),
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(color: const Color(0xFFFFE3CD)),
+    ),
+    child: Text(
+      text,
+      style: GoogleFonts.plusJakartaSans(
+        fontSize: 12,
+        fontWeight: FontWeight.w700,
+        color: MangoTokens.primary,
+      ),
+    ),
+  );
 }
 
 class _FieldLabel extends StatelessWidget {
@@ -392,7 +429,9 @@ class _PasswordFieldState extends State<_PasswordField> {
         suffix: IconButton(
           onPressed: () => setState(() => _obscure = !_obscure),
           icon: Icon(
-            _obscure ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+            _obscure
+                ? Icons.visibility_off_outlined
+                : Icons.visibility_outlined,
             color: MangoTokens.mutedForeground,
           ),
         ),

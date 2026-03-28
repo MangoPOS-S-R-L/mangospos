@@ -1,9 +1,18 @@
 import 'package:flutter/material.dart';
+import '../../viewmodel/menu_browser_viewmodel.dart';
+import '../../viewmodel/sales_viewmodel.dart';
 import '../../../../data/models/sales_models.dart';
 
 class ProductDetailModal extends StatefulWidget {
   final OrderItem item;
   final List<OrderItem>? groupedItems;
+  final Future<List<Map<String, dynamic>>> Function(String menuItemId)?
+  loadModifierGroups;
+  final Future<void> Function(
+    String itemId,
+    List<SelectedModifierInput> selectedModifiers,
+  )?
+  onReplaceModifiers;
   final Future<void> Function(OrderItem updatedItem) onSave;
   final Future<void> Function(
     List<OrderItem> items,
@@ -19,6 +28,8 @@ class ProductDetailModal extends StatefulWidget {
     super.key,
     required this.item,
     this.groupedItems,
+    this.loadModifierGroups,
+    this.onReplaceModifiers,
     required this.onSave,
     this.onSaveBatch,
     required this.onDelete,
@@ -46,6 +57,7 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
   late bool _isCourtesy;
   bool _isMarkingSoldOut = false;
   bool _isSaving = false;
+  bool _isEditingModifiers = false;
 
   @override
   void initState() {
@@ -300,6 +312,61 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
       if (mounted) {
         setState(() {
           _isSaving = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _handleEditModifiers() async {
+    if (_isEditingModifiers ||
+        widget.item.productId == null ||
+        widget.loadModifierGroups == null ||
+        widget.onReplaceModifiers == null ||
+        _isGroupedMode) {
+      return;
+    }
+
+    setState(() {
+      _isEditingModifiers = true;
+    });
+
+    try {
+      final groups = await widget.loadModifierGroups!(widget.item.productId!);
+      if (!mounted) return;
+      if (groups.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Este producto no tiene modificadores asignados.'),
+          ),
+        );
+        return;
+      }
+
+      final result = await showDialog<List<SelectedModifierInput>>(
+        context: context,
+        builder: (_) => _ItemModifiersEditorDialog(
+          product: MenuProduct(
+            id: widget.item.productId!,
+            name: widget.item.productName,
+            price: widget.item.unitPrice,
+            taxMode: widget.item.taxMode,
+            taxRate: widget.item.taxRate,
+            categoryId: '',
+          ),
+          groups: groups,
+          existingModifiers: widget.item.modifiers,
+        ),
+      );
+      if (!mounted || result == null) return;
+      await widget.onReplaceModifiers!(widget.item.id, result);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Modificadores actualizados.')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isEditingModifiers = false;
         });
       }
     }
@@ -632,6 +699,82 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                 ],
               ),
               const SizedBox(height: 12),
+
+              if (!_isGroupedMode && widget.item.productId != null) ...[
+                Row(
+                  children: [
+                    const Text(
+                      'Modificadores',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: kTextPrimary,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const Spacer(),
+                    OutlinedButton.icon(
+                      onPressed: _isEditingModifiers
+                          ? null
+                          : _handleEditModifiers,
+                      icon: _isEditingModifiers
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.tune, size: 16),
+                      label: const Text('Editar modificadores'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                if (widget.item.modifiers.isEmpty)
+                  const Text(
+                    'Este item no tiene modificadores seleccionados.',
+                    style: TextStyle(fontSize: 13, color: kTextSecondary),
+                  )
+                else
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: widget.item.modifiers
+                        .map((modifier) {
+                          final hasCost = modifier.price > 0.009;
+                          final isComboChoice = modifier.name.contains(': ');
+                          return Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: isComboChoice
+                                  ? const Color(0xFFFFF7ED)
+                                  : const Color(0xFFF8FAFC),
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(
+                                color: isComboChoice
+                                    ? const Color(0xFFFED7AA)
+                                    : kBorder,
+                              ),
+                            ),
+                            child: Text(
+                              hasCost
+                                  ? '${modifier.name} (+RD\$ ${modifier.price.toStringAsFixed(2)})'
+                                  : modifier.name,
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: isComboChoice
+                                    ? const Color(0xFF9A3412)
+                                    : const Color(0xFF475569),
+                              ),
+                            ),
+                          );
+                        })
+                        .toList(growable: false),
+                  ),
+                const SizedBox(height: 12),
+              ],
 
               // Cortesía
               Row(
@@ -1006,6 +1149,227 @@ class _PreviewRow extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _ItemModifiersEditorDialog extends StatefulWidget {
+  final MenuProduct product;
+  final List<Map<String, dynamic>> groups;
+  final List<OrderItemModifier> existingModifiers;
+
+  const _ItemModifiersEditorDialog({
+    required this.product,
+    required this.groups,
+    required this.existingModifiers,
+  });
+
+  @override
+  State<_ItemModifiersEditorDialog> createState() =>
+      _ItemModifiersEditorDialogState();
+}
+
+class _ItemModifiersEditorDialogState
+    extends State<_ItemModifiersEditorDialog> {
+  final Map<String, Set<String>> _selectedByGroup = <String, Set<String>>{};
+
+  @override
+  void initState() {
+    super.initState();
+    final existingNames = widget.existingModifiers.map((m) => m.name).toSet();
+    for (final row in widget.groups) {
+      final group = Map<String, dynamic>.from(row['modifier_groups'] as Map);
+      final groupId = group['id']?.toString() ?? '';
+      final modifiers = ((group['modifiers'] as List?) ?? const [])
+          .map((item) => Map<String, dynamic>.from(item as Map))
+          .where((item) => item['is_active'] != false)
+          .toList(growable: false);
+      final selected = modifiers
+          .where(
+            (item) => existingNames.contains(item['name']?.toString() ?? ''),
+          )
+          .map((item) => item['id']?.toString() ?? '')
+          .where((id) => id.isNotEmpty)
+          .toSet();
+      _selectedByGroup[groupId] = selected;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 680, maxHeight: 720),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Editar modificadores · ${widget.product.name}',
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: widget.groups
+                        .map((row) {
+                          final group = Map<String, dynamic>.from(
+                            row['modifier_groups'] as Map,
+                          );
+                          final groupId = group['id']?.toString() ?? '';
+                          final displayType =
+                              group['display_type']?.toString() ?? 'multiple';
+                          final maxSelect =
+                              (group['max_select'] as num?)?.toInt() ?? 0;
+                          final modifiers =
+                              ((group['modifiers'] as List?) ?? const [])
+                                  .map(
+                                    (item) =>
+                                        Map<String, dynamic>.from(item as Map),
+                                  )
+                                  .where((item) => item['is_active'] != false)
+                                  .toList(growable: false);
+                          final selected =
+                              _selectedByGroup[groupId] ?? <String>{};
+                          return Container(
+                            width: double.infinity,
+                            margin: const EdgeInsets.only(bottom: 12),
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              border: Border.all(
+                                color: const Color(0xFFE2E8F0),
+                              ),
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  group['name']?.toString() ?? 'Grupo',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const SizedBox(height: 10),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: modifiers
+                                      .map((modifier) {
+                                        final modifierId =
+                                            modifier['id']?.toString() ?? '';
+                                        final price =
+                                            (modifier['price_delta'] as num?)
+                                                ?.toDouble() ??
+                                            0.0;
+                                        return FilterChip(
+                                          selected: selected.contains(
+                                            modifierId,
+                                          ),
+                                          label: Text(
+                                            price > 0
+                                                ? '${modifier['name']} (+RD\$ ${price.toStringAsFixed(2)})'
+                                                : '${modifier['name']}',
+                                          ),
+                                          onSelected: (_) {
+                                            setState(() {
+                                              final set = _selectedByGroup
+                                                  .putIfAbsent(
+                                                    groupId,
+                                                    () => <String>{},
+                                                  );
+                                              if (displayType == 'single') {
+                                                if (set.contains(modifierId)) {
+                                                  set.clear();
+                                                } else {
+                                                  set
+                                                    ..clear()
+                                                    ..add(modifierId);
+                                                }
+                                              } else {
+                                                if (set.contains(modifierId)) {
+                                                  set.remove(modifierId);
+                                                } else {
+                                                  if (maxSelect > 0 &&
+                                                      set.length >= maxSelect) {
+                                                    return;
+                                                  }
+                                                  set.add(modifierId);
+                                                }
+                                              }
+                                            });
+                                          },
+                                        );
+                                      })
+                                      .toList(growable: false),
+                                ),
+                              ],
+                            ),
+                          );
+                        })
+                        .toList(growable: false),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('Cancelar'),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    onPressed: () {
+                      final result = <SelectedModifierInput>[];
+                      for (final row in widget.groups) {
+                        final group = Map<String, dynamic>.from(
+                          row['modifier_groups'] as Map,
+                        );
+                        final groupId = group['id']?.toString() ?? '';
+                        final selected =
+                            _selectedByGroup[groupId] ?? <String>{};
+                        final modifiers =
+                            ((group['modifiers'] as List?) ?? const [])
+                                .map(
+                                  (item) =>
+                                      Map<String, dynamic>.from(item as Map),
+                                )
+                                .where(
+                                  (item) => selected.contains(
+                                    item['id']?.toString() ?? '',
+                                  ),
+                                );
+                        for (final modifier in modifiers) {
+                          result.add(
+                            SelectedModifierInput(
+                              name:
+                                  modifier['name']?.toString() ?? 'Modificador',
+                              qty: 1,
+                              price:
+                                  (modifier['price_delta'] as num?)
+                                      ?.toDouble() ??
+                                  0.0,
+                            ),
+                          );
+                        }
+                      }
+                      Navigator.of(context).pop(result);
+                    },
+                    child: const Text('Guardar cambios'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

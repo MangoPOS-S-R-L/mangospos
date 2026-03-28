@@ -5,9 +5,9 @@ import 'package:mangopos/core/utils/web_utils/web_utils.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:mangopos/core/tenant/tenant_resolver.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/categories/view/categories_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/modifiers/view/modifiers_view.dart';
+import 'package:mangopos/presentation/settings/more%20settings/menus/combos/view/combos_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/menus/view/menus_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/recipes/view/recipes_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/view/printers_view.dart.dart';
@@ -126,7 +126,9 @@ class AppRouter {
       final requestedBusinessId = state.uri.queryParameters['business_id'];
 
       // LOG DIAGNÓSTICO
-      AppLogger.d('[Router] redirect → path="$path" isAuthenticated=$isAuthenticated mode=${TenantResolver.mode.name} uri=${state.uri}');
+      AppLogger.d(
+        '[Router] redirect → path="$path" isAuthenticated=$isAuthenticated uri=${state.uri}',
+      );
 
       final isAuthRoute =
           path == AppRoutes.login ||
@@ -136,37 +138,9 @@ class AppRouter {
           path == AppRoutes.crossAuth ||
           path == '/auth';
 
-      // ── MODO TENANT (*.mangopos.do) ────────────────────────────────────
-      // - Sin sesión  → redirigir a app.mangopos.do (el portal de login)
-      // - Con sesión  → dejar pasar normalmente (GoRouter maneja el dashboard)
-      // - /auth route → dejar pasar siempre (SessionBridge la consume en main())
-      if (kIsWeb && TenantResolver.isTenant) {
-        // La ruta /auth es el landing del SessionBridge, siempre debe pasar
-        if (path == '/auth') return null;
-
-        if (!isAuthenticated) {
-          // Sin sesión → mandar al portal principal para hacer login
-          AppLogger.i('[Router] Tenant sin sesión → redirigiendo a app.mangopos.do');
-          WebUtils.assign('https://app.mangopos.do/');
-          // Retornamos null para no causar un loop de GoRouter mientras el browser navega
-          return null;
-        }
-
-        // Con sesión: si intenta ir a una auth route (ej: /login), mandarlo al dashboard
-        if (isAuthRoute) {
-          return Uri(
-            path: AppRoutes.dashboard,
-            queryParameters: requestedBusinessId == null ? null : {'business_id': requestedBusinessId},
-          ).toString();
-        }
-
-        return null;
-      }
-
-      // ── MODO APP SHELL (app.mangopos.do) — portal de login/registro ─────
-      // En el app shell NUNCA mostramos el dashboard directamente.
-      // Siempre pasamos por /select-business que decide a qué tenant ir.
-      AppLogger.d('[Router] isAuthRoute=$isAuthRoute  isAuthenticated=$isAuthenticated');
+      AppLogger.d(
+        '[Router] isAuthRoute=$isAuthRoute  isAuthenticated=$isAuthenticated',
+      );
 
       if (!isAuthenticated) {
         if (isAuthRoute) return null;
@@ -178,17 +152,14 @@ class AppRouter {
         ).toString();
       }
 
-      // Autenticado → en WEB (portal) siempre a select-business.
-      // En WINDOWS/NATIVE, dejar que siga al dashboard si ya inició sesión.
-      if (isAuthRoute || path == '/' || path == AppRoutes.dashboard) {
-        if (kIsWeb) {
-          return AppRoutes.selectBusiness;
-        }
-        return null;
+      // Autenticado:
+      // - rutas auth -> selector interno de negocio
+      // - raíz -> selector interno si tiene varios; dashboard si ya quedó negocio activo
+      if (isAuthRoute || path == '/') {
+        return AppRoutes.selectBusiness;
       }
 
       return null;
-
     },
     errorBuilder: (_, state) => _NotFoundView(path: state.uri.toString()),
     routes: [
@@ -200,19 +171,20 @@ class AppRouter {
       GoRoute(
         path: '/auth',
         builder: (context, state) {
-          final at = state.uri.queryParameters['at']
-              ?? state.uri.queryParameters['access_token'];
-          final rt = state.uri.queryParameters['rt']
-              ?? state.uri.queryParameters['refresh_token'];
+          final at =
+              state.uri.queryParameters['at'] ??
+              state.uri.queryParameters['access_token'];
+          final rt =
+              state.uri.queryParameters['rt'] ??
+              state.uri.queryParameters['refresh_token'];
           // LOG DIAGNÓSTICO
           AppLogger.i('[CrossAuth] GoRoute builder disparado!');
           AppLogger.d('[CrossAuth] state.uri = ${state.uri}');
-          AppLogger.d('[CrossAuth] at = ${at != null ? "[len=${at.length} inicio=${at.length > 10 ? at.substring(0, 10) : at}]" : "NULL"}');
-          AppLogger.d('[CrossAuth] rt = ${rt != null ? "[presente]" : "NULL"}');
-          return CrossAuthView(
-            accessToken: at,
-            refreshToken: rt,
+          AppLogger.d(
+            '[CrossAuth] at = ${at != null ? "[len=${at.length} inicio=${at.length > 10 ? at.substring(0, 10) : at}]" : "NULL"}',
           );
+          AppLogger.d('[CrossAuth] rt = ${rt != null ? "[presente]" : "NULL"}');
+          return CrossAuthView(accessToken: at, refreshToken: rt);
         },
       ),
       // ---------- Alias React (paridad de rutas 1:1) ----------
@@ -551,6 +523,10 @@ class AppRouter {
               GoRoute(
                 path: AppRoutes.menuRecipes,
                 builder: (context, state) => const RecipesView(),
+              ),
+              GoRoute(
+                path: AppRoutes.menuCombos,
+                builder: (context, state) => const CombosView(),
               ),
 
               // /menu/modifier-groups

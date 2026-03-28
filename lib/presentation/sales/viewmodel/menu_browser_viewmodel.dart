@@ -11,12 +11,11 @@ class MenuCategory {
   final String? color;
   const MenuCategory({required this.id, required this.name, this.color});
 
-  factory MenuCategory.fromMap(Map<String, dynamic> m) =>
-      MenuCategory(
-        id: m['id'] as String,
-        name: (m['name'] ?? '') as String,
-        color: m['color'] as String?,
-      );
+  factory MenuCategory.fromMap(Map<String, dynamic> m) => MenuCategory(
+    id: m['id'] as String,
+    name: (m['name'] ?? '') as String,
+    color: m['color'] as String?,
+  );
 }
 
 @immutable
@@ -26,10 +25,8 @@ class MenuDefinition {
 
   const MenuDefinition({required this.id, required this.name});
 
-  factory MenuDefinition.fromMap(Map<String, dynamic> m) => MenuDefinition(
-    id: m['id'] as String,
-    name: (m['name'] ?? '') as String,
-  );
+  factory MenuDefinition.fromMap(Map<String, dynamic> m) =>
+      MenuDefinition(id: m['id'] as String, name: (m['name'] ?? '') as String);
 }
 
 @immutable
@@ -42,6 +39,7 @@ class MenuProduct {
   final String? imageUrl;
   final String categoryId;
   final String? menuId;
+  final String itemType;
 
   const MenuProduct({
     required this.id,
@@ -52,6 +50,7 @@ class MenuProduct {
     required this.categoryId,
     this.imageUrl,
     this.menuId,
+    this.itemType = 'standard',
   });
 
   factory MenuProduct.fromMap(Map<String, dynamic> m) {
@@ -90,6 +89,7 @@ class MenuProduct {
       categoryId: (m['category_id'] ?? '') as String,
       imageUrl: m['image_url'] as String?,
       menuId: m['menu_id'] as String?,
+      itemType: m['item_type']?.toString() ?? 'standard',
     );
   }
 }
@@ -166,21 +166,22 @@ class MenuBrowserState {
 /// Proveedor del ViewModel
 final menuBrowserVmProvider =
     StateNotifierProvider<MenuBrowserViewModel, MenuBrowserState>((ref) {
-  final client = Supabase.instance.client;
-  // Escuchar cambios en el negocio activo para forzar recreación si cambia
-  ref.watch(sessionProvider.select((s) => s.activeBusinessId));
-  return MenuBrowserViewModel(client, ref);
-});
+      final client = Supabase.instance.client;
+      // Escuchar cambios en el negocio activo para forzar recreación si cambia
+      ref.watch(sessionProvider.select((s) => s.activeBusinessId));
+      return MenuBrowserViewModel(client, ref);
+    });
 
 class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
-  MenuBrowserViewModel(this._client, this.ref) : super(const MenuBrowserState());
+  MenuBrowserViewModel(this._client, this.ref)
+    : super(const MenuBrowserState());
 
   final SupabaseClient _client;
   final Ref ref;
   static const _menuItemsSelect =
-      'id,name,price,image_url,category_id,is_active,position,tax_mode,menu_item_taxes(tax_id,taxes(rate))';
+      'id,name,price,image_url,category_id,is_active,position,tax_mode,item_type,menu_item_taxes(tax_id,taxes(rate))';
   static const _menuListSelect =
-      'id,name,price,image_url,category_id,menu_id,is_active,position,tax_mode,effective_tax_rate';
+      'id,name,price,image_url,category_id,menu_id,is_active,position,tax_mode,item_type,effective_tax_rate';
   Future<String> _resolveBusinessId() async {
     final sessionBusinessId = ref.read(sessionProvider).activeBusinessId;
     if (sessionBusinessId != null && sessionBusinessId.isNotEmpty) {

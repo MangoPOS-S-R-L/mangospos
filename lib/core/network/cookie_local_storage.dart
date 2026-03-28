@@ -4,13 +4,15 @@ import 'package:mangopos/core/utils/web_utils/web_utils.dart';
 
 /// Implementación personalizada de LocalStorage para Supabase
 /// que guarda la sesión en una Cookie tipo wildcard (.mangopos.do)
-/// en lugar del localStorage del navegador, permitiendo Single Sign-On 
-/// nativo entre el portal (app.) y los tenants (*.).
+/// en lugar del localStorage del navegador, permitiendo Single Sign-On
+/// nativo para web/app shell centralizado.
 class SharedCookieLocalStorage extends LocalStorage {
   const SharedCookieLocalStorage();
-  
+
   static const String cookieName = 'sb-mangopos-auth';
-  static final LocalStorage _mobileFallback = SharedPreferencesLocalStorage(persistSessionKey: 'supabase.auth.token');
+  static final LocalStorage _mobileFallback = SharedPreferencesLocalStorage(
+    persistSessionKey: 'supabase.auth.token',
+  );
 
   @override
   Future<void> initialize() async {
@@ -22,7 +24,7 @@ class SharedCookieLocalStorage extends LocalStorage {
   @override
   Future<String?> accessToken() async {
     if (!kIsWeb) return _mobileFallback.accessToken();
-    
+
     final cookieStr = WebUtils.cookie;
     final cookies = cookieStr.split(';');
     for (final c in cookies) {
@@ -45,12 +47,12 @@ class SharedCookieLocalStorage extends LocalStorage {
     if (!kIsWeb) {
       return _mobileFallback.persistSession(persistSessionString);
     }
-    
+
     final encoded = Uri.encodeComponent(persistSessionString);
     final domain = _getCookieDomain();
-    
+
     // Cookie expira en 7 días (604800 segundos)
-    WebUtils.cookie = 
+    WebUtils.cookie =
         '$cookieName=$encoded; Max-Age=604800; Domain=$domain; Path=/; Secure; SameSite=Lax';
   }
 
@@ -59,9 +61,9 @@ class SharedCookieLocalStorage extends LocalStorage {
     if (!kIsWeb) {
       return _mobileFallback.removePersistedSession();
     }
-    
+
     final domain = _getCookieDomain();
-    WebUtils.cookie = 
+    WebUtils.cookie =
         '$cookieName=; Max-Age=0; Domain=$domain; Path=/; Secure; SameSite=Lax';
   }
 
@@ -69,7 +71,7 @@ class SharedCookieLocalStorage extends LocalStorage {
     try {
       final host = WebUtils.hostname.toLowerCase();
       if (host == 'localhost' || host == '127.0.0.1') return host;
-      
+
       // Si estamos en cualquier subdominio de mangopos.do,
       // establecer la cookie de forma global para todos los subdominios.
       if (host.endsWith('mangopos.do')) {

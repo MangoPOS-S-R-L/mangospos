@@ -90,7 +90,15 @@ class PrintTicketService {
 
       if (item.modifiers.isNotEmpty) {
         for (final mod in item.modifiers) {
-          gen.text('  + ${mod.name}');
+          final isComboChoice = mod.name.contains(': ');
+          final priceSuffix = mod.price > 0
+              ? ' (+RD\$ ${_formatMoney(mod.price)})'
+              : '';
+          gen.text(
+            isComboChoice
+                ? '  • ${mod.name}$priceSuffix'
+                : '  + ${mod.name}$priceSuffix',
+          );
         }
       }
 
@@ -783,7 +791,13 @@ class PrintTicketService {
         name: item.productName,
         quantity: item.quantity,
         price: item.total,
-        modifiers: item.modifiers.map((m) => m.name).toList(),
+        modifiers: item.modifiers
+            .map(
+              (m) => m.price > 0
+                  ? '${m.name} (+RD\$ ${_formatMoney(m.price)})'
+                  : m.name,
+            )
+            .toList(),
       );
     }
 

@@ -501,6 +501,86 @@ class SalesRepository {
     }
   }
 
+  Future<List<Map<String, dynamic>>> getComboGroupsForMenuItem(
+    String menuItemId,
+  ) async {
+    try {
+      final data = await _client
+          .from('combo_groups')
+          .select(
+            'id, name, min_select, max_select, is_required, sort_order, combo_group_items(id, menu_item_id, price_delta, is_default, sort_order, menu_items(id, name, price, is_active))',
+          )
+          .eq('menu_item_id', menuItemId)
+          .order('sort_order');
+      return List<Map<String, dynamic>>.from(data as List);
+    } catch (e) {
+      throw Exception('Error al obtener grupos del combo: $e');
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getModifierGroupsForMenuItem(
+    String menuItemId,
+  ) async {
+    try {
+      final data = await _client
+          .from('menu_item_groups')
+          .select(
+            'group_id, modifier_groups!inner(id, name, min_select, max_select, is_active, display_type, selection_mode, is_required, free_qty, max_qty_per_option, sort_order, modifiers(id, group_id, name, price_delta, is_active, sort_order, default_selected))',
+          )
+          .eq('menu_item_id', menuItemId)
+          .eq('modifier_groups.is_active', true)
+          .order(
+            'sort_order',
+            referencedTable: 'modifier_groups',
+            ascending: true,
+          );
+
+      return List<Map<String, dynamic>>.from(
+        data as List,
+      ).map((row) => Map<String, dynamic>.from(row)).toList(growable: false);
+    } catch (e) {
+      throw Exception('Error al obtener modificadores del producto: $e');
+    }
+  }
+
+  Future<void> addOrderItemModifiers({
+    required String itemId,
+    required List<Map<String, dynamic>> modifiers,
+  }) async {
+    if (modifiers.isEmpty) return;
+    try {
+      await _client
+          .from('order_item_modifiers')
+          .insert(
+            modifiers
+                .map(
+                  (modifier) => {
+                    'item_id': itemId,
+                    'name': modifier['name'],
+                    'qty': modifier['qty'] ?? 1,
+                    'price': modifier['price'] ?? 0,
+                  },
+                )
+                .toList(growable: false),
+          );
+    } catch (e) {
+      throw Exception('Error al guardar modificadores del item: $e');
+    }
+  }
+
+  Future<void> replaceOrderItemModifiers({
+    required String itemId,
+    required List<Map<String, dynamic>> modifiers,
+  }) async {
+    try {
+      await _client.from('order_item_modifiers').delete().eq('item_id', itemId);
+      if (modifiers.isEmpty) return;
+      await addOrderItemModifiers(itemId: itemId, modifiers: modifiers);
+    } catch (e) {
+      throw Exception('Error al reemplazar modificadores del item: $e');
+    }
+  }
+
   /// Actualizar cantidad de item
   Future<void> updateItemQuantity({
     required String itemId,
@@ -728,9 +808,43 @@ class SalesRepository {
                 : null);
 
       final itemsRaw = (payload['items'] as List?) ?? const [];
-      final items = itemsRaw
+      final baseItems = itemsRaw
           .map(
             (row) => OrderItem.fromMap(Map<String, dynamic>.from(row as Map)),
+          )
+          .toList(growable: false);
+
+      final itemIds = baseItems
+          .map((item) => item.id)
+          .where((id) => id.isNotEmpty)
+          .toList(growable: false);
+
+      Map<String, List<OrderItemModifier>> modifiersByItem = const {};
+      if (itemIds.isNotEmpty) {
+        final rawModifiers = await _client
+            .from('order_item_modifiers')
+            .select('id, item_id, name, qty, price')
+            .inFilter('item_id', itemIds)
+            .order('id', ascending: true);
+
+        final grouped = <String, List<OrderItemModifier>>{};
+        for (final row in (rawModifiers as List)) {
+          final modifier = OrderItemModifier.fromMap(
+            Map<String, dynamic>.from(row as Map),
+          );
+          grouped
+              .putIfAbsent(modifier.itemId, () => <OrderItemModifier>[])
+              .add(modifier);
+        }
+        modifiersByItem = grouped;
+      }
+
+      final items = baseItems
+          .map(
+            (item) => item.copyWith(
+              modifiers:
+                  modifiersByItem[item.id] ?? const <OrderItemModifier>[],
+            ),
           )
           .toList(growable: false);
 
@@ -764,13 +878,9 @@ class SalesRepository {
     try {
       await _assertOrderInBusinessScope(orderId, businessId: businessId);
 
-      final baseSelect = includeModifiers
-          ? '$_itemFields,order_item_modifiers(*)'
-          : _itemFields;
-
       var query = _client
           .from('order_items')
-          .select(baseSelect)
+          .select(_itemFields)
           .eq('order_id', orderId);
 
       if (onlyOpen) {
@@ -780,18 +890,48 @@ class SalesRepository {
       final data = await query
           .order('created_at', ascending: true)
           .limit(limit);
+      final items = data
+          .map(
+            (json) => OrderItem.fromMap(Map<String, dynamic>.from(json as Map)),
+          )
+          .toList(growable: false);
 
-      return data.map((json) {
-        final item = OrderItem.fromMap(json);
-        final modifiers = includeModifiers
-            ? (json['order_item_modifiers'] as List?)
-                      ?.map((m) => OrderItemModifier.fromMap(m))
-                      .toList() ??
-                  []
-            : const <OrderItemModifier>[];
+      if (!includeModifiers || items.isEmpty) {
+        return items;
+      }
 
-        return item.copyWith(modifiers: modifiers);
-      }).toList();
+      final itemIds = items
+          .map((item) => item.id)
+          .where((id) => id.isNotEmpty)
+          .toList(growable: false);
+      if (itemIds.isEmpty) {
+        return items;
+      }
+
+      final rawModifiers = await _client
+          .from('order_item_modifiers')
+          .select('id, item_id, name, qty, price')
+          .inFilter('item_id', itemIds)
+          .order('id', ascending: true);
+
+      final modifiersByItem = <String, List<OrderItemModifier>>{};
+      for (final row in (rawModifiers as List)) {
+        final modifier = OrderItemModifier.fromMap(
+          Map<String, dynamic>.from(row as Map),
+        );
+        modifiersByItem
+            .putIfAbsent(modifier.itemId, () => <OrderItemModifier>[])
+            .add(modifier);
+      }
+
+      return items
+          .map(
+            (item) => item.copyWith(
+              modifiers:
+                  modifiersByItem[item.id] ?? const <OrderItemModifier>[],
+            ),
+          )
+          .toList(growable: false);
     } catch (e) {
       throw Exception('Error al obtener items: $e');
     }

@@ -27,7 +27,8 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
   void setCountry(String v) => _safeSet(state.copyWith(country: v));
   void setAddress(String v) => _safeSet(state.copyWith(address: v));
   void setPhone(String v) => _safeSet(state.copyWith(phone: v));
-  void setSubdomain(String v) => _safeSet(state.copyWith(subdomain: v));
+  // Legacy no-op: ya no usamos subdominios por negocio.
+  void setSubdomain(String v) {}
 
   void _safeSet(RegisterStep2State next) {
     if (state == next) return;
@@ -46,24 +47,15 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
       final step1 = ref.read(registerStep1VmProvider);
       final step2 = state;
 
-      if ((step1.email ?? '').trim().isEmpty || (step1.password ?? '').isEmpty) {
+      if ((step1.email ?? '').trim().isEmpty ||
+          (step1.password ?? '').isEmpty) {
         throw Exception('Faltan correo o contraseña');
       }
       if (step2.businessName.trim().isEmpty) {
         throw Exception('Falta el nombre del negocio');
       }
-      final normalizedSubdomain = _normalizeSubdomain(step2.subdomain);
-      if (normalizedSubdomain.isEmpty) {
-        throw Exception('Subdominio inválido');
-      }
-      final domain = '$normalizedSubdomain.mangopos.do';
-
-      final exists = await supabase
-          .from('businesses')
-          .select('id')
-          .eq('domain', domain)
-          .maybeSingle();
-      if (exists != null) throw Exception('El dominio "$domain" ya está en uso.');
+      // Multi-tenant web removido: el sistema corre centralizado en app.mangopos.do.
+      final domain = 'app.mangopos.do';
 
       final AuthResponse resp = await supabase.auth.signUp(
         email: step1.email!,
@@ -122,7 +114,8 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
         await ref.read(sessionProvider.notifier).restoreFromSupabaseSession();
         return const RegisterSubmitResult(
           requiresEmailConfirmation: false,
-          message: 'Todo quedó creado correctamente. En unos segundos entrarás al panel principal.',
+          message:
+              'Todo quedó creado correctamente. En unos segundos entrarás al panel principal.',
         );
       }
 
@@ -146,9 +139,7 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
   }
 
   String buildDomainPreview() {
-    final normalizedSubdomain = _normalizeSubdomain(state.subdomain);
-    if (normalizedSubdomain.isEmpty) return 'tunegocio.mangopos.do';
-    return '$normalizedSubdomain.mangopos.do';
+    return 'app.mangopos.do';
   }
 
   String _resolveMembershipPlan(String? rawPlan) {
@@ -159,29 +150,9 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
     }
     return 'starter';
   }
-
-  String _normalizeSubdomain(String raw) {
-    final normalized = raw
-        .trim()
-        .toLowerCase()
-        .replaceAll('á', 'a')
-        .replaceAll('é', 'e')
-        .replaceAll('í', 'i')
-        .replaceAll('ó', 'o')
-        .replaceAll('ú', 'u')
-        .replaceAll('ñ', 'n');
-    final base = normalized
-        .trim()
-        .toLowerCase()
-        .replaceAll('.mangopos.do', '')
-        .replaceAll(RegExp(r'[^a-z0-9-]'), '-')
-        .replaceAll(RegExp(r'-{2,}'), '-')
-        .replaceAll(RegExp(r'^-+|-+$'), '');
-    return base;
-  }
 }
 
 final registerStep2VmProvider =
     NotifierProvider<RegisterStep2ViewModel, RegisterStep2State>(
-  RegisterStep2ViewModel.new,
-);
+      RegisterStep2ViewModel.new,
+    );

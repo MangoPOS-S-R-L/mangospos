@@ -54,6 +54,7 @@ class AppRoutes {
   static const menuItems = '$menu/items';
   static const menuCategories = '$menu/categories';
   static const menuRecipes = '$menu/recipes';
+  static const menuCombos = '$menu/combos';
   static const menuModifierGroups = '$menu/modifier-groups';
   static const menuModifiers = '$menu/modifiers';
 

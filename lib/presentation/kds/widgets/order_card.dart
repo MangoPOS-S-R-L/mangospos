@@ -227,11 +227,26 @@ class _ItemCard extends StatelessWidget {
                 padding: const EdgeInsets.only(left: 16, top: 4),
                 child: Row(
                   children: [
-                    Icon(Icons.add, size: 12, color: Colors.grey[400]),
+                    Icon(
+                      mod.name.contains(': ')
+                          ? Icons.radio_button_checked
+                          : Icons.add,
+                      size: 12,
+                      color: mod.name.contains(': ')
+                          ? const Color(0xFFFB923C)
+                          : Colors.grey[400],
+                    ),
                     const SizedBox(width: 4),
-                    Text(
-                      mod.name,
-                      style: TextStyle(color: Colors.grey[400], fontSize: 13),
+                    Expanded(
+                      child: Text(
+                        mod.name,
+                        style: TextStyle(
+                          color: mod.name.contains(': ')
+                              ? const Color(0xFFFED7AA)
+                              : Colors.grey[400],
+                          fontSize: 13,
+                        ),
+                      ),
                     ),
                   ],
                 ),

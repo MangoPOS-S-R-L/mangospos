@@ -17,14 +17,27 @@ class PromosRepository {
     final response = await _client
         .from(PromosQueries.tablePromotions)
         .select(
-          'id, name, description, discount_type, discount_value, min_purchase, applies_to, start_date, end_date, is_active, created_at',
+          'id, name, description, discount_type, discount_value, min_purchase, applies_to, promo_type, target_scope, target_ids, days_of_week, auto_apply, priority, stackable, buy_quantity, pay_quantity, reward_quantity, start_date, end_date, is_active, created_at',
         )
         .eq('business_id', businessId)
+        .order('priority', ascending: false)
         .order('created_at', ascending: false);
 
     return List<Map<String, dynamic>>.from(
       response,
     ).map(PromotionSummary.fromMap).toList(growable: false);
+  }
+
+  Future<List<PromoProductSummary>> getProducts(String businessId) async {
+    final response = await _client
+        .from('menu_items')
+        .select('id, name, category_id, is_active')
+        .eq('business_id', businessId)
+        .order('name');
+
+    return List<Map<String, dynamic>>.from(
+      response,
+    ).map(PromoProductSummary.fromMap).toList(growable: false);
   }
 
   Future<List<CouponSummary>> getCoupons(String businessId) async {
@@ -60,23 +73,53 @@ class PromosRepository {
     required String name,
     String? description,
     required String discountType,
+    required String promoType,
     required double discountValue,
     required double minPurchase,
+    required String appliesTo,
+    required String targetScope,
+    required List<String> targetIds,
+    required List<int> daysOfWeek,
+    required bool autoApply,
+    required bool stackable,
+    required int priority,
+    int? buyQuantity,
+    int? payQuantity,
+    int? rewardQuantity,
     required DateTime startDate,
     required DateTime endDate,
   }) async {
-    await _client.from(PromosQueries.tablePromotions).insert({
-      'business_id': businessId,
-      'name': name,
-      'description': description,
-      'discount_type': discountType,
-      'discount_value': discountValue,
-      'min_purchase': minPurchase,
-      'applies_to': 'all',
-      'start_date': startDate.toUtc().toIso8601String(),
-      'end_date': endDate.toUtc().toIso8601String(),
-      'is_active': true,
-    }..removeWhere((key, value) => value == null || value == ''));
+    await _client
+        .from(PromosQueries.tablePromotions)
+        .insert(
+          {
+            'business_id': businessId,
+            'name': name,
+            'description': description,
+            'discount_type': discountType,
+            'promo_type': promoType,
+            'discount_value': discountValue,
+            'min_purchase': minPurchase,
+            'applies_to': appliesTo,
+            'target_scope': targetScope,
+            'target_ids': targetIds,
+            'days_of_week': daysOfWeek,
+            'auto_apply': autoApply,
+            'stackable': stackable,
+            'priority': priority,
+            'buy_quantity': buyQuantity,
+            'pay_quantity': payQuantity,
+            'reward_quantity': rewardQuantity,
+            'start_date': startDate.toUtc().toIso8601String(),
+            'end_date': endDate.toUtc().toIso8601String(),
+            'is_active': true,
+          }..removeWhere((key, value) {
+            if (value == null) return true;
+            if (value is String) return value.isEmpty;
+            if (value is List) return value.isEmpty && key == 'target_ids';
+            return false;
+          }),
+        );
   }
 
   Future<void> createCoupon({
@@ -89,17 +132,21 @@ class PromosRepository {
     required DateTime validFrom,
     required DateTime validUntil,
   }) async {
-    await _client.from(PromosQueries.tableCoupons).insert({
-      'business_id': businessId,
-      'code': code,
-      'discount_type': discountType,
-      'discount_value': discountValue,
-      'usage_limit': usageLimit,
-      'min_purchase': minPurchase,
-      'valid_from': validFrom.toUtc().toIso8601String(),
-      'valid_until': validUntil.toUtc().toIso8601String(),
-      'is_active': true,
-    }..removeWhere((key, value) => value == null || value == ''));
+    await _client
+        .from(PromosQueries.tableCoupons)
+        .insert(
+          {
+            'business_id': businessId,
+            'code': code,
+            'discount_type': discountType,
+            'discount_value': discountValue,
+            'usage_limit': usageLimit,
+            'min_purchase': minPurchase,
+            'valid_from': validFrom.toUtc().toIso8601String(),
+            'valid_until': validUntil.toUtc().toIso8601String(),
+            'is_active': true,
+          }..removeWhere((key, value) => value == null || value == ''),
+        );
   }
 
   Future<void> createGiftCard({
@@ -108,14 +155,18 @@ class PromosRepository {
     required double initialBalance,
     DateTime? expiresAt,
   }) async {
-    await _client.from(PromosQueries.tableGiftCards).insert({
-      'business_id': businessId,
-      'code': code,
-      'initial_balance': initialBalance,
-      'current_balance': initialBalance,
-      'expires_at': expiresAt?.toIso8601String().split('T').first,
-      'is_active': true,
-    }..removeWhere((key, value) => value == null || value == ''));
+    await _client
+        .from(PromosQueries.tableGiftCards)
+        .insert(
+          {
+            'business_id': businessId,
+            'code': code,
+            'initial_balance': initialBalance,
+            'current_balance': initialBalance,
+            'expires_at': expiresAt?.toIso8601String().split('T').first,
+            'is_active': true,
+          }..removeWhere((key, value) => value == null || value == ''),
+        );
   }
 
   Future<Map<String, double>> getTotals(String businessId) async {

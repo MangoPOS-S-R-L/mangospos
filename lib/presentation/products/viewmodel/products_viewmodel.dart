@@ -39,34 +39,39 @@ class ProductsViewModel extends ChangeNotifier {
   List<Map<String, dynamic>> get products => _products;
   List<Map<String, dynamic>> get filteredProducts {
     final query = _searchQuery.trim().toLowerCase();
-    return _products.where((product) {
-      final name = product['name']?.toString().toLowerCase() ?? '';
-      final sku = product['sku']?.toString().toLowerCase() ?? '';
-      final barcode = product['barcode']?.toString().toLowerCase() ?? '';
-      final categoryId = product['category_id']?.toString();
-      final links = product['menu_item_links'] as List<dynamic>? ?? const [];
-      String? firstMenuId;
-      if (links.isNotEmpty) {
-        final firstLink = links.first;
-        if (firstLink is Map<String, dynamic>) {
-          firstMenuId = firstLink['menu_id']?.toString();
-        }
-      }
+    return _products
+        .where((product) {
+          final name = product['name']?.toString().toLowerCase() ?? '';
+          final sku = product['sku']?.toString().toLowerCase() ?? '';
+          final barcode = product['barcode']?.toString().toLowerCase() ?? '';
+          final categoryId = product['category_id']?.toString();
+          final links =
+              product['menu_item_links'] as List<dynamic>? ?? const [];
+          String? firstMenuId;
+          if (links.isNotEmpty) {
+            final firstLink = links.first;
+            if (firstLink is Map<String, dynamic>) {
+              firstMenuId = firstLink['menu_id']?.toString();
+            }
+          }
 
-      final matchesSearch =
-          query.isEmpty ||
-          name.contains(query) ||
-          sku.contains(query) ||
-          barcode.contains(query);
-      final matchesCategory =
-          _selectedCategoryFilterId == null ||
-          categoryId == _selectedCategoryFilterId;
-      final matchesMenu =
-          _selectedMenuFilterId == null || firstMenuId == _selectedMenuFilterId;
+          final matchesSearch =
+              query.isEmpty ||
+              name.contains(query) ||
+              sku.contains(query) ||
+              barcode.contains(query);
+          final matchesCategory =
+              _selectedCategoryFilterId == null ||
+              categoryId == _selectedCategoryFilterId;
+          final matchesMenu =
+              _selectedMenuFilterId == null ||
+              firstMenuId == _selectedMenuFilterId;
 
-      return matchesSearch && matchesCategory && matchesMenu;
-    }).toList(growable: false);
+          return matchesSearch && matchesCategory && matchesMenu;
+        })
+        .toList(growable: false);
   }
+
   List<Map<String, dynamic>> get categories => _categories;
   List<Map<String, dynamic>> get menus => _menus;
   bool get isLoading => _isLoading;
@@ -104,8 +109,9 @@ class ProductsViewModel extends ChangeNotifier {
   }
 
   void setCategoryFilter(String? categoryId) {
-    _selectedCategoryFilterId =
-        categoryId == null || categoryId.isEmpty ? null : categoryId;
+    _selectedCategoryFilterId = categoryId == null || categoryId.isEmpty
+        ? null
+        : categoryId;
     notifyListeners();
   }
 
@@ -141,6 +147,7 @@ class ProductsViewModel extends ChangeNotifier {
     String? barcode,
     bool hasVariants = false,
     bool isActive = true,
+    String itemType = 'standard',
     File? imageFile,
     Uint8List? imageBytes,
     List<String> taxIds = const [],
@@ -188,6 +195,7 @@ class ProductsViewModel extends ChangeNotifier {
         barcode: barcode,
         hasVariants: hasVariants,
         isActive: isActive,
+        itemType: itemType,
         imagePath: imagePath,
         imageUrl: imageUrl,
         taxIds: taxIds,
@@ -215,6 +223,7 @@ class ProductsViewModel extends ChangeNotifier {
     double? cost,
     String? barcode,
     bool hasVariants = false,
+    String itemType = 'standard',
     File? imageFile,
     Uint8List? imageBytes,
     List<String> taxIds = const [],
@@ -260,6 +269,7 @@ class ProductsViewModel extends ChangeNotifier {
         cost: cost,
         barcode: barcode,
         hasVariants: hasVariants,
+        itemType: itemType,
         imagePath: imagePath,
         imageUrl: imageUrl,
         taxIds: taxIds,
@@ -316,11 +326,15 @@ class ProductsViewModel extends ChangeNotifier {
       return Map<String, dynamic>.from(existing.first);
     }
 
-    final nextPosition = _categories.fold<int>(0, (maxPos, category) {
-      final raw = category['position'];
-      final pos = raw is int ? raw : int.tryParse(raw?.toString() ?? '') ?? 0;
-      return pos > maxPos ? pos : maxPos;
-    }) + 1;
+    final nextPosition =
+        _categories.fold<int>(0, (maxPos, category) {
+          final raw = category['position'];
+          final pos = raw is int
+              ? raw
+              : int.tryParse(raw?.toString() ?? '') ?? 0;
+          return pos > maxPos ? pos : maxPos;
+        }) +
+        1;
 
     final created = await _categoryRepository.create(
       model.Category(

@@ -1,15 +1,13 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
-
 import '../../../core/utils/logger.dart';
-import '../../../core/auth/session_bridge.dart';
 import '../../../core/business/business_resolver.dart';
 import '../../../core/storage/storage_service.dart';
+import '../../../services/session/session_controller.dart';
 
 class SelectBusinessView extends ConsumerStatefulWidget {
   const SelectBusinessView({super.key});
@@ -33,7 +31,7 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
     try {
       final supabase = Supabase.instance.client;
       final user = supabase.auth.currentUser;
-      
+
       if (user == null) {
         if (mounted) context.go('/login');
         return;
@@ -41,7 +39,9 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
 
       final res = await supabase
           .from('user_businesses')
-          .select('business_id, role, businesses(business_name, branch_name, domain)')
+          .select(
+            'business_id, role, businesses(business_name, branch_name, domain)',
+          )
           .eq('user_id', user.id);
 
       final list = res as List<dynamic>;
@@ -53,26 +53,16 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
         return;
       }
 
-      // Si solo tiene 1 negocio → auto-redirigir al tenant sin mostrar el selector
+      // Si solo tiene 1 negocio → selección automática interna
       if (list.length == 1) {
         final item = list.first as Map<String, dynamic>;
-        final biz = item['businesses'];
-        final domain = biz?['domain'] as String?;
-
-        if (domain != null && domain.isNotEmpty && kIsWeb) {
-          AppLogger.i('[SelectBusiness] Un solo negocio, redirigiendo automáticamente a $domain');
-          SessionBridge.redirectToTenant(domain);
-          return; // El browser navega al tenant
-        }
-        
-        // En Windows/Native, si solo hay uno, también podríamos seleccionar automáticamente
-        if (!kIsWeb) {
-          final businessId = item['business_id'] as String?;
-          if (businessId != null) {
-            AppLogger.i('[SelectBusiness] Windows: Un solo negocio, seleccionando $businessId');
-            _handleSelect(item);
-            return;
-          }
+        final businessId = item['business_id'] as String?;
+        if (businessId != null) {
+          AppLogger.i(
+            '[SelectBusiness] Un solo negocio, seleccionando $businessId',
+          );
+          await _handleSelect(item);
+          return;
         }
       }
 
@@ -95,34 +85,19 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
     }
   }
 
-  void _handleSelect(Map<String, dynamic> item) async {
+  Future<void> _handleSelect(Map<String, dynamic> item) async {
     final businessId = item['business_id'] as String?;
     if (businessId == null) return;
 
-    if (kIsWeb) {
-      final biz = item['businesses'];
-      if (biz == null) return;
-      
-      final domain = biz['domain'] as String?;
-      if (domain == null || domain.isEmpty) return;
+    AppLogger.i('Negocio seleccionado internamente: $businessId');
 
-      AppLogger.i('Negocio seleccionado, transfiriendo sesión a tenant: $domain');
-      SessionBridge.redirectToTenant(domain);
-    } else {
-      // Windows / Desktop / Mobile
-      AppLogger.i('Negocio seleccionado en Windows: $businessId. Guardando y entrando...');
-      
-      // 1. Guardar en storage persistente para futuros inicios
-      final storage = await StorageService.getInstance();
-      await storage.write(StorageKeys.activeBusinessId, businessId);
-      
-      // 2. Notificar al resolver actual (en memoria)
-      BusinessResolver.setActiveBusinessId(businessId);
-      
-      // 3. Entrar a la app
-      if (mounted) {
-        context.go('/');
-      }
+    final storage = await StorageService.getInstance();
+    await storage.write(StorageKeys.activeBusinessId, businessId);
+    BusinessResolver.setActiveBusinessId(businessId);
+    ref.read(sessionProvider.notifier).setActiveBusiness(businessId);
+
+    if (mounted) {
+      context.go('/dashboard');
     }
   }
 
@@ -147,66 +122,71 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
               ).animate().fadeIn(duration: 400.ms).slideY(begin: 0.2),
 
               const SizedBox(height: 24),
-              
+
               // Header Animado
               Container(
-                constraints: const BoxConstraints(maxWidth: 520),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(24),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Color(0x0A000000),
-                      blurRadius: 20,
-                      offset: Offset(0, 10),
-                    )
-                  ],
-                ),
-                child: Column(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(24),
-                      decoration: const BoxDecoration(
-                        border: Border(bottom: BorderSide(color: Color(0xFFF1F5F9))),
-                      ),
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 32,
-                            height: 32,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFF97316),
-                              borderRadius: BorderRadius.circular(8),
+                    constraints: const BoxConstraints(maxWidth: 520),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(24),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x0A000000),
+                          blurRadius: 20,
+                          offset: Offset(0, 10),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(24),
+                          decoration: const BoxDecoration(
+                            border: Border(
+                              bottom: BorderSide(color: Color(0xFFF1F5F9)),
                             ),
-                            child: const Center(
-                              child: Text(
-                                'M',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 32,
+                                height: 32,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF97316),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: const Center(
+                                  child: Text(
+                                    'M',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
                                 ),
                               ),
-                            ),
+                              const SizedBox(width: 12),
+                              const Text(
+                                'Selecciona tu negocio',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFF0F172A),
+                                ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: 12),
-                          const Text(
-                            'Selecciona tu negocio',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF0F172A),
-                            ),
-                          ),
-                        ],
-                      ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.all(32),
+                          child: _buildContent(),
+                        ),
+                      ],
                     ),
-                    Padding(
-                      padding: const EdgeInsets.all(32),
-                      child: _buildContent(),
-                    ),
-                  ],
-                ),
-              ).animate().fadeIn(duration: 500.ms).slideY(begin: 0.1, delay: 100.ms),
+                  )
+                  .animate()
+                  .fadeIn(duration: 500.ms)
+                  .slideY(begin: 0.1, delay: 100.ms),
             ],
           ), // Cascade effect removed as children are individually animated
         ),
@@ -237,12 +217,18 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
         decoration: BoxDecoration(
           color: const Color(0xFFFEF2F2),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFFFCA5A5).withValues(alpha: 0.5)),
+          border: Border.all(
+            color: const Color(0xFFFCA5A5).withValues(alpha: 0.5),
+          ),
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Icon(Icons.warning_amber_rounded, color: Color(0xFFEF4444), size: 20),
+            const Icon(
+              Icons.warning_amber_rounded,
+              color: Color(0xFFEF4444),
+              size: 20,
+            ),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
@@ -284,9 +270,12 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
         final i = entry.key;
         final item = entry.value;
         final biz = item['businesses'] ?? {};
-        
+
         final branchName = biz['branch_name']?.toString() ?? '';
-        final businessName = biz['business_name']?.toString() ?? biz['name']?.toString() ?? 'Negocio Desconocido';
+        final businessName =
+            biz['business_name']?.toString() ??
+            biz['name']?.toString() ??
+            'Negocio Desconocido';
         final domain = biz['domain']?.toString() ?? '';
         final role = item['role']?.toString().toUpperCase() ?? 'OWNER';
 
@@ -316,7 +305,9 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
                       ),
                       child: Center(
                         child: Text(
-                          businessName.isNotEmpty ? businessName.substring(0, 1).toUpperCase() : 'B',
+                          businessName.isNotEmpty
+                              ? businessName.substring(0, 1).toUpperCase()
+                              : 'B',
                           style: const TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
@@ -331,7 +322,9 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            branchName.isNotEmpty ? '$businessName - $branchName' : businessName,
+                            branchName.isNotEmpty
+                                ? '$businessName - $branchName'
+                                : businessName,
                             style: const TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.w600,
@@ -350,7 +343,10 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
                       ),
                     ),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: const Color(0xFFF1F5F9),
                         borderRadius: BorderRadius.circular(20),
@@ -368,7 +364,7 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
                     const Icon(
                       Icons.chevron_right_rounded,
                       color: Color(0xFF94A3B8),
-                    )
+                    ),
                   ],
                 ),
               ),

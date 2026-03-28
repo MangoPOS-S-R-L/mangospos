@@ -457,6 +457,47 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     return null;
   }
 
+  Future<void> _handleProductTap(
+    BuildContext context,
+    MenuProduct product,
+  ) async {
+    final vm = ref.read(currentOrderProvider.notifier);
+
+    List<SelectedModifierInput> selectedModifiers = const [];
+    if (product.itemType == 'combo') {
+      final comboGroups = await vm.getMenuItemComboGroups(product.id);
+      if (!context.mounted) return;
+      final comboResult = await showDialog<List<SelectedModifierInput>>(
+        context: context,
+        builder: (_) =>
+            _ComboSelectionDialog(product: product, groups: comboGroups),
+      );
+      if (!context.mounted || comboResult == null) return;
+      selectedModifiers = comboResult;
+    }
+
+    final groups = await vm.getMenuItemModifierGroups(product.id);
+    if (!context.mounted) return;
+    if (groups.isNotEmpty) {
+      final result = await showDialog<List<SelectedModifierInput>>(
+        context: context,
+        builder: (_) =>
+            _ModifiersSelectionDialog(product: product, groups: groups),
+      );
+      if (!context.mounted || result == null) return;
+      selectedModifiers = [...selectedModifiers, ...result];
+    }
+
+    await vm.addItem(
+      menuItemId: product.id,
+      productName: product.name,
+      productPrice: product.price,
+      productTaxMode: product.taxMode,
+      productTaxRate: product.taxRate,
+      selectedModifiers: selectedModifiers,
+    );
+  }
+
   Future<void> _handleAssignClient(BuildContext context) async {
     final selected = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -670,15 +711,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                   );
                   return;
                 }
-                ref
-                    .read(currentOrderProvider.notifier)
-                    .addItem(
-                      menuItemId: product.id,
-                      productName: product.name,
-                      productPrice: product.price,
-                      productTaxMode: product.taxMode,
-                      productTaxRate: product.taxRate,
-                    );
+                _handleProductTap(context, product);
               },
             );
 
@@ -1108,6 +1141,15 @@ class _CartView extends ConsumerWidget {
       builder: (context) => ProductDetailModal(
         item: item,
         groupedItems: groupedItems,
+        loadModifierGroups: (menuItemId) => ref
+            .read(currentOrderProvider.notifier)
+            .getMenuItemModifierGroups(menuItemId),
+        onReplaceModifiers: (itemId, selectedModifiers) => ref
+            .read(currentOrderProvider.notifier)
+            .replaceItemModifiers(
+              itemId: itemId,
+              selectedModifiers: selectedModifiers,
+            ),
         onSave: (updatedItem) async {
           await ref
               .read(currentOrderProvider.notifier)
@@ -2892,15 +2934,17 @@ class _CartLineItem extends StatelessWidget {
     final name = item.productName;
     final qty = item.quantity.toStringAsFixed(1);
     final totalItem = _uiItemDisplayAmount(item).toStringAsFixed(2);
+    final modifiers = item.modifiers;
 
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        hoverColor: Colors.black.withValues(alpha: 0.04), // Subtle hover effect
+        hoverColor: Colors.black.withValues(alpha: 0.04),
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 6),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (isDraft && onDelete != null)
                 SizedBox(
@@ -2917,75 +2961,140 @@ class _CartLineItem extends StatelessWidget {
                 )
               else
                 const SizedBox(width: 36),
-              Text(
-                qty,
-                style: const TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: _salesTextPrimary,
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  qty,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: _salesTextPrimary,
+                  ),
                 ),
               ),
               const SizedBox(width: 10),
               if (!isDraft)
                 const Padding(
-                  padding: EdgeInsets.only(right: 6),
+                  padding: EdgeInsets.only(right: 6, top: 2),
                   child: Icon(
                     Icons.check_circle,
                     size: 16,
                     color: Color(0xFF22C55E),
                   ),
                 ),
-              Container(
-                width: 22,
-                height: 22,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFE6F0FF),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: const Text(
-                  'P',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF3B82F6),
+              Padding(
+                padding: const EdgeInsets.only(top: 1),
+                child: Container(
+                  width: 22,
+                  height: 22,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE6F0FF),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Text(
+                    'P',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF3B82F6),
+                    ),
                   ),
                 ),
               ),
               if (item.isTakeout) ...[
                 const SizedBox(width: 6),
-                Container(
-                  width: 22,
-                  height: 22,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFFF3E8),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: const Icon(
-                    Icons.shopping_bag_outlined,
-                    size: 13,
-                    color: Color(0xFFF97316),
+                Padding(
+                  padding: const EdgeInsets.only(top: 1),
+                  child: Container(
+                    width: 22,
+                    height: 22,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF3E8),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Icon(
+                      Icons.shopping_bag_outlined,
+                      size: 13,
+                      color: Color(0xFFF97316),
+                    ),
                   ),
                 ),
               ],
               const SizedBox(width: 10),
               Expanded(
-                child: Text(
-                  name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    color: _salesTextPrimary,
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: _salesTextPrimary,
+                      ),
+                    ),
+                    if (modifiers.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: modifiers
+                            .map((modifier) {
+                              final hasExtraCost = modifier.price > 0.009;
+                              final qtyLabel = modifier.qty > 1
+                                  ? '${modifier.qty.toStringAsFixed(modifier.qty % 1 == 0 ? 0 : 1)}x '
+                                  : '';
+                              final isComboChoice = modifier.name.contains(
+                                ': ',
+                              );
+                              return Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: isComboChoice
+                                      ? const Color(0xFFFFF7ED)
+                                      : const Color(0xFFF8FAFC),
+                                  borderRadius: BorderRadius.circular(999),
+                                  border: Border.all(
+                                    color: isComboChoice
+                                        ? const Color(0xFFFED7AA)
+                                        : const Color(0xFFE2E8F0),
+                                  ),
+                                ),
+                                child: Text(
+                                  hasExtraCost
+                                      ? '$qtyLabel${modifier.name} (+RD\$ ${modifier.price.toStringAsFixed(2)})'
+                                      : '$qtyLabel${modifier.name}',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: isComboChoice
+                                        ? const Color(0xFF9A3412)
+                                        : const Color(0xFF475569),
+                                  ),
+                                ),
+                              );
+                            })
+                            .toList(growable: false),
+                      ),
+                    ],
+                  ],
                 ),
               ),
-              Text(
-                'RD\$ $totalItem',
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: _salesTotalColor,
+              const SizedBox(width: 8),
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  'RD\$ $totalItem',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: _salesTotalColor,
+                  ),
                 ),
               ),
             ],
@@ -4994,6 +5103,391 @@ class _SelectTableDialogState extends ConsumerState<_SelectTableDialog> {
         ),
       ),
     );
+  }
+}
+
+class _ComboSelectionDialog extends StatefulWidget {
+  final MenuProduct product;
+  final List<Map<String, dynamic>> groups;
+
+  const _ComboSelectionDialog({required this.product, required this.groups});
+
+  @override
+  State<_ComboSelectionDialog> createState() => _ComboSelectionDialogState();
+}
+
+class _ComboSelectionDialogState extends State<_ComboSelectionDialog> {
+  final Map<String, String> _selectedByGroup = <String, String>{};
+
+  @override
+  void initState() {
+    super.initState();
+    for (final group in widget.groups) {
+      final items = ((group['combo_group_items'] as List?) ?? const [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList(growable: false);
+      final defaultItem = items.cast<Map<String, dynamic>?>().firstWhere(
+        (item) => item?['is_default'] == true,
+        orElse: () => items.isEmpty ? null : items.first,
+      );
+      if (defaultItem != null) {
+        final menuItemId = defaultItem['menu_item_id']?.toString();
+        if (menuItemId != null && menuItemId.isNotEmpty) {
+          _selectedByGroup[group['id']?.toString() ?? ''] = menuItemId;
+        }
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Armar combo · ${widget.product.name}'),
+      content: SizedBox(
+        width: 700,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: widget.groups
+                .map((group) {
+                  final groupId = group['id']?.toString() ?? '';
+                  final items =
+                      ((group['combo_group_items'] as List?) ?? const [])
+                          .map((e) => Map<String, dynamic>.from(e as Map))
+                          .toList(growable: false)
+                        ..sort(
+                          (a, b) => ((a['sort_order'] as num?)?.toInt() ?? 0)
+                              .compareTo(
+                                (b['sort_order'] as num?)?.toInt() ?? 0,
+                              ),
+                        );
+                  return Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: const Color(0xFFE2E8F0)),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          group['name']?.toString() ?? 'Grupo',
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 10),
+                        ...items.map((item) {
+                          final product = Map<String, dynamic>.from(
+                            (item['menu_items'] as Map?) ?? const {},
+                          );
+                          final menuItemId =
+                              item['menu_item_id']?.toString() ?? '';
+                          final priceDelta =
+                              (item['price_delta'] as num?)?.toDouble() ?? 0.0;
+                          return RadioListTile<String>(
+                            value: menuItemId,
+                            groupValue: _selectedByGroup[groupId],
+                            title: Text(
+                              product['name']?.toString() ?? 'Opción',
+                            ),
+                            subtitle: priceDelta > 0
+                                ? Text(
+                                    'Extra RD\$ ${priceDelta.toStringAsFixed(2)}',
+                                  )
+                                : null,
+                            onChanged: (value) {
+                              if (value == null) return;
+                              setState(() => _selectedByGroup[groupId] = value);
+                            },
+                          );
+                        }),
+                      ],
+                    ),
+                  );
+                })
+                .toList(growable: false),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final result = <SelectedModifierInput>[];
+            for (final group in widget.groups) {
+              final groupId = group['id']?.toString() ?? '';
+              final selectedId = _selectedByGroup[groupId];
+              if (selectedId == null || selectedId.isEmpty) continue;
+              final items = ((group['combo_group_items'] as List?) ?? const [])
+                  .map((e) => Map<String, dynamic>.from(e as Map));
+              Map<String, dynamic>? selected;
+              for (final item in items) {
+                if (item['menu_item_id']?.toString() == selectedId) {
+                  selected = item;
+                  break;
+                }
+              }
+              if (selected == null) continue;
+              final product = Map<String, dynamic>.from(
+                (selected['menu_items'] as Map?) ?? const {},
+              );
+              final groupName = group['name']?.toString() ?? 'Grupo';
+              result.add(
+                SelectedModifierInput(
+                  name: '$groupName: ${product['name'] ?? 'Opción'}',
+                  qty: 1,
+                  price: (selected['price_delta'] as num?)?.toDouble() ?? 0.0,
+                ),
+              );
+            }
+            Navigator.of(context).pop(result);
+          },
+          child: const Text('Agregar combo'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ModifiersSelectionDialog extends StatefulWidget {
+  final MenuProduct product;
+  final List<Map<String, dynamic>> groups;
+
+  const _ModifiersSelectionDialog({
+    required this.product,
+    required this.groups,
+  });
+
+  @override
+  State<_ModifiersSelectionDialog> createState() =>
+      _ModifiersSelectionDialogState();
+}
+
+class _ModifiersSelectionDialogState extends State<_ModifiersSelectionDialog> {
+  final Map<String, Set<String>> _selectedByGroup = <String, Set<String>>{};
+
+  @override
+  void initState() {
+    super.initState();
+    for (final row in widget.groups) {
+      final group = Map<String, dynamic>.from(row['modifier_groups'] as Map);
+      final groupId = group['id']?.toString() ?? '';
+      final modifiers = ((group['modifiers'] as List?) ?? const [])
+          .map((item) => Map<String, dynamic>.from(item as Map))
+          .where((item) => item['is_active'] != false)
+          .toList(growable: false);
+      final defaults = modifiers
+          .where((item) => item['default_selected'] == true)
+          .map((item) => item['id']?.toString() ?? '')
+          .where((id) => id.isNotEmpty)
+          .toSet();
+      _selectedByGroup[groupId] = defaults;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final currency = NumberFormat.currency(
+      locale: 'es_DO',
+      symbol: 'RD\$',
+      decimalDigits: 2,
+    );
+
+    return AlertDialog(
+      title: Text(widget.product.name),
+      content: SizedBox(
+        width: 620,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Personaliza el producto antes de agregarlo',
+                style: TextStyle(color: _salesTextSecondary),
+              ),
+              const SizedBox(height: 16),
+              ...widget.groups.map((row) {
+                final group = Map<String, dynamic>.from(
+                  row['modifier_groups'] as Map,
+                );
+                final groupId = group['id']?.toString() ?? '';
+                final groupName = group['name']?.toString() ?? 'Grupo';
+                final displayType =
+                    group['display_type']?.toString() ?? 'multiple';
+                final minSelect = (group['min_select'] as num?)?.toInt() ?? 0;
+                final maxSelect = (group['max_select'] as num?)?.toInt() ?? 0;
+                final selected = _selectedByGroup[groupId] ?? <String>{};
+                final modifiers =
+                    ((group['modifiers'] as List?) ?? const [])
+                        .map((item) => Map<String, dynamic>.from(item as Map))
+                        .where((item) => item['is_active'] != false)
+                        .toList(growable: false)
+                      ..sort(
+                        (a, b) => ((a['sort_order'] as num?)?.toInt() ?? 0)
+                            .compareTo((b['sort_order'] as num?)?.toInt() ?? 0),
+                      );
+
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 14),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: _salesDivider),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        groupName,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: _salesTextPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _groupHint(
+                          displayType: displayType,
+                          minSelect: minSelect,
+                          maxSelect: maxSelect,
+                        ),
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: _salesTextSecondary,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: modifiers
+                            .map((modifier) {
+                              final modifierId =
+                                  modifier['id']?.toString() ?? '';
+                              final price =
+                                  (modifier['price_delta'] as num?)
+                                      ?.toDouble() ??
+                                  0.0;
+                              final isSelected = selected.contains(modifierId);
+                              return FilterChip(
+                                selected: isSelected,
+                                label: Text(
+                                  price > 0
+                                      ? '${modifier['name']} (+${currency.format(price)})'
+                                      : '${modifier['name']}',
+                                ),
+                                onSelected: (_) => _toggleModifier(
+                                  groupId: groupId,
+                                  modifierId: modifierId,
+                                  displayType: displayType,
+                                  maxSelect: maxSelect,
+                                ),
+                              );
+                            })
+                            .toList(growable: false),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Agregar')),
+      ],
+    );
+  }
+
+  String _groupHint({
+    required String displayType,
+    required int minSelect,
+    required int maxSelect,
+  }) {
+    if (displayType == 'single') {
+      return minSelect > 0 ? 'Selecciona 1 opción' : 'Selecciona una opción';
+    }
+    if (maxSelect > 0) {
+      return minSelect > 0
+          ? 'Selecciona entre $minSelect y $maxSelect opciones'
+          : 'Máximo $maxSelect opciones';
+    }
+    return minSelect > 0
+        ? 'Selecciona al menos $minSelect opciones'
+        : 'Opcional';
+  }
+
+  void _toggleModifier({
+    required String groupId,
+    required String modifierId,
+    required String displayType,
+    required int maxSelect,
+  }) {
+    setState(() {
+      final selected = _selectedByGroup.putIfAbsent(groupId, () => <String>{});
+      if (displayType == 'single') {
+        if (selected.contains(modifierId)) {
+          selected.clear();
+        } else {
+          selected
+            ..clear()
+            ..add(modifierId);
+        }
+        return;
+      }
+
+      if (selected.contains(modifierId)) {
+        selected.remove(modifierId);
+        return;
+      }
+
+      if (maxSelect > 0 && selected.length >= maxSelect) {
+        return;
+      }
+      selected.add(modifierId);
+    });
+  }
+
+  void _submit() {
+    final result = <SelectedModifierInput>[];
+
+    for (final row in widget.groups) {
+      final group = Map<String, dynamic>.from(row['modifier_groups'] as Map);
+      final groupId = group['id']?.toString() ?? '';
+      final minSelect = (group['min_select'] as num?)?.toInt() ?? 0;
+      final selected = _selectedByGroup[groupId] ?? <String>{};
+      if (selected.length < minSelect) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Debes completar: ${group['name']}')),
+        );
+        return;
+      }
+      final modifiers = ((group['modifiers'] as List?) ?? const [])
+          .map((item) => Map<String, dynamic>.from(item as Map))
+          .where((item) => selected.contains(item['id']?.toString() ?? ''));
+      for (final modifier in modifiers) {
+        result.add(
+          SelectedModifierInput(
+            name: modifier['name']?.toString() ?? 'Modificador',
+            qty: 1,
+            price: (modifier['price_delta'] as num?)?.toDouble() ?? 0.0,
+          ),
+        );
+      }
+    }
+
+    Navigator.of(context).pop(result);
   }
 }
 

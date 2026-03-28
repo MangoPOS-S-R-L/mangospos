@@ -20,7 +20,6 @@ import 'package:window_manager/window_manager.dart';
 
 import 'app/router/app_router.dart';
 import 'app/router/routes.dart';
-import 'core/auth/session_bridge.dart';
 import 'core/cache/cache_manager.dart';
 import 'core/network/supabase_config.dart';
 import 'core/utils/logger.dart';
@@ -164,8 +163,6 @@ Future<void> _bootstrapApp() async {
     AppLogger.i(
       'Supabase inicializado correctamente conectando a: ${Env.supabaseUrl}',
     );
-
-    await SessionBridge.handleIncoming();
 
     if (!kIsWeb && defaultTargetPlatform != TargetPlatform.windows) {
       MediaKit.ensureInitialized();

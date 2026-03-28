@@ -68,8 +68,19 @@ class PromosViewModel extends ChangeNotifier {
     required String name,
     String? description,
     required String discountType,
+    required String promoType,
     required double discountValue,
     required double minPurchase,
+    required String appliesTo,
+    required String targetScope,
+    required List<String> targetIds,
+    required List<int> daysOfWeek,
+    required bool autoApply,
+    required bool stackable,
+    required int priority,
+    int? buyQuantity,
+    int? payQuantity,
+    int? rewardQuantity,
     required DateTime startDate,
     required DateTime endDate,
   }) async {
@@ -87,8 +98,19 @@ class PromosViewModel extends ChangeNotifier {
         name: name,
         description: description,
         discountType: discountType,
+        promoType: promoType,
         discountValue: discountValue,
         minPurchase: minPurchase,
+        appliesTo: appliesTo,
+        targetScope: targetScope,
+        targetIds: targetIds,
+        daysOfWeek: daysOfWeek,
+        autoApply: autoApply,
+        stackable: stackable,
+        priority: priority,
+        buyQuantity: buyQuantity,
+        payQuantity: payQuantity,
+        rewardQuantity: rewardQuantity,
         startDate: startDate,
         endDate: endDate,
       );
@@ -135,10 +157,7 @@ class PromosViewModel extends ChangeNotifier {
       _state = _state.copyWith(saving: false);
       await refresh();
     } catch (e) {
-      _state = _state.copyWith(
-        saving: false,
-        error: 'Error creando cupón: $e',
-      );
+      _state = _state.copyWith(saving: false, error: 'Error creando cupón: $e');
       notifyListeners();
       rethrow;
     }
@@ -183,12 +202,14 @@ class PromosViewModel extends ChangeNotifier {
     }
 
     final promotions = await _repository.getPromotions(businessId);
+    final products = await _repository.getProducts(businessId);
     final coupons = await _repository.getCoupons(businessId);
     final giftCards = await _repository.getGiftCards(businessId);
 
     _state = _state.copyWith(
       loading: false,
       promotions: promotions,
+      products: products,
       coupons: coupons,
       giftCards: giftCards,
       clearError: true,
