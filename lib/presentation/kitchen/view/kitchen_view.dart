@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/presentation/kitchen/viewmodel/kitchen_viewmodel.dart';
 import 'package:mangopos/data/models/kitchen_models.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import 'package:mangopos/app/theme/mango_tokens.dart';
 
 String _formatQty(double qty) {
   if ((qty - qty.roundToDouble()).abs() < 0.001) {
@@ -304,28 +305,80 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
     showDialog(
       context: context,
       builder: (dialogContext) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 760, maxHeight: 700),
           child: Padding(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(24),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Completados hoy',
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        color: MangoTokens.primary.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: const Icon(
+                        Icons.checklist_rounded,
+                        color: MangoTokens.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Completados hoy', style: MangoTokens.h1()),
+                          const SizedBox(height: 6),
+                          Text(
+                            '${orders.length} comandas completadas en el día.',
+                            style: MangoTokens.subtitle(),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.of(dialogContext).pop(),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 6),
-                Text(
-                  '${orders.length} comandas completadas en el día.',
-                  style: const TextStyle(color: Color(0xFF6B7280)),
-                ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 20),
                 Expanded(
                   child: orders.isEmpty
-                      ? const Center(
-                          child: Text('No hay comandas completadas hoy.'),
+                      ? Center(
+                          child: Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(24),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(color: MangoTokens.border),
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(
+                                  Icons.inbox_outlined,
+                                  size: 28,
+                                  color: MangoTokens.mutedForeground,
+                                ),
+                                const SizedBox(height: 10),
+                                Text(
+                                  'No hay comandas completadas hoy.',
+                                  style: MangoTokens.body(
+                                    color: MangoTokens.mutedForeground,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         )
                       : ListView.separated(
                           itemCount: orders.length,
@@ -336,45 +389,114 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
                                 .map((e) => e.readyAt ?? e.createdAt)
                                 .reduce((a, b) => a.isAfter(b) ? a : b);
                             return Container(
-                              padding: const EdgeInsets.all(16),
+                              padding: const EdgeInsets.all(18),
                               decoration: BoxDecoration(
                                 color: Colors.white,
-                                borderRadius: BorderRadius.circular(16),
-                                border: Border.all(color: Colors.grey.shade200),
+                                borderRadius: BorderRadius.circular(18),
+                                border: Border.all(color: MangoTokens.border),
+                                boxShadow: MangoTokens.shadowCard,
                               ),
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Row(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      Expanded(
-                                        child: Text(
-                                          'Orden ${order.orderNumber.isNotEmpty ? order.orderNumber : order.orderId.substring(0, 8).toUpperCase()}',
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.w800,
-                                            fontSize: 16,
-                                          ),
+                                      Container(
+                                        width: 42,
+                                        height: 42,
+                                        decoration: BoxDecoration(
+                                          color: MangoTokens.secondary,
+                                          borderRadius: BorderRadius.circular(14),
+                                        ),
+                                        child: const Icon(
+                                          Icons.receipt_long_outlined,
+                                          color: MangoTokens.primary,
                                         ),
                                       ),
-                                      Text(
-                                        '${completedAt.hour.toString().padLeft(2, '0')}:${completedAt.minute.toString().padLeft(2, '0')}',
-                                        style: const TextStyle(color: Color(0xFF6B7280)),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              'Orden ${order.orderNumber.isNotEmpty ? order.orderNumber : order.orderId.substring(0, 8).toUpperCase()}',
+                                              style: MangoTokens.body().copyWith(
+                                                fontWeight: FontWeight.w800,
+                                                fontSize: 16,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              'Mesa: ${order.tableName ?? 'N/A'} · Mesero: ${order.waiterName ?? 'N/A'}',
+                                              style: MangoTokens.label(),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 6,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: MangoTokens.secondary,
+                                          borderRadius: BorderRadius.circular(999),
+                                        ),
+                                        child: Text(
+                                          '${completedAt.hour.toString().padLeft(2, '0')}:${completedAt.minute.toString().padLeft(2, '0')}',
+                                          style: MangoTokens.label(
+                                            color: MangoTokens.foreground,
+                                          ).copyWith(fontWeight: FontWeight.w700),
+                                        ),
                                       ),
                                     ],
                                   ),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    'Mesa: ${order.tableName ?? 'N/A'} · Mesero: ${order.waiterName ?? 'N/A'}',
-                                    style: const TextStyle(color: Color(0xFF6B7280)),
-                                  ),
-                                  const SizedBox(height: 10),
-                                  ...order.items.map(
-                                    (item) => Padding(
-                                      padding: const EdgeInsets.only(bottom: 6),
-                                      child: Text(
-                                        '${_formatQty(item.quantity)} x ${item.productName}',
-                                        style: const TextStyle(fontWeight: FontWeight.w600),
-                                      ),
+                                  const SizedBox(height: 14),
+                                  Container(
+                                    width: double.infinity,
+                                    padding: const EdgeInsets.all(14),
+                                    decoration: BoxDecoration(
+                                      color: MangoTokens.secondary,
+                                      borderRadius: BorderRadius.circular(14),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Items completados',
+                                          style: MangoTokens.label(
+                                            color: MangoTokens.foreground,
+                                          ).copyWith(fontWeight: FontWeight.w700),
+                                        ),
+                                        const SizedBox(height: 10),
+                                        ...order.items.map(
+                                          (item) => Padding(
+                                            padding: const EdgeInsets.only(bottom: 8),
+                                            child: Row(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  '${_formatQty(item.quantity)}x',
+                                                  style: MangoTokens.body().copyWith(
+                                                    fontWeight: FontWeight.w800,
+                                                    color: MangoTokens.primary,
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 8),
+                                                Expanded(
+                                                  child: Text(
+                                                    item.productName,
+                                                    style: MangoTokens.body().copyWith(
+                                                      fontWeight: FontWeight.w600,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
                                 ],
@@ -383,13 +505,27 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
                           },
                         ),
                 ),
-                const SizedBox(height: 12),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: TextButton(
-                    onPressed: () => Navigator.of(dialogContext).pop(),
-                    child: const Text('Cerrar'),
-                  ),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: MangoTokens.primary,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 18,
+                          vertical: 14,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                      onPressed: () => Navigator.of(dialogContext).pop(),
+                      icon: const Icon(Icons.check_rounded, size: 18),
+                      label: const Text('Cerrar'),
+                    ),
+                  ],
                 ),
               ],
             ),
