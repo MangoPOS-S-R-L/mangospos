@@ -131,37 +131,21 @@ class CashClosePrintService {
         );
 
     final printers = await _printingRepository.getPrinters(businessId);
-    final networkPrinters = printers
-        .where((p) => (p.ipAddress?.trim().isNotEmpty ?? false) && p.isActive)
+    final activePrinters = printers
+        .where((p) => p.isActive)
         .toList(growable: false);
 
-    final printer =
-        preferredPrinter != null &&
-            (preferredPrinter.ipAddress?.trim().isNotEmpty ?? false)
+    final printer = preferredPrinter != null && preferredPrinter.isActive
         ? preferredPrinter
-        : (networkPrinters.isNotEmpty ? networkPrinters.first : null);
+        : (activePrinters.isNotEmpty ? activePrinters.first : null);
 
-    final ip = printer?.ipAddress?.trim();
-    if (printer == null || ip == null || ip.isEmpty) {
+    if (printer == null) {
       throw Exception(
-        'No hay una impresora de red activa configurada para imprimir el cierre de caja.',
+        'No hay una impresora activa configurada para imprimir el cierre de caja.',
       );
     }
 
-    final port = printer.port ?? 9100;
-    if (await _printingRepository.isAgentUp()) {
-      await _printingRepository.printRawViaAgent(
-        ip: ip,
-        port: port,
-        data: bytes,
-      );
-    } else {
-      await _printingRepository.printRawDirectTcp(
-        ip: ip,
-        port: port,
-        data: bytes,
-      );
-    }
+    await _printingRepository.printEscPos(printer: printer, data: bytes);
   }
 
   String _shortMoney(int amount) {

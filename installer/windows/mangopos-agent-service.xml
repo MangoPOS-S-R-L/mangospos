@@ -3,6 +3,8 @@
   <name>MangoPOS Print Agent</name>
   <description>Servicio de impresión persistente para MangoPOS.</description>
   <executable>mangopos-agent.exe</executable>
+  <startmode>Automatic</startmode>
+  <onfailure action="restart" delay="10 sec" />
   <log mode="roll"></log>
   <stopexecutable>cmd.exe</stopexecutable>
   <stoparguments>/c taskkill /F /IM mangopos-agent.exe</stoparguments>

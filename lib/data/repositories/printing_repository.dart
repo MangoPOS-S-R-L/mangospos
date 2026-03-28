@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:io';
 import 'dart:async';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import 'package:mangopos/core/services/local_print_service.dart';
 
@@ -647,6 +648,100 @@ class PrintingRepository {
     await socket.close();
   }
 
+  Future<void> printEscPos({
+    required PrinterConfig printer,
+    required List<int> data,
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    switch (printer.printerType) {
+      case PrinterType.network:
+        final ip = printer.ipAddress?.trim();
+        if (ip == null || ip.isEmpty) {
+          throw Exception('La impresora de red no tiene IP configurada.');
+        }
+        if (kIsWeb) {
+          final up = await isAgentUp();
+          if (!up) {
+            throw Exception(
+              'Para imprimir por red desde la Web necesitas el Agente LAN activo.',
+            );
+          }
+          await printRawViaAgent(
+            ip: ip,
+            port: printer.port ?? 9100,
+            data: data,
+          );
+          return;
+        }
+        try {
+          await printRawDirectTcp(
+            ip: ip,
+            port: printer.port ?? 9100,
+            data: data,
+            timeout: timeout,
+          );
+        } catch (_) {
+          if (await isAgentUp()) {
+            await printRawViaAgent(
+              ip: ip,
+              port: printer.port ?? 9100,
+              data: data,
+            );
+            return;
+          }
+          rethrow;
+        }
+        return;
+      case PrinterType.usb:
+        if (kIsWeb) {
+          throw Exception(
+            'Las impresoras USB no se usan desde la Web. Usa la app local de Windows o una impresora de red.',
+          );
+        }
+        await printRawDirectUsb(printer: printer, data: data, timeout: timeout);
+        return;
+      case PrinterType.bluetooth:
+        throw Exception(
+          'La impresión Bluetooth directa no está soportada en este flujo.',
+        );
+    }
+  }
+
+  Future<void> printRawDirectUsb({
+    required PrinterConfig printer,
+    required List<int> data,
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    if (Platform.isWindows) {
+      await _printRawDirectUsbWindows(
+        printerName: printer.name,
+        devicePath: printer.devicePath,
+        portHint: printer.mac,
+        data: data,
+        timeout: timeout,
+      );
+      return;
+    }
+
+    final devicePath = printer.devicePath?.trim();
+    if (devicePath == null || devicePath.isEmpty) {
+      throw Exception(
+        'La impresora USB no tiene una ruta local configurada para impresión directa.',
+      );
+    }
+
+    final file = File(devicePath);
+    await file.writeAsBytes(data, mode: FileMode.writeOnly, flush: true);
+  }
+
+  Future<List<Map<String, dynamic>>> discoverLocalUsbPrinters() async {
+    if (kIsWeb) return const [];
+    if (Platform.isWindows) {
+      return _discoverLocalUsbPrintersWindows();
+    }
+    return const [];
+  }
+
   /// Imprimir Job genérico vía Agente (Público)
   Future<void> printJobViaAgent(Map<String, dynamic> jobPayload) async {
     final success = await _localService.printJob(jobPayload);
@@ -658,6 +753,210 @@ class PrintingRepository {
   /// Descubrir con agent (Scan Subnet)
   Future<List<dynamic>> discoverWithAgent(String businessId) async {
     return await _localService.discoverPrinters();
+  }
+
+  Future<List<Map<String, dynamic>>> _discoverLocalUsbPrintersWindows() async {
+    final result = await _runPowerShell(r'''
+$ErrorActionPreference = 'Stop'
+$items = @(
+  Get-CimInstance Win32_Printer |
+    Where-Object { $_.Local -eq $true -and $_.PortName -match '^USB' } |
+    Sort-Object Name |
+    ForEach-Object {
+      [pscustomobject]@{
+        name = $_.Name
+        type = 'usb'
+        devicePath = $_.Name
+        mac = $_.PortName
+        portName = $_.PortName
+        driverName = $_.DriverName
+        deviceId = $_.DeviceID
+      }
+    }
+)
+
+if ($items.Count -eq 0) {
+  '[]'
+} else {
+  $items | ConvertTo-Json -Compress
+}
+''', timeout: const Duration(seconds: 6));
+
+    final stdout = result.stdout.toString().trim();
+    if (stdout.isEmpty || stdout == 'null') return const [];
+
+    final decoded = jsonDecode(stdout);
+    if (decoded is List) {
+      return decoded
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList(growable: false);
+    }
+    if (decoded is Map) {
+      return [Map<String, dynamic>.from(decoded)];
+    }
+    return const [];
+  }
+
+  Future<void> _printRawDirectUsbWindows({
+    required String printerName,
+    required List<int> data,
+    String? devicePath,
+    String? portHint,
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    final base64Data = base64Encode(data);
+    final result = await _runPowerShell('''
+\$ErrorActionPreference = 'Stop'
+\$printerName = ${_toPowerShellSingleQuoted(printerName)}
+\$devicePath = ${_toPowerShellSingleQuoted(devicePath?.trim() ?? '')}
+\$portHint = ${_toPowerShellSingleQuoted(portHint?.trim() ?? '')}
+\$payload = '$base64Data'
+\$bytes = [Convert]::FromBase64String(\$payload)
+
+\$target = Get-CimInstance Win32_Printer |
+  Where-Object {
+    (\$printerName -and \$_.Name -eq \$printerName) -or
+    (\$devicePath -and (\$_.Name -eq \$devicePath -or \$_.DeviceID -eq \$devicePath)) -or
+    (\$portHint -and \$_.PortName -eq \$portHint)
+  } |
+  Select-Object -First 1
+
+if (-not \$target) {
+  \$target = Get-CimInstance Win32_Printer |
+    Where-Object {
+      \$_.Local -eq \$true -and \$_.PortName -match '^USB' -and (
+        (\$printerName -and \$_.Name -like "*\$printerName*") -or
+        (\$devicePath -and (\$_.Name -like "*\$devicePath*" -or \$_.DeviceID -like "*\$devicePath*")) -or
+        (\$portHint -and \$_.PortName -like "*\$portHint*")
+      )
+    } |
+    Select-Object -First 1
+}
+
+if (-not \$target) {
+  throw "USB_PRINTER_NOT_FOUND name=\$printerName devicePath=\$devicePath port=\$portHint"
+}
+
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class RawPrinterHelper
+{
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+    public class DOCINFOA
+    {
+        [MarshalAs(UnmanagedType.LPStr)]
+        public string pDocName;
+        [MarshalAs(UnmanagedType.LPStr)]
+        public string pOutputFile;
+        [MarshalAs(UnmanagedType.LPStr)]
+        public string pDataType;
+    }
+
+    [DllImport("Winspool.drv", EntryPoint = "OpenPrinterA", SetLastError = true, CharSet = CharSet.Ansi, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool OpenPrinter(string szPrinter, out IntPtr hPrinter, IntPtr pd);
+
+    [DllImport("Winspool.drv", EntryPoint = "ClosePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool ClosePrinter(IntPtr hPrinter);
+
+    [DllImport("Winspool.drv", EntryPoint = "StartDocPrinterA", SetLastError = true, CharSet = CharSet.Ansi, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool StartDocPrinter(IntPtr hPrinter, int level, [In, MarshalAs(UnmanagedType.LPStruct)] DOCINFOA di);
+
+    [DllImport("Winspool.drv", EntryPoint = "EndDocPrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool EndDocPrinter(IntPtr hPrinter);
+
+    [DllImport("Winspool.drv", EntryPoint = "StartPagePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool StartPagePrinter(IntPtr hPrinter);
+
+    [DllImport("Winspool.drv", EntryPoint = "EndPagePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool EndPagePrinter(IntPtr hPrinter);
+
+    [DllImport("Winspool.drv", EntryPoint = "WritePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool WritePrinter(IntPtr hPrinter, byte[] pBytes, int dwCount, out int dwWritten);
+}
+"@
+
+\$handle = [IntPtr]::Zero
+\$docStarted = \$false
+\$pageStarted = \$false
+
+if (-not [RawPrinterHelper]::OpenPrinter(\$target.Name, [ref]\$handle, [IntPtr]::Zero)) {
+  \$err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+  throw "OPEN_PRINTER_FAILED \$err (\$(\$target.Name))"
+}
+
+try {
+  \$doc = New-Object RawPrinterHelper+DOCINFOA
+  \$doc.pDocName = 'MangoPOS'
+  \$doc.pDataType = 'RAW'
+
+  if (-not [RawPrinterHelper]::StartDocPrinter(\$handle, 1, \$doc)) {
+    \$err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    throw "START_DOC_FAILED \$err"
+  }
+  \$docStarted = \$true
+
+  if (-not [RawPrinterHelper]::StartPagePrinter(\$handle)) {
+    \$err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    throw "START_PAGE_FAILED \$err"
+  }
+  \$pageStarted = \$true
+
+  \$written = 0
+  if (-not [RawPrinterHelper]::WritePrinter(\$handle, \$bytes, \$bytes.Length, [ref]\$written)) {
+    \$err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    throw "WRITE_PRINTER_FAILED \$err"
+  }
+
+  if (\$written -ne \$bytes.Length) {
+    throw "WRITE_PRINTER_INCOMPLETE \$written/\$(\$bytes.Length)"
+  }
+}
+finally {
+  if (\$pageStarted) { [void][RawPrinterHelper]::EndPagePrinter(\$handle) }
+  if (\$docStarted) { [void][RawPrinterHelper]::EndDocPrinter(\$handle) }
+  if (\$handle -ne [IntPtr]::Zero) { [void][RawPrinterHelper]::ClosePrinter(\$handle) }
+}
+''', timeout: timeout);
+
+    if (result.exitCode != 0) {
+      final stderr = result.stderr.toString().trim();
+      throw Exception(
+        stderr.isEmpty ? 'No se pudo imprimir por USB en Windows.' : stderr,
+      );
+    }
+  }
+
+  Future<ProcessResult> _runPowerShell(
+    String script, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    final result = await Process.run('powershell', [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      script,
+    ]).timeout(timeout);
+
+    if (result.exitCode != 0) {
+      final stderr = result.stderr.toString().trim();
+      final stdout = result.stdout.toString().trim();
+      throw Exception(
+        [
+          if (stderr.isNotEmpty) stderr,
+          if (stdout.isNotEmpty) stdout,
+        ].join('\n'),
+      );
+    }
+
+    return result;
+  }
+
+  String _toPowerShellSingleQuoted(String value) {
+    return "'${value.replaceAll("'", "''")}'";
   }
 
   // ... (Resto de métodos de compatibilidad)

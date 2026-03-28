@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -573,7 +572,7 @@ class _PaymentTableRow extends ConsumerWidget {
         printsReceipts: true,
       );
 
-      if (assignedPrinter == null || assignedPrinter.ipAddress == null) {
+      if (assignedPrinter == null) {
         throw Exception('No hay impresora configurada para recibos.');
       }
 
@@ -600,25 +599,10 @@ class _PaymentTableRow extends ConsumerWidget {
         receiptItemDisplayMode: receiptItemDisplayMode,
       );
 
-      if (kIsWeb) {
-        final up = await printRepo.isAgentUp();
-        if (!up) {
-          throw Exception(
-            'Para imprimir desde la Web necesitas el Agente LAN activo en tu PC.',
-          );
-        }
-        await printRepo.printRawViaAgent(
-          ip: assignedPrinter.ipAddress!,
-          port: assignedPrinter.port ?? 9100,
-          data: ticket.escPosCommands,
-        );
-      } else {
-        await printRepo.printRawDirectTcp(
-          ip: assignedPrinter.ipAddress!,
-          port: assignedPrinter.port ?? 9100,
-          data: ticket.escPosCommands,
-        );
-      }
+      await printRepo.printEscPos(
+        printer: assignedPrinter,
+        data: ticket.escPosCommands,
+      );
 
       if (context.mounted) {
         scaffold.showSnackBar(

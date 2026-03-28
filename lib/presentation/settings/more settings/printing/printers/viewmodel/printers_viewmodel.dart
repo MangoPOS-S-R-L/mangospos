@@ -299,6 +299,31 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         return true;
       }
 
+      if (printer.type == PrinterType.usb) {
+        final commands = <int>[
+          27,
+          64,
+          27,
+          97,
+          1,
+          ...utf8.encode('PRUEBA DE IMPRESION\n'),
+          ...utf8.encode('${printer.name}\n'),
+          ...utf8.encode('Conexion USB local\n'),
+          10,
+          10,
+          10,
+          29,
+          86,
+          66,
+          0,
+        ];
+        await _repo.printRawDirectUsb(
+          printer: _toPrinterConfig(printer),
+          data: commands,
+        );
+        return true;
+      }
+
       // Para BT/otros: encola en backend (si ya lo usas)
       await _repo.enqueueTestPrint(printerId);
       return true;
@@ -317,6 +342,13 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       final p = state.items.firstWhere((x) => x.id == printerId);
 
       if (kIsWeb) {
+        if (p.type == PrinterType.usb) {
+          state = state.copyWith(
+            errorMessage:
+                'Las impresoras USB requieren la app local de Windows. En Web usa una impresora de red con el Agente LAN.',
+          );
+          return false;
+        }
         try {
           final up = await _repo.isAgentUp();
           if (!up) {
@@ -391,29 +423,35 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         final up = await _repo.isAgentUp();
         if (up) return await scanViaAgent();
       } catch (_) {}
-      
+
       _log('scanOnLANUnified() -> web sin agente: intentando cloud discovery');
-      await discoverOnLANWeb(); 
-      
+      await discoverOnLANWeb();
+
       final rem = 10000 - sw.elapsed.inMilliseconds;
       if (rem > 0) {
-        _log('scanOnLANUnified() -> Esperando $rem ms adicionales para llegar a 10s.');
+        _log(
+          'scanOnLANUnified() -> Esperando $rem ms adicionales para llegar a 10s.',
+        );
         await Future.delayed(Duration(milliseconds: rem));
       }
 
       await load(businessId: _businessId ?? 'auto', force: true);
-      return state.items.map((p) => DiscoveredPrinter(
-        name: p.name,
-        type: p.type,
-        ip: p.ip,
-        mac: p.mac,
-        idHint: p.id,
-      )).toList();
+      return state.items
+          .map(
+            (p) => DiscoveredPrinter(
+              name: p.name,
+              type: p.type,
+              ip: p.ip,
+              mac: p.mac,
+              idHint: p.id,
+            ),
+          )
+          .toList();
     }
-    
+
     final lanResults = await scanOnLAN();
     final usbResults = await scanUSB();
-    
+
     return [...lanResults, ...usbResults];
   }
 
@@ -457,10 +495,14 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       final stopwatch = Stopwatch()..start();
       for (int offset = 0; offset < hosts.length; offset += maxConcurrent) {
         final elapsedRaw = stopwatch.elapsed.inMilliseconds;
-        _log('scanOnLAN() -> Procesando batch offset=$offset de ${hosts.length} (T=${elapsedRaw}ms)');
-        
+        _log(
+          'scanOnLAN() -> Procesando batch offset=$offset de ${hosts.length} (T=${elapsedRaw}ms)',
+        );
+
         if (stopwatch.elapsed.inSeconds >= 10) {
-          _log('scanOnLAN() -> Límite de 10s alcanzado (alcanzó offset $offset). Deteniendo.');
+          _log(
+            'scanOnLAN() -> Límite de 10s alcanzado (alcanzó offset $offset). Deteniendo.',
+          );
           break;
         }
 
@@ -477,7 +519,9 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
           final host = batch[i];
           final openPorts = resultsBatch[i];
           if (openPorts.isNotEmpty) {
-            _log('scanOnLAN() -> ¡ENCONTRADO!: $host puertos=${openPorts.join(',')}');
+            _log(
+              'scanOnLAN() -> ¡ENCONTRADO!: $host puertos=${openPorts.join(',')}',
+            );
             found[host] = openPorts;
           }
         }
@@ -486,7 +530,9 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       // 💡 Forzamos que dure al menos 10 segundos si terminó muy rápido (UX)
       final remaining = 10000 - stopwatch.elapsed.inMilliseconds;
       if (remaining > 0) {
-        _log('scanOnLAN() -> Escaneo terminó en ${stopwatch.elapsed.inMilliseconds}ms. Esperando ${remaining}ms adicionales para llegar a los 10s...');
+        _log(
+          'scanOnLAN() -> Escaneo terminó en ${stopwatch.elapsed.inMilliseconds}ms. Esperando ${remaining}ms adicionales para llegar a los 10s...',
+        );
         await Future.delayed(Duration(milliseconds: remaining));
       }
 
@@ -577,8 +623,10 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         );
       }
 
-      _log('scanViaAgent() -> ${out.length} resultados en ${sw.elapsed.inMilliseconds}ms');
-      
+      _log(
+        'scanViaAgent() -> ${out.length} resultados en ${sw.elapsed.inMilliseconds}ms',
+      );
+
       final rem = 10000 - sw.elapsed.inMilliseconds;
       if (rem > 0) {
         _log('scanViaAgent() -> Esperando $rem ms adicionales...');
@@ -726,21 +774,50 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         }
       }
 
-      // 2. Escaneo vía Agente Local (Desktop/Mac/Web)
-      try {
-        final agentUp = await _repo.isAgentUp();
-        if (agentUp) {
-          final agentResults = await scanViaAgent();
-          for (final d in agentResults) {
-            if (d.type == PrinterType.usb) {
-              if (!out.any((x) => x.idHint == d.idHint)) {
+      // 2. Escaneo local en Windows sin depender del agente.
+      if (!kIsWeb && Platform.isWindows) {
+        try {
+          final devices = await _repo.discoverLocalUsbPrinters();
+          for (final device in devices) {
+            final devicePath = device['devicePath']?.toString().trim();
+            final name = device['name']?.toString().trim().isNotEmpty == true
+                ? device['name']!.toString().trim()
+                : 'USB Printer';
+            if (devicePath == null || devicePath.isEmpty) continue;
+            if (!out.any((x) => x.idHint == devicePath)) {
+              out.add(
+                DiscoveredPrinter(
+                  name: name,
+                  type: PrinterType.usb,
+                  idHint: devicePath,
+                  mac:
+                      device['portName']?.toString() ??
+                      device['mac']?.toString(),
+                ),
+              );
+            }
+          }
+        } catch (e) {
+          _log('scanUSB() Windows local error: $e');
+        }
+      } else if (kIsWeb) {
+        // 3. En Web solo existe agente para red; USB local no está disponible.
+      } else {
+        // 3. Fallback por agente solo en plataformas donde aún no existe escaneo local USB.
+        try {
+          final agentUp = await _repo.isAgentUp();
+          if (agentUp) {
+            final agentResults = await scanViaAgent();
+            for (final d in agentResults) {
+              if (d.type == PrinterType.usb &&
+                  !out.any((x) => x.idHint == d.idHint)) {
                 out.add(d);
               }
             }
           }
+        } catch (e) {
+          _log('scanUSB() Agent error: $e');
         }
-      } catch (e) {
-        _log('scanUSB() Agent error: $e');
       }
     } catch (e, st) {
       _log('scanUSB() global ERROR: $e\n$st');
@@ -1252,5 +1329,23 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
   /// Helper method to convert PrinterConfig to PrinterDevice
   PrinterDevice _toPrinterDevice(PrinterConfig config) {
     return PrinterDevice.fromConfig(config);
+  }
+
+  PrinterConfig _toPrinterConfig(PrinterDevice printer) {
+    return PrinterConfig(
+      id: printer.id,
+      businessId: printer.businessId,
+      name: printer.name,
+      type: printer.type.name,
+      ipAddress: printer.ip,
+      port: 9100,
+      devicePath: printer.devicePath,
+      mac: printer.mac,
+      isActive: printer.online,
+      paperWidth: printer.paperWidth,
+      encoding: printer.encoding,
+      lastSeen: printer.lastSeen,
+      createdAt: printer.createdAt,
+    );
   }
 }

@@ -1,6 +1,7 @@
 const path = require('path');
 const io = require('socket.io-client');
 const winston = require('winston');
+const { exec } = require('child_process');
 const discoveryService = require('./core/discovery');
 
 // Cargar .env: detectar si corremos como script o como binario pkg
@@ -819,9 +820,99 @@ function checkPrinterStatus(ip, port, timeout = 1500) {
     });
 }
 
+function runPowerShell(script) {
+    return new Promise((resolve, reject) => {
+        const escaped = script.replace(/"/g, '\\"');
+        exec(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${escaped}"`, {
+            windowsHide: true,
+        }, (error, stdout, stderr) => {
+            if (error) {
+                reject(new Error((stderr || error.message || '').trim()));
+                return;
+            }
+            resolve((stdout || '').trim());
+        });
+    });
+}
+
+async function getLocalApiListener() {
+    if (process.platform !== 'win32') return null;
+
+    const script = [
+        `$conn = Get-NetTCPConnection -LocalPort ${LOCAL_PORT} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1`,
+        'if (-not $conn) { return }',
+        '$proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue',
+        '[pscustomobject]@{ pid = $conn.OwningProcess; name = if ($proc) { $proc.ProcessName } else { $null } } | ConvertTo-Json -Compress',
+    ].join('; ');
+
+    try {
+        const raw = await runPowerShell(script);
+        if (!raw) return null;
+        return JSON.parse(raw);
+    } catch (error) {
+        logger.warn(`No se pudo inspeccionar el puerto ${LOCAL_PORT}: ${error.message}`);
+        return null;
+    }
+}
+
+async function stopExistingAgentOnLocalPort() {
+    const listener = await getLocalApiListener();
+    if (!listener || !listener.pid || listener.pid === process.pid) {
+        return false;
+    }
+
+    const processName = String(listener.name || '').toLowerCase();
+    const looksLikeAgent =
+        processName.includes('mangopos-agent') ||
+        processName === 'node' ||
+        processName === 'node.exe';
+
+    if (!looksLikeAgent) {
+        logger.warn(`El puerto ${LOCAL_PORT} esta ocupado por ${listener.name || 'otro proceso'} (PID ${listener.pid}). No se detendra automaticamente.`);
+        return false;
+    }
+
+    logger.warn(`Se detecto una instancia previa del agente en el puerto ${LOCAL_PORT} (PID ${listener.pid}, ${listener.name}). Se intentara reiniciar.`);
+
+    try {
+        await runPowerShell(`Stop-Process -Id ${listener.pid} -Force -ErrorAction Stop`);
+    } catch (error) {
+        logger.error(`No se pudo detener la instancia previa del agente (PID ${listener.pid}): ${error.message}`);
+        return false;
+    }
+
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        const current = await getLocalApiListener();
+        if (!current || current.pid === process.pid) {
+            logger.info(`Puerto ${LOCAL_PORT} liberado correctamente.`);
+            return true;
+        }
+    }
+
+    logger.error(`La instancia previa del agente no libero el puerto ${LOCAL_PORT} a tiempo.`);
+    return false;
+}
+
+async function startLocalApiServer() {
+    await stopExistingAgentOnLocalPort();
+
+    app.listen(LOCAL_PORT, () => {
+        logger.info(`ðŸš€ Local API escuchando en http://localhost:${LOCAL_PORT}`);
+    }).on('error', (err) => {
+        if (err.code === 'EADDRINUSE') {
+            logger.error(`âŒ El puerto ${LOCAL_PORT} ya estÃ¡ en uso. El agente seguirÃ¡ operando vÃ­a Socket.io si es posible.`);
+        } else {
+            logger.error(`âŒ Error iniciando servidor API: ${err.message}`);
+        }
+    });
+}
+
+
+startLocalApiServer();
 
 // Iniciar Servidor HTTP
-app.listen(LOCAL_PORT, () => {
+if (false) app.listen(LOCAL_PORT, () => {
     logger.info(`🚀 Local API escuchando en http://localhost:${LOCAL_PORT}`);
 }).on('error', (err) => {
     if (err.code === 'EADDRINUSE') {

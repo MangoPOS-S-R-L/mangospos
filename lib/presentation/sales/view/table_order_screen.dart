@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/core/utils/display_name_utils.dart';
 import 'package:mangopos/data/models/sales_models.dart';
@@ -1431,8 +1430,8 @@ class _CartView extends ConsumerWidget {
                           Text(
                             origin == OrderOrigin.table
                                 ? (tableCode.toLowerCase().startsWith('mesa')
-                                    ? tableCode
-                                    : 'Mesa $tableCode')
+                                      ? tableCode
+                                      : 'Mesa $tableCode')
                                 : origin == OrderOrigin.manual
                                 ? 'Venta Manual ${tableCode.isNotEmpty ? " • $tableCode" : ""}'
                                 : 'Venta Rápida',
@@ -2315,13 +2314,6 @@ class _CartView extends ConsumerWidget {
         throw Exception('Impresora no configurada.');
       }
 
-      final ip = assignedPrinter.ipAddress?.trim();
-      final port = assignedPrinter.port ?? 9100;
-
-      if (ip == null || ip.isEmpty) {
-        throw Exception('IP de impresora no configurada.');
-      }
-
       final receiptItemDisplayMode = await ref
           .read(posSettingsRepositoryProvider)
           .getReceiptItemDisplayMode(businessId);
@@ -2378,26 +2370,28 @@ class _CartView extends ConsumerWidget {
       // Ejecución con Timeout de 3 segundos
       await Future(() async {
         if (ticket != null) {
-          if (kIsWeb) {
-            final up = await printRepo.isAgentUp();
-            if (!up) throw Exception('Agente LAN no detectado.');
-            await printRepo.printRawViaAgent(
-              ip: ip,
-              port: port,
-              data: ticket.escPosCommands,
-            );
-          } else {
-            await printRepo.printRawDirectTcp(
-              ip: ip,
-              port: port,
-              data: ticket.escPosCommands,
+          await printRepo.printEscPos(
+            printer: assignedPrinter,
+            data: ticket.escPosCommands,
+          );
+        } else {
+          if (!assignedPrinter.isNetwork) {
+            throw Exception(
+              'La impresión ${assignedPrinter.type} requiere generar el ticket ESC/POS antes de enviarlo.',
             );
           }
-        } else {
+          final ip = assignedPrinter.ipAddress?.trim();
+          if (ip == null || ip.isEmpty) {
+            throw Exception('La impresora de red no tiene IP configurada.');
+          }
           await printRepo.printJobViaAgent({
             'id':
                 '${type.toUpperCase()}-${DateTime.now().millisecondsSinceEpoch}',
-            'printer': {'type': 'network', 'ip': ip, 'port': port},
+            'printer': {
+              'type': 'network',
+              'ip': ip,
+              'port': assignedPrinter.port ?? 9100,
+            },
             'content': {'type': type, 'data': data},
           });
         }
@@ -5323,7 +5317,8 @@ class _ModifiersSelectionDialogState extends State<_ModifiersSelectionDialog> {
             children: [
               _SalesModifierDialogHeader(
                 title: widget.product.name,
-                subtitle: 'Personaliza el producto antes de agregarlo a la orden.',
+                subtitle:
+                    'Personaliza el producto antes de agregarlo a la orden.',
               ),
               const SizedBox(height: 18),
               Expanded(
@@ -5332,148 +5327,167 @@ class _ModifiersSelectionDialogState extends State<_ModifiersSelectionDialog> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-              ...widget.groups.map((row) {
-                final group = Map<String, dynamic>.from(
-                  row['modifier_groups'] as Map,
-                );
-                final groupId = group['id']?.toString() ?? '';
-                final groupName = group['name']?.toString() ?? 'Grupo';
-                final displayType =
-                    group['display_type']?.toString() ?? 'multiple';
-                final minSelect = (group['min_select'] as num?)?.toInt() ?? 0;
-                final maxSelect = (group['max_select'] as num?)?.toInt() ?? 0;
-                final selected = _selectedByGroup[groupId] ?? <String>{};
-                final modifiers =
-                    ((group['modifiers'] as List?) ?? const [])
-                        .map((item) => Map<String, dynamic>.from(item as Map))
-                        .where((item) => item['is_active'] != false)
-                        .toList(growable: false)
-                      ..sort(
-                        (a, b) => ((a['sort_order'] as num?)?.toInt() ?? 0)
-                            .compareTo((b['sort_order'] as num?)?.toInt() ?? 0),
-                      );
+                      ...widget.groups.map((row) {
+                        final group = Map<String, dynamic>.from(
+                          row['modifier_groups'] as Map,
+                        );
+                        final groupId = group['id']?.toString() ?? '';
+                        final groupName = group['name']?.toString() ?? 'Grupo';
+                        final displayType =
+                            group['display_type']?.toString() ?? 'multiple';
+                        final minSelect =
+                            (group['min_select'] as num?)?.toInt() ?? 0;
+                        final maxSelect =
+                            (group['max_select'] as num?)?.toInt() ?? 0;
+                        final selected =
+                            _selectedByGroup[groupId] ?? <String>{};
+                        final modifiers =
+                            ((group['modifiers'] as List?) ?? const [])
+                                .map(
+                                  (item) =>
+                                      Map<String, dynamic>.from(item as Map),
+                                )
+                                .where((item) => item['is_active'] != false)
+                                .toList(growable: false)
+                              ..sort(
+                                (a, b) =>
+                                    ((a['sort_order'] as num?)?.toInt() ?? 0)
+                                        .compareTo(
+                                          (b['sort_order'] as num?)?.toInt() ??
+                                              0,
+                                        ),
+                              );
 
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 14),
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: _salesSurface,
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(color: _salesDivider),
-                    boxShadow: _salesSoftShadow,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              groupName,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w800,
-                                fontSize: 15,
-                                color: _salesTextPrimary,
-                              ),
-                            ),
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 14),
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: _salesSurface,
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(color: _salesDivider),
+                            boxShadow: _salesSoftShadow,
                           ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFF3F0ED),
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                            child: Text(
-                              displayType == 'single' ? '1 opción' : 'Múltiple',
-                              style: const TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                                color: _salesTextSecondary,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      groupName,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                        fontSize: 15,
+                                        color: _salesTextPrimary,
+                                      ),
+                                    ),
+                                  ),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 6,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFF3F0ED),
+                                      borderRadius: BorderRadius.circular(999),
+                                    ),
+                                    child: Text(
+                                      displayType == 'single'
+                                          ? '1 opción'
+                                          : 'Múltiple',
+                                      style: const TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                        color: _salesTextSecondary,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        _groupHint(
-                          displayType: displayType,
-                          minSelect: minSelect,
-                          maxSelect: maxSelect,
-                        ),
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: _salesTextSecondary,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: modifiers
-                            .map((modifier) {
-                              final modifierId =
-                                  modifier['id']?.toString() ?? '';
-                              final price =
-                                  (modifier['price_delta'] as num?)
-                                      ?.toDouble() ??
-                                  0.0;
-                              final isSelected = selected.contains(modifierId);
-                              return FilterChip(
-                                selected: isSelected,
-                                showCheckmark: false,
-                                selectedColor: const Color(0xFFFFEDD5),
-                                backgroundColor: const Color(0xFFF8FAFC),
-                                side: BorderSide(
-                                  color: isSelected
-                                      ? _salesTotalColor
-                                      : _salesDivider,
-                                  width: isSelected ? 1.5 : 1,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(14),
-                                ),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 10,
-                                ),
-                                labelStyle: TextStyle(
-                                  color: isSelected
-                                      ? const Color(0xFF9A3412)
-                                      : _salesTextPrimary,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                                avatar: Icon(
-                                  isSelected
-                                      ? Icons.check_circle_rounded
-                                      : Icons.add_circle_outline_rounded,
-                                  size: 18,
-                                  color: isSelected
-                                      ? _salesTotalColor
-                                      : _salesTextHint,
-                                ),
-                                label: Text(
-                                  price > 0
-                                      ? '${modifier['name']} (+${currency.format(price)})'
-                                      : '${modifier['name']}',
-                                ),
-                                onSelected: (_) => _toggleModifier(
-                                  groupId: groupId,
-                                  modifierId: modifierId,
+                              const SizedBox(height: 6),
+                              Text(
+                                _groupHint(
                                   displayType: displayType,
+                                  minSelect: minSelect,
                                   maxSelect: maxSelect,
                                 ),
-                              );
-                            })
-                            .toList(growable: false),
-                      ),
-                    ],
-                  ),
-                );
-              }),
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: _salesTextSecondary,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: modifiers
+                                    .map((modifier) {
+                                      final modifierId =
+                                          modifier['id']?.toString() ?? '';
+                                      final price =
+                                          (modifier['price_delta'] as num?)
+                                              ?.toDouble() ??
+                                          0.0;
+                                      final isSelected = selected.contains(
+                                        modifierId,
+                                      );
+                                      return FilterChip(
+                                        selected: isSelected,
+                                        showCheckmark: false,
+                                        selectedColor: const Color(0xFFFFEDD5),
+                                        backgroundColor: const Color(
+                                          0xFFF8FAFC,
+                                        ),
+                                        side: BorderSide(
+                                          color: isSelected
+                                              ? _salesTotalColor
+                                              : _salesDivider,
+                                          width: isSelected ? 1.5 : 1,
+                                        ),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            14,
+                                          ),
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 10,
+                                        ),
+                                        labelStyle: TextStyle(
+                                          color: isSelected
+                                              ? const Color(0xFF9A3412)
+                                              : _salesTextPrimary,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                        avatar: Icon(
+                                          isSelected
+                                              ? Icons.check_circle_rounded
+                                              : Icons
+                                                    .add_circle_outline_rounded,
+                                          size: 18,
+                                          color: isSelected
+                                              ? _salesTotalColor
+                                              : _salesTextHint,
+                                        ),
+                                        label: Text(
+                                          price > 0
+                                              ? '${modifier['name']} (+${currency.format(price)})'
+                                              : '${modifier['name']}',
+                                        ),
+                                        onSelected: (_) => _toggleModifier(
+                                          groupId: groupId,
+                                          modifierId: modifierId,
+                                          displayType: displayType,
+                                          maxSelect: maxSelect,
+                                        ),
+                                      );
+                                    })
+                                    .toList(growable: false),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
                     ],
                   ),
                 ),
@@ -5489,7 +5503,10 @@ class _ModifiersSelectionDialogState extends State<_ModifiersSelectionDialog> {
                   const SizedBox(width: 10),
                   FilledButton.icon(
                     onPressed: _submit,
-                    icon: const Icon(Icons.add_shopping_cart_outlined, size: 18),
+                    icon: const Icon(
+                      Icons.add_shopping_cart_outlined,
+                      size: 18,
+                    ),
                     label: const Text('Agregar'),
                   ),
                 ],
@@ -5605,10 +5622,7 @@ class _SalesModifierDialogHeader extends StatelessWidget {
             color: _salesTotalColor.withValues(alpha: 0.12),
             borderRadius: BorderRadius.circular(16),
           ),
-          child: const Icon(
-            Icons.tune_rounded,
-            color: _salesTotalColor,
-          ),
+          child: const Icon(Icons.tune_rounded, color: _salesTotalColor),
         ),
         const SizedBox(width: 14),
         Expanded(

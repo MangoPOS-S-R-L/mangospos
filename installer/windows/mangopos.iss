@@ -50,12 +50,16 @@ Name: "{autoprograms}\{#AppName}"; Filename: "{app}\App\{#AppExeName}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\App\{#AppExeName}"; Tasks: desktopicon
 
 [Run]
+Filename: "{cmd}"; Parameters: "/c taskkill /F /IM mangopos-agent.exe /T >nul 2>&1"; Flags: runhidden waituntilterminated
+Filename: "{cmd}"; Parameters: "/c taskkill /F /IM mangopos-agent-service.exe /T >nul 2>&1"; Flags: runhidden waituntilterminated
 Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "stop"; Flags: runhidden waituntilterminated; Check: AgentServiceRegistered
 Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "uninstall"; Flags: runhidden waituntilterminated; Check: AgentServiceRegistered
 Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "install"; Flags: runhidden waituntilterminated
 Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "start"; Flags: runhidden waituntilterminated postinstall skipifsilent; Description: "Iniciar agente LAN de impresion"
 
 [UninstallRun]
+Filename: "{cmd}"; Parameters: "/c taskkill /F /IM mangopos-agent.exe /T >nul 2>&1"; Flags: runhidden waituntilterminated; RunOnceId: "KillMangoPOSAgentProcess"
+Filename: "{cmd}"; Parameters: "/c taskkill /F /IM mangopos-agent-service.exe /T >nul 2>&1"; Flags: runhidden waituntilterminated; RunOnceId: "KillMangoPOSAgentWrapper"
 Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "stop"; Flags: runhidden waituntilterminated; RunOnceId: "StopMangoPOSAgentService"
 Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "uninstall"; Flags: runhidden waituntilterminated; RunOnceId: "UninstallMangoPOSAgentService"
 

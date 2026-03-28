@@ -32,10 +32,10 @@ class DiscoveryService {
     }
 
     async scanUSBWindows() {
-        // Use PowerShell to find USB Printing Support devices
-        // This is more robust than node-usb on Windows without build tools
-        // We use Get-WmiObject to interpret the 'Service' property correctly
-        const cmd = `powershell -NoProfile -Command "Get-WmiObject Win32_PnPEntity | Where-Object { $_.Service -eq 'usbprint' } | Select-Object Name, DeviceID, Manufacturer | ConvertTo-Json"`;
+        // USB thermal printers on Windows are not always exposed with Service=usbprint.
+        // Some drivers show them as generic USB PnP devices but still expose VID/PID.
+        const script = "$items = Get-CimInstance Win32_PnPEntity | Where-Object { $_.DeviceID -match '^USB\\\\VID_' -and ($_.Service -eq 'usbprint' -or $_.PNPClass -eq 'Printer' -or $_.Name -match 'POS|Printer|2con|XP-|TM-|Epson|Bixolon|Star|Brother') } | Select-Object Name, DeviceID, Manufacturer, Service, PNPClass; $items | ConvertTo-Json -Compress";
+        const cmd = `powershell -NoProfile -ExecutionPolicy Bypass -Command "${script}"`;
 
         return new Promise((resolve) => {
             exec(cmd, (error, stdout, stderr) => {
@@ -50,16 +50,26 @@ class DiscoveryService {
                     // Handle single object vs array
                     const devices = Array.isArray(data) ? data : [data];
 
+                    const seen = new Set();
                     devices.forEach(d => {
                         if (!d.DeviceID) return;
+                        if (seen.has(d.DeviceID)) return;
+                        const name = d.Name || 'Unknown USB Printer';
+                        const looksLikePrinter =
+                            d.Service === 'usbprint' ||
+                            /\bPOS\b|Printer|2con|2C-|XP-|TM-|Epson|Bixolon|Star|Brother/i.test(name);
+                        if (!looksLikePrinter) return;
+                        seen.add(d.DeviceID);
                         // Extract VID/PID from DeviceID (e.g., USB\VID_2CB7&PID_811B\...)
                         // Format: USB\VID_xxxx&PID_xxxx\serial
                         this.discoveredDevices.push({
                             type: 'usb',
-                            name: d.Name || 'Unknown USB Printer',
+                            name,
                             vid: this.extractVidPid(d.DeviceID, 'VID'),
                             pid: this.extractVidPid(d.DeviceID, 'PID'),
                             deviceId: d.DeviceID,
+                            service: d.Service || null,
+                            pnpClass: d.PNPClass || null,
                             address: d.DeviceID // Use DeviceID as address/endpoint
                         });
                     });

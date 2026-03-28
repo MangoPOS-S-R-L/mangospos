@@ -1,7 +1,5 @@
 // lib/data/repositories/printing_service.dart
-import 'dart:convert';
-
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/printing_models.dart';
 import '../models/sales_models.dart';
@@ -202,61 +200,13 @@ class PrintingService {
     required String areaCode,
     required Map<String, dynamic> fallbackData,
   }) async {
-    switch (printer.type) {
-      case 'network':
-        final ip = printer.ipAddress?.trim();
-        if (ip == null || ip.isEmpty) {
-          throw Exception('La impresora de red no tiene IP configurada.');
-        }
-        if (kIsWeb) {
-          await _printingRepo.printRawViaAgent(
-            ip: ip,
-            port: printer.port ?? 9100,
-            data: bytes,
-          );
-          return;
-        }
-        try {
-          await _printingRepo.printRawDirectTcp(
-            ip: ip,
-            port: printer.port ?? 9100,
-            data: bytes,
-          );
-        } catch (_) {
-          await _printingRepo.printRawViaAgent(
-            ip: ip,
-            port: printer.port ?? 9100,
-            data: bytes,
-          );
-        }
-        return;
-      case 'usb':
-        await _printingRepo.printJobViaAgent({
-          'id': 'KITCHEN-${DateTime.now().millisecondsSinceEpoch}',
-          'printer': {
-            'id': printer.id,
-            'type': 'usb',
-            'name': printer.name,
-            'endpoint': printer.devicePath,
-            'devicePath': printer.devicePath,
-            'path': printer.devicePath,
-            'deviceId': printer.devicePath,
-          },
-          'content': {
-            'type': 'raw_base64',
-            'dataBase64': base64Encode(bytes),
-            'fallback': fallbackData,
-          },
-          'meta': {'areaCode': areaCode},
-        });
-        return;
-      case 'bluetooth':
-        throw Exception(
-          'La autoimpresión de cocina no soporta Bluetooth todavía.',
-        );
-      default:
-        throw Exception('Tipo de impresora no soportado: ${printer.type}.');
+    if (printer.printerType == PrinterType.bluetooth) {
+      throw Exception(
+        'La autoimpresión de cocina no soporta Bluetooth todavía.',
+      );
     }
+
+    await _printingRepo.printEscPos(printer: printer, data: bytes);
   }
 
   /// Agrupar items por área de impresión
