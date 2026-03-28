@@ -74,6 +74,7 @@ dependencies:
   printing: ^5.14.2
   window_manager: ^0.5.1
   web: ^1.1.1
+  flutter_usb_printer: ^0.1.0+1
 
 
 dev_dependencies:

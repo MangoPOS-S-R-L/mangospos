@@ -12,6 +12,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+// USB
+import 'package:flutter_usb_printer/flutter_usb_printer.dart';
+
 import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
@@ -407,7 +410,11 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         idHint: p.id,
       )).toList();
     }
-    return scanOnLAN();
+    
+    final lanResults = await scanOnLAN();
+    final usbResults = await scanUSB();
+    
+    return [...lanResults, ...usbResults];
   }
 
   Future<List<DiscoveredPrinter>> scanOnLAN({
@@ -683,6 +690,60 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       _log('scanBluetooth() ERROR: $e\n$st');
       state = state.copyWith(isDiscovering: false, errorMessage: e.toString());
       return <DiscoveredPrinter>[];
+    } finally {
+      state = state.copyWith(isDiscovering: false);
+    }
+
+    return out;
+  }
+
+  /// Escaneo USB. **No guarda**.
+  Future<List<DiscoveredPrinter>> scanUSB() async {
+    final out = <DiscoveredPrinter>[];
+    state = state.copyWith(isDiscovering: true, errorMessage: null);
+
+    try {
+      // 1. Escaneo vía flutter_usb_printer (Android)
+      if (!kIsWeb && Platform.isAndroid) {
+        try {
+          final List<Map<String, dynamic>> devices =
+              await FlutterUsbPrinter.getUSBDeviceList();
+          for (final d in devices) {
+            final vendorId = d['vendorId']?.toString() ?? '';
+            final productId = d['productId']?.toString() ?? '';
+            final name = d['manufacturer'] ?? d['productName'] ?? 'USB';
+            out.add(
+              DiscoveredPrinter(
+                name: '$name (USB)',
+                type: PrinterType.usb,
+                idHint: '$vendorId:$productId',
+                mac: '$vendorId:$productId',
+              ),
+            );
+          }
+        } catch (e) {
+          _log('scanUSB() Android error: $e');
+        }
+      }
+
+      // 2. Escaneo vía Agente Local (Desktop/Mac/Web)
+      try {
+        final agentUp = await _repo.isAgentUp();
+        if (agentUp) {
+          final agentResults = await scanViaAgent();
+          for (final d in agentResults) {
+            if (d.type == PrinterType.usb) {
+              if (!out.any((x) => x.idHint == d.idHint)) {
+                out.add(d);
+              }
+            }
+          }
+        }
+      } catch (e) {
+        _log('scanUSB() Agent error: $e');
+      }
+    } catch (e, st) {
+      _log('scanUSB() global ERROR: $e\n$st');
     } finally {
       state = state.copyWith(isDiscovering: false);
     }
