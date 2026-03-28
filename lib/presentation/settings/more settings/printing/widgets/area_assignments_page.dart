@@ -38,6 +38,7 @@ class PrintingAreaAssignmentsPage extends ConsumerStatefulWidget {
 class _PrintingAreaAssignmentsPageState
     extends ConsumerState<PrintingAreaAssignmentsPage> {
   final Map<String, List<PrinterConfig>> _assignedByArea = {};
+  final Map<String, List<PrintAreaPrinter>> _assignmentsByArea = {};
   final Set<String> _loadingAreaIds = {};
 
   @override
@@ -70,10 +71,12 @@ class _PrintingAreaAssignmentsPageState
     setState(() => _loadingAreaIds.add(areaId));
     try {
       final repo = ref.read(printingAreasRepositoryProvider);
-      final printers = await repo.getOrderPrintersForArea(areaId);
+      final printers = await repo.getPrintersForArea(areaId);
       if (!mounted) return;
+      final assignments = await repo.getAreaPrinterAssignments(areaId);
       setState(() {
         _assignedByArea[areaId] = printers;
+        _assignmentsByArea[areaId] = assignments;
         _loadingAreaIds.remove(areaId);
       });
     } catch (_) {
@@ -337,6 +340,12 @@ class _PrintingAreaAssignmentsPageState
                                     child: PrintingDashedPanel(
                                       child: _AssignedPrinterCard(
                                         printer: printer,
+                                        assignment: (() {
+                                          final matches = (_assignmentsByArea[area.id] ?? const [])
+                                              .where((a) => a.printerId == printer.id)
+                                              .toList(growable: false);
+                                          return matches.isEmpty ? null : matches.first;
+                                        })(),
                                         onDelete: () =>
                                             _removePrinterAssignment(
                                               area,
@@ -344,6 +353,19 @@ class _PrintingAreaAssignmentsPageState
                                             ),
                                         onConfigure: () =>
                                             _configurePrinter(printer),
+                                        onToggleModes: (sendToKitchen, markReady) async {
+                                          final ok = await ref
+                                              .read(printingAreasViewModelProvider.notifier)
+                                              .updateAreaPrinterModes(
+                                                areaId: area.id,
+                                                printerId: printer.id,
+                                                printsOrders: sendToKitchen,
+                                                printsReceipts: markReady,
+                                              );
+                                          if (ok) {
+                                            await _loadAssignedPrinters(area.id);
+                                          }
+                                        },
                                       ),
                                     ),
                                   );
@@ -364,13 +386,17 @@ class _PrintingAreaAssignmentsPageState
 class _AssignedPrinterCard extends StatelessWidget {
   const _AssignedPrinterCard({
     required this.printer,
+    required this.assignment,
     required this.onDelete,
     required this.onConfigure,
+    required this.onToggleModes,
   });
 
   final PrinterConfig printer;
+  final PrintAreaPrinter? assignment;
   final VoidCallback onDelete;
   final VoidCallback onConfigure;
+  final Future<void> Function(bool sendToKitchen, bool markReady) onToggleModes;
 
   @override
   Widget build(BuildContext context) {
@@ -438,6 +464,42 @@ class _AssignedPrinterCard extends StatelessWidget {
         Text(
           'MAC: $mac',
           style: const TextStyle(fontSize: 13, color: MangoColors.darkGray),
+        ),
+        const SizedBox(height: 14),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF8FAFC),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFE5E7EB)),
+          ),
+          child: Column(
+            children: [
+              SwitchListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Imprimir al enviar a cocina'),
+                subtitle: const Text('Comanda sale al enviar desde la mesa.'),
+                value: assignment?.printsOrders == true,
+                onChanged: (value) => onToggleModes(
+                  value,
+                  assignment?.printsReceipts == true,
+                ),
+              ),
+              const Divider(height: 1),
+              SwitchListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Imprimir al marcar listo'),
+                subtitle: const Text('Comanda sale desde la pantalla de cocina.'),
+                value: assignment?.printsReceipts == true,
+                onChanged: (value) => onToggleModes(
+                  assignment?.printsOrders == true,
+                  value,
+                ),
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: 14),
         Row(

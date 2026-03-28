@@ -30,6 +30,8 @@ const int agentPort = 4000;
 bool _authRecoveryScheduled = false;
 int _authRecoveryAttempts = 0;
 const int _maxAuthRecoveryAttempts = 3;
+DateTime? _lastTransientAuthLogAt;
+String? _lastTransientAuthSignature;
 
 Future<bool> _pingAgentOnce({
   Duration timeout = const Duration(milliseconds: 1000),
@@ -128,11 +130,13 @@ void main() {
     (error, stackTrace) {
       if (_isTransientSupabaseAuthRefreshError(error)) {
         _scheduleExpiredAuthRecovery(error, stackTrace);
-        AppLogger.w(
-          'Supabase Auth devolvio un error transitorio de refresh. La app continuara mientras el backend se recupera.',
-          error: error,
-          stackTrace: stackTrace,
-        );
+        if (_shouldLogTransientAuthError(error)) {
+          AppLogger.w(
+            'Supabase Auth devolvio un error transitorio de refresh. La app continuara mientras el backend se recupera.',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        }
         return;
       }
 
@@ -194,11 +198,13 @@ void _installGlobalErrorHandlers() {
   FlutterError.onError = (details) {
     if (_isTransientSupabaseAuthRefreshError(details.exception)) {
       _scheduleExpiredAuthRecovery(details.exception, details.stack);
-      AppLogger.w(
-        'FlutterError recuperable de Supabase Auth refresh.',
-        error: details.exception,
-        stackTrace: details.stack,
-      );
+      if (_shouldLogTransientAuthError(details.exception)) {
+        AppLogger.w(
+          'FlutterError recuperable de Supabase Auth refresh.',
+          error: details.exception,
+          stackTrace: details.stack,
+        );
+      }
       return;
     }
 
@@ -213,11 +219,13 @@ void _installGlobalErrorHandlers() {
   PlatformDispatcher.instance.onError = (error, stackTrace) {
     if (_isTransientSupabaseAuthRefreshError(error)) {
       _scheduleExpiredAuthRecovery(error, stackTrace);
-      AppLogger.w(
-        'PlatformDispatcher capturo un error transitorio de Supabase Auth refresh.',
-        error: error,
-        stackTrace: stackTrace,
-      );
+      if (_shouldLogTransientAuthError(error)) {
+        AppLogger.w(
+          'PlatformDispatcher capturo un error transitorio de Supabase Auth refresh.',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
       return true;
     }
 
@@ -242,6 +250,22 @@ bool _isTransientSupabaseAuthRefreshError(Object error) {
       message.contains('statusCode: 502');
 }
 
+bool _shouldLogTransientAuthError(Object error) {
+  final now = DateTime.now();
+  final signature = error.toString();
+  final shouldLog =
+      _lastTransientAuthSignature != signature ||
+      _lastTransientAuthLogAt == null ||
+      now.difference(_lastTransientAuthLogAt!) > const Duration(seconds: 45);
+
+  if (shouldLog) {
+    _lastTransientAuthSignature = signature;
+    _lastTransientAuthLogAt = now;
+  }
+
+  return shouldLog;
+}
+
 void _scheduleExpiredAuthRecovery(Object error, StackTrace? stackTrace) {
   if (_authRecoveryScheduled) return;
 
@@ -256,13 +280,28 @@ void _scheduleExpiredAuthRecovery(Object error, StackTrace? stackTrace) {
   Future<void>.microtask(() async {
     try {
       _authRecoveryAttempts += 1;
-      AppLogger.w(
-        'La sesion expiro y el refresh fallo. Intentando recuperar la sesion sin cerrar al usuario. Intento $_authRecoveryAttempts/$_maxAuthRecoveryAttempts.',
-        error: error,
-        stackTrace: stackTrace,
+      final retryDelay = Duration(
+        seconds: _authRecoveryAttempts <= 1 ? 2 : (_authRecoveryAttempts * 4),
       );
 
-      final refreshToken = session?.refreshToken;
+      if (_shouldLogTransientAuthError(error)) {
+        AppLogger.w(
+          'La sesion expiro y el refresh fallo. Intentando recuperar la sesion sin cerrar al usuario. Intento $_authRecoveryAttempts/$_maxAuthRecoveryAttempts en ${retryDelay.inSeconds}s.',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
+
+      await Future.delayed(retryDelay);
+
+      final latestSession = auth.currentSession;
+      final latestAccessToken = latestSession?.accessToken;
+      if (latestAccessToken != null && !_isJwtExpired(latestAccessToken)) {
+        _authRecoveryAttempts = 0;
+        return;
+      }
+
+      final refreshToken = latestSession?.refreshToken;
       if (refreshToken != null && refreshToken.isNotEmpty) {
         await auth.refreshSession(refreshToken);
       }
@@ -279,9 +318,11 @@ void _scheduleExpiredAuthRecovery(Object error, StackTrace? stackTrace) {
       }
 
       if (_authRecoveryAttempts < _maxAuthRecoveryAttempts) {
-        AppLogger.w(
-          'No se pudo recuperar la sesion en este intento. Se mantendra la app activa y se reintentara cuando vuelva a dispararse el flujo de auth.',
-        );
+        if (_shouldLogTransientAuthError(error)) {
+          AppLogger.w(
+            'No se pudo recuperar la sesion en este intento. Se mantendra la app activa y se reintentara con backoff.',
+          );
+        }
         return;
       }
 
@@ -294,11 +335,13 @@ void _scheduleExpiredAuthRecovery(Object error, StackTrace? stackTrace) {
       AppRouter.router.go(AppRoutes.login);
       _authRecoveryAttempts = 0;
     } catch (recoveryError, recoveryStack) {
-      AppLogger.e(
-        'Fallo el intento de recuperar la sesion expirada.',
-        error: recoveryError,
-        stackTrace: recoveryStack,
-      );
+      if (_shouldLogTransientAuthError(recoveryError)) {
+        AppLogger.e(
+          'Fallo el intento de recuperar la sesion expirada.',
+          error: recoveryError,
+          stackTrace: recoveryStack,
+        );
+      }
 
       if (_authRecoveryAttempts >= _maxAuthRecoveryAttempts) {
         try {

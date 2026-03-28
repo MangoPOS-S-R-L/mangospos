@@ -76,6 +76,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
               pendingCount: pending.length,
               preparingCount: preparing.length,
               completedToday: completedToday,
+              readyItems: ready,
             ),
             const SizedBox(height: 18),
             Expanded(
@@ -198,6 +199,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
     required int pendingCount,
     required int preparingCount,
     required int completedToday,
+    required List<KitchenItem> readyItems,
   }) {
     return Row(
       children: [
@@ -225,6 +227,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
             icon: Icons.check_circle_outline,
             title: completedToday.toString(),
             subtitle: 'Completados Hoy',
+            onTap: () => _showCompletedTodayDialog(context, readyItems),
           ),
         ),
       ],
@@ -236,8 +239,12 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
     required IconData icon,
     required String title,
     required String subtitle,
+    VoidCallback? onTap,
   }) {
-    return Container(
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -282,7 +289,134 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
           ),
         ],
       ),
+    ));
+  }
+
+  void _showCompletedTodayDialog(BuildContext context, List<KitchenItem> ready) {
+    final now = DateTime.now();
+    final completedTodayItems = ready.where((i) {
+      final d = i.readyAt ?? i.createdAt;
+      return d.year == now.year && d.month == now.month && d.day == now.day;
+    }).toList(growable: false);
+
+    final orders = _groupOrdersFromItems(completedTodayItems);
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 760, maxHeight: 700),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Completados hoy',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '${orders.length} comandas completadas en el día.',
+                  style: const TextStyle(color: Color(0xFF6B7280)),
+                ),
+                const SizedBox(height: 16),
+                Expanded(
+                  child: orders.isEmpty
+                      ? const Center(
+                          child: Text('No hay comandas completadas hoy.'),
+                        )
+                      : ListView.separated(
+                          itemCount: orders.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 12),
+                          itemBuilder: (context, index) {
+                            final order = orders[index];
+                            final completedAt = order.items
+                                .map((e) => e.readyAt ?? e.createdAt)
+                                .reduce((a, b) => a.isAfter(b) ? a : b);
+                            return Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: Colors.grey.shade200),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          'Orden ${order.orderNumber.isNotEmpty ? order.orderNumber : order.orderId.substring(0, 8).toUpperCase()}',
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w800,
+                                            fontSize: 16,
+                                          ),
+                                        ),
+                                      ),
+                                      Text(
+                                        '${completedAt.hour.toString().padLeft(2, '0')}:${completedAt.minute.toString().padLeft(2, '0')}',
+                                        style: const TextStyle(color: Color(0xFF6B7280)),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    'Mesa: ${order.tableName ?? 'N/A'} · Mesero: ${order.waiterName ?? 'N/A'}',
+                                    style: const TextStyle(color: Color(0xFF6B7280)),
+                                  ),
+                                  const SizedBox(height: 10),
+                                  ...order.items.map(
+                                    (item) => Padding(
+                                      padding: const EdgeInsets.only(bottom: 6),
+                                      child: Text(
+                                        '${_formatQty(item.quantity)} x ${item.productName}',
+                                        style: const TextStyle(fontWeight: FontWeight.w600),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                ),
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: () => Navigator.of(dialogContext).pop(),
+                    child: const Text('Cerrar'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
+  }
+
+  List<KitchenOrder> _groupOrdersFromItems(List<KitchenItem> items) {
+    final map = <String, List<KitchenItem>>{};
+    for (final item in items) {
+      map.putIfAbsent(item.orderId, () => []).add(item);
+    }
+    return map.entries.map((entry) {
+      final list = entry.value;
+      list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      final first = list.first;
+      return KitchenOrder(
+        orderId: entry.key,
+        orderNumber: first.orderNumber,
+        tableName: first.tableName,
+        waiterName: first.waiterName,
+        createdAt: first.createdAt,
+        items: list,
+      );
+    }).toList()..sort((a, b) => a.createdAt.compareTo(b.createdAt));
   }
 
   List<KitchenOrder> _groupOrdersByStatus(

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mangopos/data/repositories/kitchen_repository.dart';
+import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/data/models/kitchen_models.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
 
@@ -11,14 +12,22 @@ final kitchenRepositoryProvider = Provider<KitchenRepository>((ref) {
   return KitchenRepository(Supabase.instance.client);
 });
 
+final printingServiceProvider = Provider<PrintingService>((ref) {
+  return PrintingService(Supabase.instance.client);
+});
+
 final kitchenViewModelProvider = ChangeNotifierProvider<KitchenViewModel>((
   ref,
 ) {
-  return KitchenViewModel(ref.read(kitchenRepositoryProvider));
+  return KitchenViewModel(
+    ref.read(kitchenRepositoryProvider),
+    ref.read(printingServiceProvider),
+  );
 });
 
 class KitchenViewModel extends ChangeNotifier {
   final KitchenRepository _repository;
+  final PrintingService _printingService;
 
   bool _isLoading = false;
   List<KitchenItem> _items = [];
@@ -29,7 +38,7 @@ class KitchenViewModel extends ChangeNotifier {
   bool _refreshQueued = false;
   final Map<String, _StatusOverride> _statusOverrides = {};
 
-  KitchenViewModel(this._repository);
+  KitchenViewModel(this._repository, this._printingService);
 
   bool get isLoading => _isLoading;
   List<KitchenItem> get items => _items;
@@ -137,6 +146,17 @@ class KitchenViewModel extends ChangeNotifier {
         .toSet();
     try {
       await _repository.markOrderReady(orderId);
+      if (_businessId != null && affectedIds.isNotEmpty) {
+        try {
+          await _printingService.printReadyOrderTicket(
+            orderId: orderId,
+            businessId: _businessId!,
+            itemIds: affectedIds.toList(growable: false),
+          );
+        } catch (e) {
+          debugPrint('Error printing ready ticket: $e');
+        }
+      }
       _clearOverrides(affectedIds);
       _scheduleRefresh(immediate: true);
     } catch (e) {
