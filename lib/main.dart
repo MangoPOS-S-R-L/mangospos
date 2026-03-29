@@ -22,12 +22,14 @@ import 'app/router/app_router.dart';
 import 'app/router/routes.dart';
 import 'core/cache/cache_manager.dart';
 import 'core/network/supabase_config.dart';
+import 'core/services/local_print_service.dart';
 import 'core/utils/logger.dart';
 import 'env/env.dart';
 
 const String agentHost = '127.0.0.1';
 const int agentPort = 4000;
 bool _authRecoveryScheduled = false;
+bool _authResetScheduled = false;
 int _authRecoveryAttempts = 0;
 const int _maxAuthRecoveryAttempts = 3;
 DateTime? _lastTransientAuthLogAt;
@@ -101,6 +103,7 @@ Future<void> _ensurePrinterAgentStarted() async {
   for (int i = 0; i < 10; i++) {
     await Future.delayed(const Duration(milliseconds: 800));
     if (await _pingAgentOnce()) {
+      LocalPrintService.primeBaseUrl('http://$agentHost:$agentPort');
       debugPrint('[Agent] Arrancado correctamente.');
       return;
     }
@@ -128,6 +131,11 @@ void main() {
       await _bootstrapApp();
     },
     (error, stackTrace) {
+      if (_isSupabaseAuthRefreshSchemaMismatch(error)) {
+        _scheduleExpiredAuthReset(error, stackTrace);
+        return;
+      }
+
       if (_isTransientSupabaseAuthRefreshError(error)) {
         _scheduleExpiredAuthRecovery(error, stackTrace);
         if (_shouldLogTransientAuthError(error)) {
@@ -179,6 +187,8 @@ Future<void> _bootstrapApp() async {
 
     await _lockLandscapeIfMobile();
     await _ensurePrinterAgentStarted();
+    LocalPrintService.primeBaseUrl('http://$agentHost:$agentPort');
+    unawaited(LocalPrintService().warmup());
     await CacheManager.initialize();
     AppLogger.d('CacheManager inicializado');
 
@@ -196,6 +206,11 @@ Future<void> _bootstrapApp() async {
 
 void _installGlobalErrorHandlers() {
   FlutterError.onError = (details) {
+    if (_isSupabaseAuthRefreshSchemaMismatch(details.exception)) {
+      _scheduleExpiredAuthReset(details.exception, details.stack);
+      return;
+    }
+
     if (_isTransientSupabaseAuthRefreshError(details.exception)) {
       _scheduleExpiredAuthRecovery(details.exception, details.stack);
       if (_shouldLogTransientAuthError(details.exception)) {
@@ -217,6 +232,11 @@ void _installGlobalErrorHandlers() {
   };
 
   PlatformDispatcher.instance.onError = (error, stackTrace) {
+    if (_isSupabaseAuthRefreshSchemaMismatch(error)) {
+      _scheduleExpiredAuthReset(error, stackTrace);
+      return true;
+    }
+
     if (_isTransientSupabaseAuthRefreshError(error)) {
       _scheduleExpiredAuthRecovery(error, stackTrace);
       if (_shouldLogTransientAuthError(error)) {
@@ -238,16 +258,12 @@ void _installGlobalErrorHandlers() {
   };
 }
 
-bool _isTransientSupabaseAuthRefreshError(Object error) {
-  final message = error.toString();
-  if (!message.contains('AuthRetryableFetchException')) {
-    return false;
-  }
+bool _isSupabaseAuthRefreshSchemaMismatch(Object error) {
+  return SupabaseConfig.isAuthRefreshSchemaMismatchError(error);
+}
 
-  return message.contains('missing destination name oauth_client_id') ||
-      message.contains('Bad Gateway') ||
-      message.contains('statusCode: 500') ||
-      message.contains('statusCode: 502');
+bool _isTransientSupabaseAuthRefreshError(Object error) {
+  return SupabaseConfig.isTransientAuthRefreshError(error);
 }
 
 bool _shouldLogTransientAuthError(Object error) {
@@ -264,6 +280,41 @@ bool _shouldLogTransientAuthError(Object error) {
   }
 
   return shouldLog;
+}
+
+void _scheduleExpiredAuthReset(Object error, StackTrace? stackTrace) {
+  if (_authResetScheduled) return;
+
+  final auth = Supabase.instance.client.auth;
+  if (auth.currentSession == null) {
+    return;
+  }
+
+  _authResetScheduled = true;
+  Future<void>.microtask(() async {
+    try {
+      if (_shouldLogTransientAuthError(error)) {
+        AppLogger.e(
+          'Supabase Auth no pudo refrescar la sesion por una incompatibilidad del backend. Se limpiara la sesion local y se enviara al usuario al login.',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
+
+      await auth.signOut(scope: SignOutScope.local);
+    } catch (resetError, resetStack) {
+      AppLogger.e(
+        'No se pudo limpiar la sesion local tras un fallo de refresh incompatible.',
+        error: resetError,
+        stackTrace: resetStack,
+      );
+    } finally {
+      _authRecoveryAttempts = 0;
+      _authRecoveryScheduled = false;
+      _authResetScheduled = false;
+      AppRouter.router.go(AppRoutes.login);
+    }
+  });
 }
 
 void _scheduleExpiredAuthRecovery(Object error, StackTrace? stackTrace) {
@@ -313,7 +364,9 @@ void _scheduleExpiredAuthRecovery(Object error, StackTrace? stackTrace) {
 
       if (recovered) {
         _authRecoveryAttempts = 0;
-        AppLogger.i('Sesion recuperada correctamente tras refresh fallido transitorio.');
+        AppLogger.i(
+          'Sesion recuperada correctamente tras refresh fallido transitorio.',
+        );
         return;
       }
 

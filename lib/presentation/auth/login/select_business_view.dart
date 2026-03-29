@@ -4,8 +4,10 @@ import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
+import '../../../app/router/routes.dart';
 import '../../../core/utils/logger.dart';
 import '../../../core/business/business_resolver.dart';
+import '../../../core/network/supabase_config.dart';
 import '../../../core/storage/storage_service.dart';
 import '../../../services/session/session_controller.dart';
 
@@ -36,8 +38,9 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
   }
 
   Future<void> _loadBusinesses() async {
+    final supabase = Supabase.instance.client;
+
     try {
-      final supabase = Supabase.instance.client;
       final user = supabase.auth.currentUser;
 
       if (user == null) {
@@ -83,6 +86,17 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
         });
       }
     } catch (e) {
+      if (SupabaseConfig.isAuthRefreshSchemaMismatchError(e)) {
+        AppLogger.w(
+          'La sesion expiro y el backend auth no pudo renovarla. Regresando al login.',
+          error: e,
+        );
+
+        await supabase.auth.signOut(scope: SignOutScope.local);
+        if (mounted) context.go(AppRoutes.login);
+        return;
+      }
+
       if (mounted) {
         setState(() {
           _error = 'No pudimos cargar tus accesos.';
@@ -452,20 +466,23 @@ class _BusinessLoadingStateState extends State<_BusinessLoadingState>
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1400),
-    )..addStatusListener((status) {
-        if (status == AnimationStatus.completed) {
-          _controller.forward(from: 0);
-          if (!mounted) return;
-          setState(() {
-            _messageIndex = (_messageIndex + 1) %
-                _SelectBusinessViewState._loadingMessages.length;
-          });
-        }
-      })
-      ..forward();
+    _controller =
+        AnimationController(
+            vsync: this,
+            duration: const Duration(milliseconds: 1400),
+          )
+          ..addStatusListener((status) {
+            if (status == AnimationStatus.completed) {
+              _controller.forward(from: 0);
+              if (!mounted) return;
+              setState(() {
+                _messageIndex =
+                    (_messageIndex + 1) %
+                    _SelectBusinessViewState._loadingMessages.length;
+              });
+            }
+          })
+          ..forward();
   }
 
   @override

@@ -47,16 +47,27 @@ class PrintingService {
   }) async {
     try {
       // 1. Obtener información de la orden
-      final order = await _salesRepo.getOrder(orderId);
+      final orderFuture = _salesRepo.getOrder(orderId);
+      final itemsFuture = _salesRepo.getOrderItems(
+        orderId,
+        includeModifiers: true,
+      );
+      final orderDataFuture = _getOrderDisplayData(
+        orderId,
+        fallbackTableName: fallbackTableName,
+        fallbackWaiterName: fallbackWaiterName,
+      );
+      final businessNameFuture = _getBusinessName(businessId);
+      final receiptItemDisplayModeFuture = PosSettingsRepository(
+        _client,
+      ).getReceiptItemDisplayMode(businessId);
+      final order = await orderFuture;
       if (order == null) {
         throw Exception('Orden no encontrada');
       }
 
       // 2. Obtener items de la orden
-      final items = await _salesRepo.getOrderItems(
-        orderId,
-        includeModifiers: true,
-      );
+      final items = await itemsFuture;
 
       final draftItems = items
           .where((item) => item.status == 'draft' || item.status == 'open')
@@ -71,37 +82,31 @@ class PrintingService {
       }
 
       // 3. Obtener información adicional para el ticket
-      final orderData = await _getOrderDisplayData(
-        orderId,
-        fallbackTableName: fallbackTableName,
-        fallbackWaiterName: fallbackWaiterName,
-      );
-      final businessName = await _getBusinessName(businessId);
-      final receiptItemDisplayMode = await PosSettingsRepository(
-        _client,
-      ).getReceiptItemDisplayMode(businessId);
+      final orderData = await orderDataFuture;
+      final businessName = await businessNameFuture;
+      final receiptItemDisplayMode = await receiptItemDisplayModeFuture;
 
       // 4. Agrupar items por área de impresión
       final itemsByArea = await _groupItemsByPrintArea(draftItems);
 
       // 5. Resolver áreas e impresoras antes de marcar la orden.
       final printersByAreaCode = <String, List<PrinterConfig>>{};
-      final missingPrinterAreas = <String>[];
       final areasByCode = <String, PrintArea>{};
+      final resolvedAreas = await Future.wait(
+        itemsByArea.keys.map((areaCode) async {
+          final area = await _ensureAreaForCode(businessId, areaCode);
+          final printers = await _getOrderPrintersWithOfflineFallback(
+            businessId: businessId,
+            areaId: area.id,
+            areaCode: areaCode,
+          );
+          return (areaCode: areaCode, area: area, printers: printers);
+        }),
+      );
 
-      for (final areaCode in itemsByArea.keys) {
-        final area = await _ensureAreaForCode(businessId, areaCode);
-        areasByCode[areaCode] = area;
-
-        final printers = await _getOrderPrintersWithOfflineFallback(
-          businessId: businessId,
-          areaId: area.id,
-          areaCode: areaCode,
-        );
-        printersByAreaCode[areaCode] = printers;
-        if (printers.isEmpty) {
-          missingPrinterAreas.add(areaCode);
-        }
+      for (final resolved in resolvedAreas) {
+        areasByCode[resolved.areaCode] = resolved.area;
+        printersByAreaCode[resolved.areaCode] = resolved.printers;
       }
 
       // Si no hay impresoras configuradas para "enviar a cocina",

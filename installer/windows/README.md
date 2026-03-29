@@ -49,6 +49,7 @@ powershell -ExecutionPolicy Bypass -File .\sign_msi.ps1 -MsiPath "C:\ruta\MangoP
 
 - compila `flutter build windows --release`
 - compila `agent\dist\mangopos-agent.exe`
+- toma la version desde `pubspec.yaml` y convierte `1.0.0+1` a `1.0.0.1` para los instaladores
 - prepara stage con app + carpeta `Agent`
 - compila un `.exe` con Inno Setup en `build\installer`
 - compila MSI con WiX

@@ -1,6 +1,7 @@
 param(
   [string]$Configuration = "Release",
   [string]$Platform = "x64",
+  [string]$AppVersion = "",
   [string]$CertPfx = "",
   [string]$CertPassword = "",
   [switch]$SkipSign
@@ -25,6 +26,42 @@ function Find-SignTool {
   return $null
 }
 
+function Normalize-AppVersion([string]$Version) {
+  if ([string]::IsNullOrWhiteSpace($Version)) {
+    return "1.0.0"
+  }
+
+  $versionText = $Version.Trim()
+  $match = [regex]::Match($versionText, '^(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?$')
+  if (-not $match.Success) {
+    return $versionText
+  }
+
+  $major = $match.Groups[1].Value
+  $minor = $match.Groups[2].Value
+  $patch = $match.Groups[3].Value
+  $build = $match.Groups[4].Value
+
+  if ([string]::IsNullOrWhiteSpace($build)) {
+    return "$major.$minor.$patch"
+  }
+
+  return "$major.$minor.$patch.$build"
+}
+
+function Get-AppVersionFromPubspec([string]$PubspecPath) {
+  if (-not (Test-Path $PubspecPath)) {
+    return "1.0.0"
+  }
+
+  $match = Select-String -Path $PubspecPath -Pattern '^version:\s*([0-9]+\.[0-9]+\.[0-9]+(?:\+[0-9]+)?)' | Select-Object -First 1
+  if ($match) {
+    return Normalize-AppVersion $match.Matches[0].Groups[1].Value
+  }
+
+  return "1.0.0"
+}
+
 $root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 Set-Location $root
 
@@ -32,12 +69,18 @@ Require-Tool flutter
 Require-Tool wix
 # wix extension add WixUIExtension (se hará en el script si es necesario)
 
+$resolvedVersion = if ([string]::IsNullOrWhiteSpace($AppVersion)) {
+  Get-AppVersionFromPubspec (Join-Path $root "pubspec.yaml")
+} else {
+  Normalize-AppVersion $AppVersion
+}
+
 $buildDir = Join-Path $root "build\windows\x64\runner\$Configuration"
 $appExe = Join-Path $buildDir "mangopos.exe"
 $stage = Join-Path $root "build\installer_stage"
 $wixDir = Join-Path $root "installer\windows\wix"
 $outDir = Join-Path $root "build\installer"
-$msiPath = Join-Path $outDir "MangoPOS-Setup-1.0.0-x64.msi"
+$msiPath = Join-Path $outDir "MangoPOS-Setup-$resolvedVersion-x64.msi"
 
 Write-Host "==> Building Flutter Windows app" -ForegroundColor Cyan
 flutter build windows --release
@@ -68,8 +111,8 @@ Write-Host "==> Preparing App stage (Robocopy)" -ForegroundColor Cyan
 & robocopy $buildDir (Join-Path $stage "App") /e /np /njh /njs /log:null
 
 Write-Host "==> Preparing Agent stage" -ForegroundColor Cyan
-# Copiar el payload del agente
-& robocopy (Join-Path $root "agent\dist") (Join-Path $stage "Agent") /e /np /njh /njs /log:null
+# Copiar solo el payload necesario del agente
+Copy-Item -Force (Join-Path $root "agent\dist\mangopos-agent.exe") (Join-Path $stage "Agent\mangopos-agent.exe")
 if (Test-Path (Join-Path $root "agent\config.yaml")) {
   Copy-Item -Force (Join-Path $root "agent\config.yaml") (Join-Path $stage "Agent")
 }
@@ -94,7 +137,7 @@ $wixArgs = @(
   "build",
   "-acceptEula", "wix7",
   "-d", "SourceDir=$stage",
-  "-d", "Version=1.0.0",
+  "-d", "Version=$resolvedVersion",
   "-d", "Manufacturer=Cristian Gomez",
   "-d", "ProductName=MangoPOS",
   "-ext", "WixToolset.UI.wixext",
@@ -128,6 +171,6 @@ Write-Host "MSI listo: $msiPath" -ForegroundColor Green
 $iscc = Join-Path $Env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"
 if (Test-Path $iscc) {
     Write-Host "==> Building Inno Setup EXE (Recomendado)" -ForegroundColor Cyan
-    & $iscc (Join-Path $PSScriptRoot "mangopos.iss")
+    & $iscc "/DAppVersion=$resolvedVersion" (Join-Path $PSScriptRoot "mangopos.iss")
     Write-Host "EXE listo en build/installer/" -ForegroundColor Green
 }

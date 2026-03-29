@@ -44,6 +44,10 @@ const double _salesRadiusButton = 12; // botones pill
 const double _salesRadiusField = 14;
 const double _salesRadiusTab = 12;
 
+final _salesActionLocksProvider = StateProvider<Set<String>>(
+  (ref) => <String>{},
+);
+
 const List<BoxShadow> _salesSoftShadow = [
   BoxShadow(color: Color(0x10000000), blurRadius: 6, offset: Offset(0, 2)),
 ];
@@ -931,6 +935,47 @@ class _CartView extends ConsumerWidget {
 
   // --- 🪄 UI HELPERS ----------------------------------------------------
 
+  String _sendKitchenActionKey(String? orderId) {
+    return 'send_kitchen:${orderId ?? 'none'}';
+  }
+
+  String _printActionKey(String type, {String? orderId, String? checkId}) {
+    return 'print:$type:${orderId ?? 'none'}:${checkId ?? 'all'}';
+  }
+
+  String _reprintActionKey(String orderId, List<OrderItem> items) {
+    final itemIds = items.map((item) => item.id).toList()..sort();
+    return 'reprint:$orderId:${itemIds.join(",")}';
+  }
+
+  bool _isActionLocked(WidgetRef ref, String key) {
+    return ref.watch(
+      _salesActionLocksProvider.select(
+        (activeLocks) => activeLocks.contains(key),
+      ),
+    );
+  }
+
+  Future<void> _runLockedAction(
+    WidgetRef ref,
+    String key,
+    Future<void> Function() action,
+  ) async {
+    final activeLocks = ref.read(_salesActionLocksProvider);
+    if (activeLocks.contains(key)) return;
+
+    final notifier = ref.read(_salesActionLocksProvider.notifier);
+    notifier.state = {...activeLocks, key};
+
+    try {
+      await action();
+    } finally {
+      final nextLocks = {...ref.read(_salesActionLocksProvider)};
+      nextLocks.remove(key);
+      notifier.state = nextLocks;
+    }
+  }
+
   void _openPaymentModal(
     BuildContext context,
     WidgetRef ref,
@@ -1044,6 +1089,11 @@ class _CartView extends ConsumerWidget {
         final printedFiscalType = fiscalDoc?.ncfType ?? finalFiscalType;
 
         if (context.mounted) {
+          final invoicePrintLockKey = _printActionKey(
+            'invoice',
+            orderId: printOrder.id,
+            checkId: checkId,
+          );
           final invoiceData = {
             'title': '*** FACTURA ***',
             'restaurantName': businessProfile.name,
@@ -1084,18 +1134,20 @@ class _CartView extends ConsumerWidget {
           }
 
           try {
-            await _handlePrintFlow(
-              context,
-              ref,
-              'invoice',
-              invoiceData,
-              orderObj: printOrder,
-              orderItems: items,
-              payments: payments,
-              tableName: tableName,
-              waiterName: waiterName,
-              showSnackBar: true,
-            );
+            await _runLockedAction(ref, invoicePrintLockKey, () async {
+              await _handlePrintFlow(
+                context,
+                ref,
+                'invoice',
+                invoiceData,
+                orderObj: printOrder,
+                orderItems: items,
+                payments: payments,
+                tableName: tableName,
+                waiterName: waiterName,
+                showSnackBar: true,
+              );
+            });
             onFinish();
           } catch (e) {
             if (context.mounted) {
@@ -1260,16 +1312,31 @@ class _CartView extends ConsumerWidget {
         onReprint: (item.status != 'draft')
             ? () {
                 final order = ref.read(currentOrderProvider).order;
-                if (order != null) {
-                  ref
-                      .read(currentOrderProvider.notifier)
-                      .reprintKitchenTicket(
-                        orderId: order.id,
-                        items: groupedItems?.isNotEmpty == true
-                            ? groupedItems
-                            : [item],
-                      );
+                final itemsToReprint = groupedItems?.isNotEmpty == true
+                    ? groupedItems!
+                    : [item];
+                if (order == null) return;
+
+                final reprintLockKey = _reprintActionKey(
+                  order.id,
+                  itemsToReprint,
+                );
+                if (ref
+                    .read(_salesActionLocksProvider)
+                    .contains(reprintLockKey)) {
+                  return;
                 }
+
+                unawaited(
+                  _runLockedAction(ref, reprintLockKey, () async {
+                    await ref
+                        .read(currentOrderProvider.notifier)
+                        .reprintKitchenTicket(
+                          orderId: order.id,
+                          items: itemsToReprint,
+                        );
+                  }),
+                );
               }
             : null,
       ),
@@ -1414,6 +1481,16 @@ class _CartView extends ConsumerWidget {
     }
     final groupedSentItems = groupedSent.values.toList();
     final latestVoidAudit = _extractLatestVoidAudit(orderState.sessionNote);
+    final currentOrderId = orderState.order?.id;
+    final sendKitchenLockKey = _sendKitchenActionKey(currentOrderId);
+    final precheckLockKey = _printActionKey(
+      'precheck',
+      orderId: currentOrderId,
+      checkId: selectedCheckId,
+    );
+    final sendKitchenLocked =
+        orderState.loading || _isActionLocked(ref, sendKitchenLockKey);
+    final precheckLocked = _isActionLocked(ref, precheckLockKey);
 
     return Column(
       children: [
@@ -1989,39 +2066,55 @@ class _CartView extends ConsumerWidget {
                   _ActionButton(
                     label: 'Enviar a Cocina',
                     background: _salesKitchenButton,
-                    onPressed: () async {
-                      try {
-                        final waiterName =
-                            await _loadWaiterName(ref, orderState.order!.id) ??
-                            ref.read(sessionProvider).userName;
-                        if (!context.mounted) return;
-                        await ref
-                            .read(currentOrderProvider.notifier)
-                            .confirmOrder(
-                              tableName: tableCode,
-                              waiterName: waiterName,
+                    onPressed: sendKitchenLocked
+                        ? null
+                        : () async {
+                            await _runLockedAction(
+                              ref,
+                              sendKitchenLockKey,
+                              () async {
+                                try {
+                                  final waiterName =
+                                      await _loadWaiterName(
+                                        ref,
+                                        orderState.order!.id,
+                                      ) ??
+                                      ref.read(sessionProvider).userName;
+                                  if (!context.mounted) return;
+                                  await ref
+                                      .read(currentOrderProvider.notifier)
+                                      .confirmOrder(
+                                        tableName: tableCode,
+                                        waiterName: waiterName,
+                                      );
+                                  if (!context.mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('Orden enviada a cocina'),
+                                    ),
+                                  );
+                                } on NoAssignedKitchenPrinterException catch (
+                                  e
+                                ) {
+                                  if (!context.mounted) return;
+                                  await _showMissingKitchenPrinterDialog(
+                                    context,
+                                    e,
+                                  );
+                                } catch (e) {
+                                  if (!context.mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Error al enviar a cocina: ${e.toString()}',
+                                      ),
+                                      backgroundColor: Colors.red,
+                                    ),
+                                  );
+                                }
+                              },
                             );
-                        if (!context.mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Orden enviada a cocina'),
-                          ),
-                        );
-                      } on NoAssignedKitchenPrinterException catch (e) {
-                        if (!context.mounted) return;
-                        await _showMissingKitchenPrinterDialog(context, e);
-                      } catch (e) {
-                        if (!context.mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              'Error al enviar a cocina: ${e.toString()}',
-                            ),
-                            backgroundColor: Colors.red,
-                          ),
-                        );
-                      }
-                    },
+                          },
                     icon: Icons.soup_kitchen_outlined,
                   ),
                   const SizedBox(height: 12),
@@ -2114,73 +2207,92 @@ class _CartView extends ConsumerWidget {
                       Expanded(
                         child: _SecondaryActionButton(
                           label: 'Pre-Cuenta',
-                          onPressed: () async {
-                            if (orderState.order != null) {
-                              final businessProfile =
-                                  await _loadBusinessReceiptProfile(ref);
-                              final waiterName =
-                                  await _loadWaiterName(
+                          onPressed: precheckLocked
+                              ? null
+                              : () async {
+                                  await _runLockedAction(
                                     ref,
-                                    orderState.order!.id,
-                                  ) ??
-                                  ref.read(sessionProvider).userName;
-                              if (!context.mounted) return;
-                              final preCheckData = {
-                                'restaurantName': businessProfile.name,
-                                'businessName': businessProfile.businessName,
-                                'legalName': businessProfile.legalName,
-                                'rnc': businessProfile.rnc,
-                                'phone': businessProfile.phone,
-                                'address': businessProfile.address,
-                                'tableName':
-                                    '$tableCode ${selectedCheckId != null ? "(Cuentas Separadas)" : ""}',
-                                'waiterName': waiterName,
-                                'items': displayedItems
-                                    .map(
-                                      (i) => {
-                                        'quantity': i.quantity,
-                                        'name': i.productName,
-                                        'price': _effectiveItemTotal(i),
-                                      },
-                                    )
-                                    .toList(),
-                                'subtotal': displaySubtotal,
-                                'tax': displayTax,
-                                'total': displayTotal,
-                              };
+                                    precheckLockKey,
+                                    () async {
+                                      if (orderState.order != null) {
+                                        final businessProfile =
+                                            await _loadBusinessReceiptProfile(
+                                              ref,
+                                            );
+                                        final waiterName =
+                                            await _loadWaiterName(
+                                              ref,
+                                              orderState.order!.id,
+                                            ) ??
+                                            ref.read(sessionProvider).userName;
+                                        if (!context.mounted) return;
+                                        final preCheckData = {
+                                          'restaurantName':
+                                              businessProfile.name,
+                                          'businessName':
+                                              businessProfile.businessName,
+                                          'legalName':
+                                              businessProfile.legalName,
+                                          'rnc': businessProfile.rnc,
+                                          'phone': businessProfile.phone,
+                                          'address': businessProfile.address,
+                                          'tableName':
+                                              '$tableCode ${selectedCheckId != null ? "(Cuentas Separadas)" : ""}',
+                                          'waiterName': waiterName,
+                                          'items': displayedItems
+                                              .map(
+                                                (i) => {
+                                                  'quantity': i.quantity,
+                                                  'name': i.productName,
+                                                  'price': _effectiveItemTotal(
+                                                    i,
+                                                  ),
+                                                },
+                                              )
+                                              .toList(),
+                                          'subtotal': displaySubtotal,
+                                          'tax': displayTax,
+                                          'total': displayTotal,
+                                        };
 
-                              try {
-                                await _handlePrintFlow(
-                                  context,
-                                  ref,
-                                  'precheck',
-                                  preCheckData,
-                                  orderObj: orderState.order!,
-                                  orderItems: displayedItems,
-                                  tableName:
-                                      preCheckData['tableName'] as String?,
-                                  waiterName:
-                                      preCheckData['waiterName'] as String?,
-                                );
-                              } catch (e) {
-                                if (context.mounted) {
-                                  _showReimpresionDialog(
-                                    context: context,
-                                    ref: ref,
-                                    type: 'precheck',
-                                    data: preCheckData,
-                                    orderObj: orderState.order!,
-                                    orderItems: displayedItems,
-                                    tableName:
-                                        preCheckData['tableName'] as String?,
-                                    waiterName:
-                                        preCheckData['waiterName'] as String?,
-                                    errorMsg: e.toString(),
+                                        try {
+                                          await _handlePrintFlow(
+                                            context,
+                                            ref,
+                                            'precheck',
+                                            preCheckData,
+                                            orderObj: orderState.order!,
+                                            orderItems: displayedItems,
+                                            tableName:
+                                                preCheckData['tableName']
+                                                    as String?,
+                                            waiterName:
+                                                preCheckData['waiterName']
+                                                    as String?,
+                                          );
+                                        } catch (e) {
+                                          if (context.mounted) {
+                                            _showReimpresionDialog(
+                                              context: context,
+                                              ref: ref,
+                                              type: 'precheck',
+                                              data: preCheckData,
+                                              orderObj: orderState.order!,
+                                              orderItems: displayedItems,
+                                              tableName:
+                                                  preCheckData['tableName']
+                                                      as String?,
+                                              waiterName:
+                                                  preCheckData['waiterName']
+                                                      as String?,
+                                              errorMsg: e.toString(),
+                                            );
+                                          }
+                                        }
+                                      }
+                                    },
                                   );
-                                }
-                              }
-                            }
-                          },
+                                },
                           icon: Icons.receipt_long_outlined,
                         ),
                       ),
@@ -2304,7 +2416,7 @@ class _CartView extends ConsumerWidget {
         throw Exception('Negocio no resuelto.');
       }
 
-      final assignedPrinter = await printRepo.getAssignedPrinterForType(
+      final assignedPrinterFuture = printRepo.getAssignedPrinterForType(
         businessId: businessId,
         preferredAreaCodes: type == 'invoice'
             ? const ['fiscal', 'cashier']
@@ -2312,14 +2424,17 @@ class _CartView extends ConsumerWidget {
         printsPrebills: type == 'precheck',
         printsReceipts: type == 'invoice',
       );
+      final receiptItemDisplayModeFuture = ref
+          .read(posSettingsRepositoryProvider)
+          .getReceiptItemDisplayMode(businessId);
+
+      final assignedPrinter = await assignedPrinterFuture;
 
       if (assignedPrinter == null) {
         throw Exception('Impresora no configurada.');
       }
 
-      final receiptItemDisplayMode = await ref
-          .read(posSettingsRepositoryProvider)
-          .getReceiptItemDisplayMode(businessId);
+      final receiptItemDisplayMode = await receiptItemDisplayModeFuture;
 
       // Preparación de datos (fuera del timeout para no penalizar generación)
       dynamic ticket;
@@ -2402,11 +2517,13 @@ class _CartView extends ConsumerWidget {
         }
       });
 
-      unawaited(printFuture.catchError((error, stackTrace) {
-        debugPrint(
-          'Impresión en ${assignedPrinter.name} falló después del timeout: $error',
-        );
-      }));
+      unawaited(
+        printFuture.catchError((error, stackTrace) {
+          debugPrint(
+            'Impresión en ${assignedPrinter.name} falló después del timeout: $error',
+          );
+        }),
+      );
 
       try {
         await printFuture.timeout(
@@ -2473,6 +2590,11 @@ class _CartView extends ConsumerWidget {
     required String errorMsg,
     VoidCallback? onFinish,
   }) {
+    final retryPrintLockKey = _printActionKey(
+      type,
+      orderId: orderObj?.id,
+      checkId: data['checkId']?.toString(),
+    );
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -2557,36 +2679,47 @@ class _CartView extends ConsumerWidget {
                   Expanded(
                     child: FilledButton(
                       onPressed: () async {
-                        Navigator.pop(ctx);
-                        try {
-                          await _handlePrintFlow(
-                            context,
-                            ref,
-                            type,
-                            data,
-                            orderObj: orderObj,
-                            orderItems: orderItems,
-                            payments: payments,
-                            tableName: tableName,
-                            waiterName: waiterName,
-                            showSnackBar: true,
-                          );
-                          onFinish?.call();
-                        } catch (e) {
-                          _showReimpresionDialog(
-                            context: context,
-                            ref: ref,
-                            type: type,
-                            data: data,
-                            orderObj: orderObj,
-                            orderItems: orderItems,
-                            payments: payments,
-                            tableName: tableName,
-                            waiterName: waiterName,
-                            errorMsg: e.toString(),
-                            onFinish: onFinish,
-                          );
+                        if (ref
+                            .read(_salesActionLocksProvider)
+                            .contains(retryPrintLockKey)) {
+                          return;
                         }
+                        Navigator.pop(ctx);
+                        await _runLockedAction(
+                          ref,
+                          retryPrintLockKey,
+                          () async {
+                            try {
+                              await _handlePrintFlow(
+                                context,
+                                ref,
+                                type,
+                                data,
+                                orderObj: orderObj,
+                                orderItems: orderItems,
+                                payments: payments,
+                                tableName: tableName,
+                                waiterName: waiterName,
+                                showSnackBar: true,
+                              );
+                              onFinish?.call();
+                            } catch (e) {
+                              _showReimpresionDialog(
+                                context: context,
+                                ref: ref,
+                                type: type,
+                                data: data,
+                                orderObj: orderObj,
+                                orderItems: orderItems,
+                                payments: payments,
+                                tableName: tableName,
+                                waiterName: waiterName,
+                                errorMsg: e.toString(),
+                                onFinish: onFinish,
+                              );
+                            }
+                          },
+                        );
                       },
                       style: FilledButton.styleFrom(
                         backgroundColor: _salesTotalColor,
@@ -3200,7 +3333,7 @@ class _ActionButton extends StatelessWidget {
 
 class _SecondaryActionButton extends StatelessWidget {
   final String label;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
   final IconData icon;
 
   const _SecondaryActionButton({
@@ -3217,8 +3350,15 @@ class _SecondaryActionButton extends StatelessWidget {
       child: OutlinedButton(
         onPressed: onPressed,
         style: OutlinedButton.styleFrom(
-          backgroundColor: _salesTabActiveBg,
-          side: const BorderSide(color: _salesDivider),
+          backgroundColor: onPressed == null
+              ? _salesTabActiveBg.withValues(alpha: 0.45)
+              : _salesTabActiveBg,
+          side: BorderSide(
+            color: onPressed == null
+                ? _salesDivider.withValues(alpha: 0.55)
+                : _salesDivider,
+          ),
+          disabledForegroundColor: _salesTextPrimary.withValues(alpha: 0.45),
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(_salesRadiusButton),
@@ -3227,16 +3367,24 @@ class _SecondaryActionButton extends StatelessWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 18, color: _salesTextPrimary),
+            Icon(
+              icon,
+              size: 18,
+              color: onPressed == null
+                  ? _salesTextPrimary.withValues(alpha: 0.45)
+                  : _salesTextPrimary,
+            ),
             const SizedBox(width: 8),
             Flexible(
               child: Text(
                 label,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
-                  color: _salesTextPrimary,
+                  color: onPressed == null
+                      ? _salesTextPrimary.withValues(alpha: 0.45)
+                      : _salesTextPrimary,
                   height: 1.1,
                 ),
               ),

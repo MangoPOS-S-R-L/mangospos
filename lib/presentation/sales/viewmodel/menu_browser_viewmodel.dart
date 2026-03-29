@@ -1,14 +1,20 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../../../services/session/session_controller.dart';
+
+import '../../../core/network/connectivity_service.dart';
+import '../../../core/offline/offline_catalog_service.dart';
 import '../../../data/utils/business_id_resolver.dart';
+import '../../../services/session/session_controller.dart';
 
 @immutable
 class MenuCategory {
   final String id;
   final String name;
   final String? color;
+
   const MenuCategory({required this.id, required this.name, this.color});
 
   factory MenuCategory.fromMap(Map<String, dynamic> m) => MenuCategory(
@@ -163,25 +169,29 @@ class MenuBrowserState {
   }
 }
 
-/// Proveedor del ViewModel
 final menuBrowserVmProvider =
     StateNotifierProvider<MenuBrowserViewModel, MenuBrowserState>((ref) {
       final client = Supabase.instance.client;
-      // Escuchar cambios en el negocio activo para forzar recreación si cambia
       ref.watch(sessionProvider.select((s) => s.activeBusinessId));
       return MenuBrowserViewModel(client, ref);
     });
 
 class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
   MenuBrowserViewModel(this._client, this.ref)
-    : super(const MenuBrowserState());
+    : super(const MenuBrowserState()) {
+    unawaited(_connectivity.initialize());
+  }
 
   final SupabaseClient _client;
   final Ref ref;
+  final ConnectivityService _connectivity = ConnectivityService();
+  final OfflineCatalogService _offlineCatalog = OfflineCatalogService();
+
   static const _menuItemsSelect =
       'id,name,price,image_url,category_id,is_active,position,tax_mode,item_type,menu_item_taxes(tax_id,taxes(rate))';
   static const _menuListSelect =
       'id,name,price,image_url,category_id,menu_id,is_active,position,tax_mode,item_type,effective_tax_rate';
+
   Future<String> _resolveBusinessId() async {
     final sessionBusinessId = ref.read(sessionProvider).activeBusinessId;
     if (sessionBusinessId != null && sessionBusinessId.isNotEmpty) {
@@ -196,6 +206,166 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
     return resolved;
   }
 
+  Future<OfflineCatalogSnapshot> _ensureCatalogSnapshot({
+    required String businessId,
+    bool refresh = false,
+  }) async {
+    await _connectivity.initialize();
+    final localSnapshot = await _offlineCatalog.loadSnapshot(businessId);
+    final hasLocalData = localSnapshot?.hasData == true;
+
+    if (!refresh && hasLocalData) {
+      return localSnapshot!;
+    }
+
+    if (!_connectivity.isConnected && hasLocalData) {
+      return localSnapshot!;
+    }
+
+    try {
+      return await _refreshCatalogSnapshot(businessId);
+    } catch (e) {
+      if (hasLocalData) {
+        debugPrint('MenuBrowserViewModel usando catalogo offline: $e');
+        return localSnapshot!;
+      }
+      rethrow;
+    }
+  }
+
+  Future<OfflineCatalogSnapshot> _refreshCatalogSnapshot(
+    String businessId,
+  ) async {
+    final existing = await _offlineCatalog.loadSnapshot(businessId);
+    final results = await Future.wait<dynamic>([
+      _client
+          .from('categories')
+          .select('id,name,color')
+          .eq('business_id', businessId)
+          .eq('is_active', true)
+          .order('position', ascending: true),
+      _client
+          .from('menus')
+          .select('id,name')
+          .eq('business_id', businessId)
+          .eq('is_active', true)
+          .order('created_at', ascending: true),
+      _client
+          .from('menu_items')
+          .select(_menuItemsSelect)
+          .eq('business_id', businessId)
+          .eq('is_active', true)
+          .order('position', ascending: true)
+          .order('name', ascending: true),
+    ]);
+
+    final categories = _rowsToMaps(results[0]);
+    final menus = _rowsToMaps(results[1]);
+    final products = _rowsToMaps(results[2]);
+    final menuProducts = existing?.menuProducts ?? const <Map<String, dynamic>>[];
+    final favoriteIds = existing?.favoriteProductIds ?? const <String>[];
+
+    await _offlineCatalog.saveSnapshot(
+      businessId: businessId,
+      categories: categories,
+      menus: menus,
+      products: products,
+      menuProducts: menuProducts,
+      favoriteProductIds: favoriteIds,
+    );
+
+    return OfflineCatalogSnapshot(
+      savedAt: DateTime.now(),
+      categories: categories,
+      menus: menus,
+      products: products,
+      menuProducts: menuProducts,
+      favoriteProductIds: favoriteIds,
+    );
+  }
+
+  Future<List<MenuProduct>> _loadMenuProductsSnapshot({
+    required String businessId,
+    required String menuId,
+  }) async {
+    final snapshot = await _offlineCatalog.loadSnapshot(businessId);
+    final cachedRows = snapshot?.productsByMenu(menuId) ?? const [];
+    if (cachedRows.isNotEmpty) {
+      return _parseProducts(cachedRows);
+    }
+
+    await _connectivity.initialize();
+    if (!_connectivity.isConnected) {
+      return const [];
+    }
+
+    final rows = await _client
+        .from('v_menu_items_list')
+        .select(_menuListSelect)
+        .eq('business_id', businessId)
+        .eq('menu_id', menuId)
+        .eq('is_active', true)
+        .order('position', ascending: true)
+        .order('name', ascending: true);
+
+    final freshRows = _rowsToMaps(rows);
+    if (freshRows.isEmpty) {
+      return const [];
+    }
+
+    final preserved = snapshot?.menuProducts ?? const <Map<String, dynamic>>[];
+    final mergedRows = [
+      ...preserved.where((item) => item['menu_id']?.toString() != menuId),
+      ...freshRows,
+    ];
+
+    await _offlineCatalog.saveSnapshot(
+      businessId: businessId,
+      menuProducts: mergedRows,
+    );
+
+    return _parseProducts(freshRows);
+  }
+
+  List<Map<String, dynamic>> _rowsToMaps(dynamic rows) {
+    if (rows is! List) {
+      return const [];
+    }
+
+    return rows
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .toList(growable: false);
+  }
+
+  List<MenuCategory> _parseCategories(List<Map<String, dynamic>> rows) =>
+      rows.map(MenuCategory.fromMap).toList(growable: false);
+
+  List<MenuDefinition> _parseMenus(List<Map<String, dynamic>> rows) =>
+      rows.map(MenuDefinition.fromMap).toList(growable: false);
+
+  List<MenuProduct> _parseProducts(List<Map<String, dynamic>> rows) =>
+      rows.map(MenuProduct.fromMap).toList(growable: false);
+
+  Future<void> _restoreProductsForCurrentContext() async {
+    if (state.loadedMenuId != null && state.loadedMenuId!.isNotEmpty) {
+      await loadProductsByMenu(state.loadedMenuId!);
+      return;
+    }
+    if (state.loadedCategoryId != null && state.loadedCategoryId!.isNotEmpty) {
+      await loadProductsByCategory(state.loadedCategoryId!);
+      return;
+    }
+    if (state.selectedCategoryId != null && state.selectedCategoryId!.isNotEmpty) {
+      await loadProductsByCategory(state.selectedCategoryId!);
+      return;
+    }
+    if (state.selectedMenuId != null && state.selectedMenuId!.isNotEmpty) {
+      await loadProductsByMenu(state.selectedMenuId!);
+      return;
+    }
+    await loadAllProducts();
+  }
+
   Future<void> loadAll({
     String? preselectCategoryId,
     String? preselectMenuId,
@@ -203,57 +373,41 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
     try {
       state = state.copyWith(loading: true, error: null);
       final businessId = await _resolveBusinessId();
+      final snapshot = await _ensureCatalogSnapshot(
+        businessId: businessId,
+        refresh: true,
+      );
 
-      final cats = await _client
-          .from('categories')
-          .select('id,name,color')
-          .eq('business_id', businessId)
-          .eq('is_active', true)
-          .order('position', ascending: true);
-      final menusRaw = await _client
-          .from('menus')
-          .select('id,name')
-          .eq('business_id', businessId)
-          .eq('is_active', true)
-          .order('created_at', ascending: true);
-
-      final rawCategories = cats as List<dynamic>;
-      final categories = rawCategories
-          .map((e) => MenuCategory.fromMap(e as Map<String, dynamic>))
-          .toList();
-      final menus = (menusRaw as List<dynamic>)
-          .map((e) => MenuDefinition.fromMap(e as Map<String, dynamic>))
-          .toList();
-
+      final categories = _parseCategories(snapshot.categories);
+      final menus = _parseMenus(snapshot.menus);
       final selectedCategory =
           preselectCategoryId ??
           (categories.isNotEmpty ? categories.first.id : null);
       final selectedMenu =
           preselectMenuId ?? (menus.isNotEmpty ? menus.first.id : null);
+      final initialProducts = selectedCategory == null
+          ? const <MenuProduct>[]
+          : _parseProducts(snapshot.productsByCategory(selectedCategory));
 
       state = state.copyWith(
         loading: false,
+        error: null,
         categories: categories,
         menus: menus,
         selectedCategoryId: selectedCategory,
         selectedMenuId: selectedMenu,
+        products: initialProducts,
+        productsMode: selectedCategory == null
+            ? MenuProductsMode.none
+            : MenuProductsMode.category,
+        loadedCategoryId: selectedCategory,
+        clearLoadedMenuId: true,
         selectedProduct: null,
       );
-
-      if (selectedCategory != null) {
-        await loadProductsByCategory(selectedCategory);
-      } else {
-        state = state.copyWith(
-          products: const [],
-          productsMode: MenuProductsMode.none,
-          clearLoadedCategoryId: true,
-          clearLoadedMenuId: true,
-        );
-      }
     } catch (e) {
       state = state.copyWith(
         loading: false,
-        error: 'No se pudieron cargar categorías: $e',
+        error: 'No se pudieron cargar categorias: $e',
       );
     }
   }
@@ -262,22 +416,12 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
     try {
       state = state.copyWith(loading: true, error: null, selectedProduct: null);
       final businessId = await _resolveBusinessId();
-
-      final rows = await _client
-          .from('menu_items')
-          .select(_menuItemsSelect)
-          .eq('business_id', businessId)
-          .eq('is_active', true)
-          .order('position', ascending: true)
-          .order('name', ascending: true);
-
-      final products = (rows as List<dynamic>)
-          .map((e) => MenuProduct.fromMap(e as Map<String, dynamic>))
-          .toList();
+      final snapshot = await _ensureCatalogSnapshot(businessId: businessId);
 
       state = state.copyWith(
         loading: false,
-        products: products,
+        error: null,
+        products: _parseProducts(snapshot.allProducts()),
         productsMode: MenuProductsMode.all,
         clearLoadedCategoryId: true,
         clearLoadedMenuId: true,
@@ -286,40 +430,48 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
     } catch (e) {
       state = state.copyWith(
         loading: false,
-        error: 'No se pudo cargar el menú: $e',
+        error: 'No se pudo cargar el menu: $e',
       );
     }
   }
 
   Future<void> loadFavoriteProducts() async {
+    OfflineCatalogSnapshot? snapshot;
+
     try {
       state = state.copyWith(loading: true, error: null, selectedProduct: null);
       final businessId = await _resolveBusinessId();
-
-      final rows = await _client
-          .from('menu_items')
-          .select(_menuItemsSelect)
-          .eq('business_id', businessId)
-          .eq('is_active', true)
-          .order('position', ascending: true)
-          .order('name', ascending: true);
-
-      final allProducts = (rows as List<dynamic>)
-          .map((e) => MenuProduct.fromMap(e as Map<String, dynamic>))
-          .toList();
+      snapshot = await _ensureCatalogSnapshot(businessId: businessId);
+      final allProducts = _parseProducts(snapshot.allProducts());
 
       if (allProducts.isEmpty) {
         state = state.copyWith(
           loading: false,
+          error: null,
           products: const [],
           productsMode: MenuProductsMode.favorites,
           clearLoadedCategoryId: true,
           clearLoadedMenuId: true,
+          selectedProduct: null,
         );
         return;
       }
 
-      final productIds = allProducts.map((p) => p.id).toList();
+      await _connectivity.initialize();
+      if (!_connectivity.isConnected) {
+        state = state.copyWith(
+          loading: false,
+          error: null,
+          products: _parseProducts(snapshot.favoriteProducts()),
+          productsMode: MenuProductsMode.favorites,
+          clearLoadedCategoryId: true,
+          clearLoadedMenuId: true,
+          selectedProduct: null,
+        );
+        return;
+      }
+
+      final productIds = allProducts.map((p) => p.id).toList(growable: false);
       final orderRows = await _client
           .from('order_items')
           .select('product_id, qty, created_at')
@@ -331,7 +483,9 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
       for (final row in (orderRows as List<dynamic>)) {
         final map = row as Map<String, dynamic>;
         final productId = map['product_id'] as String?;
-        if (productId == null || productId.isEmpty) continue;
+        if (productId == null || productId.isEmpty) {
+          continue;
+        }
         final qty = (map['qty'] is num) ? (map['qty'] as num).toDouble() : 1.0;
         scoreByProduct[productId] = (scoreByProduct[productId] ?? 0) + qty;
       }
@@ -346,8 +500,15 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
               ),
             );
 
+      await _offlineCatalog.saveSnapshot(
+        businessId: businessId,
+        favoriteProductIds:
+            favorites.map((product) => product.id).toList(growable: false),
+      );
+
       state = state.copyWith(
         loading: false,
+        error: null,
         products: favorites,
         productsMode: MenuProductsMode.favorites,
         clearLoadedCategoryId: true,
@@ -355,6 +516,20 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
         selectedProduct: null,
       );
     } catch (e) {
+      final fallback = snapshot?.favoriteProducts() ?? const [];
+      if (fallback.isNotEmpty) {
+        state = state.copyWith(
+          loading: false,
+          error: null,
+          products: _parseProducts(fallback),
+          productsMode: MenuProductsMode.favorites,
+          clearLoadedCategoryId: true,
+          clearLoadedMenuId: true,
+          selectedProduct: null,
+        );
+        return;
+      }
+
       state = state.copyWith(
         loading: false,
         error: 'No se pudieron cargar los favoritos: $e',
@@ -378,20 +553,12 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
         selectedProduct: null,
       );
 
-      final rows = await _client
-          .from('menu_items')
-          .select(_menuItemsSelect)
-          .eq('business_id', businessId)
-          .eq('is_active', true)
-          .eq('category_id', categoryId)
-          .order('position', ascending: true);
-
-      final products = (rows as List<dynamic>)
-          .map((e) => MenuProduct.fromMap(e as Map<String, dynamic>))
-          .toList();
+      final snapshot = await _ensureCatalogSnapshot(businessId: businessId);
+      final products = _parseProducts(snapshot.productsByCategory(categoryId));
 
       state = state.copyWith(
         loading: false,
+        error: null,
         products: products,
         productsMode: MenuProductsMode.category,
         loadedCategoryId: categoryId,
@@ -439,21 +606,14 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
         selectedProduct: null,
       );
 
-      final rows = await _client
-          .from('v_menu_items_list')
-          .select(_menuListSelect)
-          .eq('business_id', businessId)
-          .eq('menu_id', menuId)
-          .eq('is_active', true)
-          .order('position', ascending: true)
-          .order('name', ascending: true);
-
-      final products = (rows as List<dynamic>)
-          .map((e) => MenuProduct.fromMap(e as Map<String, dynamic>))
-          .toList();
+      final products = await _loadMenuProductsSnapshot(
+        businessId: businessId,
+        menuId: menuId,
+      );
 
       state = state.copyWith(
         loading: false,
+        error: null,
         products: products,
         productsMode: MenuProductsMode.menu,
         loadedMenuId: menuId,
@@ -462,7 +622,7 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
     } catch (e) {
       state = state.copyWith(
         loading: false,
-        error: 'No se pudieron cargar los productos del menú: $e',
+        error: 'No se pudieron cargar los productos del menu: $e',
       );
     }
   }
@@ -472,32 +632,19 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
     state = state.copyWith(search: q, selectedProduct: null);
 
     if (q.isEmpty) {
-      // Si se borra la búsqueda, recarga por categoría seleccionada
-      if (state.selectedCategoryId != null) {
-        await loadProductsByCategory(state.selectedCategoryId!);
-      }
+      await _restoreProductsForCurrentContext();
       return;
     }
 
     try {
       state = state.copyWith(loading: true, error: null);
       final businessId = await _resolveBusinessId();
-
-      final rows = await _client
-          .from('menu_items')
-          .select(_menuItemsSelect)
-          .eq('business_id', businessId)
-          .eq('is_active', true)
-          .ilike('name', '%$q%')
-          .order('name', ascending: true);
-
-      final products = (rows as List<dynamic>)
-          .map((e) => MenuProduct.fromMap(e as Map<String, dynamic>))
-          .toList();
+      final snapshot = await _ensureCatalogSnapshot(businessId: businessId);
 
       state = state.copyWith(
         loading: false,
-        products: products,
+        error: null,
+        products: _parseProducts(snapshot.searchProducts(q)),
         productsMode: MenuProductsMode.search,
         clearLoadedCategoryId: true,
         clearLoadedMenuId: true,
@@ -511,7 +658,6 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
     }
   }
 
-  // UI helpers: selección de producto para agregar
   void startAddProduct(MenuProduct p) {
     state = state.copyWith(selectedProduct: p);
   }

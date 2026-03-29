@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
@@ -19,7 +20,12 @@ class LocalPrintService {
     'http://localhost:9105',
   ];
 
+  static const Duration _resolvedBaseUrlTtl = Duration(minutes: 10);
+  static String? _sharedResolvedBaseUrl;
+  static DateTime? _sharedResolvedBaseUrlAt;
+
   String? _resolvedBaseUrl;
+  DateTime? _resolvedBaseUrlAt;
   final String? _apiToken;
 
   LocalPrintService({String? apiToken}) : _apiToken = apiToken;
@@ -39,18 +45,77 @@ class LocalPrintService {
     debugPrint('[LocalPrintService] $message');
   }
 
+  static void primeBaseUrl(String baseUrl) {
+    final normalized = baseUrl.trim();
+    if (normalized.isEmpty) return;
+    _sharedResolvedBaseUrl = normalized;
+    _sharedResolvedBaseUrlAt = DateTime.now();
+  }
+
+  static void clearPrimedBaseUrl() {
+    _sharedResolvedBaseUrl = null;
+    _sharedResolvedBaseUrlAt = null;
+  }
+
+  bool _isFreshResolvedUrl(String? baseUrl, DateTime? resolvedAt) {
+    if (baseUrl == null || resolvedAt == null) return false;
+    return DateTime.now().difference(resolvedAt) < _resolvedBaseUrlTtl;
+  }
+
+  void _rememberResolvedBaseUrl(String baseUrl) {
+    final now = DateTime.now();
+    _resolvedBaseUrl = baseUrl;
+    _resolvedBaseUrlAt = now;
+    _sharedResolvedBaseUrl = baseUrl;
+    _sharedResolvedBaseUrlAt = now;
+  }
+
+  void _forgetResolvedBaseUrl(String? baseUrl) {
+    if (_resolvedBaseUrl == baseUrl) {
+      _resolvedBaseUrl = null;
+      _resolvedBaseUrlAt = null;
+    }
+    if (_sharedResolvedBaseUrl == baseUrl) {
+      clearPrimedBaseUrl();
+    }
+  }
+
+  Future<void> warmup() async {
+    await _resolveBaseUrl();
+  }
+
   Future<String?> _resolveBaseUrl() async {
     final cached = _resolvedBaseUrl;
-    if (cached != null && await _isHealthy(cached)) {
+    if (_isFreshResolvedUrl(cached, _resolvedBaseUrlAt)) {
       return cached;
     }
 
-    for (final candidate in _baseUrls) {
+    final sharedCached = _sharedResolvedBaseUrl;
+    if (_isFreshResolvedUrl(sharedCached, _sharedResolvedBaseUrlAt)) {
+      _resolvedBaseUrl = sharedCached;
+      _resolvedBaseUrlAt = _sharedResolvedBaseUrlAt;
+      return sharedCached;
+    }
+
+    final candidates = <String>[
+      if (cached != null && cached.isNotEmpty) cached,
+      if (sharedCached != null &&
+          sharedCached.isNotEmpty &&
+          sharedCached != cached)
+        sharedCached,
+      ..._baseUrls.where(
+        (candidate) => candidate != cached && candidate != sharedCached,
+      ),
+    ];
+
+    for (final candidate in candidates) {
       if (await _isHealthy(candidate)) {
-        _resolvedBaseUrl = candidate;
+        _rememberResolvedBaseUrl(candidate);
         return candidate;
       }
     }
+    _forgetResolvedBaseUrl(cached);
+    _forgetResolvedBaseUrl(sharedCached);
     return null;
   }
 
@@ -231,6 +296,7 @@ class LocalPrintService {
       );
       throw Exception(errorMsg);
     } catch (e) {
+      _forgetResolvedBaseUrl(baseUrl);
       _log('Error printing job: $e');
       rethrow;
     }
@@ -268,6 +334,7 @@ class LocalPrintService {
       );
       throw Exception(errorMsg);
     } catch (e) {
+      _forgetResolvedBaseUrl(_resolvedBaseUrl);
       _log('Error testing print: $e');
       return false;
     }
@@ -350,6 +417,7 @@ class LocalPrintService {
         throw Exception('El agente rechazó la impresión: $errorMsg');
       }
     } catch (e) {
+      _forgetResolvedBaseUrl(_resolvedBaseUrl);
       _log('Error sending raw data: $e');
       if (e.toString().contains('SocketException') ||
           e.toString().contains('ClientException')) {
@@ -389,6 +457,7 @@ class LocalPrintService {
       );
       return [];
     } catch (e) {
+      _forgetResolvedBaseUrl(_resolvedBaseUrl);
       _log('Error discovering printers: $e');
       return [];
     }

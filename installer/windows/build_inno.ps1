@@ -35,14 +35,37 @@ function Resolve-InnoCompiler {
   throw "No se encontro ISCC.exe. Instala Inno Setup 6."
 }
 
+function Normalize-AppVersion([string]$Version) {
+  if ([string]::IsNullOrWhiteSpace($Version)) {
+    return "1.0.0"
+  }
+
+  $versionText = $Version.Trim()
+  $match = [regex]::Match($versionText, '^(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?$')
+  if (-not $match.Success) {
+    return $versionText
+  }
+
+  $major = $match.Groups[1].Value
+  $minor = $match.Groups[2].Value
+  $patch = $match.Groups[3].Value
+  $build = $match.Groups[4].Value
+
+  if ([string]::IsNullOrWhiteSpace($build)) {
+    return "$major.$minor.$patch"
+  }
+
+  return "$major.$minor.$patch.$build"
+}
+
 function Get-AppVersionFromPubspec([string]$PubspecPath) {
   if (-not (Test-Path $PubspecPath)) {
     return "1.0.0"
   }
 
-  $match = Select-String -Path $PubspecPath -Pattern '^version:\s*([0-9]+\.[0-9]+\.[0-9]+)' | Select-Object -First 1
+  $match = Select-String -Path $PubspecPath -Pattern '^version:\s*([0-9]+\.[0-9]+\.[0-9]+(?:\+[0-9]+)?)' | Select-Object -First 1
   if ($match) {
-    return $match.Matches[0].Groups[1].Value
+    return Normalize-AppVersion $match.Matches[0].Groups[1].Value
   }
 
   return "1.0.0"
@@ -67,7 +90,7 @@ Set-Location $root
 $resolvedVersion = if ([string]::IsNullOrWhiteSpace($AppVersion)) {
   Get-AppVersionFromPubspec (Join-Path $root "pubspec.yaml")
 } else {
-  $AppVersion
+  Normalize-AppVersion $AppVersion
 }
 
 $buildDir = Join-Path $root "build\windows\x64\runner\$Configuration"

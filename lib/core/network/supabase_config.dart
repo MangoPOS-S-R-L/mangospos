@@ -5,6 +5,12 @@ import 'cookie_local_storage.dart';
 /// 🔧 Configuración personalizada de Supabase
 /// Incluye timeouts, reintentos y manejo de errores
 class SupabaseConfig {
+  static const List<String> _authRefreshSchemaMismatchSignatures = [
+    'missing destination name oauth_client_id',
+    'missing destination name scopes',
+    'missing destination name refresh_token_hmac_key',
+  ];
+
   /// Timeout para operaciones de lectura (SELECT)
   static const Duration readTimeout = Duration(seconds: 15);
 
@@ -32,8 +38,16 @@ class SupabaseConfig {
     required String anonKey,
   }) async {
     // Limpiamos los parámetros por si vienen con comillas o backticks residuales del entorno
-    String cleanUrl = url.replaceAll('`', '').replaceAll('\'', '').replaceAll('"', '').trim();
-    final cleanAnonKey = anonKey.replaceAll('`', '').replaceAll('\'', '').replaceAll('"', '').trim();
+    String cleanUrl = url
+        .replaceAll('`', '')
+        .replaceAll('\'', '')
+        .replaceAll('"', '')
+        .trim();
+    final cleanAnonKey = anonKey
+        .replaceAll('`', '')
+        .replaceAll('\'', '')
+        .replaceAll('"', '')
+        .trim();
 
     // Asegurarse de que el URL tenga scheme (https://)
     if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
@@ -50,15 +64,17 @@ class SupabaseConfig {
         detectSessionInUri: true,
         localStorage: SharedCookieLocalStorage(),
       ),
-      realtimeClientOptions: const RealtimeClientOptions(
-        eventsPerSecond: 10,
-      ),
+      realtimeClientOptions: const RealtimeClientOptions(eventsPerSecond: 10),
       storageOptions: const StorageClientOptions(retryAttempts: 3),
     );
   }
 
   /// Verificar si el error es recuperable
   static bool isRecoverableError(dynamic error) {
+    if (isAuthRefreshSchemaMismatchError(error)) {
+      return false;
+    }
+
     if (error is PostgrestException) {
       // Códigos de error recuperables
       final recoverableCodes = [
@@ -82,8 +98,37 @@ class SupabaseConfig {
         error.toString().contains('HandshakeException');
   }
 
+  static bool isAuthRefreshSchemaMismatchError(dynamic error) {
+    final message = error.toString().toLowerCase();
+    for (final signature in _authRefreshSchemaMismatchSignatures) {
+      if (message.contains(signature)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static bool isTransientAuthRefreshError(dynamic error) {
+    final message = error.toString();
+    if (!message.contains('AuthRetryableFetchException')) {
+      return false;
+    }
+
+    if (isAuthRefreshSchemaMismatchError(error)) {
+      return false;
+    }
+
+    return message.contains('Bad Gateway') ||
+        message.contains('statusCode: 500') ||
+        message.contains('statusCode: 502');
+  }
+
   /// Obtener mensaje de error amigable
   static String getFriendlyErrorMessage(dynamic error) {
+    if (isAuthRefreshSchemaMismatchError(error)) {
+      return 'Tu sesion vencio y el servidor de autenticacion no pudo renovarla. Inicia sesion de nuevo.';
+    }
+
     if (error is PostgrestException) {
       switch (error.code) {
         case '57014':

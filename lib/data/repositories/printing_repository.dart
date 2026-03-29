@@ -11,8 +11,55 @@ import '../models/printing_models.dart';
 /// 🖨️ Repositorio de Impresión
 class PrintingRepository {
   final SupabaseClient _client;
+  static const Duration _lookupCacheTtl = Duration(minutes: 5);
+  static final Map<String, _CachedLookup<List<PrintArea>>> _printAreasCache =
+      {};
+  static final Map<String, _CachedLookup<PrinterConfig?>>
+  _assignedPrinterCache = {};
+  static final Map<String, _CachedLookup<List<PrinterConfig>>>
+  _orderPrintersCache = {};
 
   PrintingRepository(this._client);
+
+  static T? _readCached<T>(Map<String, _CachedLookup<T>> cache, String key) {
+    final entry = cache[key];
+    if (entry == null) return null;
+    if (DateTime.now().difference(entry.cachedAt) >= _lookupCacheTtl) {
+      cache.remove(key);
+      return null;
+    }
+    return entry.value;
+  }
+
+  static void _writeCached<T>(
+    Map<String, _CachedLookup<T>> cache,
+    String key,
+    T value,
+  ) {
+    cache[key] = _CachedLookup(value, DateTime.now());
+  }
+
+  static void _clearLookupCaches() {
+    _printAreasCache.clear();
+    _assignedPrinterCache.clear();
+    _orderPrintersCache.clear();
+  }
+
+  String _assignedPrinterLookupKey({
+    required String businessId,
+    required List<String> preferredAreaCodes,
+    required bool printsOrders,
+    required bool printsPrebills,
+    required bool printsReceipts,
+  }) {
+    return [
+      businessId,
+      preferredAreaCodes.join(','),
+      if (printsOrders) 'orders',
+      if (printsPrebills) 'prebills',
+      if (printsReceipts) 'receipts',
+    ].join('|');
+  }
 
   // ============================================================
   // 🖨️ IMPRESORAS
@@ -78,6 +125,7 @@ class PrintingRepository {
           .select()
           .single();
 
+      _clearLookupCaches();
       return PrinterConfig.fromMap(data);
     } catch (e) {
       throw Exception('Error al crear impresora: $e');
@@ -111,6 +159,7 @@ class PrintingRepository {
 
       if (updates.isEmpty) return;
       await _client.from('printers').update(updates).eq('id', printerId);
+      _clearLookupCaches();
     } catch (e) {
       throw Exception('Error al actualizar impresora: $e');
     }
@@ -186,6 +235,9 @@ class PrintingRepository {
 
   /// Obtener áreas de impresión
   Future<List<PrintArea>> getPrintAreas(String businessId) async {
+    final cached = _readCached(_printAreasCache, businessId);
+    if (cached != null) return cached;
+
     try {
       final data = await _client
           .from('print_areas')
@@ -193,7 +245,9 @@ class PrintingRepository {
           .eq('business_id', businessId)
           .order('name', ascending: true);
 
-      return data.map((json) => PrintArea.fromMap(json)).toList();
+      final areas = data.map((json) => PrintArea.fromMap(json)).toList();
+      _writeCached(_printAreasCache, businessId, areas);
+      return areas;
     } catch (e) {
       throw Exception('Error al obtener áreas: $e');
     }
@@ -241,6 +295,7 @@ class PrintingRepository {
           .select()
           .single();
 
+      _clearLookupCaches();
       return PrintArea.fromMap(data);
     } catch (e) {
       throw Exception('Error al asegurar área de impresión: $e');
@@ -265,6 +320,9 @@ class PrintingRepository {
   }
 
   Future<List<PrinterConfig>> getOrderPrintersForArea(String areaId) async {
+    final cached = _readCached(_orderPrintersCache, areaId);
+    if (cached != null) return cached;
+
     try {
       final data = await _client
           .from('print_area_printers')
@@ -274,9 +332,11 @@ class PrintingRepository {
           .eq('prints_orders', true)
           .order('priority', ascending: true);
 
-      return data
+      final printers = data
           .map((json) => PrinterConfig.fromMap(json['printers']))
           .toList();
+      _writeCached(_orderPrintersCache, areaId, printers);
+      return printers;
     } catch (e) {
       throw Exception('Error al obtener impresoras activas del área: $e');
     }
@@ -300,7 +360,9 @@ class PrintingRepository {
     }
   }
 
-  Future<List<PrintAreaPrinter>> getAreaPrinterAssignments(String areaId) async {
+  Future<List<PrintAreaPrinter>> getAreaPrinterAssignments(
+    String areaId,
+  ) async {
     try {
       final data = await _client
           .from('print_area_printers')
@@ -309,7 +371,9 @@ class PrintingRepository {
           .order('priority', ascending: true);
 
       return data
-          .map((row) => PrintAreaPrinter.fromMap(Map<String, dynamic>.from(row)))
+          .map(
+            (row) => PrintAreaPrinter.fromMap(Map<String, dynamic>.from(row)),
+          )
           .toList(growable: false);
     } catch (e) {
       throw Exception('Error al obtener asignaciones del área: $e');
@@ -370,6 +434,16 @@ class PrintingRepository {
     bool printsPrebills = false,
     bool printsReceipts = false,
   }) async {
+    final cacheKey = _assignedPrinterLookupKey(
+      businessId: businessId,
+      preferredAreaCodes: preferredAreaCodes,
+      printsOrders: printsOrders,
+      printsPrebills: printsPrebills,
+      printsReceipts: printsReceipts,
+    );
+    final cached = _readCached(_assignedPrinterCache, cacheKey);
+    if (cached != null) return cached;
+
     try {
       final areas = await getPrintAreas(businessId);
       final areasByCode = {for (final area in areas) area.code: area};
@@ -394,10 +468,13 @@ class PrintingRepository {
 
         final printer = data.first['printers'];
         if (printer != null) {
-          return PrinterConfig.fromMap(printer);
+          final resolved = PrinterConfig.fromMap(printer);
+          _writeCached(_assignedPrinterCache, cacheKey, resolved);
+          return resolved;
         }
       }
 
+      _writeCached<PrinterConfig?>(_assignedPrinterCache, cacheKey, null);
       return null;
     } catch (e) {
       throw Exception('Error al obtener la impresora asignada: $e');
@@ -416,6 +493,7 @@ class PrintingRepository {
         'printer_id': printerId,
         'priority': priority,
       });
+      _clearLookupCaches();
     } catch (e) {
       throw Exception('Error al asignar impresora: $e');
     }
@@ -437,6 +515,7 @@ class PrintingRepository {
           })
           .eq('area_id', areaId)
           .eq('printer_id', printerId);
+      _clearLookupCaches();
     } catch (e) {
       throw Exception('Error al actualizar la configuración de impresión: $e');
     }
@@ -470,6 +549,7 @@ class PrintingRepository {
             .delete()
             .eq('area_id', areaId)
             .eq('printer_id', printerId);
+        _clearLookupCaches();
         return;
       }
 
@@ -483,6 +563,7 @@ class PrintingRepository {
           })
           .eq('area_id', areaId)
           .eq('printer_id', printerId);
+      _clearLookupCaches();
     } catch (e) {
       throw Exception('Error al remover impresora: $e');
     }
@@ -612,6 +693,7 @@ class PrintingRepository {
   Future<void> deletePrinter(String printerId) async {
     try {
       await _client.from('printers').delete().eq('id', printerId);
+      _clearLookupCaches();
     } catch (e) {
       throw Exception('Error al eliminar impresora: $e');
     }
@@ -1041,12 +1123,14 @@ finally {
         .select()
         .single();
 
+    _clearLookupCaches();
     return PrintArea.fromMap(data);
   }
 
   /// Eliminar área (compatibilidad)
   Future<void> deleteArea(String areaId) async {
     await _client.from('print_areas').delete().eq('id', areaId);
+    _clearLookupCaches();
   }
 
   /// Vincular area a impresora con configuracion de tipos de impresion
@@ -1071,6 +1155,7 @@ finally {
         'prints_prebills': printsPrebills,
         'prints_receipts': printsReceipts,
       }, onConflict: 'area_id,printer_id');
+      _clearLookupCaches();
     } catch (e) {
       throw Exception('Error al vincular impresora a area: $e');
     }
@@ -1147,6 +1232,7 @@ finally {
         'prints_prebills': printsPrebills,
         'prints_receipts': printsReceipts,
       }, onConflict: 'area_id,printer_id');
+      _clearLookupCaches();
     } catch (e) {
       throw Exception('Error al asignar impresora al área: $e');
     }
@@ -1171,4 +1257,11 @@ finally {
     final bytes = utf8.encode(jsonEncode(payload));
     return bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
   }
+}
+
+class _CachedLookup<T> {
+  const _CachedLookup(this.value, this.cachedAt);
+
+  final T value;
+  final DateTime cachedAt;
 }

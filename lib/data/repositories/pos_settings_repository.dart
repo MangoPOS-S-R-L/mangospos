@@ -10,6 +10,8 @@ class PosSettingsRepository {
 
   static const String receiptItemsGrouped = 'grouped';
   static const String receiptItemsSeparate = 'separate';
+  static const Duration _receiptModeCacheTtl = Duration(minutes: 5);
+  static final Map<String, _CachedReceiptMode> _receiptModeCache = {};
 
   final SupabaseClient _client;
 
@@ -31,12 +33,19 @@ class PosSettingsRepository {
     required String businessId,
     required bool enabled,
   }) async {
-    await _client.from('businesses').update({
-      'prompt_people_count_on_table_open': enabled,
-    }).eq('id', businessId);
+    await _client
+        .from('businesses')
+        .update({'prompt_people_count_on_table_open': enabled})
+        .eq('id', businessId);
   }
 
   Future<String> getReceiptItemDisplayMode(String businessId) async {
+    final cached = _receiptModeCache[businessId];
+    if (cached != null &&
+        DateTime.now().difference(cached.cachedAt) < _receiptModeCacheTtl) {
+      return cached.mode;
+    }
+
     try {
       final row = await _client
           .from('businesses')
@@ -45,10 +54,14 @@ class PosSettingsRepository {
           .maybeSingle();
 
       final mode = row?['receipt_item_display_mode']?.toString();
-      if (mode == receiptItemsSeparate) {
-        return receiptItemsSeparate;
-      }
-      return receiptItemsGrouped;
+      final normalized = mode == receiptItemsSeparate
+          ? receiptItemsSeparate
+          : receiptItemsGrouped;
+      _receiptModeCache[businessId] = _CachedReceiptMode(
+        normalized,
+        DateTime.now(),
+      );
+      return normalized;
     } catch (_) {
       return receiptItemsGrouped;
     }
@@ -62,8 +75,20 @@ class PosSettingsRepository {
         ? receiptItemsSeparate
         : receiptItemsGrouped;
 
-    await _client.from('businesses').update({
-      'receipt_item_display_mode': normalized,
-    }).eq('id', businessId);
+    await _client
+        .from('businesses')
+        .update({'receipt_item_display_mode': normalized})
+        .eq('id', businessId);
+    _receiptModeCache[businessId] = _CachedReceiptMode(
+      normalized,
+      DateTime.now(),
+    );
   }
+}
+
+class _CachedReceiptMode {
+  const _CachedReceiptMode(this.mode, this.cachedAt);
+
+  final String mode;
+  final DateTime cachedAt;
 }
