@@ -20,10 +20,11 @@ class AuthRemoteDS {
     required String fullName,
     String? phone,
   }) async {
-    await _sb.from('profiles').insert({
-      'user_id': userId,
+    await _sb.from('profiles').upsert({
+      'id': userId,
       'full_name': fullName,
       'phone': phone,
+      'updated_at': DateTime.now().toIso8601String(),
     });
   }
 }

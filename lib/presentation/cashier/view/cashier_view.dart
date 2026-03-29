@@ -6,6 +6,7 @@ import 'package:mangopos/presentation/cashier/state/blind_cash_close_models.dart
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/app/router/routes.dart';
+import 'package:mangopos/core/network/supabase_config.dart';
 import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/utils/responsive_utils.dart';
 import 'package:mangopos/presentation/cashier/widgets/blind_cash_close_dialog.dart';
@@ -14,18 +15,6 @@ import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/data/utils/payment_amount_utils.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:async';
-
-bool _isTransientSupabaseAuthRefreshError(Object error) {
-  final message = error.toString();
-  if (!message.contains('AuthRetryableFetchException')) {
-    return false;
-  }
-
-  return message.contains('missing destination name oauth_client_id') ||
-      message.contains('Bad Gateway') ||
-      message.contains('statusCode: 500') ||
-      message.contains('statusCode: 502');
-}
 
 class CashierView extends ConsumerStatefulWidget {
   const CashierView({super.key});
@@ -223,7 +212,8 @@ class _CashierViewState extends ConsumerState<CashierView> {
             try {
               await ref.read(cashierViewModelProvider).init();
             } catch (e) {
-              if (!_isTransientSupabaseAuthRefreshError(e)) {
+              if (!SupabaseConfig.isTransientAuthRefreshError(e) &&
+                  !SupabaseConfig.isAuthRefreshSchemaMismatchError(e)) {
                 rethrow;
               }
             }
@@ -233,7 +223,8 @@ class _CashierViewState extends ConsumerState<CashierView> {
             final msg = e.toString();
             final friendly = msg.contains('OPEN_TABLES_EXIST')
                 ? 'Todavía hay mesas abiertas. Si deseas cerrar por cambio de turno, confirma el cierre con mesas abiertas.'
-                : _isTransientSupabaseAuthRefreshError(e)
+                : SupabaseConfig.isTransientAuthRefreshError(e) ||
+                      SupabaseConfig.isAuthRefreshSchemaMismatchError(e)
                 ? 'Supabase Auth devolvio un error transitorio al refrescar la sesion. Verifica si la caja ya se cerro.'
                 : 'No se pudo cerrar la caja.';
             throw Exception(
