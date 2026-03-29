@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/core/utils/display_name_utils.dart';
+import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/models/fiscal_models.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
@@ -2367,8 +2370,10 @@ class _CartView extends ConsumerWidget {
               );
       }
 
-      // Ejecución con Timeout de 3 segundos
-      await Future(() async {
+      final printTimeout = const Duration(seconds: 3);
+      final isUsbPrinter = assignedPrinter.printerType == PrinterType.usb;
+
+      final printFuture = Future(() async {
         if (ticket != null) {
           await printRepo.printEscPos(
             printer: assignedPrinter,
@@ -2395,10 +2400,27 @@ class _CartView extends ConsumerWidget {
             'content': {'type': type, 'data': data},
           });
         }
-      }).timeout(
-        const Duration(seconds: 3),
-        onTimeout: () => throw Exception('Timeout'),
-      );
+      });
+
+      unawaited(printFuture.catchError((error, stackTrace) {
+        debugPrint(
+          'Impresión en ${assignedPrinter.name} falló después del timeout: $error',
+        );
+      }));
+
+      try {
+        await printFuture.timeout(
+          printTimeout,
+          onTimeout: () => throw TimeoutException('Timeout'),
+        );
+      } on TimeoutException {
+        if (!isUsbPrinter) {
+          throw Exception('Timeout');
+        }
+        debugPrint(
+          'La impresora USB ${assignedPrinter.name} sigue procesando el ticket tras $printTimeout. Ignoramos el timeout.',
+        );
+      }
 
       if (showSnackBar && context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
