@@ -590,15 +590,34 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
 
     byZone.setOpening(ts.tableId, true);
 
-    // Mesa ocupada por otro mesero: exigir el PIN del usuario actual
-    // para dejar rastro de quién accedió (admin/supervisor pueden pasar sin PIN extra).
+    // Mesa ocupada por otro mesero:
+    // - el dueño entra sin PIN
+    // - admin/supervisor/cajero pueden abrir cualquier mesa sin PIN extra
+    // - otro mesero puede entrar, usando SU propio PIN
     final session = ref.read(sessionProvider);
     final isOtherWaiterTable = ts.sessionId != null && !ts.isOwn;
-    final bypassPin =
+    final canBypassPin =
         session.activeRole == PosRole.administrador ||
         session.activeRole == PosRole.supervisor ||
         session.activeRole == PosRole.cajero;
-    if (isOtherWaiterTable && !bypassPin) {
+    final isWaiter = session.activeRole == PosRole.mesero;
+    if (isOtherWaiterTable && !isWaiter && !canBypassPin) {
+      if (!context.mounted) {
+        byZone.setOpening(ts.tableId, false);
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Solo administradores, supervisores, cajeros u otro mesero con PIN pueden abrir esta mesa.',
+          ),
+          backgroundColor: Colors.red,
+        ),
+      );
+      byZone.setOpening(ts.tableId, false);
+      return;
+    }
+    if (isOtherWaiterTable && isWaiter && !canBypassPin) {
       if (!context.mounted) {
         byZone.setOpening(ts.tableId, false);
         return;

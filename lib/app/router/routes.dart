@@ -34,6 +34,7 @@ class AppRoutes {
   static const purchasesRegister = '$settings/purchases/register';
   static const promosCenter = '$settings/promos';
   static const settingsUsers = '$settings/users';
+  static const settingsWaiters = '$settings/waiters';
   static const settingsRoles = '$settings/roles';
 
   // ---- Subrutas de ventas ----

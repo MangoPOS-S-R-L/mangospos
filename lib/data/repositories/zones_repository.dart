@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:mangopos/core/utils/display_name_utils.dart';
 
 import '../models/sales_models.dart';
 import '../models/zone.dart';
@@ -92,6 +93,77 @@ class ZonesRepository {
     final rows = List<Map<String, dynamic>>.from(
       await query.order('code', ascending: true),
     );
+
+    final currentUserId = sb.auth.currentUser?.id;
+    final waiterUserIds = rows
+        .map((row) => row['waiter_user_id']?.toString().trim())
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    final openedByIds = rows
+        .map((row) => row['opened_by']?.toString().trim())
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    final profileIds = {...waiterUserIds, ...openedByIds}.toList(growable: false);
+
+    final displayNameByUserId = <String, String>{};
+    if (profileIds.isNotEmpty) {
+      if (scopedBusinessId != null && scopedBusinessId.isNotEmpty) {
+        final employeeRows = List<Map<String, dynamic>>.from(
+          await sb
+              .from('v_employees_summary')
+              .select('user_id, first_name')
+              .eq('business_id', scopedBusinessId)
+              .inFilter('user_id', profileIds),
+        );
+        for (final employee in employeeRows) {
+          final userId = employee['user_id']?.toString().trim();
+          final firstName = employee['first_name']?.toString().trim();
+          if (userId == null || userId.isEmpty) continue;
+          if (firstName == null || firstName.isEmpty) continue;
+          displayNameByUserId[userId] = preferredDisplayName(firstName: firstName);
+        }
+      }
+
+      final missingProfileIds = profileIds
+          .where((id) => !displayNameByUserId.containsKey(id))
+          .toList(growable: false);
+      if (missingProfileIds.isNotEmpty) {
+        final profileRows = List<Map<String, dynamic>>.from(
+          await sb
+              .from('profiles')
+              .select('id, full_name')
+              .inFilter('id', missingProfileIds),
+        );
+        for (final profile in profileRows) {
+          final id = profile['id']?.toString().trim();
+          final fullName = profile['full_name']?.toString().trim();
+          if (id == null || id.isEmpty) continue;
+          if (fullName == null || fullName.isEmpty) continue;
+          displayNameByUserId[id] = preferredDisplayName(fullName: fullName);
+        }
+      }
+    }
+
+    for (final row in rows) {
+      final waiterUserId = row['waiter_user_id']?.toString().trim();
+      final openedBy = row['opened_by']?.toString().trim();
+      final ownerUserId = (waiterUserId != null && waiterUserId.isNotEmpty)
+          ? waiterUserId
+          : ((openedBy != null && openedBy.isNotEmpty) ? openedBy : null);
+      if (ownerUserId != null && ownerUserId.isNotEmpty) {
+        row['waiter_name'] =
+            displayNameByUserId[ownerUserId] ??
+            preferredDisplayName(fullName: row['waiter_name']?.toString());
+        row['is_own'] = currentUserId != null && currentUserId == ownerUserId;
+      } else {
+        row['is_own'] = false;
+      }
+    }
+
     final sessionIds = rows
         .map((row) => row['session_id']?.toString().trim())
         .whereType<String>()

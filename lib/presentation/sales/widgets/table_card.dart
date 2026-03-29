@@ -270,7 +270,10 @@ class _TableCardState extends State<TableCard> {
                         const SizedBox(width: 6),
                         Flexible(
                           child: Text(
-                            widget.table.waiterName ?? 'Sin mesero',
+                            (widget.table.waiterName != null &&
+                                    widget.table.waiterName!.trim().isNotEmpty)
+                                ? widget.table.waiterName!
+                                : 'Sin mesero',
                             style: AppTextStyles.tableWaiter.copyWith(
                               color: AppColors.mutedForeground,
                             ),

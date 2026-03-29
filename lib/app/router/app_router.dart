@@ -20,6 +20,7 @@ import 'package:mangopos/presentation/settings/more%20settings/system%20settings
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/zones_tables/view/zones_tables_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/users/view/roles_permissions_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/users/view/users_view.dart';
+import 'package:mangopos/presentation/settings/more%20settings/system%20settings/users/view/waiters_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/fiscal/view/fiscal_receipts_view.dart';
 import '../../presentation/auth/login/login_view.dart';
 import '../../presentation/auth/login/select_business_view.dart';
@@ -215,6 +216,10 @@ class AppRouter {
       GoRoute(
         path: AppRoutes.settingsReact,
         redirect: (context, state) => AppRoutes.settings,
+      ),
+      GoRoute(
+        path: '/ajustes/mozos',
+        redirect: (context, state) => AppRoutes.settingsWaiters,
       ),
 
       // ---------- Auth ----------
@@ -417,6 +422,11 @@ class AppRouter {
             path: AppRoutes.settingsUsers,
             builder: (context, state) =>
                 const SettingsUsersView(businessId: 'auto'),
+          ),
+          GoRoute(
+            path: AppRoutes.settingsWaiters,
+            builder: (context, state) =>
+                const SettingsWaitersView(businessId: 'auto'),
           ),
           GoRoute(
             path: '${AppRoutes.settingsRoles}/:userId/:employeeId',

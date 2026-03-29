@@ -527,7 +527,7 @@ class _QuickActionsSection extends StatelessWidget {
               (
                 Icons.people_outline,
                 'Mozos',
-                'Gestionar meseros',
+                'Ventas y mesas por mesero',
                 AppColors.info,
                 '/ajustes/mozos',
               ),

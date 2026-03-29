@@ -10,6 +10,7 @@ import 'package:mangopos/core/cache/cache_manager.dart';
 import 'package:mangopos/core/cache/cache_config.dart';
 import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
+import 'package:mangopos/data/utils/order_pricing_utils.dart';
 
 final cashierRepositoryProvider = Provider<CashierRepository>((ref) {
   return CashierRepository(Supabase.instance.client);
@@ -502,20 +503,88 @@ class CashierViewModel extends ChangeNotifier {
 
         Map<String, double> sessionTotals = {};
         if (sessions.isNotEmpty) {
-          final sessionIds = sessions.map((s) => s.id).toList();
+          final sessionIds = sessions.map((s) => s.id).toList(growable: false);
           final client = Supabase.instance.client;
 
-          final ordersData = await client
-              .from('orders')
-              .select('session_id, total')
-              .inFilter('session_id', sessionIds)
-              .neq('status', 'paid')
-              .neq('status', 'cancelled');
+          final orderRows = List<Map<String, dynamic>>.from(
+            await client
+                .from('orders')
+                .select(
+                  'id,session_id,status_ext,subtotal,tax,service_fee,discounts,total,created_at,closed_at',
+                )
+                .inFilter('session_id', sessionIds)
+                .isFilter('closed_at', null)
+                .not('status_ext', 'in', '(paid,void)'),
+          );
 
-          for (final order in ordersData) {
-            final sessionId = order['session_id'] as String;
-            final total = (order['total'] as num).toDouble();
-            sessionTotals[sessionId] = (sessionTotals[sessionId] ?? 0) + total;
+          final orderIds = orderRows
+              .map((order) => order['id']?.toString().trim())
+              .whereType<String>()
+              .where((orderId) => orderId.isNotEmpty)
+              .toList(growable: false);
+
+          final sessionIdByOrderId = <String, String>{};
+          final ordersById = <String, Order>{};
+          for (final order in orderRows) {
+            final orderId = order['id']?.toString().trim();
+            final sessionId = order['session_id']?.toString().trim();
+            if (orderId == null || orderId.isEmpty) continue;
+            if (sessionId == null || sessionId.isEmpty) continue;
+            sessionIdByOrderId[orderId] = sessionId;
+            ordersById[orderId] = Order.fromMap(order);
+          }
+
+          final itemsByOrderId = <String, List<OrderItem>>{};
+          final closedCheckIdsByOrderId = <String, Set<String>>{};
+
+          if (orderIds.isNotEmpty) {
+            final itemRows = List<Map<String, dynamic>>.from(
+              await client
+                  .from('order_items')
+                  .select(
+                    'id,order_id,product_id,product_name,sku,qty,quantity,unit_price,subtotal,discounts,tax,total,check_id,is_takeout,status,notes,tax_mode,tax_rate,created_at',
+                  )
+                  .inFilter('order_id', orderIds)
+                  .not('status', 'in', '(paid,void)'),
+            );
+
+            final checkRows = List<Map<String, dynamic>>.from(
+              await client
+                  .from('order_checks')
+                  .select('id,order_id,is_closed')
+                  .inFilter('order_id', orderIds),
+            );
+
+            for (final itemRow in itemRows) {
+              final item = OrderItem.fromMap(itemRow);
+              final orderId = item.orderId.trim();
+              if (orderId.isEmpty) continue;
+              itemsByOrderId.putIfAbsent(orderId, () => <OrderItem>[]).add(item);
+            }
+
+            for (final checkRow in checkRows) {
+              final checkId = checkRow['id']?.toString().trim();
+              final orderId = checkRow['order_id']?.toString().trim();
+              if (orderId == null || orderId.isEmpty) continue;
+              if (checkRow['is_closed'] != true) continue;
+              if (checkId == null || checkId.isEmpty) continue;
+              closedCheckIdsByOrderId.putIfAbsent(orderId, () => <String>{}).add(checkId);
+            }
+          }
+
+          for (final orderId in orderIds) {
+            final sessionId = sessionIdByOrderId[orderId];
+            if (sessionId == null || sessionId.isEmpty) continue;
+            final order = ordersById[orderId];
+            if (order == null) continue;
+            final closedCheckIds =
+                closedCheckIdsByOrderId[orderId] ?? const <String>{};
+            final pendingItems = (itemsByOrderId[orderId] ?? const <OrderItem>[])
+                .where((item) => !closedCheckIds.contains(item.checkId))
+                .toList(growable: false);
+            final pendingTotal = summarizeOrderPricing(order, pendingItems).total;
+            sessionTotals[sessionId] =
+                (sessionTotals[sessionId] ?? 0) + pendingTotal;
           }
         }
 
