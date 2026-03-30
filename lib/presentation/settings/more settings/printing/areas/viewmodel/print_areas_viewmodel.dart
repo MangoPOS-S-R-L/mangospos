@@ -225,6 +225,8 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
 
     final cashierArea = await ensureSystemArea(code: 'cashier', name: 'Caja');
     final fiscalArea = await ensureSystemArea(code: 'fiscal', name: 'Fiscal');
+    final closureArea =
+        await ensureSystemArea(code: 'cash_close', name: 'Cierre de caja');
 
     await refresh();
 
@@ -234,8 +236,10 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
     return ReceiptAssignmentsBootstrap(
       cashierArea: cashierArea,
       fiscalArea: fiscalArea,
+      closureArea: closureArea,
       selectedPrebillPrinter: prebills[cashierArea.id],
       selectedReceiptPrinter: receipts[fiscalArea.id],
+      selectedClosurePrinter: receipts[closureArea.id],
     );
   }
 
@@ -268,12 +272,16 @@ class ReceiptAssignmentsBootstrap {
   const ReceiptAssignmentsBootstrap({
     required this.cashierArea,
     required this.fiscalArea,
+    required this.closureArea,
     required this.selectedPrebillPrinter,
     required this.selectedReceiptPrinter,
+    required this.selectedClosurePrinter,
   });
 
   final PrintArea cashierArea;
   final PrintArea fiscalArea;
+  final PrintArea closureArea;
   final String? selectedPrebillPrinter;
   final String? selectedReceiptPrinter;
+  final String? selectedClosurePrinter;
 }

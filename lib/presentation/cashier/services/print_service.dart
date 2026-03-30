@@ -123,6 +123,7 @@ class CashClosePrintService {
           businessId: businessId,
           preferredAreaCodes: const [
             'cashier',
+            'cash_close',
             'receipt',
             'receipts',
             'fiscal',

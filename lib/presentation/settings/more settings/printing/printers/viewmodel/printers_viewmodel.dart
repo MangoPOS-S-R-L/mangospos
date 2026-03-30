@@ -280,7 +280,7 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       if (printer.type == PrinterType.network && printer.ip != null) {
         final socket = await Socket.connect(
           printer.ip!,
-          9100,
+          printer.port ?? 9100,
           timeout: const Duration(seconds: 3),
         );
 
@@ -359,7 +359,7 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
             return false;
           }
           if (p.ip?.isNotEmpty ?? false) {
-            await _repo.testPrintViaAgent(ip: p.ip!, port: 9100);
+            await _repo.testPrintViaAgent(ip: p.ip!, port: p.port ?? 9100);
             return true;
           } else {
             state = state.copyWith(
@@ -379,7 +379,7 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       // Nativo (Desktop/Mobile)
       if (p.type == PrinterType.network && (p.ip?.isNotEmpty ?? false)) {
         try {
-          await _repo.testPrintViaAgent(ip: p.ip!, port: 9100);
+          await _repo.testPrintViaAgent(ip: p.ip!, port: p.port ?? 9100);
           return true;
         } catch (_) {
           // Si el agente no está disponible, intenta por socket directo
@@ -1338,7 +1338,7 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       name: printer.name,
       type: printer.type.name,
       ipAddress: printer.ip,
-      port: 9100,
+      port: printer.port ?? 9100,
       devicePath: printer.devicePath,
       mac: printer.mac,
       isActive: printer.online,

@@ -41,6 +41,7 @@ class PrinterDevice {
     required this.businessId,
     required this.name,
     this.ip,
+    this.port,
     this.mac,
     this.devicePath,
     required this.type,
@@ -55,6 +56,7 @@ class PrinterDevice {
   final String businessId;
   final String name;
   final String? ip;
+  final int? port;
   final String? mac;
   final String? devicePath;
   final PrinterType type;
@@ -71,6 +73,7 @@ class PrinterDevice {
       businessId: normalized['business_id'] as String,
       name: normalized['name'] as String,
       ip: normalized['ip'] as String?,
+      port: normalized['port'] as int?,
       mac: normalized['mac'] as String?,
       devicePath: normalized['device_path'] as String?,
       type: PrinterTypeX.fromName(normalized['type'] as String?),
@@ -88,6 +91,7 @@ class PrinterDevice {
       businessId: config.businessId,
       name: config.name,
       ip: config.ipAddress,
+      port: config.port,
       mac: config.mac,
       devicePath: config.devicePath,
       type: config.printerType,
@@ -108,6 +112,7 @@ class PrinterDevice {
       'name': name,
       'ip': ipValue == null || ipValue.isEmpty ? null : ipValue,
       'ip_address': ipValue == null || ipValue.isEmpty ? null : ipValue,
+      'port': port,
       'mac': macValue == null || macValue.isEmpty ? null : macValue,
       'device_path': devicePath,
       'type': type.name,
@@ -125,6 +130,7 @@ class PrinterDevice {
     String? businessId,
     String? name,
     String? ip,
+    int? port,
     String? mac,
     String? devicePath,
     PrinterType? type,
@@ -139,6 +145,7 @@ class PrinterDevice {
       businessId: businessId ?? this.businessId,
       name: name ?? this.name,
       ip: ip ?? this.ip,
+      port: port ?? this.port,
       mac: mac ?? this.mac,
       devicePath: devicePath ?? this.devicePath,
       type: type ?? this.type,

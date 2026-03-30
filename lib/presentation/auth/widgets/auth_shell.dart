@@ -31,20 +31,20 @@ class AuthShell extends StatelessWidget {
       backgroundColor: MangoTokens.background,
       body: SafeArea(
         child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 1280),
+            child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1100),
             child: Padding(
-              padding: const EdgeInsets.all(24),
+              padding: const EdgeInsets.all(16),
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   color: MangoTokens.card,
-                  borderRadius: BorderRadius.circular(24),
+                  borderRadius: BorderRadius.circular(20),
                   border: Border.all(color: MangoTokens.border),
                   boxShadow: const [
                     BoxShadow(
                       color: Color(0x0D231D1A),
-                      blurRadius: 24,
-                      offset: Offset(0, 10),
+                      blurRadius: 20,
+                      offset: Offset(0, 8),
                     ),
                   ],
                 ),
@@ -66,12 +66,12 @@ class AuthShell extends StatelessWidget {
                                     Expanded(
                                       flex: 12,
                                       child: Padding(
-                                        padding: const EdgeInsets.fromLTRB(
-                                          44,
-                                          40,
-                                          44,
-                                          40,
-                                        ),
+                                      padding: const EdgeInsets.fromLTRB(
+                                        32,
+                                        30,
+                                        32,
+                                        30,
+                                      ),
                                         child: main,
                                       ),
                                     ),
@@ -84,7 +84,7 @@ class AuthShell extends StatelessWidget {
                                       child: Container(
                                         color: const Color(0xFFFFFCFA),
                                         child: Padding(
-                                          padding: const EdgeInsets.all(32),
+                                          padding: const EdgeInsets.all(24),
                                           child: side,
                                         ),
                                       ),
@@ -287,46 +287,61 @@ class _Header extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 20),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
       decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: MangoTokens.border)),
+        color: Colors.transparent,
+        border: Border(
+          bottom: BorderSide(color: MangoTokens.border, width: 0.5),
+        ),
       ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final inlineSteps = steps != null && constraints.maxWidth >= 920;
-          return Column(
-            children: [
-              Row(
-                children: [
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
                   Container(
                     width: 44,
                     height: 44,
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(14),
-                      gradient: const LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [
-                          MangoTokens.primary,
-                          Color(0xFFF59F0A),
-                        ],
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x1A000000),
+                          blurRadius: 8,
+                          offset: Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.asset(
+                        'assets/favicon/android-chrome-512x512.png',
+                        fit: BoxFit.cover,
                       ),
                     ),
-                    child: const Icon(
-                      Icons.storefront_rounded,
-                      color: Colors.white,
-                    ),
                   ),
-                  const SizedBox(width: 14),
+          const SizedBox(width: 14),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        'MangoPOS',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w800,
-                          color: MangoTokens.foreground,
+                      RichText(
+                        text: TextSpan(
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w800,
+                          ),
+                          children: [
+                            TextSpan(
+                              text: 'Crea tu cuenta en ',
+                              style: TextStyle(color: MangoTokens.foreground),
+                            ),
+                            TextSpan(
+                              text: 'Mango',
+                              style: TextStyle(color: MangoTokens.primary),
+                            ),
+                            TextSpan(
+                              text: 'POS',
+                              style: TextStyle(color: const Color(0xFF2BA85A)),
+                            ),
+                          ],
                         ),
                       ),
                       Text(
@@ -339,86 +354,94 @@ class _Header extends StatelessWidget {
                       ),
                     ],
                   ),
-                  const Spacer(),
-                  if (inlineSteps)
-                    Flexible(
-                      child: _Steps(steps: steps!, currentStep: currentStep),
-                    ),
-                ],
-              ),
-              if (!inlineSteps && steps != null) ...[
-                const SizedBox(height: 18),
-                _Steps(steps: steps!, currentStep: currentStep),
-              ],
-            ],
-          );
-        },
+          const Spacer(),
+          if (steps != null)
+            _StepsRow(
+              steps: steps!,
+              currentStep: currentStep,
+            ),
+        ],
       ),
     );
   }
 }
 
-class _Steps extends StatelessWidget {
+class _StepsRow extends StatelessWidget {
   final List<AuthShellStep> steps;
   final int currentStep;
 
-  const _Steps({required this.steps, required this.currentStep});
+  const _StepsRow({
+    required this.steps,
+    required this.currentStep,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Wrap(
-      alignment: WrapAlignment.end,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      spacing: 14,
-      runSpacing: 8,
-      children: List.generate(steps.length, (index) {
-        final step = steps[index];
-        final isCurrent = index == currentStep;
-        final isComplete = step.complete || index < currentStep;
-        return Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 34,
-              height: 34,
-              decoration: BoxDecoration(
-                color: isCurrent || isComplete
-                    ? MangoTokens.primary
-                    : Colors.transparent,
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: List.generate(steps.length * 2 - 1, (index) {
+          if (index.isOdd) {
+            return Container(
+              width: 40,
+              height: 1,
+              color: MangoTokens.border,
+              margin: const EdgeInsets.symmetric(horizontal: 12),
+            );
+          }
+          final stepIndex = index ~/ 2;
+          final step = steps[stepIndex];
+          final isCurrent = stepIndex == currentStep;
+          final isComplete = step.complete || stepIndex < currentStep;
+          return Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
                   color: isCurrent || isComplete
                       ? MangoTokens.primary
-                      : MangoTokens.border,
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: isCurrent || isComplete
+                        ? MangoTokens.primary
+                        : MangoTokens.border,
+                  ),
+                ),
+                child: Center(
+                  child: isComplete
+                      ? const Icon(Icons.check_rounded,
+                          color: Colors.white, size: 18)
+                      : Text(
+                          '${stepIndex + 1}',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: isCurrent
+                              ? Colors.white
+                              : MangoTokens.mutedForeground,
+                        ),
+                        ),
                 ),
               ),
-              child: Center(
-                child: isComplete
-                    ? const Icon(Icons.check_rounded, color: Colors.white, size: 18)
-                    : Text(
-                        '${index + 1}',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: isCurrent ? Colors.white : MangoTokens.mutedForeground,
-                        ),
-                      ),
+              const SizedBox(width: 6),
+              Text(
+                step.title,
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 13,
+                  fontWeight: isCurrent ? FontWeight.w700 : FontWeight.w500,
+                  color: isCurrent
+                      ? MangoTokens.foreground
+                      : MangoTokens.mutedForeground,
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              step.title,
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 14,
-                fontWeight: isCurrent ? FontWeight.w700 : FontWeight.w500,
-                color: isCurrent
-                    ? MangoTokens.foreground
-                    : MangoTokens.mutedForeground,
-              ),
-            ),
-          ],
-        );
-      }),
+            ],
+          );
+        }),
+      ),
     );
   }
 }

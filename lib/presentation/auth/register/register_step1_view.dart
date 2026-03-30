@@ -6,7 +6,6 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_tokens.dart';
 import 'package:mangopos/core/config/plans_config.dart';
 import 'package:mangopos/presentation/auth/widgets/auth_shell.dart';
-import 'package:flutter_animate/flutter_animate.dart';
 import 'register_step1_viewmodel.dart';
 
 class RegisterStep1View extends ConsumerStatefulWidget {
@@ -23,6 +22,8 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
   late final TextEditingController _fullNameCtl;
   late final TextEditingController _emailCtl;
   late final TextEditingController _passwordCtl;
+  late final TextEditingController _confirmCtl;
+  bool _termsAccepted = false;
 
   static const _steps = <AuthShellStep>[
     AuthShellStep(title: 'Crear cuenta'),
@@ -33,13 +34,17 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
   @override
   void initState() {
     super.initState();
-    ref
-        .read(registerStep1VmProvider.notifier)
-        .setSelectedPlan(widget.initialPlan);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref
+          .read(registerStep1VmProvider.notifier)
+          .setSelectedPlan(widget.initialPlan);
+    });
     final state = ref.read(registerStep1VmProvider);
     _fullNameCtl = TextEditingController(text: state.fullName ?? '');
     _emailCtl = TextEditingController(text: state.email ?? '');
     _passwordCtl = TextEditingController(text: state.password ?? '');
+    _confirmCtl = TextEditingController();
   }
 
   @override
@@ -47,17 +52,23 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
     _fullNameCtl.dispose();
     _emailCtl.dispose();
     _passwordCtl.dispose();
+    _confirmCtl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final planNotifier = ref.read(registerStep1VmProvider.notifier);
     final state = ref.watch(registerStep1VmProvider);
     final selectedPlan = PlansConfig.plans.firstWhere(
       (p) => p.id == state.selectedPlan,
       orElse: () => PlansConfig.plans.first,
     );
-    final planLabel = selectedPlan.name;
+    final afterTrialValue = _extractPrice(selectedPlan.price);
+    final featureHighlights = selectedPlan.features
+        .take(4)
+        .map((feature) => feature.title)
+        .toList();
 
     return AuthShell(
       brandSubtitle: 'Onboarding de negocios en MangoPOS',
@@ -69,177 +80,19 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _eyebrow(
-                'Cuenta principal',
-              ).animate().fadeIn(duration: 400.ms).slideX(begin: -0.1),
-              const SizedBox(height: 18),
-              Text(
-                'Crea tu acceso',
-                style: GoogleFonts.plusJakartaSans(
-                  fontSize: 34,
-                  fontWeight: FontWeight.w800,
-                  color: MangoTokens.foreground,
-                ),
-              ).animate().fadeIn(delay: 100.ms).slideX(begin: -0.1),
-              const SizedBox(height: 10),
-              Text(
-                'Este usuario será el propietario inicial del negocio. Después podrás crear usuarios operativos con permisos separados.',
-                style: GoogleFonts.plusJakartaSans(
-                  fontSize: 15.5,
-                  height: 1.6,
-                  color: MangoTokens.mutedForeground,
-                ),
-              ).animate().fadeIn(delay: 200.ms).slideX(begin: -0.1),
-              const SizedBox(height: 24),
-              // Selector de Planes interactivo
-              _FieldLabel(
-                'Elige el plan ideal para tu negocio',
-              ).animate().fadeIn(delay: 300.ms),
-              const SizedBox(height: 10),
-              Container(
-                constraints: const BoxConstraints(maxWidth: double.infinity),
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  clipBehavior: Clip.none,
-                  child: Row(
-                    children: PlansConfig.plans.map((plan) {
-                      final isSelected = plan.id == state.selectedPlan;
-                      return Padding(
-                        padding: const EdgeInsets.only(right: 16),
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 300),
-                          curve: Curves.easeOutCubic,
-                          width: 260,
-                          padding: const EdgeInsets.all(20),
-                          decoration: BoxDecoration(
-                            color: isSelected
-                                ? const Color(0xFFFFF7F1)
-                                : Colors.white,
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(
-                              color: isSelected
-                                  ? MangoTokens.primary
-                                  : MangoTokens.border,
-                              width: isSelected ? 2 : 1,
-                            ),
-                            boxShadow: isSelected
-                                ? [
-                                    BoxShadow(
-                                      color: MangoTokens.primary.withValues(
-                                        alpha: 0.1,
-                                      ),
-                                      blurRadius: 15,
-                                      offset: const Offset(0, 5),
-                                    ),
-                                  ]
-                                : [],
-                          ),
-                          child: InkWell(
-                            onTap: () {
-                              ref
-                                  .read(registerStep1VmProvider.notifier)
-                                  .setSelectedPlan(plan.id);
-                            },
-                            borderRadius: BorderRadius.circular(18),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                if (plan.isPopular)
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 10,
-                                      vertical: 4,
-                                    ),
-                                    margin: const EdgeInsets.only(bottom: 12),
-                                    decoration: BoxDecoration(
-                                      color: MangoTokens.primary.withValues(
-                                        alpha: 0.1,
-                                      ),
-                                      borderRadius: BorderRadius.circular(20),
-                                    ),
-                                    child: const Text(
-                                      'MÁS POPULAR',
-                                      style: TextStyle(
-                                        color: MangoTokens.primary,
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ),
-                                Text(
-                                  plan.name,
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w800,
-                                    color: MangoTokens.foreground,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                Text(
-                                  plan.price,
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w600,
-                                    color: MangoTokens.secondaryForeground,
-                                  ),
-                                ),
-                                const SizedBox(height: 16),
-                                ...plan.features
-                                    .take(3)
-                                    .map(
-                                      (f) => Padding(
-                                        padding: const EdgeInsets.only(
-                                          bottom: 8,
-                                        ),
-                                        child: Row(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            const Icon(
-                                              Icons.check_circle,
-                                              size: 14,
-                                              color: MangoTokens.primary,
-                                            ),
-                                            const SizedBox(width: 8),
-                                            Expanded(
-                                              child: Text(
-                                                f.title,
-                                                style:
-                                                    GoogleFonts.plusJakartaSans(
-                                                      fontSize: 12,
-                                                      color: MangoTokens
-                                                          .mutedForeground,
-                                                    ),
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ),
-              ).animate().fadeIn(delay: 350.ms).slideX(begin: 0.1),
-              const SizedBox(height: 30),
-              _FieldLabel(
-                'Nombre del responsable',
-              ).animate().fadeIn(delay: 400.ms),
+              const SizedBox(height: 8),
+              _FieldLabel('Nombre completo'),
               TextFormField(
                 controller: _fullNameCtl,
                 validator: _required,
                 textInputAction: TextInputAction.next,
                 decoration: _inputDecoration(
-                  hint: 'Ej. Maria Rodriguez',
+                  hint: 'Ej. María Rodríguez',
                   icon: Icons.badge_outlined,
                 ),
-              ).animate().fadeIn(delay: 450.ms).slideY(begin: 0.2),
+              ),
               const SizedBox(height: 18),
-              _FieldLabel('Correo de acceso').animate().fadeIn(delay: 500.ms),
+              _FieldLabel('Correo electrónico'),
               TextFormField(
                 controller: _emailCtl,
                 validator: (value) {
@@ -252,40 +105,81 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
                 textInputAction: TextInputAction.next,
                 autofillHints: const [AutofillHints.email],
                 decoration: _inputDecoration(
-                  hint: 'tu-negocio@correo.com',
+                  hint: 'tu@empresa.com',
                   icon: Icons.alternate_email_rounded,
                 ),
-              ).animate().fadeIn(delay: 550.ms).slideY(begin: 0.2),
+              ),
               const SizedBox(height: 18),
-              _FieldLabel('Contraseña').animate().fadeIn(delay: 600.ms),
-              _PasswordField(
-                controller: _passwordCtl,
-              ).animate().fadeIn(delay: 650.ms).slideY(begin: 0.2),
-              const SizedBox(height: 14),
-              Text(
-                'Mínimo 6 caracteres.',
-                style: GoogleFonts.plusJakartaSans(
-                  fontSize: 12.5,
-                  color: MangoTokens.mutedForeground,
+              _FieldLabel('Teléfono'),
+              TextFormField(
+                keyboardType: TextInputType.phone,
+                textInputAction: TextInputAction.next,
+                decoration: _inputDecoration(
+                  hint: '+1 809 555 0000',
+                  icon: Icons.phone_outlined,
                 ),
-              ).animate().fadeIn(delay: 700.ms),
-              const SizedBox(height: 28),
+              ),
+              const SizedBox(height: 18),
+              _FieldLabel('Contraseña'),
+              _PasswordField(controller: _passwordCtl),
+              const SizedBox(height: 18),
+              _FieldLabel('Confirmar contraseña'),
+              _PasswordField(
+                controller: _confirmCtl,
+                hint: 'Repite tu contraseña',
+                validator: (value) {
+                  if ((value ?? '').isEmpty) return 'Este campo es obligatorio';
+                  if (value != _passwordCtl.text) {
+                    return 'Las contraseñas no coinciden';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 18),
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    '¿Ya tienes una cuenta?',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 14,
-                      color: MangoTokens.mutedForeground,
+                  Checkbox(
+                    value: _termsAccepted,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    onChanged: (value) {
+                      setState(() => _termsAccepted = value ?? false);
+                    },
+                  ),
+                  Expanded(
+                    child: RichText(
+                      text: TextSpan(
+                        text: 'Acepto los ',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 13,
+                          color: MangoTokens.mutedForeground,
+                        ),
+                        children: [
+                          TextSpan(
+                            text: 'Términos y Condiciones',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: MangoTokens.primary,
+                            ),
+                          ),
+                          TextSpan(
+                            text: ' y la Política de Privacidad',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: MangoTokens.primary,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                  TextButton(
-                    onPressed: () => context.go(AppRoutes.login),
-                    child: const Text('Inicia sesión'),
-                  ),
                 ],
-              ).animate().fadeIn(delay: 750.ms),
-              const SizedBox(height: 8),
+              ),
+              const SizedBox(height: 20),
               SizedBox(
                 width: double.infinity,
                 height: 54,
@@ -307,7 +201,7 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
                     ),
                   ),
                 ),
-              ).animate().fadeIn(delay: 800.ms).slideY(begin: 0.2),
+              ),
             ],
           ),
         ),
@@ -316,29 +210,54 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            AuthSummaryCard(
-              title: 'Resumen',
-              children: [
-                AuthSummaryRow(label: 'Plan', value: planLabel),
-                AuthSummaryRow(label: 'Prueba', value: '14 días gratis'),
-                AuthSummaryRow(label: 'Acceso principal', value: 'Propietario'),
-                AuthSummaryRow(label: 'Acceso web', value: 'app.mangopos.do'),
-                AuthSummaryRow(
-                  label: 'Permisos iniciales',
-                  value: 'Administrador completo',
-                  highlight: true,
-                ),
-              ],
+            Text(
+              'Selecciona tu plan',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: MangoTokens.secondaryForeground,
+                letterSpacing: 1.5,
+              ),
             ),
-            const SizedBox(height: 16),
-            _MutedBlock(
-              title: 'Qué sigue',
-              lines: const [
-                'Registrar el negocio y su sucursal inicial.',
-                'Elegir tipo de negocio.',
-                'Definir el subdominio de acceso.',
-                'Activar el espacio con configuración base.',
-              ],
+            const SizedBox(height: 6),
+            Text(
+              'Plan para tu cuenta',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                color: MangoTokens.foreground,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Solo mostramos los planes disponibles en la web. Todos incluyen 14 días de prueba.',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 14,
+                height: 1.6,
+                color: MangoTokens.mutedForeground,
+              ),
+            ),
+            const SizedBox(height: 22),
+            Column(
+              children: PlansConfig.plans.map((plan) {
+                final isSelected = plan.id == selectedPlan.id;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: _PlanOptionCard(
+                    plan: plan,
+                    selected: isSelected,
+                    onTap: () => planNotifier.setSelectedPlan(plan.id),
+                  ),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 18),
+            _PlanDetailCard(plan: selectedPlan),
+            const SizedBox(height: 18),
+            _PlanTotalCard(
+              afterTrial: afterTrialValue,
+              planPrice: selectedPlan.price,
+              highlights: featureHighlights,
             ),
           ],
         ),
@@ -348,6 +267,14 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
 
   void _handleNext() {
     if (!(_formKey.currentState?.validate() ?? false)) return;
+    if (!_termsAccepted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Debes aceptar los Términos y Condiciones'),
+        ),
+      );
+      return;
+    }
     final vm = ref.read(registerStep1VmProvider.notifier);
     vm.setFullName(_fullNameCtl.text.trim());
     vm.setEmail(_emailCtl.text.trim());
@@ -361,23 +288,6 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
     }
     return null;
   }
-
-  Widget _eyebrow(String text) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-    decoration: BoxDecoration(
-      color: const Color(0xFFFFF7F1),
-      borderRadius: BorderRadius.circular(999),
-      border: Border.all(color: const Color(0xFFFFE3CD)),
-    ),
-    child: Text(
-      text,
-      style: GoogleFonts.plusJakartaSans(
-        fontSize: 12,
-        fontWeight: FontWeight.w700,
-        color: MangoTokens.primary,
-      ),
-    ),
-  );
 }
 
 class _FieldLabel extends StatelessWidget {
@@ -390,11 +300,11 @@ class _FieldLabel extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Text(
-        text,
+        text.toUpperCase(),
         style: GoogleFonts.plusJakartaSans(
           fontSize: 12.5,
           fontWeight: FontWeight.w700,
-          color: MangoTokens.secondaryForeground,
+          color: const Color(0xFF66718A),
         ),
       ),
     );
@@ -403,8 +313,14 @@ class _FieldLabel extends StatelessWidget {
 
 class _PasswordField extends StatefulWidget {
   final TextEditingController controller;
+  final String hint;
+  final String? Function(String?)? validator;
 
-  const _PasswordField({required this.controller});
+  const _PasswordField({
+    required this.controller,
+    this.hint = 'Protege la cuenta principal',
+    this.validator,
+  });
 
   @override
   State<_PasswordField> createState() => _PasswordFieldState();
@@ -418,13 +334,15 @@ class _PasswordFieldState extends State<_PasswordField> {
     return TextFormField(
       controller: widget.controller,
       obscureText: _obscure,
-      validator: (value) {
-        if ((value ?? '').length < 6) return 'Minimo 6 caracteres';
-        return null;
-      },
+      validator:
+          widget.validator ??
+          (value) {
+            if ((value ?? '').length < 6) return 'Minimo 6 caracteres';
+            return null;
+          },
       autofillHints: const [AutofillHints.newPassword],
       decoration: _inputDecoration(
-        hint: 'Protege la cuenta principal',
+        hint: widget.hint,
         icon: Icons.lock_outline_rounded,
         suffix: IconButton(
           onPressed: () => setState(() => _obscure = !_obscure),
@@ -440,11 +358,203 @@ class _PasswordFieldState extends State<_PasswordField> {
   }
 }
 
-class _MutedBlock extends StatelessWidget {
-  final String title;
-  final List<String> lines;
+class _PlanOptionCard extends StatelessWidget {
+  final MangoPlan plan;
+  final bool selected;
+  final VoidCallback onTap;
 
-  const _MutedBlock({required this.title, required this.lines});
+  const _PlanOptionCard({
+    required this.plan,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final borderColor = selected ? MangoTokens.primary : MangoTokens.border;
+    final background = selected ? const Color(0xFFFFF5EE) : Colors.white;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: borderColor, width: selected ? 1.5 : 1),
+        boxShadow: selected
+            ? [
+                BoxShadow(
+                  color: MangoTokens.primary.withOpacity(0.12),
+                  blurRadius: 18,
+                  offset: const Offset(0, 8),
+                ),
+              ]
+            : null,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(16),
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Icon(
+                  selected
+                      ? Icons.check_circle_rounded
+                      : Icons.radio_button_unchecked,
+                  color: selected
+                      ? MangoTokens.primary
+                      : MangoTokens.mutedForeground,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        plan.name,
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                          color: MangoTokens.foreground,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        plan.description,
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 13,
+                          height: 1.5,
+                          color: MangoTokens.secondaryForeground,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      plan.price,
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: MangoTokens.foreground,
+                      ),
+                    ),
+                    if (selected) ...[
+                      const SizedBox(height: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFF1E1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          'SELECCIONADO',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: MangoTokens.primary,
+                          ),
+                        ),
+                      ),
+                    ],
+                    if (!selected) const SizedBox(height: 20),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PlanDetailCard extends StatelessWidget {
+  final MangoPlan plan;
+
+  const _PlanDetailCard({required this.plan});
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: MangoTokens.border),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF7F1),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: const Icon(
+                Icons.star_rounded,
+                color: MangoTokens.primary,
+                size: 28,
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Resumen del plan ${plan.name}',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: MangoTokens.foreground,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Facturación mensual',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 13,
+                      color: MangoTokens.secondaryForeground,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Text(
+              plan.price,
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: MangoTokens.primary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PlanTotalCard extends StatelessWidget {
+  final String afterTrial;
+  final String planPrice;
+  final List<String> highlights;
+
+  const _PlanTotalCard({
+    required this.afterTrial,
+    required this.planPrice,
+    required this.highlights,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -459,30 +569,87 @@ class _MutedBlock extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              title,
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 15,
-                fontWeight: FontWeight.w700,
-                color: MangoTokens.foreground,
-              ),
-            ),
-            const SizedBox(height: 12),
-            ...lines.map(
-              (line) => Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: Text(
-                  '• $line',
+            Row(
+              children: [
+                Text(
+                  'Total ahora',
                   style: GoogleFonts.plusJakartaSans(
-                    fontSize: 13.5,
-                    height: 1.55,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
                     color: MangoTokens.mutedForeground,
                   ),
                 ),
+                const Spacer(),
+                Text(
+                  'US\$0.00',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    color: MangoTokens.primary,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Divider(color: MangoTokens.border),
+            const SizedBox(height: 12),
+            Text(
+              'Después de 14 días',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: MangoTokens.mutedForeground,
               ),
             ),
+            const SizedBox(height: 4),
+            Text(
+              afterTrial,
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+                color: MangoTokens.foreground,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              planPrice,
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 13,
+                color: MangoTokens.mutedForeground,
+              ),
+            ),
+            const SizedBox(height: 14),
+            ...highlights.map((feature) => _PlanFeatureRow(feature)).toList(),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _PlanFeatureRow extends StatelessWidget {
+  final String feature;
+
+  const _PlanFeatureRow(this.feature);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        children: [
+          const Icon(Icons.check_circle, size: 18, color: Colors.green),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              feature,
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 13,
+                color: MangoTokens.mutedForeground,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -521,4 +688,12 @@ InputDecoration _inputDecoration({
       borderSide: const BorderSide(color: MangoTokens.destructive, width: 1.5),
     ),
   );
+}
+
+String _extractPrice(String raw) {
+  final match = RegExp(r'US\$[\d.,]+').firstMatch(raw);
+  if (match != null) {
+    return match.group(0)!;
+  }
+  return raw;
 }

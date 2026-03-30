@@ -24,8 +24,10 @@ class PrintingReceiptsView extends ConsumerStatefulWidget {
 class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
   PrintArea? _cashierArea;
   PrintArea? _fiscalArea;
+  PrintArea? _closureArea;
   String? _selectedPrebillPrinter;
   String? _selectedReceiptPrinter;
+  String? _selectedClosurePrinter;
   String _receiptItemDisplayMode = PosSettingsRepository.receiptItemsGrouped;
   bool _busy = false;
 
@@ -58,8 +60,10 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
     setState(() {
       _cashierArea = bootstrap.cashierArea;
       _fiscalArea = bootstrap.fiscalArea;
+      _closureArea = bootstrap.closureArea;
       _selectedPrebillPrinter = bootstrap.selectedPrebillPrinter;
       _selectedReceiptPrinter = bootstrap.selectedReceiptPrinter;
+      _selectedClosurePrinter = bootstrap.selectedClosurePrinter;
       _receiptItemDisplayMode = receiptItemDisplayMode;
     });
   }
@@ -98,7 +102,9 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
   Future<void> _removeAssignment({
     required PrintArea area,
     required String printerId,
-    required bool prebill,
+    required bool removesPrebills,
+    required bool removesReceipts,
+    ValueSetter<String?>? onRemoved,
   }) async {
     setState(() => _busy = true);
     final ok = await ref
@@ -107,17 +113,13 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
           areaId: area.id,
           printerId: printerId,
           removeOrders: false,
-          removePrebills: prebill,
-          removeReceipts: !prebill,
+          removePrebills: removesPrebills,
+          removeReceipts: removesReceipts,
         );
     if (!mounted) return;
     setState(() {
       _busy = false;
-      if (prebill) {
-        _selectedPrebillPrinter = null;
-      } else {
-        _selectedReceiptPrinter = null;
-      }
+      onRemoved?.call(null);
     });
     if (ok) {
       await _bootstrap();
@@ -175,7 +177,10 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
 
   Future<void> _replacePrinter({
     required PrintArea area,
-    required bool prebill,
+    required String dialogTitle,
+    required bool printsPrebills,
+    required bool printsReceipts,
+    required ValueChanged<String> onSelected,
   }) async {
     final printers =
         List<PrinterDevice>.from(
@@ -188,9 +193,7 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
     final selected = await showDialog<PrinterDevice>(
       context: context,
       builder: (dialogContext) => _ReceiptPrinterPickerDialog(
-        title: prebill
-            ? 'Selecciona impresora para prefactura'
-            : 'Selecciona impresora para comprobante final',
+        title: dialogTitle,
         printers: printers,
       ),
     );
@@ -199,17 +202,11 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
     await _saveAssignment(
       area: area,
       printerId: selected.id,
-      printsPrebills: prebill,
-      printsReceipts: !prebill,
+      printsPrebills: printsPrebills,
+      printsReceipts: printsReceipts,
     );
     if (!mounted) return;
-    setState(() {
-      if (prebill) {
-        _selectedPrebillPrinter = selected.id;
-      } else {
-        _selectedReceiptPrinter = selected.id;
-      }
-    });
+    setState(() => onSelected(selected.id));
   }
 
   @override
@@ -221,12 +218,16 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
 
     PrinterDevice? prebillPrinter;
     PrinterDevice? receiptPrinter;
+    PrinterDevice? closurePrinter;
     for (final printer in printers) {
       if (printer.id == _selectedPrebillPrinter) {
         prebillPrinter = printer;
       }
       if (printer.id == _selectedReceiptPrinter) {
         receiptPrinter = printer;
+      }
+      if (printer.id == _selectedClosurePrinter) {
+        closurePrinter = printer;
       }
     }
 
@@ -269,14 +270,22 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
                         trailingLabel: 'Area fiscal',
                         printer: receiptPrinter,
                         busy: _busy,
-                        onAddOrReplace: () =>
-                            _replacePrinter(area: _fiscalArea!, prebill: false),
+                        onAddOrReplace: () => _replacePrinter(
+                          area: _fiscalArea!,
+                          dialogTitle:
+                              'Selecciona impresora para comprobante final',
+                          printsPrebills: false,
+                          printsReceipts: true,
+                          onSelected: (id) => _selectedReceiptPrinter = id,
+                        ),
                         onDelete: receiptPrinter == null
                             ? null
                             : () => _removeAssignment(
                                 area: _fiscalArea!,
                                 printerId: receiptPrinter!.id,
-                                prebill: false,
+                                removesPrebills: false,
+                                removesReceipts: true,
+                                onRemoved: (_) => _selectedReceiptPrinter = null,
                               ),
                         onConfigure: receiptPrinter == null
                             ? null
@@ -291,14 +300,21 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
                         trailingLabel: 'Area caja',
                         printer: prebillPrinter,
                         busy: _busy,
-                        onAddOrReplace: () =>
-                            _replacePrinter(area: _cashierArea!, prebill: true),
+                        onAddOrReplace: () => _replacePrinter(
+                          area: _cashierArea!,
+                          dialogTitle: 'Selecciona impresora para prefactura',
+                          printsPrebills: true,
+                          printsReceipts: false,
+                          onSelected: (id) => _selectedPrebillPrinter = id,
+                        ),
                         onDelete: prebillPrinter == null
                             ? null
                             : () => _removeAssignment(
                                 area: _cashierArea!,
                                 printerId: prebillPrinter!.id,
-                                prebill: true,
+                                removesPrebills: true,
+                                removesReceipts: false,
+                                onRemoved: (_) => _selectedPrebillPrinter = null,
                               ),
                         onConfigure: prebillPrinter == null
                             ? null
@@ -306,6 +322,37 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
                         replaceLabel: 'Reemplazar',
                       ),
                     ),
+                    if (_closureArea != null)
+                      SizedBox(
+                        width: cardWidth,
+                        child: _DocumentAssignmentCard(
+                          title: 'Cierre de caja',
+                          trailingLabel: 'Area cierre',
+                          printer: closurePrinter,
+                          busy: _busy,
+                          onAddOrReplace: () => _replacePrinter(
+                            area: _closureArea!,
+                            dialogTitle:
+                                'Selecciona impresora para cierre de caja',
+                            printsPrebills: false,
+                            printsReceipts: true,
+                            onSelected: (id) => _selectedClosurePrinter = id,
+                          ),
+                          onDelete: closurePrinter == null
+                              ? null
+                              : () => _removeAssignment(
+                                  area: _closureArea!,
+                                  printerId: closurePrinter!.id,
+                                  removesPrebills: false,
+                                  removesReceipts: true,
+                                  onRemoved: (_) => _selectedClosurePrinter = null,
+                                ),
+                          onConfigure: closurePrinter == null
+                              ? null
+                              : () => _configurePrinter(closurePrinter!),
+                          replaceLabel: 'Reemplazar',
+                        ),
+                      ),
                   ],
                 );
               },

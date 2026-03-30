@@ -4,7 +4,9 @@ import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_tokens.dart';
+import 'package:mangopos/core/config/plans_config.dart';
 import 'package:mangopos/presentation/auth/register/business_registration_catalog.dart';
+import 'package:mangopos/presentation/auth/register/register_step1_viewmodel.dart';
 import 'package:mangopos/presentation/auth/widgets/auth_shell.dart';
 import 'register_step2_viewmodel.dart';
 
@@ -21,8 +23,11 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
   late final TextEditingController _branchCtl;
   late final TextEditingController _addressCtl;
   late final TextEditingController _phoneCtl;
+  late final TextEditingController _subdomainCtl;
   late String _country;
   late String _businessType;
+  late String _currency;
+  late String _businessSize;
 
   static const _steps = <AuthShellStep>[
     AuthShellStep(title: 'Crear cuenta', complete: true),
@@ -41,10 +46,24 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
     'España',
   ];
 
+  static const _currencyOptions = <String>[
+    'Peso Dominicano (DOP)',
+    'Dólar estadounidense (USD)',
+    'Peso Mexicano (MXN)',
+  ];
+
+  static const _businessSizeOptions = <String>[
+    'Micro',
+    'Pequeño',
+    'Mediano',
+    'Grande',
+  ];
+
   @override
   void initState() {
     super.initState();
     final state = ref.read(registerStep2VmProvider);
+    final notifier = ref.read(registerStep2VmProvider.notifier);
     _businessCtl = TextEditingController(text: state.businessName);
     _branchCtl = TextEditingController(text: state.branchName);
     _addressCtl = TextEditingController(text: state.address);
@@ -53,13 +72,22 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
         ? state.country
         : _countries.first;
     _businessType = state.businessType;
+    _currency = _currencyOptions.first;
+    _businessSize = _businessSizeOptions[1];
+    final initialSubdomain = state.subdomain.isNotEmpty
+        ? state.subdomain
+        : _normalizeSubdomain(state.businessName);
+    _subdomainCtl = TextEditingController(text: initialSubdomain);
+    notifier.setSubdomain(initialSubdomain);
 
-    _businessCtl.addListener(() {
+    _businessCtl.addListener(() => setState(() {}));
+    _branchCtl.addListener(() => setState(() {}));
+    _addressCtl.addListener(() => setState(() {}));
+    _phoneCtl.addListener(() => setState(() {}));
+    _subdomainCtl.addListener(() {
+      notifier.setSubdomain(_normalizeSubdomain(_subdomainCtl.text));
       setState(() {});
     });
-    _branchCtl.addListener(() => setState(() {}));
-    _phoneCtl.addListener(() => setState(() {}));
-    _addressCtl.addListener(() => setState(() {}));
   }
 
   @override
@@ -68,6 +96,7 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
     _branchCtl.dispose();
     _addressCtl.dispose();
     _phoneCtl.dispose();
+    _subdomainCtl.dispose();
     super.dispose();
   }
 
@@ -75,10 +104,17 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
   Widget build(BuildContext context) {
     final vm = ref.read(registerStep2VmProvider.notifier);
     final selectedType = businessTypeByDbValue(_businessType);
-    final domainPreview = 'app.mangopos.do';
+    final step1 = ref.watch(registerStep1VmProvider);
+    final selectedPlan = PlansConfig.plans.firstWhere(
+      (plan) => plan.id == step1.selectedPlan,
+      orElse: () => PlansConfig.plans.first,
+    );
     final summaryBranch = _branchCtl.text.trim().isEmpty
         ? 'Sucursal Principal'
         : _branchCtl.text.trim();
+    final suggestion = _currentSubdomain();
+    final domainPreview = '$suggestion.mangopos.do';
+    final afterTrialValue = _extractPrice(selectedPlan.price);
 
     return AuthShell(
       brandSubtitle: 'Registro del negocio',
@@ -90,10 +126,10 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _eyebrow('Datos del negocio'),
-              const SizedBox(height: 18),
+              _eyebrow('Paso 2 de 3'),
+              const SizedBox(height: 10),
               Text(
-                'Configura tu negocio',
+                'Configura tu empresa',
                 style: GoogleFonts.plusJakartaSans(
                   fontSize: 34,
                   fontWeight: FontWeight.w800,
@@ -102,10 +138,10 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
               ),
               const SizedBox(height: 10),
               Text(
-                'Define el nombre y el tipo de operación de tu negocio. Todo se manejará directamente desde app.mangopos.do.',
+                'Completa los datos principales del negocio y define el subdominio con el que entrarás a MangoPOS.',
                 style: GoogleFonts.plusJakartaSans(
                   fontSize: 15.5,
-                  height: 1.6,
+                  height: 1.55,
                   color: MangoTokens.mutedForeground,
                 ),
               ),
@@ -116,24 +152,14 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
                 validator: _required,
                 textInputAction: TextInputAction.next,
                 decoration: _inputDecoration(
-                  hint: 'Ej. Mango Bistró',
+                  hint: 'Ej. Restaurante El Mango',
                   icon: Icons.storefront_rounded,
                 ),
               ),
-              const SizedBox(height: 18),
-              _FieldLabel('Sucursal inicial'),
-              TextFormField(
-                controller: _branchCtl,
-                textInputAction: TextInputAction.next,
-                decoration: _inputDecoration(
-                  hint: 'Principal, Piantini, etc.',
-                  icon: Icons.location_city_outlined,
-                ),
-              ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 22),
               _FieldLabel('Tipo de negocio'),
               DropdownButtonFormField<String>(
-                initialValue: _businessType,
+                value: _businessType,
                 items: businessTypeOptions
                     .map(
                       (option) => DropdownMenuItem(
@@ -147,47 +173,11 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
                   setState(() => _businessType = value);
                 },
                 decoration: _inputDecoration(
-                  hint: 'Selecciona un tipo',
+                  hint: 'Selecciona el tipo de negocio',
                   icon: selectedType.icon,
                 ),
               ),
-              const SizedBox(height: 10),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFF7F1),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: const Color(0xFFFFE3CD)),
-                ),
-                child: Text(
-                  selectedType.subtitle,
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 13.5,
-                    height: 1.55,
-                    color: MangoTokens.secondaryForeground,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 18),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF5F9FF),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: const Color(0xFFD7E7FF)),
-                ),
-                child: Text(
-                  'Acceso web centralizado: $domainPreview',
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: MangoTokens.info,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 22),
               Row(
                 children: [
                   Expanded(
@@ -196,7 +186,7 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
                       children: [
                         _FieldLabel('País'),
                         DropdownButtonFormField<String>(
-                          initialValue: _country,
+                          value: _country,
                           items: _countries
                               .map(
                                 (country) => DropdownMenuItem(
@@ -222,13 +212,73 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _FieldLabel('Teléfono (opcional)'),
+                        _FieldLabel('Moneda'),
+                        DropdownButtonFormField<String>(
+                          value: _currency,
+                          items: _currencyOptions
+                              .map(
+                                (currency) => DropdownMenuItem(
+                                  value: currency,
+                                  child: Text(currency),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (value) {
+                            if (value == null) return;
+                            setState(() => _currency = value);
+                          },
+                          decoration: _inputDecoration(
+                            hint: 'Elige la divisa',
+                            icon: Icons.monetization_on_outlined,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 22),
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _FieldLabel('Tamaño del negocio'),
+                        DropdownButtonFormField<String>(
+                          value: _businessSize,
+                          items: _businessSizeOptions
+                              .map(
+                                (size) => DropdownMenuItem(
+                                  value: size,
+                                  child: Text(size),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (value) {
+                            if (value == null) return;
+                            setState(() => _businessSize = value);
+                          },
+                          decoration: _inputDecoration(
+                            hint: 'Selecciona una opción',
+                            icon: Icons.pie_chart_outline_rounded,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _FieldLabel('Teléfono del negocio'),
                         TextFormField(
                           controller: _phoneCtl,
                           keyboardType: TextInputType.phone,
                           textInputAction: TextInputAction.next,
                           decoration: _inputDecoration(
-                            hint: '8095550101',
+                            hint: '+1 809 555 0000',
                             icon: Icons.phone_outlined,
                           ),
                         ),
@@ -237,7 +287,36 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
                   ),
                 ],
               ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 22),
+              _FieldLabel('Subdominio'),
+              TextFormField(
+                controller: _subdomainCtl,
+                textInputAction: TextInputAction.next,
+                decoration: _inputDecoration(
+                  hint: 'tunegocio',
+                  icon: Icons.language_rounded,
+                  suffix: Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: Text(
+                      '.mangopos.do',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: MangoTokens.secondaryForeground,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Tu acceso quedará como $domainPreview',
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 13,
+                  color: MangoTokens.mutedForeground,
+                ),
+              ),
+              const SizedBox(height: 22),
               _FieldLabel('Dirección base del negocio'),
               TextFormField(
                 controller: _addressCtl,
@@ -260,8 +339,8 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
                       foregroundColor: MangoTokens.secondaryForeground,
                       side: const BorderSide(color: MangoTokens.border),
                       padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 15,
+                        horizontal: 18,
+                        vertical: 14,
                       ),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16),
@@ -276,7 +355,7 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
                         backgroundColor: MangoTokens.primary,
                         foregroundColor: Colors.white,
                         elevation: 0,
-                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        padding: const EdgeInsets.symmetric(horizontal: 26),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(16),
                         ),
@@ -291,10 +370,11 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
                         vm.setCountry(_country);
                         vm.setPhone(_phoneCtl.text.trim());
                         vm.setAddress(_addressCtl.text.trim());
+                        vm.setSubdomain(suggestion);
                         context.go(AppRoutes.registerSetup);
                       },
                       child: Text(
-                        'Activar negocio',
+                        'Continuar',
                         style: GoogleFonts.plusJakartaSans(
                           fontSize: 15.5,
                           fontWeight: FontWeight.w700,
@@ -312,34 +392,71 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            AuthSummaryCard(
-              title: 'Resumen',
-              children: [
-                AuthSummaryRow(
-                  label: 'Negocio',
-                  value: _businessCtl.text.trim().isEmpty
-                      ? 'Pendiente'
-                      : _businessCtl.text.trim(),
-                ),
-                AuthSummaryRow(label: 'Tipo', value: selectedType.label),
-                AuthSummaryRow(label: 'Sucursal', value: summaryBranch),
-                AuthSummaryRow(
-                  label: 'Dominio',
-                  value: domainPreview,
-                  highlight: true,
-                ),
-                AuthSummaryRow(label: 'País', value: _country),
-              ],
+            Text(
+              'Resumen de empresa',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 22,
+                fontWeight: FontWeight.w700,
+                color: MangoTokens.foreground,
+              ),
             ),
-            const SizedBox(height: 16),
-            _MutedBlock(
-              title: 'Se crea automáticamente',
-              lines: const [
-                'Métodos de pago base.',
-                'Moneda DOP e ITBIS inicial.',
-                'Zona y almacén principal.',
-                'Acceso del propietario.',
-              ],
+            const SizedBox(height: 6),
+            Text(
+              'Tu negocio en MangoPOS',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: MangoTokens.mutedForeground,
+              ),
+            ),
+            const SizedBox(height: 18),
+            Text(
+              'Revisa la información principal antes de terminar la configuración inicial.',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 14,
+                height: 1.6,
+                color: MangoTokens.mutedForeground,
+              ),
+            ),
+            const SizedBox(height: 22),
+            _SubdomainSummaryCard(domain: domainPreview),
+            const SizedBox(height: 18),
+            _PlanSummaryCard(plan: selectedPlan),
+            const SizedBox(height: 18),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: MangoTokens.border),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(18),
+                child: Column(
+                  children: [
+                    _DetailRow(
+                      label: 'Negocio',
+                      value: _businessCtl.text.trim().isEmpty
+                          ? 'Pendiente'
+                          : _businessCtl.text.trim(),
+                    ),
+                    const SizedBox(height: 8),
+                    _DetailRow(label: 'Tipo', value: selectedType.label),
+                    const SizedBox(height: 8),
+                    _DetailRow(label: 'Sucursal', value: summaryBranch),
+                    const SizedBox(height: 8),
+                    _DetailRow(label: 'País', value: _country),
+                    const SizedBox(height: 8),
+                    _DetailRow(label: 'Moneda', value: _currency),
+                    const SizedBox(height: 8),
+                    _DetailRow(label: 'Tamaño', value: _businessSize),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 18),
+            _TotalSummaryCard(
+              afterTrial: afterTrialValue,
+              planPrice: selectedPlan.price,
             ),
           ],
         ),
@@ -352,6 +469,14 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
       return 'Este campo es obligatorio';
     }
     return null;
+  }
+
+  String _currentSubdomain() {
+    final customInput = _subdomainCtl.text.trim();
+    if (customInput.isNotEmpty) {
+      return _normalizeSubdomain(customInput);
+    }
+    return _normalizeSubdomain(_businessCtl.text);
   }
 
   Widget _eyebrow(String text) => Container(
@@ -393,11 +518,110 @@ class _FieldLabel extends StatelessWidget {
   }
 }
 
-class _MutedBlock extends StatelessWidget {
-  final String title;
-  final List<String> lines;
+class _DetailRow extends StatelessWidget {
+  final String label;
+  final String value;
+  final bool highlight;
 
-  const _MutedBlock({required this.title, required this.lines});
+  const _DetailRow({
+    required this.label,
+    required this.value,
+    this.highlight = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final valueColor = highlight ? MangoTokens.primary : MangoTokens.foreground;
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            label,
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              color: MangoTokens.mutedForeground,
+            ),
+          ),
+        ),
+        Text(
+          value,
+          textAlign: TextAlign.right,
+          style: GoogleFonts.plusJakartaSans(
+            fontSize: 14,
+            fontWeight: highlight ? FontWeight.w700 : FontWeight.w600,
+            color: valueColor,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SubdomainSummaryCard extends StatelessWidget {
+  final String domain;
+
+  const _SubdomainSummaryCard({required this.domain});
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xFFF5F8FF),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFD7E7FF)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 18),
+        child: Row(
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: MangoTokens.primary.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(
+                Icons.language_rounded,
+                color: MangoTokens.primary,
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Subdominio sugerido',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: MangoTokens.secondaryForeground,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  domain,
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: MangoTokens.foreground,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PlanSummaryCard extends StatelessWidget {
+  final MangoPlan plan;
+
+  const _PlanSummaryCard({required this.plan});
 
   @override
   Widget build(BuildContext context) {
@@ -412,26 +636,133 @@ class _MutedBlock extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              title,
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 15,
-                fontWeight: FontWeight.w700,
-                color: MangoTokens.foreground,
-              ),
-            ),
-            const SizedBox(height: 12),
-            ...lines.map(
-              (line) => Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: Text(
-                  '• $line',
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF7F1),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: const Icon(
+                    Icons.star_rounded,
+                    color: MangoTokens.primary,
+                    size: 26,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        plan.name,
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800,
+                          color: MangoTokens.foreground,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        plan.description,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 13,
+                          height: 1.4,
+                          color: MangoTokens.mutedForeground,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  plan.price,
                   style: GoogleFonts.plusJakartaSans(
-                    fontSize: 13.5,
-                    height: 1.55,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: MangoTokens.primary,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TotalSummaryCard extends StatelessWidget {
+  final String afterTrial;
+  final String planPrice;
+
+  const _TotalSummaryCard({required this.afterTrial, required this.planPrice});
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: MangoTokens.border),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(
+                  'Total ahora',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
                     color: MangoTokens.mutedForeground,
                   ),
                 ),
+                const Spacer(),
+                Text(
+                  'US\$0.00',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    color: MangoTokens.primary,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Divider(color: MangoTokens.border),
+            const SizedBox(height: 12),
+            Text(
+              'Después de 14 días',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: MangoTokens.mutedForeground,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              afterTrial,
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+                color: MangoTokens.foreground,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              planPrice,
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 13,
+                color: MangoTokens.mutedForeground,
               ),
             ),
           ],
@@ -474,4 +805,22 @@ InputDecoration _inputDecoration({
       borderSide: const BorderSide(color: MangoTokens.destructive, width: 1.5),
     ),
   );
+}
+
+String _normalizeSubdomain(String value) {
+  final trimmed = value.trim().toLowerCase();
+  final collapsed = trimmed.replaceAll(RegExp(r'\s+'), '');
+  final sanitized = collapsed.replaceAll(RegExp(r'[^a-z0-9-]'), '');
+  if (sanitized.isEmpty) {
+    return 'tunegocio';
+  }
+  return sanitized;
+}
+
+String _extractPrice(String raw) {
+  final match = RegExp(r'US\$[\d.,]+').firstMatch(raw);
+  if (match != null) {
+    return match.group(0)!;
+  }
+  return raw;
 }

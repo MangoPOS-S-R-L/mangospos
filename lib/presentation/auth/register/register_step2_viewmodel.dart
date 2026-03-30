@@ -27,8 +27,7 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
   void setCountry(String v) => _safeSet(state.copyWith(country: v));
   void setAddress(String v) => _safeSet(state.copyWith(address: v));
   void setPhone(String v) => _safeSet(state.copyWith(phone: v));
-  // Legacy no-op: ya no usamos subdominios por negocio.
-  void setSubdomain(String v) {}
+  void setSubdomain(String v) => _safeSet(state.copyWith(subdomain: v));
 
   void _safeSet(RegisterStep2State next) {
     if (state == next) return;

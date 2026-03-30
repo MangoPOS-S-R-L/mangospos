@@ -294,11 +294,12 @@ class LocalPrintService {
       _log(
         'Agent rejected print job -> status=${response.statusCode} error=$errorMsg',
       );
-      throw Exception(errorMsg);
+      throw _toUserFriendlyError(errorMsg);
     } catch (e) {
       _forgetResolvedBaseUrl(baseUrl);
       _log('Error printing job: $e');
-      rethrow;
+      if (e is Exception) rethrow;
+      throw _toUserFriendlyError(e.toString());
     }
   }
 
@@ -332,15 +333,15 @@ class LocalPrintService {
       _log(
         'Agent rejected test print -> status=${response.statusCode} error=$errorMsg',
       );
-      throw Exception(errorMsg);
+      throw _toUserFriendlyError(errorMsg);
     } catch (e) {
       _forgetResolvedBaseUrl(_resolvedBaseUrl);
       _log('Error testing print: $e');
-      return false;
+      if (e is Exception) rethrow;
+      throw _toUserFriendlyError(e.toString());
     }
   }
 
-  /// Enviar datos RAW (base64) directo a /api/printers/raw
   Future<bool> printRawData({
     required String ip,
     int port = 9100,
@@ -386,7 +387,6 @@ class LocalPrintService {
         _log('Agent accepted raw print -> response=${response.body}');
         return data['success'] == true;
       } else {
-        // Intentar parsear el error del agente
         String errorMsg = 'Error ${response.statusCode}';
         try {
           final body = json.decode(response.body);
@@ -397,37 +397,59 @@ class LocalPrintService {
           errorMsg = response.body.isNotEmpty ? response.body : errorMsg;
         }
 
-        if (errorMsg.contains('ETIMEDOUT')) {
-          throw Exception(
-            'No se pudo conectar a la impresora (Tiempo de espera agotado). Verifica que esté encendida y en la misma red.',
-          );
-        } else if (errorMsg.contains('ECONNREFUSED')) {
-          throw Exception(
-            'La impresora rechazó la conexión. Verifica la IP y el puerto.',
-          );
-        } else if (errorMsg.contains('EHOSTUNREACH')) {
-          throw Exception(
-            'La impresora no es inalcanzable. Verifica la IP y la red.',
-          );
-        }
-
         _log(
           'Agent rejected raw print -> status=${response.statusCode} error=$errorMsg',
         );
-        throw Exception('El agente rechazó la impresión: $errorMsg');
+        throw _toUserFriendlyError(errorMsg);
       }
     } catch (e) {
       _forgetResolvedBaseUrl(_resolvedBaseUrl);
       _log('Error sending raw data: $e');
+
       if (e.toString().contains('SocketException') ||
           e.toString().contains('ClientException')) {
         throw Exception(
           'No se puede conectar con el Agente Local. Asegúrate de que esté ejecutándose.',
         );
       }
-      rethrow;
+      if (e is Exception) rethrow;
+      throw _toUserFriendlyError(e.toString());
     }
   }
+
+  Exception _toUserFriendlyError(String errorMsg) {
+    if (errorMsg.contains('ETIMEDOUT')) {
+      return Exception(
+        'No se pudo conectar a la impresora (Tiempo de espera agotado). Verifica que esté encendida y en la misma red.',
+      );
+    } else if (errorMsg.contains('ECONNREFUSED')) {
+      return Exception(
+        'La impresora rechazó la conexión. Verifica que la dirección IP sea correcta y que la impresora permita conexiones en el puerto 9100.',
+      );
+    } else if (errorMsg.contains('EHOSTUNREACH')) {
+      return Exception(
+        'La impresora es inalcanzable. Verifica que esté en la misma red Wi-Fi y que la IP sea correcta.',
+      );
+    } else if (errorMsg.contains('socket_error') ||
+        errorMsg.contains('connect_error')) {
+      return Exception(
+        'Error de conexión con la impresora. Verifica el cable de red o la señal Wi-Fi.',
+      );
+    }
+
+    // Limpiar mensajes redundantes del agente
+    final cleanMsg = errorMsg
+        .replaceFirst('Exception: ', '')
+        .replaceFirst('Error: ', '')
+        .trim();
+
+    if (cleanMsg.contains('No se pudo abrir la impresora')) {
+      return Exception(cleanMsg);
+    }
+
+    return Exception('Fallo la impresión: $cleanMsg');
+  }
+
 
   /// Descubrir impresoras en la red
   Future<List<dynamic>> discoverPrinters() async {
