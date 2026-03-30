@@ -99,6 +99,10 @@ class _CategoriesTab extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final vm = ref.watch(menuBrowserVmProvider);
     final notifier = ref.read(menuBrowserVmProvider.notifier);
+    final selectedCategory = vm.categories
+        .where((c) => c.id == vm.selectedCategoryId)
+        .cast<dynamic>()
+        .firstOrNull;
 
     if (vm.error != null) {
       return _ErrorBox(message: vm.error!, onRetry: () => notifier.loadAll());
@@ -115,37 +119,138 @@ class _CategoriesTab extends ConsumerWidget {
 
     return Column(
       children: [
-        const SizedBox(height: 12),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: vm.categories
-                .map(
-                  (c) => ChoiceChip(
-                    label: Text(c.name),
-                    selectedColor: MangoColors.primaryOrange.withValues(
-                      alpha: .12,
-                    ),
-                    selected: vm.selectedCategoryId == c.id,
-                    onSelected: (_) => notifier.loadProductsByCategory(c.id),
-                    labelStyle: TextStyle(
-                      color: vm.selectedCategoryId == c.id
-                          ? MangoColors.primaryOrange
-                          : MangoColors.darkGray,
-                      fontWeight: vm.selectedCategoryId == c.id
-                          ? FontWeight.w700
-                          : FontWeight.w500,
-                    ),
-                  ),
-                )
-                .toList(),
+        if (selectedCategory != null) ...[
+          _SelectedCategoryHeader(
+            categoryName: selectedCategory.name as String,
+            onBack: () => notifier.loadAll(preselectCategoryId: null),
           ),
-        ),
-        const Divider(height: 24),
+          const Divider(height: 1),
+        ] else ...[
+          const SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: vm.categories
+                  .map(
+                    (c) => ChoiceChip(
+                      label: Text(c.name),
+                      selectedColor: MangoColors.primaryOrange.withValues(
+                        alpha: .12,
+                      ),
+                      selected: vm.selectedCategoryId == c.id,
+                      onSelected: (_) => notifier.loadProductsByCategory(c.id),
+                      labelStyle: TextStyle(
+                        color: vm.selectedCategoryId == c.id
+                            ? MangoColors.primaryOrange
+                            : MangoColors.darkGray,
+                        fontWeight: vm.selectedCategoryId == c.id
+                            ? FontWeight.w700
+                            : FontWeight.w500,
+                      ),
+                    ),
+                  )
+                  .toList(),
+            ),
+          ),
+          const Divider(height: 24),
+        ],
         Expanded(child: _ProductsGridTab(onAddProduct: onAddProduct)),
       ],
+    );
+  }
+}
+
+class _SelectedCategoryHeader extends StatelessWidget {
+  final String categoryName;
+  final VoidCallback onBack;
+
+  const _SelectedCategoryHeader({
+    required this.categoryName,
+    required this.onBack,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border(
+          top: BorderSide(
+            color: MangoColors.primaryOrange.withValues(alpha: .18),
+            width: 1.5,
+          ),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              InkWell(
+                onTap: onBack,
+                borderRadius: BorderRadius.circular(999),
+                child: Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: MangoColors.primaryOrange.withValues(alpha: .10),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.arrow_back_ios_new_rounded,
+                    color: MangoColors.primaryOrange,
+                    size: 20,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Text(
+                  categoryName.toUpperCase(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w800,
+                    color: MangoColors.primaryOrange,
+                    letterSpacing: 0.4,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          InkWell(
+            onTap: onBack,
+            borderRadius: BorderRadius.circular(10),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.home_rounded,
+                    size: 18,
+                    color: Colors.grey.shade600,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Todas las categorías',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey.shade700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -1,6 +1,82 @@
 
-	                   2	D:\MangoPos\Dev\mangopos\agent\dist\
-	    New File  		    7845	agent.log
-	    New File  		  42.4 m	mangopos-agent.exe
-	  New Dir          1	D:\MangoPos\Dev\mangopos\agent\dist\logs\
-	    New File  		     124	agent.log
+	                  22	D:\MangoPos\Dev\mangopos\build\windows\x64\runner\Release\
+	    New File  		  136192	app_links_plugin.dll
+	    New File  		   94208	connectivity_plus_plugin.dll
+	    New File  		   4.6 m	d3dcompiler_47.dll
+	    New File  		  17.6 m	flutter_windows.dll
+	    New File  		  472904	libEGL.dll
+	    New File  		   7.0 m	libGLESv2.dll
+	    New File  		  28.3 m	libmpv-2.dll
+	    New File  		   73728	mangopos.exe
+	    New File  		  46.1 m	MangoPOS.zip
+	    New File  		   12800	media_kit_libs_windows_video_plugin.dll
+	    New File  		  140288	media_kit_video_plugin.dll
+	    New File  		   4.5 m	pdfium.dll
+	    New File  		  112128	permission_handler_windows_plugin.dll
+	    New File  		  137728	printing_plugin.dll
+	    New File  		  116224	screen_retriever_windows_plugin.dll
+	    New File  		  437248	universal_ble_plugin.dll
+	    New File  		   89600	url_launcher_windows_plugin.dll
+	    New File  		   4.5 m	vk_swiftshader.dll
+	    New File  		   89088	volume_controller_plugin.dll
+	    New File  		  872776	vulkan-1.dll
+	    New File  		  141312	window_manager_plugin.dll
+	    New File  		  203264	zlib.dll
+	  New Dir          2	D:\MangoPos\Dev\mangopos\build\windows\x64\runner\Release\data\
+	    New File  		  12.8 m	app.so
+	    New File  		  778864	icudtl.dat
+	  New Dir          6	D:\MangoPos\Dev\mangopos\build\windows\x64\runner\Release\data\flutter_assets\
+	    New File  		    2178	AssetManifest.bin
+	    New File  		    2262	AssetManifest.bin.json
+	    New File  		     208	FontManifest.json
+	    New File  		      45	NativeAssetsManifest.json
+	    New File  		   1.4 m	NOTICES
+	    New File  		  132426	NOTICES.Z
+	  New Dir          0	D:\MangoPos\Dev\mangopos\build\windows\x64\runner\Release\data\flutter_assets\assets\
+	  New Dir          6	D:\MangoPos\Dev\mangopos\build\windows\x64\runner\Release\data\flutter_assets\assets\favicon\
+	    New File  		   39779	android-chrome-512x512.png
+	    New File  		   11558	apple-touch-icon.png
+	    New File  		     585	favicon-16x16.png
+	    New File  		    1277	favicon-32x32.png
+	    New File  		   15406	favicon.ico
+	    New File  		   13002	windows_icon.png
+	  New Dir         11	D:\MangoPos\Dev\mangopos\build\windows\x64\runner\Release\data\flutter_assets\assets\icons\
+	    New File  		   74873	caja_principal.svg
+	    New File  		   32128	clientes_principal.svg
+	    New File  		   19107	cocina_principal.svg
+	    New File  		    3065	cocina_secundario.svg
+	    New File  		    1156	conexion.svg
+	    New File  		     926	dashboard.svg
+	    New File  		   39345	masajustes.svg
+	    New File  		   36341	mesa_principal.svg
+	    New File  		   28577	productos_principal.svg
+	    New File  		    4362	reportes_principal.svg
+	    New File  		   21026	ventas_principal.svg
+	  New Dir          3	D:\MangoPos\Dev\mangopos\build\windows\x64\runner\Release\data\flutter_assets\assets\images\
+	    New File  		   16275	impresion_bluetooth.png
+	    New File  		   17066	impresion_wifi.png
+	    New File  		   36722	logo.png
+	  New Dir          1	D:\MangoPos\Dev\mangopos\build\windows\x64\runner\Release\data\flutter_assets\assets\videos\
+	    New File  		  10.2 m	video_login.mp4
+	  New Dir          1	D:\MangoPos\Dev\mangopos\build\windows\x64\runner\Release\data\flutter_assets\fonts\
+	    New File  		   1.5 m	MaterialIcons-Regular.otf
+	  New Dir          0	D:\MangoPos\Dev\mangopos\build\windows\x64\runner\Release\data\flutter_assets\packages\
+	  New Dir          0	D:\MangoPos\Dev\mangopos\build\windows\x64\runner\Release\data\flutter_assets\packages\cupertino_icons\
+	  New Dir          1	D:\MangoPos\Dev\mangopos\build\windows\x64\runner\Release\data\flutter_assets\packages\cupertino_icons\assets\
+	    New File  		  257628	CupertinoIcons.ttf
+	  New Dir          0	D:\MangoPos\Dev\mangopos\build\windows\x64\runner\Release\data\flutter_assets\packages\esc_pos_utils_plus\
+	  New Dir          1	D:\MangoPos\Dev\mangopos\build\windows\x64\runner\Release\data\flutter_assets\packages\esc_pos_utils_plus\resources\
+	    New File  		   66655	capabilities.json
+	  New Dir          0	D:\MangoPos\Dev\mangopos\build\windows\x64\runner\Release\data\flutter_assets\packages\media_kit\
+	  New Dir          0	D:\MangoPos\Dev\mangopos\build\windows\x64\runner\Release\data\flutter_assets\packages\media_kit\assets\
+	  New Dir          1	D:\MangoPos\Dev\mangopos\build\windows\x64\runner\Release\data\flutter_assets\packages\media_kit\assets\web\
+	    New File  		  374690	hls1.4.10.js
+	  New Dir          0	D:\MangoPos\Dev\mangopos\build\windows\x64\runner\Release\data\flutter_assets\packages\wakelock_plus\
+	  New Dir          1	D:\MangoPos\Dev\mangopos\build\windows\x64\runner\Release\data\flutter_assets\packages\wakelock_plus\assets\
+	    New File  		   13344	no_sleep.js
+	  New Dir          0	D:\MangoPos\Dev\mangopos\build\windows\x64\runner\Release\data\flutter_assets\packages\win_ble_plus\
+	  New Dir          1	D:\MangoPos\Dev\mangopos\build\windows\x64\runner\Release\data\flutter_assets\packages\win_ble_plus\assets\
+	    New File  		  527872	BLEServer.exe
+	  New Dir          2	D:\MangoPos\Dev\mangopos\build\windows\x64\runner\Release\data\flutter_assets\shaders\
+	    New File  		   21320	ink_sparkle.frag
+	    New File  		   17368	stretch_effect.frag

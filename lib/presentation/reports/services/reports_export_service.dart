@@ -97,6 +97,16 @@ class ReportsExportService {
             viewModel.getPurchaseSupplierRows(),
           ),
         ];
+      case ReportCategory.taxes:
+        return [
+          _metricsTable(viewModel.getTaxMetricCards()),
+          pw.SizedBox(height: 16),
+          _breakdownTable(
+            'Impuestos por tipo',
+            viewModel.getTaxTypeRows(),
+            showQuantity: true,
+          ),
+        ];
     }
   }
 

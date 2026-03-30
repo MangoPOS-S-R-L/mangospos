@@ -379,8 +379,19 @@ void _scheduleExpiredAuthRecovery(Object error, StackTrace? stackTrace) {
         return;
       }
 
+      final latestRefreshToken = auth.currentSession?.refreshToken;
+      if (latestRefreshToken != null && latestRefreshToken.isNotEmpty) {
+        AppLogger.e(
+          'No se pudo recuperar la sesion tras $_authRecoveryAttempts intentos, pero el refresh token sigue presente. Se conservara la sesion local y se volvera a intentar cuando Supabase responda.',
+          error: error,
+          stackTrace: stackTrace,
+        );
+        _authRecoveryAttempts = 0;
+        return;
+      }
+
       AppLogger.e(
-        'No se pudo recuperar la sesion tras $_authRecoveryAttempts intentos. Cerrando sesion local como ultimo recurso.',
+        'No se pudo recuperar la sesion tras $_authRecoveryAttempts intentos y ya no hay refresh token usable. Cerrando sesion local como ultimo recurso.',
         error: error,
         stackTrace: stackTrace,
       );
@@ -397,6 +408,12 @@ void _scheduleExpiredAuthRecovery(Object error, StackTrace? stackTrace) {
       }
 
       if (_authRecoveryAttempts >= _maxAuthRecoveryAttempts) {
+        final latestRefreshToken = auth.currentSession?.refreshToken;
+        if (latestRefreshToken != null && latestRefreshToken.isNotEmpty) {
+          _authRecoveryAttempts = 0;
+          return;
+        }
+
         try {
           await auth.signOut(scope: SignOutScope.local);
         } catch (signOutError, signOutStack) {

@@ -32,6 +32,13 @@ cd installer/windows
 powershell -ExecutionPolicy Bypass -File .\build_msi.ps1 -SkipSign
 ```
 
+## Generar EXE para desinstalar solo el agente LAN
+
+```powershell
+cd installer/windows
+powershell -ExecutionPolicy Bypass -File .\build_agent_uninstaller.ps1
+```
+
 ## Generar y firmar MSI
 
 ```powershell
@@ -53,6 +60,7 @@ powershell -ExecutionPolicy Bypass -File .\sign_msi.ps1 -MsiPath "C:\ruta\MangoP
 - prepara stage con app + carpeta `Agent`
 - compila un `.exe` con Inno Setup en `build\installer`
 - compila MSI con WiX
+- compila `MangoPOS-Agent-Uninstall.exe` para remover solo el agente LAN
 - instala MangoPOS en `Program Files\MangoPOS`
 - deja el agente LAN dentro de `Program Files\MangoPOS\Agent`
 - registra el agente LAN como servicio con WinSW

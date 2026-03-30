@@ -93,6 +93,10 @@ class ReportsCsvExportService {
           viewModel.getPurchaseSupplierRows(),
         );
         break;
+      case ReportCategory.taxes:
+        addMetricSection(viewModel.getTaxMetricCards());
+        addBreakdownSection('Impuestos por tipo', viewModel.getTaxTypeRows());
+        break;
     }
 
     return rows.map(_toCsvLine).join('\n');

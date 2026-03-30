@@ -6,7 +6,7 @@ import '../../../core/utils/app_time.dart';
 import '../../../data/repositories/reports_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 
-enum ReportCategory { sales, purchases, finances, inventory }
+enum ReportCategory { sales, purchases, finances, inventory, taxes }
 
 enum SalesReportRangePreset { today, yesterday, thisWeek, thisMonth, custom }
 
@@ -60,6 +60,7 @@ class ReportsState {
   final Map<String, dynamic>? cashSummary;
   final Map<String, dynamic>? purchasesSummary;
   final Map<String, dynamic>? inventorySummary;
+  final Map<String, dynamic>? taxSummary;
   final SalesReportRangePreset salesRangePreset;
   final DateTime salesFrom;
   final DateTime salesTo;
@@ -72,6 +73,7 @@ class ReportsState {
     this.cashSummary,
     this.purchasesSummary,
     this.inventorySummary,
+    this.taxSummary,
     this.salesRangePreset = SalesReportRangePreset.thisWeek,
     required this.salesFrom,
     required this.salesTo,
@@ -96,6 +98,7 @@ class ReportsState {
     Map<String, dynamic>? cashSummary,
     Map<String, dynamic>? purchasesSummary,
     Map<String, dynamic>? inventorySummary,
+    Map<String, dynamic>? taxSummary,
     SalesReportRangePreset? salesRangePreset,
     DateTime? salesFrom,
     DateTime? salesTo,
@@ -112,6 +115,7 @@ class ReportsState {
       cashSummary: cashSummary ?? this.cashSummary,
       purchasesSummary: purchasesSummary ?? this.purchasesSummary,
       inventorySummary: inventorySummary ?? this.inventorySummary,
+      taxSummary: taxSummary ?? this.taxSummary,
       salesRangePreset: salesRangePreset ?? this.salesRangePreset,
       salesFrom: salesFrom ?? this.salesFrom,
       salesTo: salesTo ?? this.salesTo,
@@ -197,6 +201,11 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
           from: state.salesFrom,
           to: state.salesTo,
         ),
+        _repository.getTaxSummary(
+          businessId: businessId,
+          from: state.salesFrom,
+          to: state.salesTo,
+        ),
       ]);
 
       state = state.copyWith(
@@ -205,6 +214,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         cashSummary: results[1],
         purchasesSummary: results[2],
         inventorySummary: results[3],
+        taxSummary: results[4],
         clearError: true,
       );
     } catch (e) {
@@ -325,6 +335,31 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
           ReportItem(
             title: 'Alertas de stock',
             description: 'Bajo mínimo: $lowStock | Agotados: $outOfStock',
+          ),
+        ];
+      case ReportCategory.taxes:
+        final totalTax =
+            (state.taxSummary?['total_tax_collected'] as num?)?.toDouble() ?? 0;
+        final serviceFee =
+            (state.taxSummary?['total_service_fee'] as num?)?.toDouble() ?? 0;
+        final totalCharges =
+            (state.taxSummary?['total_charges_collected'] as num?)
+                ?.toDouble() ??
+            (totalTax + serviceFee);
+        final taxableSales =
+            (state.taxSummary?['taxable_sales'] as num?)?.toDouble() ?? 0;
+        final configured = state.taxSummary?['configured_taxes_count'] ?? 0;
+        final active = state.taxSummary?['active_taxes_count'] ?? 0;
+        return [
+          ReportItem(
+            title: 'Impuestos y ley generados',
+            description:
+                'Impuestos: RD\$${totalTax.toStringAsFixed(2)} | Propina de ley: RD\$${serviceFee.toStringAsFixed(2)} | Total: RD\$${totalCharges.toStringAsFixed(2)}',
+          ),
+          ReportItem(
+            title: 'Configuración fiscal',
+            description:
+                'Tipos configurados: $configured | Activos: $active | Base gravable: RD\$${taxableSales.toStringAsFixed(2)}',
           ),
         ];
     }
@@ -685,6 +720,106 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         .toList(growable: false);
   }
 
+  List<SalesMetricCardData> getTaxMetricCards() {
+    final summary = state.taxSummary ?? const <String, dynamic>{};
+    final totalTax =
+        (summary['total_tax_collected'] as num?)?.toDouble() ?? 0;
+    final totalServiceFee =
+        (summary['total_service_fee'] as num?)?.toDouble() ?? 0;
+    final totalCharges =
+        (summary['total_charges_collected'] as num?)?.toDouble() ??
+        (totalTax + totalServiceFee);
+    final taxableSales = (summary['taxable_sales'] as num?)?.toDouble() ?? 0;
+    final exemptSales = (summary['exempt_sales'] as num?)?.toDouble() ?? 0;
+    final effectiveRate =
+        (summary['effective_tax_rate'] as num?)?.toDouble() ?? 0;
+    final configured = (summary['configured_taxes_count'] as num?)?.toInt() ?? 0;
+    final active = (summary['active_taxes_count'] as num?)?.toInt() ?? 0;
+    final serviceFeeOrders =
+        (summary['service_fee_orders_count'] as num?)?.toInt() ?? 0;
+    final serviceFeeRate =
+        (summary['service_fee_rate'] as num?)?.toDouble() ?? 0;
+
+    return [
+      SalesMetricCardData(
+        title: 'Impuestos cobrados',
+        value: 'RD\$${totalTax.toStringAsFixed(2)}',
+        subtitle: 'Total acumulado en el rango seleccionado',
+        icon: Icons.receipt_outlined,
+        color: const Color(0xFF2563EB),
+      ),
+      SalesMetricCardData(
+        title: 'Propina de ley',
+        value: 'RD\$${totalServiceFee.toStringAsFixed(2)}',
+        subtitle: serviceFeeOrders > 0
+            ? '$serviceFeeOrders cuentas con cargo legal'
+            : 'Sin cargos de ley en el rango',
+        icon: Icons.room_service_outlined,
+        color: const Color(0xFFF97316),
+      ),
+      SalesMetricCardData(
+        title: 'Total fiscal y ley',
+        value: 'RD\$${totalCharges.toStringAsFixed(2)}',
+        subtitle: 'Suma de impuestos + propina de ley',
+        icon: Icons.account_balance_wallet_outlined,
+        color: const Color(0xFF059669),
+      ),
+      SalesMetricCardData(
+        title: 'Ventas gravadas',
+        value: 'RD\$${taxableSales.toStringAsFixed(2)}',
+        subtitle: 'Base imponible sujeta a impuestos',
+        icon: Icons.sell_outlined,
+        color: const Color(0xFF7C3AED),
+      ),
+      SalesMetricCardData(
+        title: 'Ventas exentas',
+        value: 'RD\$${exemptSales.toStringAsFixed(2)}',
+        subtitle: 'Items sin impuesto en el rango',
+        icon: Icons.remove_circle_outline,
+        color: const Color(0xFF0F766E),
+      ),
+      SalesMetricCardData(
+        title: 'Tasa efectiva ITBIS',
+        value: '${effectiveRate.toStringAsFixed(2)}%',
+        subtitle:
+            'Propina de ley configurada: ${serviceFeeRate.toStringAsFixed(2)}%',
+        icon: Icons.percent_outlined,
+        color: const Color(0xFF6D28D9),
+      ),
+      SalesMetricCardData(
+        title: 'Tipos de impuesto',
+        value: '$active/$configured',
+        subtitle: 'Activos frente a configurados',
+        icon: Icons.account_balance_outlined,
+        color: const Color(0xFFD97706),
+      ),
+    ];
+  }
+
+  List<SalesBreakdownRow> getTaxTypeRows() {
+    final rows = (state.taxSummary?['tax_breakdown'] as List?) ?? const [];
+    return rows
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .map(
+          (row) => SalesBreakdownRow(
+            label: _formatTaxRowLabel(row),
+            amount: (row['amount'] as num?)?.toDouble() ?? 0,
+            quantity: (row['taxable_amount'] as num?)?.toDouble() ?? 0,
+            count: (row['count'] as num?)?.toInt() ?? 0,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  String _formatTaxRowLabel(Map<String, dynamic> row) {
+    final label = row['label']?.toString().trim();
+    final safeLabel = (label?.isNotEmpty ?? false) ? label! : 'Impuesto';
+    final rate = (row['rate'] as num?)?.toDouble() ?? 0;
+    return rate > 0
+        ? '$safeLabel (${rate.toStringAsFixed(2)}%)'
+        : safeLabel;
+  }
+
   String getCategoryTitle(ReportCategory category) {
     switch (category) {
       case ReportCategory.sales:
@@ -695,6 +830,8 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         return 'Informe de finanzas';
       case ReportCategory.inventory:
         return 'Informe de inventario';
+      case ReportCategory.taxes:
+        return 'Reporte de impuestos';
     }
   }
 
@@ -708,6 +845,8 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         return Icons.attach_money;
       case ReportCategory.inventory:
         return Icons.inventory_2;
+      case ReportCategory.taxes:
+        return Icons.receipt_long;
     }
   }
 }

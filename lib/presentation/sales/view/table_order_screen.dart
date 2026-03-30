@@ -3666,6 +3666,7 @@ class _CatalogAreaState extends ConsumerState<_CatalogArea>
     with TickerProviderStateMixin {
   late TabController _mainTabController;
   final TextEditingController _searchController = TextEditingController();
+  String? _activeCategoryId;
 
   @override
   void initState() {
@@ -3797,14 +3798,18 @@ class _CatalogAreaState extends ConsumerState<_CatalogArea>
               controller: _mainTabController,
               children: [
                 // 1. Grid Categorias
-                _CategoriesGrid(
+                _CategoriesPane(
+                  activeCategoryId: _activeCategoryId,
                   onCategoryTap: (catId) {
-                    // Switch to Menu tab and load products
+                    setState(() => _activeCategoryId = catId);
                     ref
                         .read(menuBrowserVmProvider.notifier)
                         .loadProductsByCategory(catId);
-                    _mainTabController.animateTo(1);
                   },
+                  onBackToCategories: () {
+                    setState(() => _activeCategoryId = null);
+                  },
+                  onProductTap: widget.onProductTap,
                 ),
                 // 2. Grid Productos
                 _ProductsGrid(onProductTap: widget.onProductTap),
@@ -4917,6 +4922,48 @@ class _SegmentedTabs extends StatelessWidget {
   }
 }
 
+class _CategoriesPane extends ConsumerWidget {
+  final String? activeCategoryId;
+  final Function(String) onCategoryTap;
+  final VoidCallback onBackToCategories;
+  final Function(dynamic) onProductTap;
+
+  const _CategoriesPane({
+    required this.activeCategoryId,
+    required this.onCategoryTap,
+    required this.onBackToCategories,
+    required this.onProductTap,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(menuBrowserVmProvider);
+    final activeCategory = activeCategoryId == null
+        ? null
+        : state.categories.where((c) => c.id == activeCategoryId).firstOrNull;
+
+    if (activeCategory == null) {
+      return _CategoriesGrid(onCategoryTap: onCategoryTap);
+    }
+
+    return Column(
+      children: [
+        _SelectedCatalogCategoryHeader(
+          categoryName: activeCategory.name,
+          onBack: onBackToCategories,
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: _ProductsGrid(
+            onProductTap: onProductTap,
+            emptyText: 'No hay productos en esta categoría',
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _CategoriesGrid extends ConsumerWidget {
   final Function(String) onCategoryTap;
   const _CategoriesGrid({required this.onCategoryTap});
@@ -5023,6 +5070,99 @@ class _CategoriesGrid extends ConsumerWidget {
           ],
         );
       },
+    );
+  }
+}
+
+class _SelectedCatalogCategoryHeader extends StatelessWidget {
+  final String categoryName;
+  final VoidCallback onBack;
+
+  const _SelectedCatalogCategoryHeader({
+    required this.categoryName,
+    required this.onBack,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      decoration: BoxDecoration(
+        color: _salesSurface,
+        border: Border(
+          top: BorderSide(
+            color: _salesTotalColor.withValues(alpha: 0.18),
+            width: 1.5,
+          ),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              InkWell(
+                onTap: onBack,
+                borderRadius: BorderRadius.circular(999),
+                child: Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: _salesTotalColor.withValues(alpha: 0.10),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.arrow_back_ios_new_rounded,
+                    color: _salesTotalColor,
+                    size: 20,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Text(
+                  categoryName.toUpperCase(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w800,
+                    color: _salesTotalColor,
+                    letterSpacing: 0.4,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          InkWell(
+            onTap: onBack,
+            borderRadius: BorderRadius.circular(10),
+            child: const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 2, vertical: 4),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.home_rounded,
+                    size: 18,
+                    color: _salesTextSecondary,
+                  ),
+                  SizedBox(width: 8),
+                  Text(
+                    'Todas las categorías',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: _salesTextSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:mangopos/core/business/business_resolver.dart';
+import 'package:mangopos/core/network/supabase_config.dart';
 import 'package:mangopos/core/security/access_control_catalog.dart';
 import 'package:mangopos/core/utils/display_name_utils.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -327,7 +328,11 @@ class SessionController extends Notifier<SessionState> {
   }
 
   Future<bool> restoreFromSupabaseSession({Session? session}) async {
-    setLoading();
+    final previousState = state;
+    final hadAuthenticatedState = previousState.isAuthenticated;
+    if (!hadAuthenticatedState) {
+      setLoading();
+    }
     final client = Supabase.instance.client;
     final currentSession = session ?? client.auth.currentSession;
     final user = currentSession?.user;
@@ -429,10 +434,19 @@ class SessionController extends Notifier<SessionState> {
         availableBusinesses: availableBusinesses,
       );
       return true;
-    } catch (_) {
-      if (!state.isAuthenticated) {
-        setUnauthenticated();
+    } catch (error) {
+      final sessionStillPresent = client.auth.currentSession != null;
+      final shouldPreserveState =
+          hadAuthenticatedState ||
+          sessionStillPresent ||
+          SupabaseConfig.isRecoverableError(error);
+
+      if (shouldPreserveState) {
+        _safeSet(previousState);
+        return false;
       }
+
+      setUnauthenticated();
       return false;
     }
   }

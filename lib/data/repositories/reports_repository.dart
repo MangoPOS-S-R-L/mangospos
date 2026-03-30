@@ -2,15 +2,97 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/utils/app_time.dart';
 import '../datasources/queries/reports_queries.dart';
+import '../utils/payment_amount_utils.dart';
 
 class ReportsRepository {
   final SupabaseClient _client;
+  static const int _inFilterBatchSize = 150;
 
   ReportsRepository(this._client);
 
   double _toDouble(dynamic value) {
     if (value is num) return value.toDouble();
     return double.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  Future<List<Map<String, dynamic>>> _selectInBatches({
+    required String table,
+    required String select,
+    required String column,
+    required List<String> values,
+    dynamic Function(dynamic query)? transform,
+  }) async {
+    if (values.isEmpty) return <Map<String, dynamic>>[];
+
+    final rows = <Map<String, dynamic>>[];
+    for (var start = 0; start < values.length; start += _inFilterBatchSize) {
+      final end = (start + _inFilterBatchSize > values.length)
+          ? values.length
+          : start + _inFilterBatchSize;
+      final chunk = values.sublist(start, end);
+      var query = _client.from(table).select(select).inFilter(column, chunk);
+      if (transform != null) {
+        query = transform(query);
+      }
+      final chunkRows = await query;
+      rows.addAll(List<Map<String, dynamic>>.from(chunkRows));
+    }
+    return rows;
+  }
+
+  Future<List<Map<String, dynamic>>> _loadScopedPaymentsForRange({
+    required String businessId,
+    required DateTime from,
+    required DateTime to,
+    required String select,
+  }) async {
+    final fromIso = AppTime.astToUtcIso(from);
+    final toIso = AppTime.astToUtcIso(to);
+
+    final paymentRows = List<Map<String, dynamic>>.from(
+      await _client
+          .from(ReportsQueries.tablePayments)
+          .select(select)
+          .gte('created_at', fromIso)
+          .lt('created_at', toIso),
+    );
+
+    final orderIds = paymentRows
+        .map((row) => row['order_id']?.toString().trim())
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+
+    if (orderIds.isEmpty) return const <Map<String, dynamic>>[];
+
+    final scopedOrders = await _selectInBatches(
+      table: ReportsQueries.tableOrders,
+      select: 'id, table_sessions!inner(business_id)',
+      column: 'id',
+      values: orderIds,
+    );
+
+    final allowedOrderIds = scopedOrders
+        .where((row) {
+          final tableSession = row['table_sessions'];
+          final sessionMap = tableSession is Map<String, dynamic>
+              ? tableSession
+              : (tableSession is Map
+                    ? Map<String, dynamic>.from(tableSession)
+                    : const <String, dynamic>{});
+          return sessionMap['business_id']?.toString() == businessId;
+        })
+        .map((row) => row['id']?.toString().trim())
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet();
+
+    return paymentRows
+        .where(
+          (row) => allowedOrderIds.contains(row['order_id']?.toString().trim()),
+        )
+        .toList(growable: false);
   }
 
   Future<Map<String, dynamic>> getSalesSummary({
@@ -20,17 +102,13 @@ class ReportsRepository {
   }) async {
     final fromIso = AppTime.astToUtcIso(from);
     final toIso = AppTime.astToUtcIso(to);
-
-    final payments = await _client
-        .from(ReportsQueries.tablePayments)
-        .select(
-          'id, amount, order_id, status, created_at, payment_methods(name, code)',
-        )
-        .eq('business_id', businessId)
-        .gte('created_at', fromIso)
-        .lt('created_at', toIso);
-
-    final paymentRows = List<Map<String, dynamic>>.from(payments);
+    final paymentRows = await _loadScopedPaymentsForRange(
+      businessId: businessId,
+      from: from,
+      to: to,
+      select:
+          'id, amount, change_amount, order_id, status, created_at, payment_method_id, payment_methods(name, code)',
+    );
     final completedPayments = paymentRows
         .where((row) => row['status'] == 'completed' || row['status'] == null)
         .toList(growable: false);
@@ -40,12 +118,18 @@ class ReportsRepository {
 
     double totalSales = 0;
     for (final payment in completedPayments) {
-      totalSales += _toDouble(payment['amount']);
+      totalSales += netPaymentAmount(
+        payment['amount'],
+        payment['change_amount'],
+      );
     }
 
     double voidedSales = 0;
     for (final payment in voidedPayments) {
-      voidedSales += _toDouble(payment['amount']);
+      voidedSales += netPaymentAmount(
+        payment['amount'],
+        payment['change_amount'],
+      );
     }
 
     final orderIds = completedPayments
@@ -54,14 +138,12 @@ class ReportsRepository {
         .toSet()
         .toList(growable: false);
 
-    final items = orderIds.isEmpty
-        ? <Map<String, dynamic>>[]
-        : List<Map<String, dynamic>>.from(
-            await _client
-                .from(ReportsQueries.tableOrderItems)
-                .select('order_id, product_name, quantity, qty, total, status')
-                .inFilter('order_id', orderIds),
-          );
+    final items = await _selectInBatches(
+      table: ReportsQueries.tableOrderItems,
+      select: 'order_id, product_name, quantity, qty, total, status',
+      column: 'order_id',
+      values: orderIds,
+    );
 
     double totalItems = 0;
     final topProducts = <String, Map<String, dynamic>>{};
@@ -99,7 +181,10 @@ class ReportsRepository {
           payment['payment_method_id']?.toString() ??
           'other';
       final label = methodMap['name']?.toString() ?? code;
-      final amount = _toDouble(payment['amount']);
+      final amount = netPaymentAmount(
+        payment['amount'],
+        payment['change_amount'],
+      );
 
       final methodBucket = byMethod.putIfAbsent(
         code,
@@ -203,16 +288,14 @@ class ReportsRepository {
         .toSet()
         .toList(growable: false);
 
-    final transactions = sessionIds.isEmpty
-        ? <Map<String, dynamic>>[]
-        : List<Map<String, dynamic>>.from(
-            await _client
-                .from(ReportsQueries.tableCashTransactions)
-                .select('amount, type, created_at')
-                .inFilter('session_id', sessionIds)
-                .gte('created_at', fromIso)
-                .lt('created_at', toIso),
-          );
+    final transactions = await _selectInBatches(
+      table: ReportsQueries.tableCashTransactions,
+      select: 'amount, type, created_at',
+      column: 'session_id',
+      values: sessionIds,
+      transform: (query) =>
+          query.gte('created_at', fromIso).lt('created_at', toIso),
+    );
 
     double manualIn = 0;
     double manualOut = 0;
@@ -274,6 +357,186 @@ class ReportsRepository {
       'manual_out_total': manualOut,
       'net_cash_flow': salesTotal + manualIn - manualOut,
       'transactions_by_type': typeRows,
+    };
+  }
+
+  Future<Map<String, dynamic>> getTaxSummary({
+    required String businessId,
+    required DateTime from,
+    required DateTime to,
+  }) async {
+    final fromIso = AppTime.astToUtcIso(from);
+    final toIso = AppTime.astToUtcIso(to);
+
+    final taxes = List<Map<String, dynamic>>.from(
+      await _client
+          .from(ReportsQueries.tableTaxes)
+          .select('id, name, rate, is_active')
+          .eq('business_id', businessId),
+    );
+
+    final businessSettings = await _client
+        .from('business_settings')
+        .select('service_fee_enabled, service_fee_rate')
+        .eq('business_id', businessId)
+        .maybeSingle();
+    final serviceFeeEnabled = businessSettings?['service_fee_enabled'] == true;
+    final serviceFeeRate = _toDouble(
+      businessSettings?['service_fee_rate'],
+    ).clamp(0, 100);
+
+    final payments = await _loadScopedPaymentsForRange(
+      businessId: businessId,
+      from: from,
+      to: to,
+      select: 'id, order_id, amount, change_amount, status, created_at',
+    );
+
+    final completedOrderIds = payments
+        .where((row) => row['status'] == 'completed' || row['status'] == null)
+        .map((row) => row['order_id']?.toString())
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+
+    final items = await _selectInBatches(
+      table: ReportsQueries.tableOrderItems,
+      select:
+          'order_id, product_name, qty, quantity, subtotal, total, tax, tax_rate, tax_mode, status',
+      column: 'order_id',
+      values: completedOrderIds,
+    );
+    final orders = await _selectInBatches(
+      table: ReportsQueries.tableOrders,
+      select: 'id, subtotal, service_fee, total, status_ext',
+      column: 'id',
+      values: completedOrderIds,
+    );
+
+    final taxesByRate = <String, Map<String, dynamic>>{};
+    for (final tax in taxes) {
+      final rate = _toDouble(tax['rate']);
+      taxesByRate[rate.toStringAsFixed(4)] = tax;
+    }
+
+    double totalTaxCollected = 0;
+    double totalServiceFee = 0;
+    double taxableSales = 0;
+    double exemptSales = 0;
+    double grossSalesWithTax = 0;
+    double totalQuantity = 0;
+    double serviceFeeBaseTotal = 0;
+    int serviceFeeOrdersCount = 0;
+    final breakdown = <String, Map<String, dynamic>>{};
+
+    for (final item in items) {
+      final status = item['status']?.toString();
+      if (status == 'void') continue;
+
+      final taxAmount = _toDouble(item['tax']);
+      final taxRate = _toDouble(item['tax_rate']);
+      final subtotal = _toDouble(item['subtotal']);
+      final total = _toDouble(item['total']);
+      final qty = _toDouble(item['qty'] ?? item['quantity']);
+
+      grossSalesWithTax += total;
+      totalQuantity += qty;
+
+      if (taxRate <= 0 || taxAmount <= 0) {
+        exemptSales += subtotal;
+        continue;
+      }
+
+      taxableSales += subtotal;
+      totalTaxCollected += taxAmount;
+
+      final rateKey = taxRate.toStringAsFixed(4);
+      final taxConfig = taxesByRate[rateKey];
+      final label = taxConfig?['name']?.toString().trim().isNotEmpty == true
+          ? taxConfig!['name'].toString().trim()
+          : 'Impuesto ${taxRate.toStringAsFixed(2)}%';
+
+      final bucket = breakdown.putIfAbsent(
+        rateKey,
+        () => {
+          'label': label,
+          'rate': taxRate,
+          'amount': 0.0,
+          'taxable_amount': 0.0,
+          'gross_amount': 0.0,
+          'quantity': 0.0,
+          'count': 0,
+        },
+      );
+      bucket['amount'] = _toDouble(bucket['amount']) + taxAmount;
+      bucket['taxable_amount'] = _toDouble(bucket['taxable_amount']) + subtotal;
+      bucket['gross_amount'] = _toDouble(bucket['gross_amount']) + total;
+      bucket['quantity'] = _toDouble(bucket['quantity']) + qty;
+      bucket['count'] = (bucket['count'] as int) + 1;
+    }
+
+    for (final order in orders) {
+      final status = order['status_ext']?.toString().trim().toLowerCase();
+      if (status == 'void' || status == 'cancelled') continue;
+
+      final serviceFee = _toDouble(order['service_fee']);
+      if (serviceFee <= 0) continue;
+
+      totalServiceFee += serviceFee;
+      serviceFeeOrdersCount += 1;
+
+      final inferredBase = serviceFeeEnabled && serviceFeeRate > 0
+          ? serviceFee / (serviceFeeRate / 100.0)
+          : _toDouble(order['subtotal']);
+      serviceFeeBaseTotal += inferredBase;
+    }
+
+    if (totalServiceFee > 0) {
+      final serviceRate = serviceFeeEnabled ? serviceFeeRate : 0.0;
+      breakdown['__service_fee__'] = {
+        'label': 'Propina de ley',
+        'rate': serviceRate,
+        'amount': totalServiceFee,
+        'taxable_amount': serviceFeeBaseTotal,
+        'gross_amount': serviceFeeBaseTotal + totalServiceFee,
+        'quantity': serviceFeeOrdersCount.toDouble(),
+        'count': serviceFeeOrdersCount,
+      };
+    }
+
+    final breakdownRows = breakdown.values.toList(
+      growable: false,
+    )..sort((a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])));
+
+    final effectiveRate = taxableSales <= 0
+        ? 0.0
+        : (totalTaxCollected / taxableSales) * 100;
+    final totalChargesCollected = totalTaxCollected + totalServiceFee;
+
+    return {
+      'from': fromIso,
+      'to': toIso,
+      'configured_taxes_count': taxes.length,
+      'active_taxes_count': taxes
+          .where((tax) => tax['is_active'] == true)
+          .length,
+      'taxed_items_count': breakdownRows.fold<int>(
+        0,
+        (sum, row) => sum + ((row['count'] as int?) ?? 0),
+      ),
+      'items_quantity': totalQuantity,
+      'gross_sales': grossSalesWithTax,
+      'taxable_sales': taxableSales,
+      'exempt_sales': exemptSales,
+      'total_tax_collected': totalTaxCollected,
+      'total_service_fee': totalServiceFee,
+      'service_fee_rate': serviceFeeRate,
+      'service_fee_orders_count': serviceFeeOrdersCount,
+      'service_fee_base_total': serviceFeeBaseTotal,
+      'total_charges_collected': totalChargesCollected,
+      'effective_tax_rate': effectiveRate,
+      'tax_breakdown': breakdownRows,
     };
   }
 
@@ -435,14 +698,12 @@ class ReportsRepository {
         .whereType<String>()
         .toList(growable: false);
 
-    final stockRows = itemIds.isEmpty
-        ? <Map<String, dynamic>>[]
-        : List<Map<String, dynamic>>.from(
-            await _client
-                .from(ReportsQueries.tableInventoryStock)
-                .select('item_id, quantity')
-                .inFilter('item_id', itemIds),
-          );
+    final stockRows = await _selectInBatches(
+      table: ReportsQueries.tableInventoryStock,
+      select: 'item_id, quantity',
+      column: 'item_id',
+      values: itemIds,
+    );
 
     final fromIso = AppTime.astToUtcIso(from);
     final toIso = AppTime.astToUtcIso(to);

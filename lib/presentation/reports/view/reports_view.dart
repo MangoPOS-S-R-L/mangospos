@@ -213,6 +213,10 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
       return _PurchasesReportSection(state: state, viewModel: viewModel);
     }
 
+    if (state.selectedCategory == ReportCategory.taxes) {
+      return _TaxReportSection(state: state, viewModel: viewModel);
+    }
+
     return state.selectedCategory == null
         ? _buildGrid(context, viewModel)
         : _buildReportList(context, viewModel, state.selectedCategory!);
@@ -922,6 +926,73 @@ class _PurchasesReportSection extends StatelessWidget {
               ],
             );
           },
+        ),
+      ],
+    );
+  }
+}
+
+class _TaxReportSection extends StatelessWidget {
+  const _TaxReportSection({required this.state, required this.viewModel});
+
+  final ReportsState state;
+  final ReportsViewModel viewModel;
+
+  @override
+  Widget build(BuildContext context) {
+    final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
+    final metrics = viewModel.getTaxMetricCards();
+    final taxRows = viewModel.getTaxTypeRows();
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      children: [
+        const Text(
+          'Resumen de impuestos y propina de ley cobrados por tipo en el rango seleccionado.',
+          style: TextStyle(color: MangoColors.muted, fontSize: 15),
+        ),
+        if (state.error != null) ...[
+          const SizedBox(height: 16),
+          Text(state.error!, style: const TextStyle(color: Colors.redAccent)),
+        ],
+        const SizedBox(height: 20),
+        Wrap(
+          spacing: 16,
+          runSpacing: 16,
+          children: metrics
+              .map(
+                (metric) => SizedBox(
+                  width: 250,
+                  child: _MetricCard(
+                    title: metric.title,
+                    value: metric.value,
+                    subtitle: metric.subtitle,
+                    icon: metric.icon,
+                    color: metric.color,
+                  ),
+                ),
+              )
+              .toList(),
+        ),
+        const SizedBox(height: 24),
+        _ChartCard(
+          title: 'Impuestos y ley por tipo',
+          rows: taxRows,
+          color: const Color(0xFFB45309),
+        ),
+        const SizedBox(height: 16),
+        _BreakdownCard(
+          title: 'Detalle por tipo de impuesto o ley',
+          emptyText: 'No hay impuestos o propina de ley generados en el rango.',
+          children: taxRows
+              .map(
+                (row) => _AmountRow(
+                  label: row.label,
+                  trailing:
+                      '${currency.format(row.amount)} · Base ${currency.format(row.quantity)} · ${row.count} items',
+                ),
+              )
+              .toList(),
         ),
       ],
     );
