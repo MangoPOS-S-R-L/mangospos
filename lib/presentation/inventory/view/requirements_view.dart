@@ -3,6 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../viewmodel/inventory_viewmodel.dart';
+import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_radius.dart';
+import '../../../core/theme/app_shadows.dart';
 
 class RequirementsView extends ConsumerStatefulWidget {
   const RequirementsView({super.key});
@@ -25,10 +28,10 @@ class _RequirementsViewState extends ConsumerState<RequirementsView> {
     final state = ref.watch(inventoryViewModelProvider).state;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: AppColors.background,
       appBar: AppBar(title: const Text('Kardex de inventario')),
       body: state.loading && state.movements.isEmpty
-          ? const Center(child: CircularProgressIndicator())
+          ? Center(child: CircularProgressIndicator(color: AppColors.primary))
           : ListView.separated(
               padding: const EdgeInsets.all(24),
               itemCount: state.movements.length,
@@ -39,21 +42,22 @@ class _RequirementsViewState extends ConsumerState<RequirementsView> {
                 return Container(
                   padding: const EdgeInsets.all(18),
                   decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: const Color(0xFFE2E8F0)),
+                    color: AppColors.card,
+                    borderRadius: BorderRadius.circular(AppRadius.card),
+                    border: Border.all(color: AppColors.border),
+                    boxShadow: AppShadows.soft,
                   ),
                   child: Row(
                     children: [
                       CircleAvatar(
                         backgroundColor: isOutflow
-                            ? const Color(0xFFFEE2E2)
-                            : const Color(0xFFDCFCE7),
+                            ? AppColors.destructive.withValues(alpha:0.1)
+                            : AppColors.success.withValues(alpha:0.1),
                         child: Icon(
                           isOutflow ? Icons.south_west : Icons.north_east,
                           color: isOutflow
-                              ? const Color(0xFFB91C1C)
-                              : const Color(0xFF15803D),
+                              ? AppColors.destructive
+                              : AppColors.success,
                         ),
                       ),
                       const SizedBox(width: 14),
@@ -63,23 +67,23 @@ class _RequirementsViewState extends ConsumerState<RequirementsView> {
                           children: [
                             Text(
                               movement.itemName,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 15,
                                 fontWeight: FontWeight.w700,
-                                color: Color(0xFF0F172A),
+                                color: AppColors.foreground,
                               ),
                             ),
                             const SizedBox(height: 4),
                             Text(
                               '${movement.warehouseName} · ${movement.movementType}',
-                              style: const TextStyle(color: Color(0xFF64748B)),
+                              style: TextStyle(color: AppColors.mutedForeground),
                             ),
                             if (movement.notes.isNotEmpty) ...[
                               const SizedBox(height: 4),
                               Text(
                                 movement.notes,
-                                style: const TextStyle(
-                                  color: Color(0xFF64748B),
+                                style: TextStyle(
+                                  color: AppColors.mutedForeground,
                                 ),
                               ),
                             ],
@@ -95,8 +99,8 @@ class _RequirementsViewState extends ConsumerState<RequirementsView> {
                               fontSize: 16,
                               fontWeight: FontWeight.w800,
                               color: isOutflow
-                                  ? const Color(0xFFB91C1C)
-                                  : const Color(0xFF15803D),
+                                  ? AppColors.destructive
+                                  : AppColors.success,
                             ),
                           ),
                           const SizedBox(height: 4),
@@ -104,9 +108,9 @@ class _RequirementsViewState extends ConsumerState<RequirementsView> {
                             DateFormat(
                               'dd/MM/yyyy HH:mm',
                             ).format(movement.createdAt),
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 12,
-                              color: Color(0xFF94A3B8),
+                              color: AppColors.mutedForeground,
                             ),
                           ),
                         ],

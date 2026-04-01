@@ -3,6 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/inventory_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
+import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_radius.dart';
+import '../../../core/theme/app_shadows.dart';
 
 class StockReconciliationView extends ConsumerStatefulWidget {
   const StockReconciliationView({super.key});
@@ -27,10 +30,10 @@ class _StockReconciliationViewState
     final state = ref.watch(inventoryViewModelProvider).state;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: AppColors.background,
       appBar: AppBar(title: const Text('Conciliacion de stock')),
       body: state.loading && state.items.isEmpty
-          ? const Center(child: CircularProgressIndicator())
+          ? Center(child: CircularProgressIndicator(color: AppColors.primary))
           : ListView.separated(
               padding: const EdgeInsets.all(24),
               itemCount: state.items.length,
@@ -40,9 +43,10 @@ class _StockReconciliationViewState
                 return Container(
                   padding: const EdgeInsets.all(18),
                   decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: const Color(0xFFE2E8F0)),
+                    color: AppColors.card,
+                    borderRadius: BorderRadius.circular(AppRadius.card),
+                    border: Border.all(color: AppColors.border),
+                    boxShadow: AppShadows.soft,
                   ),
                   child: Row(
                     children: [
@@ -52,16 +56,16 @@ class _StockReconciliationViewState
                           children: [
                             Text(
                               item.name,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w700,
-                                color: Color(0xFF0F172A),
+                                color: AppColors.foreground,
                               ),
                             ),
                             const SizedBox(height: 6),
                             Text(
                               'Actual: ${item.stock.toStringAsFixed(2)} ${item.unit} · Minimo: ${item.minStock.toStringAsFixed(2)}',
-                              style: const TextStyle(color: Color(0xFF64748B)),
+                              style: TextStyle(color: AppColors.mutedForeground),
                             ),
                           ],
                         ),
@@ -92,6 +96,8 @@ class _StockReconciliationViewState
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
+        backgroundColor: AppColors.card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.card)),
         title: Text('Ajustar ${item.name}'),
         content: SizedBox(
           width: 380,
@@ -106,7 +112,7 @@ class _StockReconciliationViewState
                 decoration: InputDecoration(
                   labelText: 'Stock contado',
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(AppRadius.card),
                   ),
                 ),
               ),
@@ -117,7 +123,7 @@ class _StockReconciliationViewState
                 decoration: InputDecoration(
                   labelText: 'Notas',
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(AppRadius.card),
                   ),
                 ),
               ),

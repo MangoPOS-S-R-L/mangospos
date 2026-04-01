@@ -5,6 +5,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/router/routes.dart';
+import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_radius.dart';
+import '../../../core/theme/app_shadows.dart';
+import '../../../core/theme/app_spacing.dart';
 import '../../../data/models/payment_models.dart';
 import '../../../data/models/sales_models.dart';
 import '../state/payment_state.dart';
@@ -86,7 +90,7 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
                   ? 'Pago guardado offline. Queda pendiente de sincronizar.'
                   : 'Pago procesado exitosamente${state.fiscalDocument != null ? " - NCF: ${state.fiscalDocument!.ncfNumber}" : ""}',
             ),
-            backgroundColor: const Color(0xFF22C55E),
+            backgroundColor: AppColors.success,
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -94,61 +98,64 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
     }
 
     return Dialog(
-      backgroundColor: Colors.grey[50], // Fondo sutil
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      backgroundColor: AppColors.background,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.lg)),
       child: Container(
         width: 1100,
         height: 850,
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(AppSpacing.xxl),
         child: state.loading
-            ? const Center(child: CircularProgressIndicator())
+            ? Center(
+                child: CircularProgressIndicator(color: AppColors.primary))
             : Column(
                 children: [
                   _buildHeader(context, totalToPay),
                   const Divider(height: 32),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: AppSpacing.sm),
 
-                  // Tabs de División (Opcional, si aplica)
+                  // Tabs de Divisi\u00f3n
                   Row(
                     children: [
                       Expanded(
                         child: _TabButton(
                           label: 'Pago Completo',
                           active: widget.check == null,
-                          onTap: () {}, // Lógica de tabs
+                          onTap: () {},
                         ),
                       ),
-                      const SizedBox(width: 16),
+                      const SizedBox(width: AppSpacing.lg),
                       Expanded(
                         child: _TabButton(
                           label: 'Dividir Cuenta',
                           active: widget.check != null,
-                          onTap: () {}, // Lógica de tabs
+                          onTap: () {},
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: AppSpacing.xxl),
 
                   // Mensajes de Error
                   if (state.offlineQueued)
                     Container(
-                      padding: const EdgeInsets.all(12),
-                      margin: const EdgeInsets.only(bottom: 16),
+                      padding: const EdgeInsets.all(AppSpacing.md),
+                      margin: const EdgeInsets.only(bottom: AppSpacing.lg),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFFFF7ED),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: const Color(0xFFF59E0B)),
+                        color: AppColors.warningBg,
+                        borderRadius: BorderRadius.circular(AppRadius.button),
+                        border: Border.all(color: AppColors.warning),
                       ),
-                      child: const Row(
+                      child: Row(
                         children: [
-                          Icon(Icons.cloud_off_rounded, color: Color(0xFFF59E0B)),
-                          SizedBox(width: 12),
+                          Icon(Icons.cloud_off_rounded,
+                              color: AppColors.warning),
+                          const SizedBox(width: AppSpacing.md),
                           Expanded(
                             child: Text(
-                              'Pago guardado localmente. Se sincronizará cuando vuelva la conexión.',
+                              'Pago guardado localmente. Se sincronizar\u00e1 cuando vuelva la conexi\u00f3n.',
                               style: TextStyle(
-                                color: Color(0xFF92400E),
+                                color: AppColors.warning,
                                 fontWeight: FontWeight.w600,
                               ),
                             ),
@@ -158,34 +165,36 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
                     ),
                   if (state.error != null && !state.offlineQueued)
                     Container(
-                      padding: const EdgeInsets.all(12),
-                      margin: const EdgeInsets.only(bottom: 20),
+                      padding: const EdgeInsets.all(AppSpacing.md),
+                      margin: const EdgeInsets.only(bottom: AppSpacing.xl),
                       constraints: const BoxConstraints(maxHeight: 100),
                       decoration: BoxDecoration(
-                        color: Colors.red[50],
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.red[200]!),
+                        color: AppColors.destructive.withValues(alpha:0.06),
+                        borderRadius: BorderRadius.circular(AppRadius.button),
+                        border: Border.all(
+                            color: AppColors.destructive.withValues(alpha:0.2)),
                       ),
                       child: SingleChildScrollView(
                         child: Row(
                           children: [
-                            Icon(Icons.error_outline, color: Colors.red[700]),
-                            const SizedBox(width: 12),
+                            Icon(Icons.error_outline,
+                                color: AppColors.destructive),
+                            const SizedBox(width: AppSpacing.md),
                             Expanded(
                               child: Text(
                                 _cleanErrorMessage(state.error!),
                                 style: TextStyle(
-                                  color: Colors.red[900],
+                                  color: AppColors.destructive,
                                   fontWeight: FontWeight.w500,
                                 ),
                               ),
                             ),
                             if (needsCashSession) ...[
-                              const SizedBox(width: 12),
+                              const SizedBox(width: AppSpacing.md),
                               TextButton(
                                 onPressed: () => _goToCashier(context),
                                 style: TextButton.styleFrom(
-                                  foregroundColor: Colors.red[900],
+                                  foregroundColor: AppColors.destructive,
                                 ),
                                 child: const Text('IR A CAJA'),
                               ),
@@ -200,7 +209,6 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        // Columna Izquierda: Métodos y Totales
                         Expanded(
                           flex: 3,
                           child: Column(
@@ -212,10 +220,7 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
                             ],
                           ),
                         ),
-
                         const VerticalDivider(width: 48),
-
-                        // Columna Derecha: Entrada de Datos y Numpad
                         Expanded(
                           flex: 2,
                           child: _buildRightSide(state, viewModel),
@@ -224,9 +229,9 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
                     ),
                   ),
 
-                  const SizedBox(height: 24),
+                  const SizedBox(height: AppSpacing.xxl),
 
-                  // Botones de Acción
+                  // Botones de Acci\u00f3n
                   Row(
                     children: [
                       Expanded(
@@ -235,11 +240,12 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
                           child: OutlinedButton(
                             onPressed: () => Navigator.of(context).pop(),
                             style: OutlinedButton.styleFrom(
-                              side: BorderSide(color: Colors.grey[300]!),
+                              side: BorderSide(color: AppColors.border),
                               shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
+                                borderRadius:
+                                    BorderRadius.circular(AppRadius.lg),
                               ),
-                              foregroundColor: Colors.grey[800],
+                              foregroundColor: AppColors.foreground,
                             ),
                             child: const Text(
                               'Cancelar',
@@ -248,7 +254,7 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
                           ),
                         ),
                       ),
-                      const SizedBox(width: 16),
+                      const SizedBox(width: AppSpacing.lg),
                       Expanded(
                         flex: 2,
                         child: SizedBox(
@@ -258,12 +264,14 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
                                 ? () => viewModel.processPayment()
                                 : null,
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFFF26900),
+                              backgroundColor: AppColors.primary,
                               foregroundColor: Colors.white,
-                              disabledBackgroundColor: Colors.grey[300],
+                              disabledBackgroundColor:
+                                  AppColors.muted,
                               elevation: 2,
                               shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
+                                borderRadius:
+                                    BorderRadius.circular(AppRadius.lg),
                               ),
                             ),
                             child: const Text(
@@ -287,7 +295,7 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
 
   String _cleanErrorMessage(String error) {
     if (error.contains('fn_process_payment')) {
-      return 'Error de configuración: Función de pago no encontrada en base de datos.';
+      return 'Error de configuraci\u00f3n: Funci\u00f3n de pago no encontrada en base de datos.';
     }
     return error;
   }
@@ -301,32 +309,33 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: const Color(0xFFF26900).withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(12),
+                color: AppColors.primaryBg,
+                borderRadius: BorderRadius.circular(AppRadius.lg),
               ),
-              child: const Icon(
+              child: Icon(
                 Icons.wallet,
-                color: Color(0xFFF26900),
+                color: AppColors.primary,
                 size: 28,
               ),
             ),
-            const SizedBox(width: 16),
+            const SizedBox(width: AppSpacing.lg),
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
+                Text(
                   'Procesar Pago',
                   style: TextStyle(
                     fontSize: 22,
                     fontWeight: FontWeight.bold,
                     letterSpacing: -0.5,
+                    color: AppColors.foreground,
                   ),
                 ),
                 Text(
                   'Orden #${widget.order.id.substring(0, 8)}',
                   style: TextStyle(
                     fontSize: 14,
-                    color: Colors.grey[500],
+                    color: AppColors.mutedForeground,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
@@ -335,10 +344,11 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
           ],
         ),
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+          padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.xl, vertical: 10),
           decoration: BoxDecoration(
-            color: Colors.black,
-            borderRadius: BorderRadius.circular(30),
+            color: AppColors.foreground,
+            borderRadius: BorderRadius.circular(AppRadius.badge),
           ),
           child: Text(
             'RD\$ ${totalToPay.toStringAsFixed(2)}',
@@ -358,21 +368,25 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'MÉTODOS DE PAGO',
+          'M\u00c9TODOS DE PAGO',
           style: TextStyle(
             fontSize: 12,
             fontWeight: FontWeight.bold,
-            color: Colors.grey[500],
+            color: AppColors.mutedForeground,
             letterSpacing: 1,
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: AppSpacing.lg),
         if (state.paymentMethods.isEmpty)
-          const Center(child: Text('No hay métodos disponibles')),
-
+          Center(
+            child: Text(
+              'No hay m\u00e9todos disponibles',
+              style: TextStyle(color: AppColors.mutedForeground),
+            ),
+          ),
         Wrap(
-          spacing: 16,
-          runSpacing: 16,
+          spacing: AppSpacing.lg,
+          runSpacing: AppSpacing.lg,
           children: state.paymentMethods.map((method) {
             final isSelected = state.selectedMethod?.id == method.id;
             return _PaymentMethodButton(
@@ -395,37 +409,32 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
     final change = state.change;
 
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(AppSpacing.xl),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.grey.withValues(alpha: 0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-        border: Border.all(color: Colors.grey.shade100),
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        boxShadow: AppShadows.soft,
+        border: Border.all(color: AppColors.border.withValues(alpha:0.5)),
       ),
       child: Column(
         children: [
           _SummaryRow(label: 'Total General', value: total, isMain: true),
           const Divider(height: 24),
-          _SummaryRow(label: 'Recibido', value: paid, color: const Color(0xFF22C55E)),
-          const SizedBox(height: 8),
+          _SummaryRow(
+              label: 'Recibido', value: paid, color: AppColors.success),
+          const SizedBox(height: AppSpacing.sm),
           if (pending > 0)
             _SummaryRow(
               label: 'Pendiente',
               value: pending,
-              color: Colors.red[700],
+              color: AppColors.destructive,
               isBold: true,
             ),
           if (change > 0)
             _SummaryRow(
               label: 'Cambio',
               value: change,
-              color: const Color(0xFFF26900),
+              color: AppColors.primary,
               isBold: true,
             ),
         ],
@@ -437,8 +446,8 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
     if (state.selectedMethod == null) {
       return Center(
         child: Text(
-          'Selecciona un método',
-          style: TextStyle(color: Colors.grey[400]),
+          'Selecciona un m\u00e9todo',
+          style: TextStyle(color: AppColors.mutedForeground),
         ),
       );
     }
@@ -452,21 +461,21 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.bold,
-                color: Colors.grey[500],
+                color: AppColors.mutedForeground,
                 letterSpacing: 1,
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppSpacing.lg),
             TextField(
               decoration: InputDecoration(
-                hintText: 'Número de autorización / referencia',
+                hintText: 'N\u00famero de autorizaci\u00f3n / referencia',
                 filled: true,
-                fillColor: Colors.white,
+                fillColor: AppColors.card,
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(AppRadius.lg),
                   borderSide: BorderSide.none,
                 ),
-                contentPadding: const EdgeInsets.all(20),
+                contentPadding: const EdgeInsets.all(AppSpacing.xl),
               ),
               style: const TextStyle(fontSize: 18),
               onChanged: (value) => viewModel.setReference(value),
@@ -477,20 +486,21 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
       return const SizedBox();
     }
 
-    // Lógica para Efectivo: Display + Chips + Numpad
+    // L\u00f3gica para Efectivo: Display + Chips + Numpad
     return Column(
       children: [
         // Display del Monto
         Container(
           width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+          padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.xxl, vertical: AppSpacing.xl),
           decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0xFFF26900), width: 1.5),
+            color: AppColors.card,
+            borderRadius: BorderRadius.circular(AppRadius.lg),
+            border: Border.all(color: AppColors.primary, width: 1.5),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFFF26900).withValues(alpha: 0.05),
+                color: AppColors.primary.withValues(alpha:0.05),
                 blurRadius: 15,
                 offset: const Offset(0, 4),
               ),
@@ -503,24 +513,24 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
                 'Monto Recibido',
                 style: TextStyle(
                   fontSize: 12,
-                  color: Colors.grey[600],
+                  color: AppColors.mutedForeground,
                   fontWeight: FontWeight.w600,
                 ),
               ),
               Text(
                 'RD\$ ${state.amountReceived.toStringAsFixed(2)}',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 32,
                   fontWeight: FontWeight.w800,
-                  color: Color(0xFF2D3142),
+                  color: AppColors.foreground,
                 ),
               ),
             ],
           ),
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: AppSpacing.xl),
 
-        // Chips de Montos Rápidos
+        // Chips de Montos R\u00e1pidos
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           child: Row(
@@ -529,17 +539,17 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
                 amount: 50,
                 onTap: () => viewModel.addToAmountReceived(50),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: AppSpacing.sm),
               _QuickAmountButton(
                 amount: 100,
                 onTap: () => viewModel.addToAmountReceived(100),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: AppSpacing.sm),
               _QuickAmountButton(
                 amount: 500,
                 onTap: () => viewModel.addToAmountReceived(500),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: AppSpacing.sm),
               _QuickAmountButton(
                 amount: 1000,
                 onTap: () => viewModel.addToAmountReceived(1000),
@@ -547,7 +557,7 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
             ],
           ),
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: AppSpacing.xl),
 
         // Numpad
         Expanded(
@@ -555,7 +565,6 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
             child: _Numpad(
               onNumberTap: (digit) {
                 final current = state.amountReceived;
-                // Evitar decimales extraños o longitud excesiva
                 if (current > 999999) return;
 
                 final isDec = current % 1 != 0;
@@ -563,7 +572,6 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
                     ? current.toString()
                     : current.toInt().toString();
 
-                // Simple concat logic
                 if (str == '0') {
                   viewModel.setAmountReceived(double.parse(digit));
                 } else {
@@ -576,10 +584,7 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
               onClear: () => viewModel.clearAmountReceived(),
               onBackspace: () {
                 final str = state.amountReceived.toString();
-                // Lógica simple de borrado (truncado)
-                // Nota: Manejo robusto de decimales requeriría gestión de estado de string
                 if (str.length > 1) {
-                  // Hack rápido para borrado visual
                   final s = str.endsWith('.0')
                       ? str.substring(0, str.length - 2)
                       : str;
@@ -621,23 +626,23 @@ class _PaymentMethodButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(AppRadius.lg),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         width: 140,
         height: 100,
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(AppSpacing.lg),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFFFFF3E0) : Colors.white,
-          borderRadius: BorderRadius.circular(16),
+          color: isSelected ? AppColors.primaryBg : AppColors.card,
+          borderRadius: BorderRadius.circular(AppRadius.lg),
           border: Border.all(
-            color: isSelected ? const Color(0xFFF26900) : Colors.grey.shade200,
+            color: isSelected ? AppColors.primary : AppColors.border,
             width: isSelected ? 2 : 1.5,
           ),
           boxShadow: isSelected
               ? [
                   BoxShadow(
-                    color: const Color(0xFFF26900).withValues(alpha: 0.15),
+                    color: AppColors.primary.withValues(alpha:0.15),
                     blurRadius: 8,
                     offset: const Offset(0, 4),
                   ),
@@ -650,16 +655,17 @@ class _PaymentMethodButton extends StatelessWidget {
             Icon(
               _getIcon(),
               size: 32,
-              color: isSelected ? const Color(0xFFF26900) : Colors.grey[600],
+              color: isSelected ? AppColors.primary : AppColors.mutedForeground,
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.sm),
             Text(
               method.name,
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                color: isSelected ? const Color(0xFFF26900) : Colors.grey[700],
+                color:
+                    isSelected ? AppColors.primary : AppColors.mutedForeground,
               ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -687,22 +693,23 @@ class _QuickAmountButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(30),
+      color: AppColors.card,
+      borderRadius: BorderRadius.circular(AppRadius.badge),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(30),
+        borderRadius: BorderRadius.circular(AppRadius.badge),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.lg, vertical: 10),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(30),
-            border: Border.all(color: Colors.grey.shade300),
+            borderRadius: BorderRadius.circular(AppRadius.badge),
+            border: Border.all(color: AppColors.border),
           ),
           child: Text(
             '+${amount.toInt()}',
             style: TextStyle(
               fontWeight: FontWeight.bold,
-              color: Colors.grey[700],
+              color: AppColors.foreground,
             ),
           ),
         ),
@@ -726,8 +733,8 @@ class _Numpad extends StatelessWidget {
   Widget build(BuildContext context) {
     return GridView.count(
       crossAxisCount: 3,
-      mainAxisSpacing: 12,
-      crossAxisSpacing: 12,
+      mainAxisSpacing: AppSpacing.md,
+      crossAxisSpacing: AppSpacing.md,
       childAspectRatio: 1.6,
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
@@ -743,7 +750,7 @@ class _Numpad extends StatelessWidget {
         _NumpadButton(label: '9', onTap: () => onNumberTap('9')),
         _NumpadButton(label: 'C', onTap: onClear, isAction: true),
         _NumpadButton(label: '0', onTap: () => onNumberTap('0')),
-        _NumpadButton(label: '⌫', onTap: onBackspace, isAction: true),
+        _NumpadButton(label: '\u232b', onTap: onBackspace, isAction: true),
       ],
     );
   }
@@ -763,16 +770,16 @@ class _NumpadButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: isAction ? Colors.grey[100] : Colors.white,
-      borderRadius: BorderRadius.circular(16),
+      color: isAction ? AppColors.secondary : AppColors.card,
+      borderRadius: BorderRadius.circular(AppRadius.lg),
       elevation: isAction ? 0 : 1,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(AppRadius.lg),
         child: Container(
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            border: isAction ? null : Border.all(color: Colors.grey.shade200),
+            borderRadius: BorderRadius.circular(AppRadius.lg),
+            border: isAction ? null : Border.all(color: AppColors.border),
           ),
           alignment: Alignment.center,
           child: Text(
@@ -780,7 +787,7 @@ class _NumpadButton extends StatelessWidget {
             style: TextStyle(
               fontSize: 24,
               fontWeight: isAction ? FontWeight.w600 : FontWeight.w500,
-              color: isAction ? Colors.red[400] : Colors.grey[800],
+              color: isAction ? AppColors.destructive : AppColors.foreground,
             ),
           ),
         ),
@@ -814,7 +821,7 @@ class _SummaryRow extends StatelessWidget {
           style: TextStyle(
             fontSize: isMain ? 18 : 15,
             fontWeight: (isBold || isMain) ? FontWeight.bold : FontWeight.w500,
-            color: isMain ? Colors.black : Colors.grey[600],
+            color: isMain ? AppColors.foreground : AppColors.mutedForeground,
           ),
         ),
         Text(
@@ -822,7 +829,7 @@ class _SummaryRow extends StatelessWidget {
           style: TextStyle(
             fontSize: isMain ? 20 : 16,
             fontWeight: FontWeight.bold,
-            color: color ?? Colors.black,
+            color: color ?? AppColors.foreground,
           ),
         ),
       ],
@@ -845,22 +852,22 @@ class _TabButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(AppRadius.lg),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         height: 50,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: active ? Colors.black : Colors.white,
-          borderRadius: BorderRadius.circular(12),
+          color: active ? AppColors.foreground : AppColors.card,
+          borderRadius: BorderRadius.circular(AppRadius.lg),
           border: Border.all(
-            color: active ? Colors.black : Colors.grey.shade300,
+            color: active ? AppColors.foreground : AppColors.border,
           ),
         ),
         child: Text(
           label,
           style: TextStyle(
-            color: active ? Colors.white : Colors.grey[600],
+            color: active ? Colors.white : AppColors.mutedForeground,
             fontWeight: FontWeight.w600,
             fontSize: 15,
           ),

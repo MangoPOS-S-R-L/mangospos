@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:mangopos/data/repositories/printing_repository.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
 import 'package:mangopos/presentation/cashier/state/blind_cash_close_models.dart';
@@ -136,13 +137,20 @@ class CashClosePrintService {
         .where((p) => p.isActive)
         .toList(growable: false);
 
-    final printer = preferredPrinter != null && preferredPrinter.isActive
-        ? preferredPrinter
-        : (activePrinters.isNotEmpty ? activePrinters.first : null);
+    // Para cierre de caja debe tener prioridad la impresora explícitamente
+    // asignada al área de cierre, aunque el flag `online` no esté actualizado.
+    final printer = preferredPrinter ??
+        (activePrinters.isNotEmpty ? activePrinters.first : null);
 
     if (printer == null) {
       throw Exception(
-        'No hay una impresora activa configurada para imprimir el cierre de caja.',
+        'No hay una impresora configurada para imprimir el cierre de caja.',
+      );
+    }
+
+    if (kIsWeb && printer.isUSB) {
+      throw Exception(
+        'El cierre está asignado a una impresora USB, pero este flujo se está ejecutando en la Web. Para cierre desde Web usa una impresora de red o ejecuta la app local de Windows.',
       );
     }
 

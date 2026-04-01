@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mangopos/core/theme/app_colors.dart';
+import 'package:mangopos/core/theme/app_radius.dart';
+import 'package:mangopos/core/theme/app_spacing.dart';
 import 'package:mangopos/presentation/customers/viewmodel/customers_viewmodel.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 
@@ -51,9 +54,9 @@ class _CustomersViewState extends ConsumerState<CustomersView> {
     }
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.background,
       body: Padding(
-        padding: const EdgeInsets.all(24.0),
+        padding: const EdgeInsets.all(AppSpacing.xxl),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -63,10 +66,10 @@ class _CustomersViewState extends ConsumerState<CustomersView> {
               style: TextStyle(
                 fontSize: 24,
                 fontWeight: FontWeight.bold,
-                color: Color(0xFF111827),
+                color: AppColors.foreground,
               ),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: AppSpacing.xxl),
 
             // Toolbar
             Row(
@@ -78,51 +81,55 @@ class _CustomersViewState extends ConsumerState<CustomersView> {
                     decoration: InputDecoration(
                       hintText:
                           'Buscar por nombre, correo o número de teléfono',
-                      prefixIcon: const Icon(Icons.search, color: Colors.grey),
+                      prefixIcon: const Icon(Icons.search, color: AppColors.mutedForeground),
                       border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(color: Colors.grey.shade300),
+                        borderRadius: BorderRadius.circular(AppRadius.button),
+                        borderSide: const BorderSide(color: AppColors.border),
                       ),
                       enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(color: Colors.grey.shade300),
+                        borderRadius: BorderRadius.circular(AppRadius.button),
+                        borderSide: const BorderSide(color: AppColors.border),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(AppRadius.button),
+                        borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
                       ),
                       contentPadding: const EdgeInsets.symmetric(
                         vertical: 0,
-                        horizontal: 16,
+                        horizontal: AppSpacing.lg,
                       ),
                     ),
                   ),
                 ),
-                const SizedBox(width: 16),
+                const SizedBox(width: AppSpacing.lg),
                 OutlinedButton.icon(
                   onPressed: () {},
                   icon: const Icon(Icons.file_upload_outlined, size: 18),
                   label: const Text('Importar'),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.black87,
-                    side: BorderSide(color: Colors.grey.shade300),
+                    foregroundColor: AppColors.foreground,
+                    side: const BorderSide(color: AppColors.border),
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 16,
+                      horizontal: AppSpacing.lg,
+                      vertical: AppSpacing.lg,
                     ),
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: AppSpacing.md),
                 OutlinedButton.icon(
                   onPressed: () {},
                   icon: const Icon(Icons.download_outlined, size: 18),
                   label: const Text('Exportar'),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.black87,
-                    side: BorderSide(color: Colors.grey.shade300),
+                    foregroundColor: AppColors.foreground,
+                    side: const BorderSide(color: AppColors.border),
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 16,
+                      horizontal: AppSpacing.lg,
+                      vertical: AppSpacing.lg,
                     ),
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: AppSpacing.md),
                 ElevatedButton(
                   onPressed: () {
                     showDialog(
@@ -131,17 +138,15 @@ class _CustomersViewState extends ConsumerState<CustomersView> {
                     );
                   },
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFE0D4FC), // Light purple
-                    foregroundColor: const Color(
-                      0xFF6D28D9,
-                    ), // Darker purple text
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
                     elevation: 0,
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 16,
+                      horizontal: AppSpacing.xl,
+                      vertical: AppSpacing.lg,
                     ),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(AppRadius.button),
                     ),
                   ),
                   child: const Text(
@@ -151,14 +156,14 @@ class _CustomersViewState extends ConsumerState<CustomersView> {
                 ),
               ],
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: AppSpacing.xxl),
 
             // Table Header
             Container(
-              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+              padding: const EdgeInsets.symmetric(vertical: AppSpacing.md, horizontal: AppSpacing.lg),
               decoration: BoxDecoration(
-                color: const Color(0xFFF3F4F6),
-                borderRadius: BorderRadius.circular(4),
+                color: AppColors.secondary,
+                borderRadius: BorderRadius.circular(AppRadius.sm),
               ),
               child: const Row(
                 children: [
@@ -169,7 +174,7 @@ class _CustomersViewState extends ConsumerState<CustomersView> {
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 12,
-                        color: Colors.grey,
+                        color: AppColors.mutedForeground,
                       ),
                     ),
                   ),
@@ -180,7 +185,7 @@ class _CustomersViewState extends ConsumerState<CustomersView> {
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 12,
-                        color: Colors.grey,
+                        color: AppColors.mutedForeground,
                       ),
                     ),
                   ),
@@ -191,7 +196,7 @@ class _CustomersViewState extends ConsumerState<CustomersView> {
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 12,
-                        color: Colors.grey,
+                        color: AppColors.mutedForeground,
                       ),
                     ),
                   ),
@@ -202,7 +207,7 @@ class _CustomersViewState extends ConsumerState<CustomersView> {
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 12,
-                        color: Colors.grey,
+                        color: AppColors.mutedForeground,
                       ),
                     ),
                   ),
@@ -213,7 +218,7 @@ class _CustomersViewState extends ConsumerState<CustomersView> {
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 12,
-                        color: Colors.grey,
+                        color: AppColors.mutedForeground,
                       ),
                       textAlign: TextAlign.right,
                     ),
@@ -225,20 +230,41 @@ class _CustomersViewState extends ConsumerState<CustomersView> {
             // Table Body
             Expanded(
               child: isLoading
-                  ? const Center(child: CircularProgressIndicator())
+                  ? const Center(
+                      child: CircularProgressIndicator(
+                        color: AppColors.primary,
+                      ),
+                    )
                   : customers.isEmpty
-                  ? const Center(child: Text('No hay clientes'))
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.people_outline,
+                              size: 48,
+                              color: AppColors.mutedForeground.withValues(alpha: 0.5)),
+                          const SizedBox(height: AppSpacing.md),
+                          const Text(
+                            'No hay clientes',
+                            style: TextStyle(
+                              color: AppColors.mutedForeground,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
                   : ListView.separated(
                       itemCount: customers.length,
                       separatorBuilder: (context, index) =>
-                          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+                          const Divider(height: 1, color: AppColors.border),
                       itemBuilder: (context, index) {
                         final customer = customers[index];
                         final name = customer['name'] ?? 'Sin Nombre';
                         return Padding(
                           padding: const EdgeInsets.symmetric(
-                            vertical: 12,
-                            horizontal: 16,
+                            vertical: AppSpacing.md,
+                            horizontal: AppSpacing.lg,
                           ),
                           child: Row(
                             children: [
@@ -248,6 +274,7 @@ class _CustomersViewState extends ConsumerState<CustomersView> {
                                   name,
                                   style: const TextStyle(
                                     fontWeight: FontWeight.w500,
+                                    color: AppColors.foreground,
                                   ),
                                 ),
                               ),
@@ -255,14 +282,14 @@ class _CustomersViewState extends ConsumerState<CustomersView> {
                                 flex: 3,
                                 child: Text(
                                   customer['email'] ?? '--',
-                                  style: const TextStyle(color: Colors.black87),
+                                  style: const TextStyle(color: AppColors.mutedForeground),
                                 ),
                               ),
                               Expanded(
                                 flex: 2,
                                 child: Text(
                                   customer['phone'] ?? '--',
-                                  style: const TextStyle(color: Colors.black87),
+                                  style: const TextStyle(color: AppColors.mutedForeground),
                                 ),
                               ),
                               Expanded(
@@ -275,24 +302,24 @@ class _CustomersViewState extends ConsumerState<CustomersView> {
                                       },
                                       child: Container(
                                         padding: const EdgeInsets.symmetric(
-                                          horizontal: 8,
-                                          vertical: 4,
+                                          horizontal: AppSpacing.sm,
+                                          vertical: AppSpacing.xs,
                                         ),
                                         decoration: BoxDecoration(
-                                          color: Colors.grey.shade100,
+                                          color: AppColors.accent,
                                           borderRadius: BorderRadius.circular(
-                                            4,
+                                            AppRadius.sm,
                                           ),
                                           border: Border.all(
-                                            color: Colors.grey.shade300,
+                                            color: AppColors.border,
                                           ),
                                         ),
                                         child: const Text(
-                                          '0 PEDIDOS', // Placeholder until implemented
+                                          '0 PEDIDOS',
                                           style: TextStyle(
                                             fontSize: 11,
                                             fontWeight: FontWeight.bold,
-                                            color: Colors.black54,
+                                            color: AppColors.mutedForeground,
                                           ),
                                         ),
                                       ),
@@ -315,20 +342,20 @@ class _CustomersViewState extends ConsumerState<CustomersView> {
                                       ),
                                       label: const Text('Actualizar'),
                                       style: OutlinedButton.styleFrom(
-                                        foregroundColor: Colors.black87,
-                                        side: BorderSide(
-                                          color: Colors.grey.shade300,
+                                        foregroundColor: AppColors.foreground,
+                                        side: const BorderSide(
+                                          color: AppColors.border,
                                         ),
                                         padding: const EdgeInsets.symmetric(
-                                          horizontal: 12,
-                                          vertical: 8,
+                                          horizontal: AppSpacing.md,
+                                          vertical: AppSpacing.sm,
                                         ),
                                         textStyle: const TextStyle(
                                           fontSize: 12,
                                         ),
                                       ),
                                     ),
-                                    const SizedBox(width: 8),
+                                    const SizedBox(width: AppSpacing.sm),
                                     InkWell(
                                       onTap: () async {
                                         // Confirm Delete
@@ -337,22 +364,20 @@ class _CustomersViewState extends ConsumerState<CustomersView> {
                                             .deleteCustomer(customer['id']);
                                       },
                                       child: Container(
-                                        padding: const EdgeInsets.all(8),
+                                        padding: const EdgeInsets.all(AppSpacing.sm),
                                         decoration: BoxDecoration(
                                           border: Border.all(
-                                            color: const Color(
-                                              0xFFEF4444,
-                                            ).withOpacity(0.5),
+                                            color: AppColors.destructive.withValues(alpha:0.5),
                                           ),
                                           borderRadius: BorderRadius.circular(
-                                            4,
+                                            AppRadius.sm,
                                           ),
-                                          color: const Color(0xFFFEF2F2),
+                                          color: AppColors.destructive.withValues(alpha:0.05),
                                         ),
                                         child: const Icon(
                                           Icons.delete_outline,
                                           size: 16,
-                                          color: Color(0xFFEF4444),
+                                          color: AppColors.destructive,
                                         ),
                                       ),
                                     ),
@@ -399,9 +424,13 @@ class _AddCustomerDialogState extends ConsumerState<_AddCustomerDialog> {
       if (mounted) Navigator.of(context).pop();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Error al crear cliente'),
+            backgroundColor: AppColors.destructive,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
       }
     }
   }
@@ -409,57 +438,57 @@ class _AddCustomerDialogState extends ConsumerState<_AddCustomerDialog> {
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.card)),
       child: Container(
         width: 500,
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(AppSpacing.xxl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
               'Agregar Cliente',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.foreground),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: AppSpacing.xxl),
             _buildField(
               'Nombre del Cliente',
               'Agregar Nombre del Cliente',
               _nameController,
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppSpacing.lg),
             _buildField(
               'Correo Electrónico',
               'Agregar Correo del Cliente',
               _emailController,
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppSpacing.lg),
             _buildField(
               'Teléfono',
               'Agregar Teléfono del Cliente',
               _phoneController,
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppSpacing.lg),
             _buildField(
               'Dirección',
               'Agregar Dirección del Cliente',
               _addressController,
             ),
-            const SizedBox(height: 32),
+            const SizedBox(height: AppSpacing.xxxl),
             Row(
               children: [
                 ElevatedButton(
                   onPressed: _submit,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFE0D4FC),
-                    foregroundColor: const Color(0xFF6D28D9),
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
                     elevation: 0,
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 16,
+                      horizontal: AppSpacing.xxl,
+                      vertical: AppSpacing.lg,
                     ),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(AppRadius.button),
                     ),
                   ),
                   child: const Text(
@@ -467,18 +496,18 @@ class _AddCustomerDialogState extends ConsumerState<_AddCustomerDialog> {
                     style: TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ),
-                const SizedBox(width: 16),
+                const SizedBox(width: AppSpacing.lg),
                 OutlinedButton(
                   onPressed: () => Navigator.pop(context),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.black87,
-                    side: BorderSide(color: Colors.grey.shade300),
+                    foregroundColor: AppColors.foreground,
+                    side: const BorderSide(color: AppColors.border),
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 16,
+                      horizontal: AppSpacing.xxl,
+                      vertical: AppSpacing.lg,
                     ),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(AppRadius.button),
                     ),
                   ),
                   child: const Text('Cancelar'),
@@ -503,25 +532,29 @@ class _AddCustomerDialogState extends ConsumerState<_AddCustomerDialog> {
           label,
           style: const TextStyle(
             fontWeight: FontWeight.w600,
-            color: Color(0xFF374151),
+            color: AppColors.foreground,
           ),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: AppSpacing.sm),
         TextField(
           controller: controller,
           decoration: InputDecoration(
             hintText: placeholder,
-            hintStyle: TextStyle(color: Colors.grey.shade400),
+            hintStyle: const TextStyle(color: AppColors.mutedForeground),
             border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(color: Colors.grey.shade300),
+              borderRadius: BorderRadius.circular(AppRadius.button),
+              borderSide: const BorderSide(color: AppColors.border),
             ),
             enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(color: Colors.grey.shade300),
+              borderRadius: BorderRadius.circular(AppRadius.button),
+              borderSide: const BorderSide(color: AppColors.border),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(AppRadius.button),
+              borderSide: const BorderSide(color: AppColors.primary, width: 2),
             ),
             contentPadding: const EdgeInsets.symmetric(
-              horizontal: 16,
+              horizontal: AppSpacing.lg,
               vertical: 14,
             ),
           ),

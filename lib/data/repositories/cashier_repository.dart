@@ -114,10 +114,14 @@ class CashierRepository {
   }
 
   Future<Map<String, dynamic>?> getLastSession(String cashRegisterId) async {
+    final userId = _client.auth.currentUser?.id;
+    if (userId == null) return null;
+
     final response = await _client
         .from('cash_register_sessions')
         .select()
         .eq('cash_register_id', cashRegisterId)
+        .eq('user_id', userId)
         .order('created_at', ascending: false)
         .limit(1)
         .maybeSingle();

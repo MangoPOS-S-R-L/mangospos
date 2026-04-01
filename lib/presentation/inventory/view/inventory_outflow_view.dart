@@ -4,7 +4,9 @@ import 'package:intl/intl.dart';
 
 import '../state/inventory_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
-import '../../../app/theme/mango_colors.dart';
+import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_radius.dart';
+import '../../../core/theme/app_shadows.dart';
 
 class InventoryOutflowView extends ConsumerStatefulWidget {
   const InventoryOutflowView({super.key});
@@ -42,9 +44,9 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
     );
 
     return Scaffold(
-      backgroundColor: MangoColors.sidebarBg,
+      backgroundColor: AppColors.background,
       body: state.loading && state.items.isEmpty
-          ? const Center(child: CircularProgressIndicator())
+          ? Center(child: CircularProgressIndicator(color: AppColors.primary))
           : SingleChildScrollView(
               padding: const EdgeInsets.all(24),
               child: Column(
@@ -53,7 +55,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Column(
+                      Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
@@ -61,15 +63,15 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                             style: TextStyle(
                               fontSize: 28,
                               fontWeight: FontWeight.w800,
-                              color: MangoColors.darkGray,
+                              color: AppColors.foreground,
                             ),
                           ),
-                          SizedBox(height: 6),
+                          const SizedBox(height: 6),
                           Text(
                             'Insumos, stock actual y salidas manuales',
                             style: TextStyle(
                               fontSize: 14,
-                              color: MangoColors.muted,
+                              color: AppColors.mutedForeground,
                             ),
                           ),
                         ],
@@ -85,8 +87,8 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                             icon: const Icon(Icons.add_box_outlined),
                             label: const Text('Nuevo insumo'),
                             style: OutlinedButton.styleFrom(
-                              foregroundColor: MangoColors.primaryOrange,
-                              side: const BorderSide(color: MangoColors.primaryOrange),
+                              foregroundColor: AppColors.primary,
+                              side: BorderSide(color: AppColors.primary),
                             ),
                           ),
                           FilledButton.icon(
@@ -99,7 +101,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                             icon: const Icon(Icons.logout_rounded),
                             label: const Text('Registrar salida'),
                             style: FilledButton.styleFrom(
-                              backgroundColor: MangoColors.primaryOrange,
+                              backgroundColor: AppColors.primary,
                             ),
                           ),
                         ],
@@ -112,13 +114,13 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                       width: double.infinity,
                       padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFFEF2F2),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: const Color(0xFFFECACA)),
+                        color: AppColors.destructive.withValues(alpha:0.05),
+                        borderRadius: BorderRadius.circular(AppRadius.card),
+                        border: Border.all(color: AppColors.destructive.withValues(alpha:0.2)),
                       ),
                       child: Text(
                         state.error!,
-                        style: const TextStyle(color: Color(0xFF991B1B)),
+                        style: TextStyle(color: AppColors.destructive),
                       ),
                     ),
                     const SizedBox(height: 16),
@@ -135,10 +137,10 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                             hintText: 'Buscar por nombre, SKU o descripcion',
                             prefixIcon: const Icon(Icons.search),
                             border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
+                              borderRadius: BorderRadius.circular(AppRadius.card),
                             ),
                             filled: true,
-                            fillColor: Colors.white,
+                            fillColor: AppColors.card,
                           ),
                         ),
                       ),
@@ -151,10 +153,10 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                           decoration: InputDecoration(
                             labelText: 'Almacen',
                             border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
+                              borderRadius: BorderRadius.circular(AppRadius.card),
                             ),
                             filled: true,
-                            fillColor: Colors.white,
+                            fillColor: AppColors.card,
                           ),
                           items: state.warehouses
                               .map(
@@ -184,8 +186,8 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                   .refresh(),
                         icon: const Icon(Icons.refresh),
                         style: IconButton.styleFrom(
-                          backgroundColor: MangoColors.primaryOrange.withValues(alpha: 0.1),
-                          foregroundColor: MangoColors.primaryOrange,
+                          backgroundColor: AppColors.primary.withValues(alpha:0.1),
+                          foregroundColor: AppColors.primary,
                         ),
                       ),
                     ],
@@ -199,13 +201,13 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                         title: 'Insumos activos',
                         value:
                             '${state.items.where((item) => item.isActive).length}',
-                        color: MangoColors.primaryOrange,
+                        color: AppColors.primary,
                       ),
                       _SummaryCard(
                         title: 'Stock bajo',
                         value:
                             '${state.items.where((item) => item.isLowStock).length}',
-                        color: const Color(0xFFF59E0B),
+                        color: AppColors.warning,
                       ),
                       _SummaryCard(
                         title: 'Valor inventario',
@@ -215,21 +217,22 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                             (sum, item) => sum + (item.stock * item.cost),
                           ),
                         ),
-                        color: const Color(0xFF059669),
+                        color: AppColors.success,
                       ),
                     ],
                   ),
                   const SizedBox(height: 24),
                   Container(
                     decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: const Color(0xFFE2E8F0)),
+                      color: AppColors.card,
+                      borderRadius: BorderRadius.circular(AppRadius.card),
+                      border: Border.all(color: AppColors.border),
+                      boxShadow: AppShadows.cardElevated,
                     ),
                     child: Column(
                       children: [
-                        const Padding(
-                          padding: EdgeInsets.fromLTRB(20, 20, 20, 8),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
                           child: Row(
                             children: [
                               Expanded(
@@ -239,7 +242,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                   style: TextStyle(
                                     fontSize: 12,
                                     fontWeight: FontWeight.w800,
-                                    color: MangoColors.muted,
+                                    color: AppColors.mutedForeground,
                                   ),
                                 ),
                               ),
@@ -249,7 +252,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                   style: TextStyle(
                                     fontSize: 12,
                                     fontWeight: FontWeight.w800,
-                                    color: Color(0xFF64748B),
+                                    color: AppColors.mutedForeground,
                                   ),
                                 ),
                               ),
@@ -259,7 +262,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                   style: TextStyle(
                                     fontSize: 12,
                                     fontWeight: FontWeight.w800,
-                                    color: Color(0xFF64748B),
+                                    color: AppColors.mutedForeground,
                                   ),
                                 ),
                               ),
@@ -269,20 +272,30 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                   style: TextStyle(
                                     fontSize: 12,
                                     fontWeight: FontWeight.w800,
-                                    color: Color(0xFF64748B),
+                                    color: AppColors.mutedForeground,
                                   ),
                                 ),
                               ),
-                              SizedBox(width: 120),
+                              const SizedBox(width: 120),
                             ],
                           ),
                         ),
                         const Divider(height: 1),
                         if (state.items.isEmpty)
-                          const Padding(
-                            padding: EdgeInsets.all(32),
-                            child: Text(
-                              'No hay insumos registrados en este almacen.',
+                          Padding(
+                            padding: const EdgeInsets.all(32),
+                            child: Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.inventory_2_outlined, size: 32, color: AppColors.mutedForeground),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'No hay insumos registrados en este almacen.',
+                                    style: TextStyle(color: AppColors.mutedForeground),
+                                  ),
+                                ],
+                              ),
                             ),
                           )
                         else
@@ -309,10 +322,10 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                         children: [
                                           Text(
                                             item.name,
-                                            style: const TextStyle(
+                                            style: TextStyle(
                                               fontSize: 15,
                                               fontWeight: FontWeight.w700,
-                                              color: MangoColors.darkGray,
+                                              color: AppColors.foreground,
                                             ),
                                           ),
                                           const SizedBox(height: 4),
@@ -325,9 +338,9 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                             ].join(' · '),
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
-                                            style: const TextStyle(
+                                            style: TextStyle(
                                               fontSize: 13,
-                                              color: MangoColors.muted,
+                                              color: AppColors.mutedForeground,
                                             ),
                                           ),
                                         ],
@@ -339,8 +352,8 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                         style: TextStyle(
                                           fontWeight: FontWeight.w700,
                                           color: item.isLowStock
-                                              ? Colors.orange.shade700
-                                              : MangoColors.darkGray,
+                                              ? AppColors.warning
+                                              : AppColors.foreground,
                                         ),
                                       ),
                                     ),
@@ -379,8 +392,8 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                                     initialItem: item,
                                                   ),
                                             style: FilledButton.styleFrom(
-                                              backgroundColor: MangoColors.primaryOrange.withValues(alpha: 0.1),
-                                              foregroundColor: MangoColors.primaryOrange,
+                                              backgroundColor: AppColors.primary.withValues(alpha:0.1),
+                                              foregroundColor: AppColors.primary,
                                             ),
                                             child: const Text('Salida'),
                                           ),
@@ -396,25 +409,38 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                     ),
                   ),
                   const SizedBox(height: 24),
-                  const Text(
+                  Text(
                     'Ultimos movimientos',
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w700,
-                      color: MangoColors.darkGray,
+                      color: AppColors.foreground,
                     ),
                   ),
                   const SizedBox(height: 12),
                   Container(
                     decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: const Color(0xFFE2E8F0)),
+                      color: AppColors.card,
+                      borderRadius: BorderRadius.circular(AppRadius.card),
+                      border: Border.all(color: AppColors.border),
+                      boxShadow: AppShadows.cardElevated,
                     ),
                     child: state.movements.isEmpty
-                        ? const Padding(
-                            padding: EdgeInsets.all(24),
-                            child: Text('Sin movimientos recientes.'),
+                        ? Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.swap_vert_outlined, size: 32, color: AppColors.mutedForeground),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'Sin movimientos recientes.',
+                                    style: TextStyle(color: AppColors.mutedForeground),
+                                  ),
+                                ],
+                              ),
+                            ),
                           )
                         : ListView.separated(
                             shrinkWrap: true,
@@ -428,15 +454,15 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                               return ListTile(
                                 leading: CircleAvatar(
                                   backgroundColor: isOutflow
-                                      ? const Color(0xFFFFEDD5)
-                                      : const Color(0xFFDCFCE7),
+                                      ? AppColors.warning.withValues(alpha:0.1)
+                                      : AppColors.success.withValues(alpha:0.1),
                                   child: Icon(
                                     isOutflow
                                         ? Icons.trending_down
                                         : Icons.trending_up,
                                     color: isOutflow
-                                        ? const Color(0xFFEA580C)
-                                        : const Color(0xFF15803D),
+                                        ? AppColors.primary
+                                        : AppColors.success,
                                   ),
                                 ),
                                 title: Text(movement.itemName),
@@ -448,8 +474,8 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                   style: TextStyle(
                                     fontWeight: FontWeight.w800,
                                     color: isOutflow
-                                        ? const Color(0xFFB91C1C)
-                                        : const Color(0xFF15803D),
+                                        ? AppColors.destructive
+                                        : AppColors.success,
                                   ),
                                 ),
                               );
@@ -553,19 +579,20 @@ class _SummaryCard extends StatelessWidget {
       width: 220,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: MangoColors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: MangoColors.cardBorder),
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppShadows.soft,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             title,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w600,
-              color: MangoColors.muted,
+              color: AppColors.mutedForeground,
             ),
           ),
           const SizedBox(height: 8),
@@ -664,12 +691,12 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
     );
     _unitController = TextEditingController(text: item?.unit ?? 'unidad');
     _selectedPresentation = (item?.unit ?? 'unidad').toLowerCase();
-    
+
     // Si la unidad actual no esta en las opciones, la agregamos temporalmente
     if (!_presentationOptions.contains(_selectedPresentation)) {
       _presentationOptions.add(_selectedPresentation);
     }
-    
+
     _costController = TextEditingController(
       text: item == null ? '' : item.cost.toStringAsFixed(2),
     );
@@ -699,15 +726,15 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: MangoColors.white,
+      backgroundColor: AppColors.card,
       surfaceTintColor: Colors.transparent,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.lg)),
       title: Text(
         widget.title,
-        style: const TextStyle(
-          fontWeight: FontWeight.w800, 
+        style: TextStyle(
+          fontWeight: FontWeight.w800,
           fontSize: 22,
-          color: MangoColors.darkGray,
+          color: AppColors.foreground,
         ),
       ),
       contentPadding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
@@ -728,19 +755,19 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
                   Expanded(
                     child: DropdownButtonFormField<String>(
                       initialValue: _selectedPresentation,
-                      dropdownColor: MangoColors.white,
+                      dropdownColor: AppColors.card,
                       decoration: InputDecoration(
                         labelText: 'Presentacion',
                         border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(AppRadius.card),
                         ),
                         enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide(color: MangoColors.cardBorder),
+                          borderRadius: BorderRadius.circular(AppRadius.card),
+                          borderSide: BorderSide(color: AppColors.border),
                         ),
                         focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide(color: MangoColors.primaryOrange, width: 2),
+                          borderRadius: BorderRadius.circular(AppRadius.card),
+                          borderSide: BorderSide(color: AppColors.primary, width: 2),
                         ),
                       ),
                       items: _presentationOptions
@@ -807,7 +834,7 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
                 const SizedBox(height: 12),
                 SwitchListTile(
                   value: _isActive,
-                  activeThumbColor: MangoColors.primaryOrange,
+                  activeThumbColor: AppColors.primary,
                   contentPadding: EdgeInsets.zero,
                   title: const Text('Insumo activo'),
                   onChanged: (value) => setState(() => _isActive = value),
@@ -820,16 +847,16 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
       actions: [
         TextButton(
           onPressed: _saving ? null : () => Navigator.of(context).pop(),
-          child: const Text(
+          child: Text(
             'Cancelar',
-            style: TextStyle(color: MangoColors.muted),
+            style: TextStyle(color: AppColors.mutedForeground),
           ),
         ),
         FilledButton(
           onPressed: _saving ? null : _submit,
           style: FilledButton.styleFrom(
-            backgroundColor: MangoColors.primaryOrange,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            backgroundColor: AppColors.primary,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.card)),
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
           ),
           child: Text(
@@ -851,20 +878,20 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
       keyboardType: keyboardType,
       decoration: InputDecoration(
         labelText: label,
-        labelStyle: const TextStyle(color: MangoColors.muted),
+        labelStyle: TextStyle(color: AppColors.mutedForeground),
         filled: true,
-        fillColor: const Color(0xFFF9FAFB),
+        fillColor: AppColors.muted,
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: MangoColors.cardBorder),
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          borderSide: BorderSide(color: AppColors.border),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: MangoColors.cardBorder),
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          borderSide: BorderSide(color: AppColors.border),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: MangoColors.primaryOrange, width: 2),
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          borderSide: BorderSide(color: AppColors.primary, width: 2),
         ),
       ),
     );
@@ -956,7 +983,7 @@ class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
               decoration: InputDecoration(
                 labelText: 'Insumo',
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(AppRadius.card),
                 ),
               ),
               items: widget.items
@@ -983,7 +1010,7 @@ class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
               decoration: InputDecoration(
                 labelText: 'Cantidad',
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(AppRadius.card),
                 ),
               ),
             ),
@@ -994,7 +1021,7 @@ class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
               decoration: InputDecoration(
                 labelText: 'Motivo / notas',
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(AppRadius.card),
                 ),
               ),
             ),

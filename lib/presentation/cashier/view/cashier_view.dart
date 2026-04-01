@@ -135,6 +135,21 @@ class _CashierViewState extends ConsumerState<CashierView> {
       return;
     }
 
+    // Validar que la sesión pertenece al usuario actual
+    final currentUserId = Supabase.instance.client.auth.currentUser?.id;
+    if (currentUserId == null ||
+        session['user_id']?.toString() != currentUserId) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Esta sesión de caja no te pertenece. Solo el cajero que la abrió puede cerrarla.',
+          ),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
     final pending = await ref
         .read(cashierViewModelProvider)
         .refreshPendingTablesCount();

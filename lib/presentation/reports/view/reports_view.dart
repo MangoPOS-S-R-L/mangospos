@@ -4,7 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
-import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/theme/app_colors.dart';
+import 'package:mangopos/core/theme/app_radius.dart';
+import 'package:mangopos/core/theme/app_shadows.dart';
 import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/presentation/reports/services/reports_csv_export_service.dart';
 import 'package:mangopos/presentation/reports/services/reports_export_service.dart';
@@ -92,7 +94,7 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
         _handleBack(state, viewModel);
       },
       child: Scaffold(
-        backgroundColor: Colors.white,
+        backgroundColor: AppColors.background,
         body: SafeArea(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -109,7 +111,7 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
                           child: IconButton(
                             icon: const Icon(
                               Icons.arrow_back,
-                              color: MangoColors.darkGray,
+                              color: AppColors.foreground,
                             ),
                             onPressed: () => _handleBack(state, viewModel),
                           ),
@@ -123,7 +125,7 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
                           style: const TextStyle(
                             fontSize: 28,
                             fontWeight: FontWeight.bold,
-                            color: MangoColors.darkGray,
+                            color: AppColors.foreground,
                           ),
                         ),
                         const Spacer(),
@@ -140,7 +142,7 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
                         'Mira y analiza todos los números que genera tu negocio',
                         style: TextStyle(
                           fontSize: 16,
-                          color: MangoColors.muted,
+                          color: AppColors.mutedForeground,
                         ),
                       ),
                     ] else ...[
@@ -181,7 +183,7 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
     ReportsViewModel viewModel,
   ) {
     if (state.loading && state.salesSummary == null) {
-      return const Center(child: CircularProgressIndicator());
+      return Center(child: CircularProgressIndicator(color: AppColors.primary));
     }
 
     if (state.error != null && state.selectedCategory == null) {
@@ -191,7 +193,7 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
           child: Text(
             state.error!,
             textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.redAccent),
+            style: const TextStyle(color: AppColors.destructive),
           ),
         ),
       );
@@ -338,9 +340,9 @@ class _ReportsToolbar extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
-            color: MangoColors.sidebarBg,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: MangoColors.cardBorder),
+            color: AppColors.secondary,
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            border: Border.all(color: AppColors.border),
           ),
           child: Text(
             '${dateFormat.format(state.salesFrom)} - ${dateFormat.format(displayedTo)}',
@@ -371,7 +373,7 @@ class _SalesReportSection extends StatelessWidget {
       children: [
         if (state.error != null) ...[
           const SizedBox(height: 16),
-          Text(state.error!, style: const TextStyle(color: Colors.redAccent)),
+          Text(state.error!, style: const TextStyle(color: AppColors.destructive)),
         ],
         const SizedBox(height: 20),
         Wrap(
@@ -396,7 +398,7 @@ class _SalesReportSection extends StatelessWidget {
         _ChartCard(
           title: 'Distribución de ventas',
           rows: methodRows,
-          color: MangoColors.primaryOrange,
+          color: AppColors.primary,
         ),
         const SizedBox(height: 16),
         LayoutBuilder(
@@ -527,11 +529,11 @@ class _FinanceReportSection extends StatelessWidget {
       children: [
         const Text(
           'Resumen consolidado de caja en el rango seleccionado.',
-          style: TextStyle(color: MangoColors.muted, fontSize: 15),
+          style: TextStyle(color: AppColors.mutedForeground, fontSize: 15),
         ),
         if (state.error != null) ...[
           const SizedBox(height: 16),
-          Text(state.error!, style: const TextStyle(color: Colors.redAccent)),
+          Text(state.error!, style: const TextStyle(color: AppColors.destructive)),
         ],
         const SizedBox(height: 20),
         Wrap(
@@ -652,11 +654,11 @@ class _InventoryReportSection extends StatelessWidget {
       children: [
         const Text(
           'Visión general de existencias, alertas y movimientos recientes.',
-          style: TextStyle(color: MangoColors.muted, fontSize: 15),
+          style: TextStyle(color: AppColors.mutedForeground, fontSize: 15),
         ),
         if (state.error != null) ...[
           const SizedBox(height: 16),
-          Text(state.error!, style: const TextStyle(color: Colors.redAccent)),
+          Text(state.error!, style: const TextStyle(color: AppColors.destructive)),
         ],
         const SizedBox(height: 20),
         Wrap(
@@ -794,7 +796,7 @@ class _InventoryReportSection extends StatelessWidget {
           'Valor de inventario estimado: ${currency.format((state.inventorySummary?['total_stock_value'] as num?)?.toDouble() ?? 0)}',
           style: const TextStyle(
             fontWeight: FontWeight.w700,
-            color: MangoColors.darkGray,
+            color: AppColors.foreground,
           ),
         ),
       ],
@@ -820,11 +822,11 @@ class _PurchasesReportSection extends StatelessWidget {
       children: [
         const Text(
           'Resumen de órdenes, recepción y proveedores del período.',
-          style: TextStyle(color: MangoColors.muted, fontSize: 15),
+          style: TextStyle(color: AppColors.mutedForeground, fontSize: 15),
         ),
         if (state.error != null) ...[
           const SizedBox(height: 16),
-          Text(state.error!, style: const TextStyle(color: Colors.redAccent)),
+          Text(state.error!, style: const TextStyle(color: AppColors.destructive)),
         ],
         const SizedBox(height: 20),
         Wrap(
@@ -949,11 +951,11 @@ class _TaxReportSection extends StatelessWidget {
       children: [
         const Text(
           'Resumen de impuestos y propina de ley cobrados por tipo en el rango seleccionado.',
-          style: TextStyle(color: MangoColors.muted, fontSize: 15),
+          style: TextStyle(color: AppColors.mutedForeground, fontSize: 15),
         ),
         if (state.error != null) ...[
           const SizedBox(height: 16),
-          Text(state.error!, style: const TextStyle(color: Colors.redAccent)),
+          Text(state.error!, style: const TextStyle(color: AppColors.destructive)),
         ],
         const SizedBox(height: 20),
         Wrap(
@@ -1014,23 +1016,23 @@ class _RangeChip extends StatelessWidget {
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(999),
+      borderRadius: BorderRadius.circular(AppRadius.full),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
-          color: selected ? MangoColors.primaryOrange : Colors.white,
-          borderRadius: BorderRadius.circular(999),
+          color: selected ? AppColors.primary : AppColors.card,
+          borderRadius: BorderRadius.circular(AppRadius.full),
           border: Border.all(
             color: selected
-                ? MangoColors.primaryOrange
-                : MangoColors.cardBorder,
+                ? AppColors.primary
+                : AppColors.border,
           ),
         ),
         child: Text(
           label,
           style: TextStyle(
             fontWeight: FontWeight.w700,
-            color: selected ? Colors.white : MangoColors.darkGray,
+            color: selected ? Colors.white : AppColors.foreground,
           ),
         ),
       ),
@@ -1062,9 +1064,10 @@ class _ChartCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: MangoColors.cardBorder),
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppShadows.soft,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1074,14 +1077,14 @@ class _ChartCard extends StatelessWidget {
             style: const TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w800,
-              color: MangoColors.darkGray,
+              color: AppColors.foreground,
             ),
           ),
           const SizedBox(height: 14),
           if (visibleRows.isEmpty)
             const Text(
               'No hay datos suficientes para graficar.',
-              style: TextStyle(color: MangoColors.muted),
+              style: TextStyle(color: AppColors.mutedForeground),
             )
           else
             SizedBox(
@@ -1094,7 +1097,7 @@ class _ChartCard extends StatelessWidget {
                     show: true,
                     drawVerticalLine: false,
                     getDrawingHorizontalLine: (value) => FlLine(
-                      color: MangoColors.cardBorder,
+                      color: AppColors.border,
                       strokeWidth: 1,
                       dashArray: [4, 4],
                     ),
@@ -1115,7 +1118,7 @@ class _ChartCard extends StatelessWidget {
                           NumberFormat.compact().format(value),
                           style: const TextStyle(
                             fontSize: 10,
-                            color: MangoColors.muted,
+                            color: AppColors.mutedForeground,
                           ),
                         ),
                       ),
@@ -1138,7 +1141,7 @@ class _ChartCard extends StatelessWidget {
                               short,
                               style: const TextStyle(
                                 fontSize: 10,
-                                color: MangoColors.muted,
+                                color: AppColors.mutedForeground,
                               ),
                             ),
                           );
@@ -1192,16 +1195,10 @@ class _MetricCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: MangoColors.cardBorder),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 12,
-            offset: const Offset(0, 6),
-          ),
-        ],
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppShadows.cardElevated,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1210,7 +1207,7 @@ class _MetricCard extends StatelessWidget {
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
               color: color.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(AppRadius.card),
             ),
             child: Icon(icon, color: color),
           ),
@@ -1218,7 +1215,7 @@ class _MetricCard extends StatelessWidget {
           Text(
             title,
             style: const TextStyle(
-              color: MangoColors.muted,
+              color: AppColors.mutedForeground,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -1228,13 +1225,13 @@ class _MetricCard extends StatelessWidget {
             style: const TextStyle(
               fontSize: 24,
               fontWeight: FontWeight.w800,
-              color: MangoColors.darkGray,
+              color: AppColors.foreground,
             ),
           ),
           const SizedBox(height: 4),
           Text(
             subtitle,
-            style: const TextStyle(color: MangoColors.muted, fontSize: 12),
+            style: const TextStyle(color: AppColors.mutedForeground, fontSize: 12),
           ),
         ],
       ),
@@ -1258,9 +1255,10 @@ class _BreakdownCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: MangoColors.cardBorder),
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppShadows.soft,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1270,12 +1268,12 @@ class _BreakdownCard extends StatelessWidget {
             style: const TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w800,
-              color: MangoColors.darkGray,
+              color: AppColors.foreground,
             ),
           ),
           const SizedBox(height: 14),
           if (children.isEmpty)
-            Text(emptyText, style: const TextStyle(color: MangoColors.muted))
+            Text(emptyText, style: const TextStyle(color: AppColors.mutedForeground))
           else
             ...children,
         ],
@@ -1303,7 +1301,7 @@ class _AmountRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 12),
-          Text(trailing, style: const TextStyle(color: MangoColors.muted)),
+          Text(trailing, style: const TextStyle(color: AppColors.mutedForeground)),
         ],
       ),
     );
@@ -1325,19 +1323,13 @@ class _ReportCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(AppRadius.card),
       child: Container(
         decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: MangoColors.cardBorder),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.05),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
+          color: AppColors.card,
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          border: Border.all(color: AppColors.border),
+          boxShadow: AppShadows.cardElevated,
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -1345,10 +1337,10 @@ class _ReportCard extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: MangoColors.primaryOrange.withValues(alpha: 0.1),
+                color: AppColors.primary.withValues(alpha: 0.1),
                 shape: BoxShape.circle,
               ),
-              child: Icon(icon, size: 40, color: MangoColors.primaryOrange),
+              child: Icon(icon, size: 40, color: AppColors.primary),
             ),
             const SizedBox(height: 16),
             Text(
@@ -1357,7 +1349,7 @@ class _ReportCard extends StatelessWidget {
               style: const TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
-                color: MangoColors.darkGray,
+                color: AppColors.foreground,
               ),
             ),
           ],
@@ -1382,13 +1374,13 @@ class _ReportListItem extends StatelessWidget {
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(AppRadius.card),
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: MangoColors.cardBorder),
+          color: AppColors.card,
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          border: Border.all(color: AppColors.border),
         ),
         child: Row(
           children: [
@@ -1401,21 +1393,21 @@ class _ReportListItem extends StatelessWidget {
                     style: const TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
-                      color: MangoColors.darkGray,
+                      color: AppColors.foreground,
                     ),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     description,
                     style: const TextStyle(
-                      color: MangoColors.muted,
+                      color: AppColors.mutedForeground,
                       fontSize: 14,
                     ),
                   ),
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right, color: MangoColors.muted),
+            const Icon(Icons.chevron_right, color: AppColors.mutedForeground),
           ],
         ),
       ),

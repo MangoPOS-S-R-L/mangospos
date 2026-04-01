@@ -4,6 +4,9 @@ import 'package:mangopos/presentation/kitchen/viewmodel/kitchen_viewmodel.dart';
 import 'package:mangopos/data/models/kitchen_models.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/app/theme/mango_tokens.dart';
+import 'package:mangopos/core/theme/app_colors.dart';
+import 'package:mangopos/core/theme/app_radius.dart';
+import 'package:mangopos/core/theme/app_shadows.dart';
 
 String _formatQty(double qty) {
   if ((qty - qty.roundToDouble()).abs() < 0.001) {
@@ -65,7 +68,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
     }).length;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF9FAFB),
+      backgroundColor: AppColors.background,
       body: Padding(
         padding: const EdgeInsets.all(24.0),
         child: Column(
@@ -82,14 +85,14 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
             const SizedBox(height: 18),
             Expanded(
               child: vm.isLoading
-                  ? const Center(child: CircularProgressIndicator())
+                  ? Center(child: CircularProgressIndicator(color: AppColors.primary))
                   : Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Expanded(
                           child: _buildOrderColumn(
                             title: 'En Espera',
-                            color: const Color(0xFFF59E0B),
+                            color: AppColors.warning,
                             orders: pendingOrders,
                             actionLabel: 'Preparar',
                             onAction: (orderId) => ref
@@ -101,7 +104,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
                         Expanded(
                           child: _buildOrderColumn(
                             title: 'En Preparacion',
-                            color: const Color(0xFF3B82F6),
+                            color: AppColors.info,
                             orders: preparingOrders,
                             actionLabel: 'Listo',
                             onAction: (orderId) => ref
@@ -121,23 +124,23 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
   Widget _buildHeader(BuildContext context) {
     return Row(
       children: [
-        const Icon(Icons.restaurant_menu, color: Color(0xFFF26900), size: 28),
+        Icon(Icons.restaurant_menu, color: AppColors.primary, size: 28),
         const SizedBox(width: 10),
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: const [
+          children: [
             Text(
               'Cocina (KDS)',
               style: TextStyle(
                 fontSize: 22,
                 fontWeight: FontWeight.bold,
-                color: Color(0xFF111827),
+                color: AppColors.foreground,
               ),
             ),
-            SizedBox(height: 2),
+            const SizedBox(height: 2),
             Text(
               'Sistema de visualizacion de comandas',
-              style: TextStyle(color: Color(0xFF6B7280), fontSize: 13),
+              style: TextStyle(color: AppColors.mutedForeground, fontSize: 13),
             ),
           ],
         ),
@@ -145,9 +148,9 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.grey.shade200),
+            color: AppColors.card,
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            border: Border.all(color: AppColors.border),
           ),
           child: Row(
             children: [
@@ -159,7 +162,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
               Switch(
                 value: autoUpdate,
                 onChanged: (val) => setState(() => autoUpdate = val),
-                activeThumbColor: const Color(0xFFF26900),
+                activeThumbColor: AppColors.primary,
               ),
             ],
           ),
@@ -171,8 +174,8 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
           label: const Text('Actualizar'),
           style: OutlinedButton.styleFrom(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            foregroundColor: const Color(0xFF111827),
-            side: BorderSide(color: Colors.grey.shade300),
+            foregroundColor: AppColors.foreground,
+            side: BorderSide(color: AppColors.border),
           ),
         ),
         const SizedBox(width: 8),
@@ -188,11 +191,11 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
       width: 38,
       height: 38,
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.grey.shade200),
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        border: Border.all(color: AppColors.border),
       ),
-      child: Icon(icon, color: const Color(0xFF6B7280)),
+      child: Icon(icon, color: AppColors.mutedForeground),
     );
   }
 
@@ -206,7 +209,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
       children: [
         Expanded(
           child: _buildStatCard(
-            color: const Color(0xFFF59E0B),
+            color: AppColors.warning,
             icon: Icons.timer_outlined,
             title: pendingCount.toString(),
             subtitle: 'En Espera',
@@ -215,7 +218,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
         const SizedBox(width: 16),
         Expanded(
           child: _buildStatCard(
-            color: const Color(0xFF3B82F6),
+            color: AppColors.info,
             icon: Icons.schedule,
             title: preparingCount.toString(),
             subtitle: 'En Preparacion',
@@ -224,7 +227,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
         const SizedBox(width: 16),
         Expanded(
           child: _buildStatCard(
-            color: const Color(0xFF22C55E),
+            color: AppColors.success,
             icon: Icons.check_circle_outline,
             title: completedToday.toString(),
             subtitle: 'Completados Hoy',
@@ -244,20 +247,14 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
   }) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(AppRadius.card),
       child: Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppShadows.cardElevated,
       ),
       child: Row(
         children: [
@@ -265,8 +262,8 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
             width: 42,
             height: 42,
             decoration: BoxDecoration(
-              color: color.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(12),
+              color: color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(AppRadius.card),
             ),
             child: Icon(icon, color: color),
           ),
@@ -284,7 +281,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
               const SizedBox(height: 2),
               Text(
                 subtitle,
-                style: const TextStyle(color: Color(0xFF6B7280), fontSize: 12),
+                style: TextStyle(color: AppColors.mutedForeground, fontSize: 12),
               ),
             ],
           ),
@@ -602,8 +599,8 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
               decoration: BoxDecoration(
-                color: color.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(999),
+                color: color.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(AppRadius.full),
               ),
               child: Text(
                 orders.length.toString(),
@@ -619,7 +616,19 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
         const SizedBox(height: 12),
         Expanded(
           child: orders.isEmpty
-              ? const Center(child: Text('No hay pedidos'))
+              ? Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.inbox_outlined, size: 32, color: AppColors.mutedForeground),
+                      const SizedBox(height: 8),
+                      Text(
+                        'No hay pedidos',
+                        style: TextStyle(color: AppColors.mutedForeground, fontSize: 13),
+                      ),
+                    ],
+                  ),
+                )
               : ListView.separated(
                   itemCount: orders.length,
                   separatorBuilder: (_, __) => const SizedBox(height: 16),
@@ -645,16 +654,10 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
 
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppShadows.cardElevated,
       ),
       child: Column(
         children: [
@@ -663,7 +666,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
             decoration: BoxDecoration(
               border: Border(
                 left: BorderSide(color: color, width: 4),
-                bottom: BorderSide(color: Colors.grey.shade200),
+                bottom: BorderSide(color: AppColors.border),
               ),
             ),
             child: Row(
@@ -672,8 +675,8 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
                   width: 44,
                   height: 44,
                   decoration: BoxDecoration(
-                    color: color.withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(12),
+                    color: color.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(AppRadius.card),
                   ),
                   alignment: Alignment.center,
                   child: Text(
@@ -718,7 +721,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
                       vertical: 10,
                     ),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
+                      borderRadius: BorderRadius.circular(AppRadius.md),
                     ),
                   ),
                   child: Text(actionLabel),
@@ -739,8 +742,8 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
                         height: 26,
                         alignment: Alignment.center,
                         decoration: BoxDecoration(
-                          color: const Color(0xFFF3F4F6),
-                          borderRadius: BorderRadius.circular(6),
+                          color: AppColors.muted,
+                          borderRadius: BorderRadius.circular(AppRadius.sm),
                         ),
                         child: Text(
                           _formatQty(item.quantity),
@@ -760,7 +763,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
                               Text(
                                 item.notes!,
                                 style: TextStyle(
-                                  color: Colors.red[400],
+                                  color: AppColors.destructive,
                                   fontSize: 11,
                                 ),
                               ),

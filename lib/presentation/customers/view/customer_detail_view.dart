@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:mangopos/core/theme/app_colors.dart';
+import 'package:mangopos/core/theme/app_radius.dart';
+import 'package:mangopos/core/theme/app_spacing.dart';
 
 class CustomerDetailView extends StatelessWidget {
   final String customerName;
@@ -13,18 +16,18 @@ class CustomerDetailView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.card,
       appBar: AppBar(
         title: const Text(
           'Pedidos',
-          style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+          style: TextStyle(color: AppColors.foreground, fontWeight: FontWeight.bold),
         ),
-        backgroundColor: Colors.white,
+        backgroundColor: AppColors.card,
         elevation: 0,
-        iconTheme: const IconThemeData(color: Colors.black),
+        iconTheme: const IconThemeData(color: AppColors.foreground),
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(AppSpacing.xxl),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -36,24 +39,25 @@ class CustomerDetailView extends StatelessWidget {
                   style: const TextStyle(
                     fontSize: 28,
                     fontWeight: FontWeight.bold,
-                    color: Colors.black87,
+                    color: AppColors.foreground,
                   ),
                 ),
-                const SizedBox(width: 16),
+                const SizedBox(width: AppSpacing.lg),
                 Container(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 6,
+                    horizontal: AppSpacing.md,
+                    vertical: AppSpacing.sm,
                   ),
                   decoration: BoxDecoration(
-                    border: Border.all(color: Colors.grey.shade300),
-                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: AppColors.border),
+                    borderRadius: BorderRadius.circular(AppRadius.sm),
                   ),
                   child: Text(
                     '$ordersCount PEDIDOS',
                     style: const TextStyle(
                       fontWeight: FontWeight.bold,
                       fontSize: 12,
+                      color: AppColors.foreground,
                     ),
                   ),
                 ),
@@ -63,57 +67,57 @@ class CustomerDetailView extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
-                    color: Colors.black87,
+                    color: AppColors.foreground,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 32),
+            const SizedBox(height: AppSpacing.xxxl),
 
             // Orders Grid
             LayoutBuilder(
               builder: (context, constraints) {
                 return Wrap(
-                  spacing: 24,
-                  runSpacing: 24,
+                  spacing: AppSpacing.xxl,
+                  runSpacing: AppSpacing.xxl,
                   children: [
                     _buildOrderCard(
                       orderId: '#545',
                       status: 'Entregado',
-                      statusColor: const Color(0xFF10B981), // Green
+                      statusColor: AppColors.success,
                       statusLabel: 'VERIFICACIÓN DE PAGO',
-                      statusLabelColor: const Color(0xFFF97316), // Orange
+                      statusLabelColor: AppColors.primary,
                       date: 'octubre 21, 2025 13:51 p. m.',
                       items: '1 Elemento(s)',
                       total: '\$25.000',
                       icon: Icons.shopping_bag_outlined,
-                      iconBg: const Color(0xFFF3F4F6),
+                      iconBg: AppColors.secondary,
                     ),
                     _buildOrderCard(
                       orderId: '#545',
                       status: 'Pedido Cancelado',
-                      statusColor: const Color(0xFFEF4444), // Red
+                      statusColor: AppColors.destructive,
                       statusLabel: 'CANCELADO',
-                      statusLabelColor: const Color(0xFFEF4444), // Red
-                      statusLabelBg: const Color(0xFFFEF2F2),
+                      statusLabelColor: AppColors.destructive,
+                      statusLabelBg: AppColors.destructive.withValues(alpha: 0.05),
                       date: 'octubre 21, 2025 13:51 p. m.',
                       items: '1 Elemento(s)',
                       total: '\$25.000',
                       icon: Icons.shopping_bag_outlined,
-                      iconBg: const Color(0xFFF3F4F6),
+                      iconBg: AppColors.secondary,
                     ),
                     _buildOrderCard(
                       orderId: '#545',
                       status: 'Entregado',
-                      statusColor: const Color(0xFF10B981), // Green
+                      statusColor: AppColors.success,
                       statusLabel: 'KOT',
-                      statusLabelColor: const Color(0xFFD97706), // Amber
-                      statusLabelBg: const Color(0xFFFEF3C7),
+                      statusLabelColor: AppColors.warning,
+                      statusLabelBg: AppColors.warningBg,
                       date: 'octubre 21, 2025 13:51 p. m.',
                       items: '1 KOT',
                       total: '\$25.000',
                       icon: Icons.delivery_dining,
-                      iconBg: const Color(0xFFF3F4F6),
+                      iconBg: AppColors.secondary,
                       hasAction: true,
                     ),
                   ],
@@ -142,11 +146,11 @@ class CustomerDetailView extends StatelessWidget {
   }) {
     return Container(
       width: 400,
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(AppSpacing.xl),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: AppColors.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -159,11 +163,11 @@ class CustomerDetailView extends StatelessWidget {
                 height: 48,
                 decoration: BoxDecoration(
                   color: iconBg,
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(AppRadius.button),
                 ),
-                child: Icon(icon, color: Colors.grey.shade400),
+                child: Icon(icon, color: AppColors.mutedForeground),
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: AppSpacing.lg),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -173,6 +177,7 @@ class CustomerDetailView extends StatelessWidget {
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 16,
+                        color: AppColors.foreground,
                       ),
                     ),
                     Text(
@@ -180,7 +185,7 @@ class CustomerDetailView extends StatelessWidget {
                       style: const TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 16,
-                        color: Colors.black87,
+                        color: AppColors.foreground,
                       ),
                     ),
                   ],
@@ -191,15 +196,15 @@ class CustomerDetailView extends StatelessWidget {
                 children: [
                   Container(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
+                      horizontal: AppSpacing.sm,
+                      vertical: AppSpacing.xs,
                     ),
                     decoration: BoxDecoration(
-                      color: statusLabelBg ?? Colors.white,
+                      color: statusLabelBg ?? AppColors.card,
                       border: statusLabelBg == null
                           ? Border.all(color: statusLabelColor)
                           : null,
-                      borderRadius: BorderRadius.circular(4),
+                      borderRadius: BorderRadius.circular(AppRadius.sm),
                     ),
                     child: Text(
                       statusLabel,
@@ -210,7 +215,7 @@ class CustomerDetailView extends StatelessWidget {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: AppSpacing.xs),
                   Row(
                     children: [
                       Container(
@@ -221,11 +226,11 @@ class CustomerDetailView extends StatelessWidget {
                           shape: BoxShape.circle,
                         ),
                       ),
-                      const SizedBox(width: 4),
+                      const SizedBox(width: AppSpacing.xs),
                       Text(
                         status,
-                        style: TextStyle(
-                          color: Colors.grey.shade600,
+                        style: const TextStyle(
+                          color: AppColors.mutedForeground,
                           fontSize: 12,
                         ),
                       ),
@@ -235,20 +240,20 @@ class CustomerDetailView extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpacing.lg),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
                 date,
-                style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
+                style: const TextStyle(color: AppColors.mutedForeground, fontSize: 13),
               ),
-              Text(items, style: const TextStyle(fontWeight: FontWeight.bold)),
+              Text(items, style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.foreground)),
             ],
           ),
           const Padding(
-            padding: EdgeInsets.symmetric(vertical: 16.0),
-            child: Divider(),
+            padding: EdgeInsets.symmetric(vertical: AppSpacing.lg),
+            child: Divider(color: AppColors.border),
           ),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -258,15 +263,15 @@ class CustomerDetailView extends StatelessWidget {
                 style: const TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.bold,
-                  color: Colors.black87,
+                  color: AppColors.foreground,
                 ),
               ),
               if (hasAction)
                 OutlinedButton(
                   onPressed: () {},
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.black87,
-                    side: BorderSide(color: Colors.grey.shade300),
+                    foregroundColor: AppColors.foreground,
+                    side: const BorderSide(color: AppColors.border),
                   ),
                   child: const Text('Nuevo KOT'),
                 ),

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/theme/app_colors.dart';
+import 'package:mangopos/core/theme/app_radius.dart';
+import 'package:mangopos/core/theme/app_spacing.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/viewmodel/taxes_viewmodel.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import '../viewmodel/products_viewmodel.dart';
@@ -44,58 +46,64 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
     }
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.background,
       body: viewModel.isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? Center(
+              child: CircularProgressIndicator(
+                color: AppColors.primary,
+              ),
+            )
           : SingleChildScrollView(
-              padding: const EdgeInsets.all(24.0),
+              padding: const EdgeInsets.all(AppSpacing.xxl),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // Header
-                  const Text(
-                    'Gestión de productos',
-                    style: TextStyle(fontSize: 18, color: Colors.black54),
+                  Text(
+                    'Gesti\u00f3n de productos',
+                    style: TextStyle(
+                      fontSize: 18,
+                      color: AppColors.mutedForeground,
+                    ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: AppSpacing.sm),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text(
-                        'Elementos del menú',
+                      Text(
+                        'Elementos del men\u00fa',
                         style: TextStyle(
                           fontSize: 24,
                           fontWeight: FontWeight.bold,
-                          color: Color(0xFF111827),
+                          color: AppColors.foreground,
                         ),
                       ),
                       Row(
                         children: [
                           IconButton(
                             onPressed: () => viewModel.init(),
-                            icon: const Icon(
+                            icon: Icon(
                               Icons.refresh,
-                              color: Colors.black54,
+                              color: AppColors.mutedForeground,
                             ),
                           ),
-                          const SizedBox(width: 16),
+                          const SizedBox(width: AppSpacing.lg),
                           ElevatedButton.icon(
                             onPressed: () =>
                                 _showAddEditDialog(context, viewModel),
                             icon: const Icon(Icons.add, size: 18),
-                            label: const Text('Agregar elemento de menú'),
+                            label: const Text('Agregar elemento de men\u00fa'),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(
-                                0xFFF97316,
-                              ), // Orange
-                              foregroundColor: Colors.white,
+                              backgroundColor: AppColors.primary,
+                              foregroundColor: AppColors.card,
                               elevation: 0,
                               padding: const EdgeInsets.symmetric(
-                                horizontal: 20,
-                                vertical: 16,
+                                horizontal: AppSpacing.xl,
+                                vertical: AppSpacing.lg,
                               ),
                               shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
+                                borderRadius:
+                                    BorderRadius.circular(AppRadius.button),
                               ),
                             ),
                           ),
@@ -103,22 +111,33 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: AppSpacing.xxl),
                   if (viewModel.error != null) ...[
                     Container(
                       width: double.infinity,
-                      padding: const EdgeInsets.all(14),
+                      padding: const EdgeInsets.all(AppSpacing.md),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFFEF2F2),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: const Color(0xFFFECACA)),
+                        color: AppColors.destructive.withValues(alpha:0.06),
+                        borderRadius: BorderRadius.circular(AppRadius.lg),
+                        border: Border.all(
+                          color: AppColors.destructive.withValues(alpha:0.2),
+                        ),
                       ),
-                      child: Text(
-                        viewModel.error!,
-                        style: const TextStyle(color: Color(0xFF991B1B)),
+                      child: Row(
+                        children: [
+                          Icon(Icons.error_outline,
+                              size: 18, color: AppColors.destructive),
+                          const SizedBox(width: AppSpacing.sm),
+                          Expanded(
+                            child: Text(
+                              viewModel.error!,
+                              style: TextStyle(color: AppColors.destructive),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: AppSpacing.lg),
                   ],
 
                   // Toolbar
@@ -128,38 +147,42 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                         child: TextField(
                           onChanged: viewModel.setSearchQuery,
                           decoration: InputDecoration(
-                            hintText: 'Busca tu elemento del menú aquí',
-                            prefixIcon: const Icon(
+                            hintText: 'Busca tu elemento del men\u00fa aqu\u00ed',
+                            prefixIcon: Icon(
                               Icons.search,
-                              color: Colors.grey,
+                              color: AppColors.mutedForeground,
                             ),
                             border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              borderSide: BorderSide(
-                                color: Colors.grey.shade300,
-                              ),
+                              borderRadius:
+                                  BorderRadius.circular(AppRadius.button),
+                              borderSide: BorderSide(color: AppColors.border),
                             ),
                             enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
+                              borderRadius:
+                                  BorderRadius.circular(AppRadius.button),
+                              borderSide: BorderSide(color: AppColors.border),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius:
+                                  BorderRadius.circular(AppRadius.button),
                               borderSide: BorderSide(
-                                color: Colors.grey.shade300,
-                              ),
+                                  color: AppColors.primary, width: 1.5),
                             ),
                             contentPadding: const EdgeInsets.symmetric(
                               vertical: 0,
-                              horizontal: 16,
+                              horizontal: AppSpacing.lg,
                             ),
                           ),
                         ),
                       ),
-                      const SizedBox(width: 16),
+                      const SizedBox(width: AppSpacing.lg),
                       _buildDropdownButton(
                         label: 'Todas',
                         items: viewModel.categories,
                         value: viewModel.selectedCategoryFilterId,
                         onChanged: viewModel.setCategoryFilter,
                       ),
-                      const SizedBox(width: 16),
+                      const SizedBox(width: AppSpacing.lg),
                       _buildDropdownButton(
                         label: 'Todos',
                         items: viewModel.menus,
@@ -168,18 +191,18 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: AppSpacing.xxl),
 
                   // Table Header
                   Container(
                     padding: const EdgeInsets.symmetric(
-                      vertical: 12,
-                      horizontal: 16,
+                      vertical: AppSpacing.md,
+                      horizontal: AppSpacing.lg,
                     ),
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: AppColors.card,
                       border: Border(
-                        bottom: BorderSide(color: Colors.grey.shade200),
+                        bottom: BorderSide(color: AppColors.border),
                       ),
                     ),
                     child: Row(
@@ -187,11 +210,11 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                         Expanded(
                           flex: 3,
                           child: Text(
-                            'ARTÍCULO',
+                            'ART\u00cdCULO',
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               fontSize: 12,
-                              color: Colors.black87,
+                              color: AppColors.mutedForeground,
                             ),
                           ),
                         ),
@@ -202,29 +225,29 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               fontSize: 12,
-                              color: Colors.black87,
+                              color: AppColors.mutedForeground,
                             ),
                           ),
                         ),
                         Expanded(
                           flex: 1,
                           child: Text(
-                            'CATEGORÍA',
+                            'CATEGOR\u00cdA',
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               fontSize: 12,
-                              color: Colors.black87,
+                              color: AppColors.mutedForeground,
                             ),
                           ),
                         ),
                         Expanded(
                           flex: 1,
                           child: Text(
-                            'MENÚ',
+                            'MEN\u00da',
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               fontSize: 12,
-                              color: Colors.black87,
+                              color: AppColors.mutedForeground,
                             ),
                           ),
                         ),
@@ -236,7 +259,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
                                 fontSize: 12,
-                                color: Colors.black87,
+                                color: AppColors.mutedForeground,
                               ),
                             ),
                           ),
@@ -244,11 +267,11 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                         Expanded(
                           flex: 1,
                           child: Text(
-                            'ACCIÓN',
+                            'ACCI\u00d3N',
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               fontSize: 12,
-                              color: Colors.black87,
+                              color: AppColors.mutedForeground,
                             ),
                             textAlign: TextAlign.right,
                           ),
@@ -259,10 +282,25 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
 
                   // Table Body
                   if (products.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.all(32.0),
+                    Padding(
+                      padding: const EdgeInsets.all(AppSpacing.xxxl),
                       child: Center(
-                        child: Text('No hay productos para los filtros actuales'),
+                        child: Column(
+                          children: [
+                            Icon(Icons.inventory_2_outlined,
+                                size: 48,
+                                color: AppColors.mutedForeground
+                                    .withValues(alpha:0.5)),
+                            const SizedBox(height: AppSpacing.md),
+                            Text(
+                              'No hay productos para los filtros actuales',
+                              style: TextStyle(
+                                color: AppColors.mutedForeground,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     )
                   else
@@ -271,7 +309,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                       physics: const NeverScrollableScrollPhysics(),
                       itemCount: products.length,
                       separatorBuilder: (context, index) =>
-                          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+                          Divider(height: 1, color: AppColors.border),
                       itemBuilder: (context, index) {
                         final product = products[index];
                         final categoryName =
@@ -293,13 +331,13 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                             : 'Excluido';
                         final taxModeColor =
                             product['tax_mode']?.toString() == 'inclusive'
-                            ? const Color(0xFF2563EB)
-                            : MangoColors.primaryOrange;
+                            ? AppColors.info
+                            : AppColors.primary;
 
                         return Padding(
                           padding: const EdgeInsets.symmetric(
-                            vertical: 16,
-                            horizontal: 16,
+                            vertical: AppSpacing.lg,
+                            horizontal: AppSpacing.lg,
                           ),
                           child: Row(
                             children: [
@@ -311,8 +349,9 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                                       width: 40,
                                       height: 40,
                                       decoration: BoxDecoration(
-                                        borderRadius: BorderRadius.circular(8),
-                                        color: Colors.grey.shade200,
+                                        borderRadius: BorderRadius.circular(
+                                            AppRadius.button),
+                                        color: AppColors.muted,
                                         image: product['image_url'] != null
                                             ? DecorationImage(
                                                 image: NetworkImage(
@@ -323,20 +362,21 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                                             : null,
                                       ),
                                       child: product['image_url'] == null
-                                          ? const Icon(
+                                          ? Icon(
                                               Icons.image,
                                               size: 20,
-                                              color: Colors.grey,
+                                              color:
+                                                  AppColors.mutedForeground,
                                             )
                                           : null,
                                     ),
-                                    const SizedBox(width: 12),
+                                    const SizedBox(width: AppSpacing.md),
                                     Expanded(
                                       child: Text(
                                         product['name'] ?? 'Sin nombre',
-                                        style: const TextStyle(
+                                        style: TextStyle(
                                           fontWeight: FontWeight.w500,
-                                          color: Colors.black87,
+                                          color: AppColors.foreground,
                                         ),
                                         overflow: TextOverflow.ellipsis,
                                       ),
@@ -351,21 +391,20 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                                   children: [
                                     Text(
                                       '\$${(product['price'] ?? 0).toStringAsFixed(2)}',
-                                      style: const TextStyle(
-                                        color: Colors.black54,
+                                      style: TextStyle(
+                                        color: AppColors.mutedForeground,
                                       ),
                                     ),
-                                    const SizedBox(height: 4),
+                                    const SizedBox(height: AppSpacing.xs),
                                     Container(
                                       padding: const EdgeInsets.symmetric(
-                                        horizontal: 8,
+                                        horizontal: AppSpacing.sm,
                                         vertical: 3,
                                       ),
                                       decoration: BoxDecoration(
-                                        color: taxModeColor.withValues(
-                                          alpha: 0.10,
-                                        ),
-                                        borderRadius: BorderRadius.circular(999),
+                                        color: taxModeColor.withValues(alpha:0.10),
+                                        borderRadius: BorderRadius.circular(
+                                            AppRadius.badge),
                                       ),
                                       child: Text(
                                         'Imp. $taxMode',
@@ -383,14 +422,16 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                                 flex: 1,
                                 child: Text(
                                   categoryName,
-                                  style: const TextStyle(color: Colors.black54),
+                                  style: TextStyle(
+                                      color: AppColors.mutedForeground),
                                 ),
                               ),
                               Expanded(
                                 flex: 1,
                                 child: Text(
                                   menuName,
-                                  style: const TextStyle(color: Colors.black54),
+                                  style: TextStyle(
+                                      color: AppColors.mutedForeground),
                                 ),
                               ),
                               Expanded(
@@ -401,15 +442,17 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                                       product['id'].toString(),
                                       isActive,
                                     ),
-                                    borderRadius: BorderRadius.circular(4),
+                                    borderRadius: BorderRadius.circular(
+                                        AppRadius.sm),
                                     child: Container(
                                       width: 20,
                                       height: 20,
                                       decoration: BoxDecoration(
                                         color: isActive
-                                            ? const Color(0xFF10B981)
-                                            : Colors.grey,
-                                        borderRadius: BorderRadius.circular(4),
+                                            ? AppColors.success
+                                            : AppColors.mutedForeground,
+                                        borderRadius: BorderRadius.circular(
+                                            AppRadius.sm),
                                       ),
                                       child: const Icon(
                                         Icons.check,
@@ -431,25 +474,25 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                                         viewModel,
                                         product: product,
                                       ),
-                                      icon: const Icon(
+                                      icon: Icon(
                                         Icons.edit,
                                         size: 18,
-                                        color: Colors.black54,
+                                        color: AppColors.mutedForeground,
                                       ),
                                       padding: EdgeInsets.zero,
                                       constraints: const BoxConstraints(),
                                     ),
-                                    const SizedBox(width: 16),
+                                    const SizedBox(width: AppSpacing.lg),
                                     IconButton(
                                       onPressed: () => _confirmDelete(
                                         context,
                                         viewModel,
                                         product['id'],
                                       ),
-                                      icon: const Icon(
+                                      icon: Icon(
                                         Icons.delete_outline,
                                         size: 18,
-                                        color: Color(0xFFEF4444),
+                                        color: AppColors.destructive,
                                       ),
                                       padding: EdgeInsets.zero,
                                       constraints: const BoxConstraints(),
@@ -475,19 +518,19 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
     required ValueChanged<String?> onChanged,
   }) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
       decoration: BoxDecoration(
-        border: Border.all(color: Colors.grey.shade300),
-        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(AppRadius.button),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
           value: value,
           hint: Text(
             '-- $label --',
-            style: TextStyle(color: Colors.grey.shade600, fontSize: 14),
+            style: TextStyle(color: AppColors.mutedForeground, fontSize: 14),
           ),
-          icon: const Icon(Icons.arrow_drop_down, color: Colors.grey),
+          icon: Icon(Icons.arrow_drop_down, color: AppColors.mutedForeground),
           items: [
             DropdownMenuItem<String>(
               value: null,
@@ -604,13 +647,23 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Eliminar Producto'),
-        content: const Text(
-          '¿Estás seguro de que deseas eliminar este producto?',
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.lg),
+        ),
+        title: Text(
+          'Eliminar Producto',
+          style: TextStyle(color: AppColors.foreground),
+        ),
+        content: Text(
+          '\u00bfEst\u00e1s seguro de que deseas eliminar este producto?',
+          style: TextStyle(color: AppColors.mutedForeground),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
+            style: TextButton.styleFrom(
+              foregroundColor: AppColors.mutedForeground,
+            ),
             child: const Text('Cancelar'),
           ),
           TextButton(
@@ -618,7 +671,9 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
               viewModel.deleteProduct(id);
               Navigator.pop(context);
             },
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            style: TextButton.styleFrom(
+              foregroundColor: AppColors.destructive,
+            ),
             child: const Text('Eliminar'),
           ),
         ],

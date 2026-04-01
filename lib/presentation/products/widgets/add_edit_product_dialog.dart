@@ -4,7 +4,10 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/theme/app_colors.dart';
+import 'package:mangopos/core/theme/app_radius.dart';
+import 'package:mangopos/core/theme/app_shadows.dart';
+import 'package:mangopos/core/theme/app_spacing.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/state/taxes_state.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/viewmodel/taxes_viewmodel.dart';
 
@@ -182,47 +185,43 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         ),
         child: Container(
           decoration: BoxDecoration(
-            color: MangoColors.white,
-            borderRadius: BorderRadius.circular(18),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x2A000000),
-                blurRadius: 30,
-                offset: Offset(0, 12),
-              ),
-            ],
+            color: AppColors.card,
+            borderRadius: BorderRadius.circular(AppRadius.lg),
+            boxShadow: AppShadows.cardInteractive,
           ),
           child: Column(
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 18, 12, 10),
+                padding: const EdgeInsets.fromLTRB(
+                    AppSpacing.xxl, AppSpacing.lg, AppSpacing.md, AppSpacing.sm),
                 child: Row(
                   children: [
                     Text(
                       isEdit
-                          ? 'Editar Elemento de Menú'
-                          : 'Agregar Elemento de Menú',
-                      style: const TextStyle(
+                          ? 'Editar Elemento de Men\u00fa'
+                          : 'Agregar Elemento de Men\u00fa',
+                      style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.w800,
-                        color: Color(0xFF282524),
+                        color: AppColors.foreground,
                       ),
                     ),
                     const Spacer(),
                     IconButton(
                       onPressed: () => Navigator.pop(context),
                       icon: const Icon(Icons.close, size: 24),
-                      color: const Color(0xFF716C69),
+                      color: AppColors.mutedForeground,
                     ),
                   ],
                 ),
               ),
-              const Divider(height: 1, color: Color(0xFFEAE6E2)),
+              Divider(height: 1, color: AppColors.border),
               Expanded(
                 child: Form(
                   key: _formKey,
                   child: SingleChildScrollView(
-                    padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
+                    padding: const EdgeInsets.fromLTRB(
+                        AppSpacing.xxl, AppSpacing.lg, AppSpacing.xxl, AppSpacing.lg),
                     child: LayoutBuilder(
                       builder: (context, constraints) {
                         final isWide = constraints.maxWidth >= 900;
@@ -231,7 +230,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Expanded(child: _buildLeftColumn()),
-                              const SizedBox(width: 20),
+                              const SizedBox(width: AppSpacing.xl),
                               Expanded(child: _buildRightColumn(taxesState)),
                             ],
                           );
@@ -240,7 +239,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             _buildLeftColumn(),
-                            const SizedBox(height: 18),
+                            const SizedBox(height: AppSpacing.lg),
                             _buildRightColumn(taxesState),
                           ],
                         );
@@ -249,23 +248,24 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
                   ),
                 ),
               ),
-              const Divider(height: 1, color: Color(0xFFEAE6E2)),
+              Divider(height: 1, color: AppColors.border),
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
+                padding: const EdgeInsets.fromLTRB(
+                    AppSpacing.xxl, AppSpacing.md, AppSpacing.xxl, AppSpacing.lg),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     OutlinedButton(
                       onPressed: () => Navigator.pop(context),
                       style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: Color(0xFFE0DBD5)),
-                        foregroundColor: const Color(0xFF2B2928),
+                        side: BorderSide(color: AppColors.border),
+                        foregroundColor: AppColors.foreground,
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 24,
-                          vertical: 14,
+                          horizontal: AppSpacing.xxl,
+                          vertical: AppSpacing.md,
                         ),
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
+                          borderRadius: BorderRadius.circular(AppRadius.button),
                         ),
                         textStyle: const TextStyle(
                           fontSize: 16,
@@ -274,18 +274,18 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
                       ),
                       child: const Text('Cancelar'),
                     ),
-                    const SizedBox(width: 14),
+                    const SizedBox(width: AppSpacing.md),
                     ElevatedButton(
                       onPressed: _submit,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: MangoColors.primaryOrange,
-                        foregroundColor: MangoColors.white,
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: AppColors.card,
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 24,
-                          vertical: 14,
+                          horizontal: AppSpacing.xxl,
+                          vertical: AppSpacing.md,
                         ),
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
+                          borderRadius: BorderRadius.circular(AppRadius.button),
                         ),
                         textStyle: const TextStyle(
                           fontSize: 16,
@@ -310,26 +310,26 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _fieldLabel('Nombre del Artículo', required: true),
+        _fieldLabel('Nombre del Art\u00edculo', required: true),
         _buildTextField(
           controller: _nameController,
           hintText: 'Ej: Pollo al Horno',
           validator: (v) =>
               v?.trim().isEmpty == true ? 'Campo requerido' : null,
         ),
-        const SizedBox(height: 14),
-        _fieldLabel('Descripción'),
+        const SizedBox(height: AppSpacing.lg),
+        _fieldLabel('Descripci\u00f3n'),
         _buildTextField(
           controller: _descController,
-          hintText: 'Descripción del producto...',
+          hintText: 'Descripci\u00f3n del producto...',
           minLines: 4,
           maxLines: 4,
         ),
-        const SizedBox(height: 14),
-        _fieldLabel('Menú', required: true),
+        const SizedBox(height: AppSpacing.lg),
+        _fieldLabel('Men\u00fa', required: true),
         _buildDropdown<String?>(
           value: _selectedMenuId,
-          hint: 'Seleccionar menú',
+          hint: 'Seleccionar men\u00fa',
           items: widget.menus
               .map(
                 (m) => DropdownMenuItem<String?>(
@@ -340,14 +340,14 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
               .toList(),
           onChanged: (v) => setState(() => _selectedMenuId = v),
         ),
-        const SizedBox(height: 14),
-        _fieldLabel('Categoría', required: true),
+        const SizedBox(height: AppSpacing.lg),
+        _fieldLabel('Categor\u00eda', required: true),
         Row(
           children: [
             Expanded(
               child: _buildDropdown<String?>(
                 value: _selectedCategoryId,
-                hint: 'Seleccionar categoría',
+                hint: 'Seleccionar categor\u00eda',
                 items: _categories
                     .map(
                       (c) => DropdownMenuItem<String?>(
@@ -359,24 +359,27 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
                 onChanged: (v) => setState(() => _selectedCategoryId = v),
               ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: AppSpacing.md),
             SizedBox(
               width: 58,
               height: 58,
               child: OutlinedButton(
                 onPressed: _isCreatingCategory ? null : _createCategoryInline,
                 style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: Color(0xFFD9D3CD)),
+                  side: BorderSide(color: AppColors.border),
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
+                    borderRadius: BorderRadius.circular(AppRadius.button),
                   ),
-                  foregroundColor: const Color(0xFF282524),
+                  foregroundColor: AppColors.foreground,
                 ),
                 child: _isCreatingCategory
-                    ? const SizedBox(
+                    ? SizedBox(
                         width: 20,
                         height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppColors.primary,
+                        ),
                       )
                     : const Icon(Icons.add, size: 24),
               ),
@@ -416,7 +419,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
                 ],
               ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: AppSpacing.md),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -434,7 +437,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
             ),
           ],
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: AppSpacing.lg),
         Row(
           children: [
             Expanded(
@@ -449,12 +452,12 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
                 ],
               ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: AppSpacing.md),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _fieldLabel('Código de Barras'),
+                  _fieldLabel('C\u00f3digo de Barras'),
                   _buildTextField(
                     controller: _barcodeController,
                     hintText: '123456789',
@@ -464,7 +467,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
             ),
           ],
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: AppSpacing.lg),
         _fieldLabel('Imagen del Producto'),
         _ImagePickerArea(
           bytes: _pickedImageBytes,
@@ -472,7 +475,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
           existingUrl: widget.product?['image_url']?.toString(),
           onTap: _pickImage,
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: AppSpacing.lg),
         _fieldLabel('Tipo de elemento'),
         _buildDropdown<String>(
           value: _itemType,
@@ -490,7 +493,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
             setState(() => _itemType = value);
           },
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: AppSpacing.lg),
         _switchRow(
           title: 'Tiene Variaciones',
           value: _hasVariants,
@@ -501,13 +504,13 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
             });
           },
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: AppSpacing.sm),
         _switchRow(
           title: 'Disponible',
           value: _isActive,
           onChanged: (v) => setState(() => _isActive = v),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: AppSpacing.sm),
         _switchRow(
           title: 'Impuestos',
           value: _selectedTaxIds.isNotEmpty,
@@ -519,37 +522,38 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
             });
           },
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: AppSpacing.sm),
         _fieldLabel('Modo de impuesto'),
         _taxModeSelector(),
-        const SizedBox(height: 6),
+        const SizedBox(height: AppSpacing.sm),
         Text(
           _taxMode == 'inclusive'
               ? 'El precio del producto ya incluye el impuesto aplicado en venta.'
               : 'El impuesto se suma sobre el precio del producto durante la venta.',
-          style: const TextStyle(fontSize: 12, color: Color(0xFF7A746D)),
+          style: TextStyle(fontSize: 12, color: AppColors.mutedForeground),
         ),
         if (taxesState.data.isLoading)
-          const Padding(
-            padding: EdgeInsets.only(top: 8),
-            child: LinearProgressIndicator(color: MangoColors.primaryOrange),
+          Padding(
+            padding: const EdgeInsets.only(top: AppSpacing.sm),
+            child: LinearProgressIndicator(color: AppColors.primary),
           ),
         if (taxesState.data.hasError)
           Padding(
-            padding: const EdgeInsets.only(top: 8),
+            padding: const EdgeInsets.only(top: AppSpacing.sm),
             child: Text(
               'Error al cargar impuestos',
-              style: TextStyle(color: Colors.red.shade700),
+              style: TextStyle(color: AppColors.destructive),
             ),
           ),
         if (!taxesState.data.isLoading && taxesState.list.isNotEmpty)
           Container(
-            margin: const EdgeInsets.only(top: 8),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            margin: const EdgeInsets.only(top: AppSpacing.sm),
+            padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.md, vertical: AppSpacing.sm),
             decoration: BoxDecoration(
-              color: const Color(0xFFF8F5F2),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: const Color(0xFFE1DBD6)),
+              color: AppColors.accent,
+              borderRadius: BorderRadius.circular(AppRadius.lg),
+              border: Border.all(color: AppColors.border),
             ),
             child: Column(
               children: taxesState.list.map((tax) {
@@ -576,13 +580,13 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
 
   Widget _fieldLabel(String text, {bool required = false}) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
       child: Text(
         required ? '$text *' : text,
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 15,
           fontWeight: FontWeight.w700,
-          color: Color(0xFF2D2A29),
+          color: AppColors.foreground,
         ),
       ),
     );
@@ -604,34 +608,34 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
       maxLines: maxLines,
       keyboardType: keyboardType,
       validator: validator,
-      style: const TextStyle(fontSize: 15, color: Color(0xFF3A3431)),
+      style: TextStyle(fontSize: 15, color: AppColors.foreground),
       decoration: InputDecoration(
         hintText: hintText,
-        hintStyle: const TextStyle(color: Color(0xFF8A8078), fontSize: 15),
+        hintStyle: TextStyle(color: AppColors.mutedForeground, fontSize: 15),
         filled: true,
-        fillColor: enabled ? Colors.white : const Color(0xFFF1EEEB),
+        fillColor: enabled ? AppColors.card : AppColors.muted,
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Color(0xFFD9D3CD)),
+          borderRadius: BorderRadius.circular(AppRadius.button),
+          borderSide: BorderSide(color: AppColors.border),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Color(0xFFD9D3CD)),
+          borderRadius: BorderRadius.circular(AppRadius.button),
+          borderSide: BorderSide(color: AppColors.border),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(
-            color: MangoColors.primaryOrange,
+          borderRadius: BorderRadius.circular(AppRadius.button),
+          borderSide: BorderSide(
+            color: AppColors.primary,
             width: 2,
           ),
         ),
         disabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Color(0xFFE2DDD8)),
+          borderRadius: BorderRadius.circular(AppRadius.button),
+          borderSide: BorderSide(color: AppColors.border),
         ),
         contentPadding: EdgeInsets.symmetric(
-          horizontal: 16,
-          vertical: maxLines != null && maxLines > 1 ? 12 : 14,
+          horizontal: AppSpacing.lg,
+          vertical: maxLines != null && maxLines > 1 ? AppSpacing.md : AppSpacing.md,
         ),
       ),
     );
@@ -645,10 +649,10 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
   }) {
     return Container(
       height: 58,
-      padding: const EdgeInsets.symmetric(horizontal: 14),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFD9D3CD)),
+        borderRadius: BorderRadius.circular(AppRadius.button),
+        border: Border.all(color: AppColors.border),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<T>(
@@ -656,13 +660,13 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
           isExpanded: true,
           hint: Text(
             hint,
-            style: const TextStyle(color: Color(0xFF8A8078), fontSize: 14),
+            style: TextStyle(color: AppColors.mutedForeground, fontSize: 14),
           ),
           icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 24),
           items: items,
           onChanged: onChanged,
-          style: const TextStyle(
-            color: Color(0xFF2D2A29),
+          style: TextStyle(
+            color: AppColors.foreground,
             fontSize: 15,
             fontWeight: FontWeight.w500,
           ),
@@ -680,20 +684,20 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
       children: [
         Text(
           title,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 15,
             fontWeight: FontWeight.w600,
-            color: Color(0xFF2D2A29),
+            color: AppColors.foreground,
           ),
         ),
         const Spacer(),
         Switch(
           value: value,
           onChanged: onChanged,
-          activeThumbColor: MangoColors.white,
-          activeTrackColor: MangoColors.primaryOrange,
+          activeThumbColor: AppColors.card,
+          activeTrackColor: AppColors.primary,
           inactiveThumbColor: Colors.white,
-          inactiveTrackColor: const Color(0xFFDFDAD5),
+          inactiveTrackColor: AppColors.border,
         ),
       ],
     );
@@ -709,20 +713,20 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         Expanded(
           child: Text(
             title,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w500,
-              color: Color(0xFF2D2A29),
+              color: AppColors.foreground,
             ),
           ),
         ),
         Switch(
           value: value,
           onChanged: onChanged,
-          activeThumbColor: MangoColors.white,
-          activeTrackColor: MangoColors.primaryOrange,
+          activeThumbColor: AppColors.card,
+          activeTrackColor: AppColors.primary,
           inactiveThumbColor: Colors.white,
-          inactiveTrackColor: const Color(0xFFDFDAD5),
+          inactiveTrackColor: AppColors.border,
         ),
       ],
     );
@@ -730,11 +734,11 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
 
   Widget _taxModeSelector() {
     return Container(
-      padding: const EdgeInsets.all(6),
+      padding: const EdgeInsets.all(AppSpacing.sm),
       decoration: BoxDecoration(
-        color: const Color(0xFFF8F5F2),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE1DBD6)),
+        color: AppColors.accent,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        border: Border.all(color: AppColors.border),
       ),
       child: Row(
         children: [
@@ -745,7 +749,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
               subtitle: 'Se suma al vender',
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: AppSpacing.sm),
           Expanded(
             child: _taxModeOption(
               value: 'inclusive',
@@ -765,29 +769,20 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
   }) {
     final selected = _taxMode == value;
     return InkWell(
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(AppRadius.lg),
       onTap: () => setState(() => _taxMode = value),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 160),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.md, vertical: AppSpacing.md),
         decoration: BoxDecoration(
-          color: selected ? Colors.white : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
+          color: selected ? AppColors.card : Colors.transparent,
+          borderRadius: BorderRadius.circular(AppRadius.lg),
           border: Border.all(
-            color: selected
-                ? MangoColors.primaryOrange
-                : const Color(0x00000000),
+            color: selected ? AppColors.primary : Colors.transparent,
             width: 1.5,
           ),
-          boxShadow: selected
-              ? const [
-                  BoxShadow(
-                    color: Color(0x0F000000),
-                    blurRadius: 8,
-                    offset: Offset(0, 2),
-                  ),
-                ]
-              : null,
+          boxShadow: selected ? AppShadows.soft : null,
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -800,26 +795,27 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
                       : Icons.radio_button_off_rounded,
                   size: 18,
                   color: selected
-                      ? MangoColors.primaryOrange
-                      : const Color(0xFF9C948B),
+                      ? AppColors.primary
+                      : AppColors.mutedForeground,
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: AppSpacing.sm),
                 Text(
                   title,
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w700,
                     color: selected
-                        ? const Color(0xFF2D2A29)
-                        : const Color(0xFF5F5A56),
+                        ? AppColors.foreground
+                        : AppColors.mutedForeground,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: AppSpacing.sm),
             Text(
               subtitle,
-              style: const TextStyle(fontSize: 12, color: Color(0xFF7A746D)),
+              style: TextStyle(
+                  fontSize: 12, color: AppColors.mutedForeground),
             ),
           ],
         ),
@@ -870,11 +866,11 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     if (_formKey.currentState?.validate() != true) return;
 
     if (_selectedMenuId == null || _selectedMenuId!.isEmpty) {
-      _showValidationMessage('Selecciona el menú.');
+      _showValidationMessage('Selecciona el men\u00fa.');
       return;
     }
     if (_selectedCategoryId == null || _selectedCategoryId!.isEmpty) {
-      _showValidationMessage('Selecciona la categoría.');
+      _showValidationMessage('Selecciona la categor\u00eda.');
       return;
     }
 
@@ -935,7 +931,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
   Future<void> _createCategoryInline() async {
     if (widget.onCreateCategory == null) {
       _showValidationMessage(
-        'Crea nuevas categorías desde Ajustes > Menús > Categorías.',
+        'Crea nuevas categor\u00edas desde Ajustes > Men\u00fas > Categor\u00edas.',
       );
       return;
     }
@@ -946,26 +942,30 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
       builder: (dialogCtx) {
         return AlertDialog(
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(AppRadius.lg),
           ),
-          title: const Text(
-            'Nueva categoría',
+          title: Text(
+            'Nueva categor\u00eda',
             style: TextStyle(
               fontWeight: FontWeight.w700,
-              color: Color(0xFF2D2A29),
+              color: AppColors.foreground,
             ),
           ),
           content: TextField(
             controller: controller,
             autofocus: true,
             decoration: InputDecoration(
-              hintText: 'Ej: Bebidas frías',
+              hintText: 'Ej: Bebidas fr\u00edas',
               border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(AppRadius.lg),
               ),
               enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: Color(0xFFD9D3CD)),
+                borderRadius: BorderRadius.circular(AppRadius.lg),
+                borderSide: BorderSide(color: AppColors.border),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(AppRadius.lg),
+                borderSide: BorderSide(color: AppColors.primary, width: 1.5),
               ),
             ),
             onSubmitted: (value) => Navigator.pop(dialogCtx, value.trim()),
@@ -973,12 +973,15 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(dialogCtx),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.mutedForeground,
+              ),
               child: const Text('Cancelar'),
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
-                backgroundColor: MangoColors.primaryOrange,
-                foregroundColor: MangoColors.white,
+                backgroundColor: AppColors.primary,
+                foregroundColor: AppColors.card,
               ),
               onPressed: () => Navigator.pop(dialogCtx, controller.text.trim()),
               child: const Text('Crear'),
@@ -990,7 +993,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
 
     if (!mounted || categoryName == null) return;
     if (categoryName.isEmpty) {
-      _showValidationMessage('Escribe un nombre para la categoría.');
+      _showValidationMessage('Escribe un nombre para la categor\u00eda.');
       return;
     }
 
@@ -1001,7 +1004,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
 
       final createdId = created['id']?.toString();
       if (createdId == null || createdId.isEmpty) {
-        throw Exception('Respuesta inválida al crear categoría');
+        throw Exception('Respuesta inv\u00e1lida al crear categor\u00eda');
       }
 
       final alreadyExists = _categories.any(
@@ -1017,10 +1020,10 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
       }
 
       setState(() => _selectedCategoryId = createdId);
-      _showValidationMessage('Categoría creada correctamente.');
+      _showValidationMessage('Categor\u00eda creada correctamente.');
     } catch (e) {
       if (!mounted) return;
-      _showValidationMessage('No se pudo crear la categoría: $e');
+      _showValidationMessage('No se pudo crear la categor\u00eda: $e');
     } finally {
       if (mounted) {
         setState(() => _isCreatingCategory = false);
@@ -1054,23 +1057,23 @@ class _ImagePickerArea extends StatelessWidget {
         existingUrl!,
         fit: BoxFit.cover,
         errorBuilder: (_, _, _) =>
-            const Icon(Icons.broken_image, size: 50, color: Color(0xFF968C84)),
+            Icon(Icons.broken_image, size: 50, color: AppColors.mutedForeground),
       );
     } else {
       content = Column(
         mainAxisAlignment: MainAxisAlignment.center,
-        children: const [
+        children: [
           Icon(
             Icons.add_photo_alternate_outlined,
             size: 64,
-            color: Color(0xFF8F847C),
+            color: AppColors.mutedForeground,
           ),
-          SizedBox(height: 14),
+          const SizedBox(height: AppSpacing.md),
           Text(
             'Click para subir imagen',
             style: TextStyle(
-              color: Color(0xFF7F746D),
-              fontSize: 20 / 1.2,
+              color: AppColors.mutedForeground,
+              fontSize: 16,
               fontWeight: FontWeight.w500,
             ),
           ),
@@ -1080,14 +1083,14 @@ class _ImagePickerArea extends StatelessWidget {
 
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(20),
+      borderRadius: BorderRadius.circular(AppRadius.lg),
       child: Container(
         width: double.infinity,
         height: 180,
         decoration: BoxDecoration(
-          color: const Color(0xFFF8F5F2),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: const Color(0xFFE1DBD6), width: 1.4),
+          color: AppColors.accent,
+          borderRadius: BorderRadius.circular(AppRadius.lg),
+          border: Border.all(color: AppColors.border, width: 1.4),
         ),
         clipBehavior: Clip.antiAlias,
         child: content,
