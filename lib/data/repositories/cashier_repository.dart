@@ -3,6 +3,21 @@ import 'package:mangopos/core/utils/display_name_utils.dart';
 import '../models/payment_models.dart';
 import '../utils/payment_amount_utils.dart';
 
+class CashRegisterException implements Exception {
+  final String errorCode;
+  final String message;
+  final int? openTablesCount;
+
+  const CashRegisterException({
+    required this.errorCode,
+    required this.message,
+    this.openTablesCount,
+  });
+
+  @override
+  String toString() => message;
+}
+
 class CashierRepository {
   final SupabaseClient _client;
   CashierRepository(this._client);
@@ -58,9 +73,12 @@ class CashierRepository {
       ),
     );
 
-    final error = response['error']?.toString().trim();
-    if (error != null && error.isNotEmpty) {
-      throw Exception(error);
+    final success = response['success'] as bool? ?? true;
+    if (!success) {
+      throw CashRegisterException(
+        errorCode: response['error_code']?.toString() ?? 'UNKNOWN_ERROR',
+        message: response['error']?.toString() ?? 'Error al abrir la caja.',
+      );
     }
 
     return response;
@@ -72,24 +90,47 @@ class CashierRepository {
     String? notes,
     bool forceWithOpenTables = false,
   }) async {
-    final response = await _client.rpc(
-      'fn_close_cash_session',
-      params: {
-        'p_session_id': sessionId,
-        'p_end_amount': endAmount,
-        'p_notes': notes,
-        'p_force_with_open_tables': forceWithOpenTables,
-      },
+    final response = Map<String, dynamic>.from(
+      await _client.rpc(
+        'fn_close_cash_session',
+        params: {
+          'p_session_id': sessionId,
+          'p_end_amount': endAmount,
+          'p_notes': notes,
+          'p_force_with_open_tables': forceWithOpenTables,
+        },
+      ),
     );
-    return Map<String, dynamic>.from(response);
+
+    final success = response['success'] as bool? ?? true;
+    if (!success) {
+      throw CashRegisterException(
+        errorCode: response['error_code']?.toString() ?? 'UNKNOWN_ERROR',
+        message: response['error']?.toString() ?? 'Error al cerrar la caja.',
+        openTablesCount: response['open_tables_count'] as int?,
+      );
+    }
+
+    return response;
   }
 
   Future<Map<String, dynamic>> getSessionSummary(String sessionId) async {
-    final response = await _client.rpc(
-      'fn_get_cash_session_summary',
-      params: {'p_session_id': sessionId},
+    final response = Map<String, dynamic>.from(
+      await _client.rpc(
+        'fn_get_cash_session_summary',
+        params: {'p_session_id': sessionId},
+      ),
     );
-    return Map<String, dynamic>.from(response);
+
+    final success = response['success'] as bool? ?? true;
+    if (!success) {
+      throw CashRegisterException(
+        errorCode: response['error_code']?.toString() ?? 'UNKNOWN_ERROR',
+        message: response['error']?.toString() ?? 'Error al obtener el resumen de caja.',
+      );
+    }
+
+    return response;
   }
 
   Future<List<Map<String, dynamic>>> getCashRegisters(String businessId) async {

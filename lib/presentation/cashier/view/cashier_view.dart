@@ -13,6 +13,7 @@ import 'package:mangopos/presentation/cashier/widgets/blind_cash_close_dialog.da
 import 'package:mangopos/presentation/cashier/widgets/open_cash_dialog.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/data/utils/payment_amount_utils.dart';
+import 'package:mangopos/data/repositories/cashier_repository.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:async';
 
@@ -220,24 +221,28 @@ class _CashierViewState extends ConsumerState<CashierView> {
             if (!mounted) return;
             GoRouter.of(context).replace(AppRoutes.cashier);
           } catch (e) {
-            final msg = e.toString();
-            final friendly = msg.contains('OPEN_TABLES_EXIST')
-                ? 'Todavía hay mesas abiertas. Si deseas cerrar por cambio de turno, confirma el cierre con mesas abiertas.'
-                : SupabaseConfig.isTransientAuthRefreshError(e) ||
-                      SupabaseConfig.isAuthRefreshSchemaMismatchError(e)
-                ? 'Supabase Auth devolvio un error transitorio al refrescar la sesion. Verifica si la caja ya se cerro.'
-                : 'No se pudo cerrar la caja.';
-            throw Exception(
-              '$friendly\n\n'
-              'session_id=${session['id']}\n'
-              'force_with_open_tables=$forceWithOpenTables\n'
-              'reported_cash=${result.totalCounted}\n'
-              'reported_card=${result.numericCard}\n'
-              'reported_transfer=${result.numericTransfer}\n'
-              'reported_total=${result.totalReported}\n'
-              'difference=${result.difference}\n'
-              'raw_error=$e',
-            );
+            String friendly;
+            if (e is CashRegisterException) {
+              switch (e.errorCode) {
+                case 'OPEN_TABLES_EXIST':
+                  final count = e.openTablesCount;
+                  friendly = count != null
+                      ? 'Hay $count mesa(s) abierta(s). Ciérralas primero o activa "Forzar cierre".'
+                      : 'Hay mesas abiertas. Ciérralas primero o activa "Forzar cierre".';
+                case 'SESSION_ALREADY_CLOSED':
+                  friendly = 'Esta sesión de caja ya fue cerrada anteriormente.';
+                case 'SESSION_NOT_FOUND':
+                  friendly = 'No se encontró la sesión de caja.';
+                default:
+                  friendly = e.message;
+              }
+            } else if (SupabaseConfig.isTransientAuthRefreshError(e) ||
+                SupabaseConfig.isAuthRefreshSchemaMismatchError(e)) {
+              friendly = 'Error de autenticación transitorio. Verifica si la caja ya se cerró antes de reintentar.';
+            } else {
+              friendly = 'No se pudo cerrar la caja.';
+            }
+            throw Exception(friendly);
           }
         },
       ),

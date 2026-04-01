@@ -62,6 +62,30 @@ function Get-AppVersionFromPubspec([string]$PubspecPath) {
   return "1.0.0"
 }
 
+function Copy-WindowsRuntimeDependencies([string]$Destination) {
+  $system32 = Join-Path $Env:windir "System32"
+  $runtimeFiles = @(
+    "vcruntime140.dll",
+    "vcruntime140_1.dll",
+    "vcruntime140_threads.dll",
+    "msvcp140.dll",
+    "msvcp140_1.dll",
+    "msvcp140_2.dll",
+    "msvcp140_atomic_wait.dll",
+    "msvcp140_codecvt_ids.dll",
+    "concrt140.dll"
+  )
+
+  foreach ($file in $runtimeFiles) {
+    $source = Join-Path $system32 $file
+    if (Test-Path $source) {
+      Copy-Item -Force $source (Join-Path $Destination $file)
+    } else {
+      Write-Warning "No se encontro runtime requerido en System32: $file"
+    }
+  }
+}
+
 $root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 Set-Location $root
 
@@ -105,10 +129,12 @@ New-Item -ItemType Directory -Force -Path $stage | Out-Null
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $stage "App") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $stage "Agent") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $stage "Support") | Out-Null
 
 Write-Host "==> Preparing App stage (Robocopy)" -ForegroundColor Cyan
 # Robocopy es mas fiable para mantener la estructura de carpetas (especialmente 'data')
 & robocopy $buildDir (Join-Path $stage "App") /e /np /njh /njs /log:null
+Copy-WindowsRuntimeDependencies (Join-Path $stage "App")
 
 Write-Host "==> Preparing Agent stage" -ForegroundColor Cyan
 # Copiar solo el payload necesario del agente
@@ -126,6 +152,9 @@ if (Test-Path (Join-Path $root "agent\.env")) {
 # Copiar el wrapper de servicio WinSW y su configuracion XML
 Copy-Item -Force (Join-Path $root "installer\windows\mangopos-agent-service.xml") (Join-Path $stage "Agent")
 Copy-Item -Force (Join-Path $root "installer\windows\WinSW.exe") (Join-Path $stage "Agent\mangopos-agent-service.exe")
+
+Write-Host "==> Preparing Support tools" -ForegroundColor Cyan
+& robocopy (Join-Path $root "installer\windows\support") (Join-Path $stage "Support") /e /np /njh /njs /log:null
 
 Write-Host "==> Building MSI with WiX v7" -ForegroundColor Cyan
 

@@ -1,12 +1,14 @@
 import 'dart:async';
+
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../../services/session/session_controller.dart';
-import '../../../core/utils/logger.dart';
+import '../../../core/network/supabase_config.dart';
 import '../../../core/utils/display_name_utils.dart';
+import '../../../core/utils/logger.dart';
+import '../../../services/session/session_controller.dart';
 import 'login_state.dart';
 
 class LoginViewModel extends Notifier<LoginState> {
@@ -33,7 +35,7 @@ class LoginViewModel extends Notifier<LoginState> {
 
   Future<void> submit() async {
     if (state.email.isEmpty || state.password.isEmpty) {
-      _safeSet(state.copyWith(error: 'Ingresa correo y contraseña'));
+      _safeSet(state.copyWith(error: 'Ingresa correo y contrasena'));
       return;
     }
     _safeSet(state.copyWith(isLoading: true, error: null));
@@ -53,13 +55,12 @@ class LoginViewModel extends Notifier<LoginState> {
         _safeSet(
           state.copyWith(
             isLoading: false,
-            error: 'Credenciales inválidas o usuario no encontrado',
+            error: 'Credenciales invalidas o usuario no encontrado',
           ),
         );
         return;
       }
 
-      // Obtener perfile
       final profileResp = await supabase
           .from('profiles')
           .select('full_name')
@@ -71,7 +72,6 @@ class LoginViewModel extends Notifier<LoginState> {
         email: user.email,
       );
 
-      // Obtener todos los roles y negocios asignados en lugar de solo uno (Soporta multi-sucursal)
       final userBizResp = await supabase
           .from('user_businesses')
           .select('business_id, role, businesses(business_name, domain)')
@@ -81,23 +81,22 @@ class LoginViewModel extends Notifier<LoginState> {
 
       if (businessesList.isEmpty) {
         AppLogger.w(
-          'Usuario sin perfil de negocio asignado (user_businesses está vacía)',
+          'Usuario sin perfil de negocio asignado (user_businesses esta vacia)',
         );
         await supabase.auth.signOut();
         _safeSet(
           state.copyWith(
             isLoading: false,
             error:
-                'Tu usuario no tiene negocio/rol asignado. Contacta al administrador.',
+                'Tu usuario no tiene negocio o rol asignado. Contacta al administrador.',
           ),
         );
         return;
       }
 
-      // Si tiene más de un negocio → mostrar selector interno
       if (businessesList.length > 1) {
         AppLogger.i(
-          'Usuario con múltiples negocios (${businessesList.length}). Mostrando selector interno.',
+          'Usuario con multiples negocios (${businessesList.length}). Mostrando selector interno.',
         );
         _safeSet(
           state.copyWith(isLoading: false, needsBusinessSelection: true),
@@ -105,7 +104,6 @@ class LoginViewModel extends Notifier<LoginState> {
         return;
       }
 
-      // El usuario solo tiene 1 negocio asignado
       final singleBiz = businessesList.first;
       final businessId = singleBiz['business_id'] as String?;
       final roleStr = singleBiz['role']?.toString();
@@ -113,13 +111,13 @@ class LoginViewModel extends Notifier<LoginState> {
 
       if (businessId == null || businessId.isEmpty || posRole == null) {
         AppLogger.e(
-          'Atributos críticos faltantes en Login -> businessId: $businessId',
+          'Atributos criticos faltantes en Login -> businessId: $businessId',
         );
         await supabase.auth.signOut();
         _safeSet(
           state.copyWith(
             isLoading: false,
-            error: 'Tu acceso no está configurado correctamente.',
+            error: 'Tu acceso no esta configurado correctamente.',
           ),
         );
         return;
@@ -140,21 +138,36 @@ class LoginViewModel extends Notifier<LoginState> {
       _safeSet(const LoginState());
     } on AuthException catch (e, st) {
       AppLogger.w('AuthException durante login', error: e, stackTrace: st);
-      _safeSet(state.copyWith(isLoading: false, error: e.message));
+      await _resetBrokenSessionIfNeeded(e);
+      final message =
+          SupabaseConfig.isAuthRefreshSchemaMismatchError(e) ||
+              SupabaseConfig.isTlsCertificateError(e)
+          ? SupabaseConfig.getFriendlyErrorMessage(e)
+          : e.message;
+      _safeSet(state.copyWith(isLoading: false, error: message));
     } on TimeoutException catch (e, st) {
       AppLogger.w('Timeout en auth', error: e, stackTrace: st);
       _safeSet(
         state.copyWith(
           isLoading: false,
-          error: 'Tiempo de espera agotado. Revisa tu conexión de red.',
+          error: 'Tiempo de espera agotado. Revisa tu conexion de red.',
         ),
       );
     } catch (e, st) {
       AppLogger.e('Error no controlado en login', error: e, stackTrace: st);
+      await _resetBrokenSessionIfNeeded(e);
       _safeSet(
-        state.copyWith(isLoading: false, error: 'Ocurrió un error inesperado'),
+        state.copyWith(
+          isLoading: false,
+          error: SupabaseConfig.getFriendlyErrorMessage(e),
+        ),
       );
     }
+  }
+
+  Future<void> _resetBrokenSessionIfNeeded(Object error) async {
+    if (!SupabaseConfig.isAuthRefreshSchemaMismatchError(error)) return;
+    await Supabase.instance.client.auth.signOut(scope: SignOutScope.local);
   }
 
   PosRole? _mapRole(String? role) {

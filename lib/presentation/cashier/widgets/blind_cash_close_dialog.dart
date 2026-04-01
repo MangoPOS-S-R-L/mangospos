@@ -35,32 +35,12 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
     BlindCashCloseState state,
     Object error,
   ) async {
-    final details = error.toString();
+    final message = error.toString().replaceFirst('Exception: ', '');
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Error al cerrar caja'),
-        content: SizedBox(
-          width: 720,
-          child: SingleChildScrollView(
-            child: SelectableText(
-              'session_id=${widget.sessionId}\n'
-              'expected_cash=${state.input.expectedCash}\n'
-              'expected_card=${state.input.expectedCard}\n'
-              'expected_transfer=${state.input.expectedTransfer}\n'
-              'reported_cash=${state.result.totalCounted}\n'
-              'reported_card=${state.result.numericCard}\n'
-              'reported_transfer=${state.result.numericTransfer}\n'
-              'reported_total=${state.result.totalReported}\n'
-              'cash_difference=${state.result.cashDifference}\n'
-              'card_difference=${state.result.cardDifference}\n'
-              'transfer_difference=${state.result.transferDifference}\n'
-              'total_difference=${state.result.totalDifference}\n\n'
-              '$details',
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
-            ),
-          ),
-        ),
+        content: Text(message),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(),
@@ -660,25 +640,41 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
     }
     setState(() => _processingClose = true);
     try {
-      final service = CashClosePrintService(Supabase.instance.client);
-      await service.printCloseTicket(
-        input: state.input,
-        result: state.result,
-        denominations: state.denominations,
-        printedAt: DateTime.now(),
-      );
-
+      // 1. Guardar en BD primero
       await widget.onCloseConfirmed!(state.result);
       if (!mounted) return;
       ref.read(blindCashCloseProvider(widget.input).notifier).reset();
       Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Caja cerrada e impresa correctamente'),
-          backgroundColor: MangoColors.successGreen,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+
+      // 2. Imprimir después — si falla, la caja ya está cerrada
+      try {
+        final service = CashClosePrintService(Supabase.instance.client);
+        await service.printCloseTicket(
+          input: state.input,
+          result: state.result,
+          denominations: state.denominations,
+          printedAt: DateTime.now(),
+        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Caja cerrada e impresa correctamente'),
+              backgroundColor: MangoColors.successGreen,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      } catch (_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Caja cerrada. No se pudo imprimir el ticket.'),
+              backgroundColor: Colors.orange,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      }
     } catch (e) {
       if (!mounted) return;
       await _showCloseErrorModal(state, e);

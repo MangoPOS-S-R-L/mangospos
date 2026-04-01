@@ -11,6 +11,13 @@ class SupabaseConfig {
     'missing destination name refresh_token_hmac_key',
   ];
 
+  static const List<String> _tlsCertificateErrorSignatures = [
+    'handshakeexception',
+    'certificate_verify_failed',
+    'unable to get local issuer certificate',
+    'certificateverifyfailed',
+  ];
+
   /// Timeout para operaciones de lectura (SELECT)
   static const Duration readTimeout = Duration(seconds: 15);
 
@@ -123,10 +130,24 @@ class SupabaseConfig {
         message.contains('statusCode: 502');
   }
 
+  static bool isTlsCertificateError(dynamic error) {
+    final message = error.toString().toLowerCase();
+    for (final signature in _tlsCertificateErrorSignatures) {
+      if (message.contains(signature)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /// Obtener mensaje de error amigable
   static String getFriendlyErrorMessage(dynamic error) {
     if (isAuthRefreshSchemaMismatchError(error)) {
       return 'Tu sesion vencio y el servidor de autenticacion no pudo renovarla. Inicia sesion de nuevo.';
+    }
+
+    if (isTlsCertificateError(error)) {
+      return 'No se pudo validar el certificado del servidor. Revisa la fecha y hora del equipo y actualiza Windows o el navegador.';
     }
 
     if (error is PostgrestException) {

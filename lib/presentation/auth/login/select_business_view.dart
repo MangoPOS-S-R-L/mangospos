@@ -99,7 +99,9 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
 
       if (mounted) {
         setState(() {
-          _error = 'No pudimos cargar tus accesos.';
+          _error = SupabaseConfig.isTlsCertificateError(e)
+              ? SupabaseConfig.getFriendlyErrorMessage(e)
+              : 'No pudimos cargar tus accesos.';
           _isLoading = false;
         });
       }
