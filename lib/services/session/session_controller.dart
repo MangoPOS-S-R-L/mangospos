@@ -238,6 +238,7 @@ class SessionState {
 
 class SessionController extends Notifier<SessionState> {
   StreamSubscription<AuthState>? _authSub;
+  bool _explicitSignOut = false;
 
   @override
   SessionState build() {
@@ -250,6 +251,12 @@ class SessionController extends Notifier<SessionState> {
         final session = event.session;
 
         if (authEvent == AuthChangeEvent.signedOut) {
+          if (!_explicitSignOut && state.isAuthenticated) {
+            // signedOut disparado por fallo de refresh (red, servidor),
+            // no por logout del usuario — preservar estado.
+            return;
+          }
+          _explicitSignOut = false;
           setUnauthenticated();
           return;
         }
@@ -435,6 +442,14 @@ class SessionController extends Notifier<SessionState> {
       );
       return true;
     } catch (error) {
+      if (SupabaseConfig.isAuthRefreshSchemaMismatchError(error)) {
+        try {
+          await client.auth.signOut(scope: SignOutScope.local);
+        } catch (_) {}
+        setUnauthenticated();
+        return false;
+      }
+
       final sessionStillPresent = client.auth.currentSession != null;
       final shouldPreserveState =
           hadAuthenticatedState ||
@@ -704,9 +719,11 @@ class SessionController extends Notifier<SessionState> {
   }
 
   Future<void> signOut() async {
+    _explicitSignOut = true;
     try {
       await Supabase.instance.client.auth.signOut();
     } finally {
+      _explicitSignOut = false;
       setUnauthenticated();
     }
   }

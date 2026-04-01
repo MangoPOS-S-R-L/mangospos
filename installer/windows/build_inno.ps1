@@ -84,6 +84,30 @@ function Copy-Directory([string]$Source, [string]$Destination) {
   }
 }
 
+function Copy-WindowsRuntimeDependencies([string]$Destination) {
+  $system32 = Join-Path $Env:windir "System32"
+  $runtimeFiles = @(
+    "vcruntime140.dll",
+    "vcruntime140_1.dll",
+    "vcruntime140_threads.dll",
+    "msvcp140.dll",
+    "msvcp140_1.dll",
+    "msvcp140_2.dll",
+    "msvcp140_atomic_wait.dll",
+    "msvcp140_codecvt_ids.dll",
+    "concrt140.dll"
+  )
+
+  foreach ($file in $runtimeFiles) {
+    $source = Join-Path $system32 $file
+    if (Test-Path $source) {
+      Copy-Item -Force $source (Join-Path $Destination $file)
+    } else {
+      Write-Warning "No se encontro runtime requerido en System32: $file"
+    }
+  }
+}
+
 $root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 Set-Location $root
 
@@ -99,6 +123,7 @@ $agentExe = Join-Path $root "agent\dist\mangopos-agent.exe"
 $stage = Join-Path $root "build\installer_stage"
 $stageApp = Join-Path $stage "App"
 $stageAgent = Join-Path $stage "Agent"
+$stageSupport = Join-Path $stage "Support"
 $outDir = Join-Path $root "build\installer"
 $issPath = Join-Path $PSScriptRoot "mangopos.iss"
 $iscc = Resolve-InnoCompiler
@@ -138,10 +163,12 @@ if (-not $SkipStage) {
 
   New-Item -ItemType Directory -Force -Path $stageApp | Out-Null
   New-Item -ItemType Directory -Force -Path $stageAgent | Out-Null
+  New-Item -ItemType Directory -Force -Path $stageSupport | Out-Null
   New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
   Write-Host "==> Preparing App stage" -ForegroundColor Cyan
   Copy-Directory $buildDir $stageApp
+  Copy-WindowsRuntimeDependencies $stageApp
 
   Write-Host "==> Preparing Agent stage" -ForegroundColor Cyan
   Copy-Item -Force $agentExe (Join-Path $stageAgent "mangopos-agent.exe")
@@ -154,6 +181,9 @@ if (-not $SkipStage) {
 
   Copy-Item -Force (Join-Path $root "installer\windows\mangopos-agent-service.xml") $stageAgent
   Copy-Item -Force (Join-Path $root "installer\windows\WinSW.exe") (Join-Path $stageAgent "mangopos-agent-service.exe")
+
+  Write-Host "==> Preparing Support tools" -ForegroundColor Cyan
+  Copy-Directory (Join-Path $root "installer\windows\support") $stageSupport
 }
 
 if (-not (Test-Path $stageApp)) {
@@ -162,6 +192,10 @@ if (-not (Test-Path $stageApp)) {
 
 if (-not (Test-Path $stageAgent)) {
   throw "No existe el stage del agente: $stageAgent"
+}
+
+if (-not (Test-Path $stageSupport)) {
+  throw "No existe el stage de soporte: $stageSupport"
 }
 
 Write-Host "==> Building Inno Setup installer" -ForegroundColor Cyan

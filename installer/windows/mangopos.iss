@@ -40,22 +40,28 @@ Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "rundiagnostics"; Description: "Ejecutar diagnostico de conectividad al finalizar"; Flags: unchecked
 
 [Files]
 Source: "..\..\build\installer_stage\App\*"; DestDir: "{app}\App"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\build\installer_stage\Agent\*"; DestDir: "{app}\Agent"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\..\build\installer_stage\Support\*"; DestDir: "{app}\Support"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\App\{#AppExeName}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\App\{#AppExeName}"; Tasks: desktopicon
+Name: "{autoprograms}\{#AppName}\Diagnosticar conectividad"; Filename: "{app}\Support\Diagnose-MangoPOS.cmd"; IconFilename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"
+Name: "{autoprograms}\{#AppName}\Reparar red y TLS"; Filename: "{app}\Support\Repair-MangoPOS-Network.cmd"; IconFilename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"
 
 [Run]
+Filename: "{cmd}"; Parameters: "/c sc config W32Time start= auto >nul 2>&1 && net start W32Time >nul 2>&1 && w32tm /resync /force >nul 2>&1"; Flags: runhidden waituntilterminated
 Filename: "{cmd}"; Parameters: "/c taskkill /F /IM mangopos-agent.exe /T >nul 2>&1"; Flags: runhidden waituntilterminated
 Filename: "{cmd}"; Parameters: "/c taskkill /F /IM mangopos-agent-service.exe /T >nul 2>&1"; Flags: runhidden waituntilterminated
 Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "stop"; Flags: runhidden waituntilterminated; Check: AgentServiceRegistered
 Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "uninstall"; Flags: runhidden waituntilterminated; Check: AgentServiceRegistered
 Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "install"; Flags: runhidden waituntilterminated
 Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "start"; Flags: runhidden waituntilterminated postinstall skipifsilent; Description: "Iniciar agente LAN de impresion"
+Filename: "{app}\Support\Diagnose-MangoPOS.cmd"; Flags: shellexec postinstall skipifsilent; Tasks: rundiagnostics; Description: "Ejecutar diagnostico de conectividad"
 
 [UninstallRun]
 Filename: "{cmd}"; Parameters: "/c taskkill /F /IM mangopos-agent.exe /T >nul 2>&1"; Flags: runhidden waituntilterminated; RunOnceId: "KillMangoPOSAgentProcess"
@@ -64,6 +70,31 @@ Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "stop"; Flags: runhi
 Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "uninstall"; Flags: runhidden waituntilterminated; RunOnceId: "UninstallMangoPOSAgentService"
 
 [Code]
+function IsSupportedWindows: Boolean;
+var
+  Version: TWindowsVersion;
+begin
+  GetWindowsVersionEx(Version);
+  Result := (Version.Major >= 10);
+end;
+
+function InitializeSetup: Boolean;
+begin
+  if not IsSupportedWindows then
+  begin
+    MsgBox(
+      'MangoPOS requiere Windows 10 o superior en 64 bits.' + #13#10 +
+      'Esta maquina no cumple el requisito minimo del sistema.',
+      mbCriticalError,
+      MB_OK
+    );
+    Result := False;
+    exit;
+  end;
+
+  Result := True;
+end;
+
 function AgentServiceRegistered: Boolean;
 begin
   Result := RegKeyExists(HKLM, 'SYSTEM\CurrentControlSet\Services\{#AgentServiceName}');
