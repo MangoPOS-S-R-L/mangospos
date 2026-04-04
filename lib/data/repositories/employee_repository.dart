@@ -382,6 +382,19 @@ class EmployeeRepository {
     );
   }
 
+  Future<void> updateUserPassword({
+    required String userId,
+    required String newPassword,
+  }) async {
+    await _client.rpc(
+      'admin_update_user_password',
+      params: {
+        'target_user_id': userId,
+        'new_password': newPassword,
+      },
+    );
+  }
+
   Future<void> deleteEmployee({required String employeeId}) async {
     await _client.from('employees').delete().eq('id', employeeId);
   }

@@ -4,9 +4,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
+import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_radius.dart';
 import 'package:mangopos/core/theme/app_shadows.dart';
+import 'package:mangopos/core/theme/app_spacing.dart';
 import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/presentation/reports/services/reports_csv_export_service.dart';
 import 'package:mangopos/presentation/reports/services/reports_export_service.dart';
@@ -41,14 +43,12 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
       return;
     }
 
-    // Si vino de una ruta directa con categoría, ir a la pantalla principal de informes
     if (widget.initialCategory != null) {
       viewModel.selectCategory(null);
       context.go(AppRoutes.reports);
       return;
     }
 
-    // Si la categoría se seleccionó desde el grid interno, solo limpiarla
     viewModel.selectCategory(null);
   }
 
@@ -100,44 +100,63 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Padding(
-                padding: const EdgeInsets.all(24.0),
+                padding: const EdgeInsets.all(AppSpacing.containerPadding),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
                       children: [
                         Padding(
-                          padding: const EdgeInsets.only(right: 16.0),
+                          padding:
+                              const EdgeInsets.only(right: AppSpacing.lg),
                           child: IconButton(
                             icon: const Icon(
                               Icons.arrow_back,
                               color: AppColors.foreground,
                             ),
-                            onPressed: () => _handleBack(state, viewModel),
+                            onPressed: () =>
+                                _handleBack(state, viewModel),
                           ),
                         ),
-                        Text(
-                          state.selectedCategory == null
-                              ? 'Informes'
-                              : viewModel.getCategoryTitle(
-                                  state.selectedCategory!,
-                                ),
-                          style: const TextStyle(
-                            fontSize: 28,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.foreground,
+                        Expanded(
+                          child: Text(
+                            state.selectedCategory == null
+                                ? 'Informes'
+                                : viewModel.getCategoryTitle(
+                                    state.selectedCategory!,
+                                  ),
+                            style: const TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.foreground,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        const Spacer(),
+                        if (state.loading)
+                          Padding(
+                            padding: const EdgeInsets.only(
+                                right: AppSpacing.sm),
+                            child: SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: AppColors.primary,
+                              ),
+                            ),
+                          ),
                         IconButton(
                           tooltip: 'Actualizar',
-                          onPressed: state.loading ? null : viewModel.load,
+                          onPressed:
+                              state.loading ? null : viewModel.load,
                           icon: const Icon(Icons.refresh),
                         ),
                       ],
                     ),
                     if (state.selectedCategory == null) ...[
-                      const SizedBox(height: 8),
+                      const SizedBox(height: AppSpacing.sm),
                       const Text(
                         'Mira y analiza todos los números que genera tu negocio',
                         style: TextStyle(
@@ -146,7 +165,7 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
                         ),
                       ),
                     ] else ...[
-                      const SizedBox(height: 16),
+                      const SizedBox(height: AppSpacing.itemGap),
                       _ReportsToolbar(
                         state: state,
                         viewModel: viewModel,
@@ -158,7 +177,8 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
                           );
                         },
                         onExportCsv: () async {
-                          await ReportsCsvExportService.exportCurrentReport(
+                          await ReportsCsvExportService
+                              .exportCurrentReport(
                             category: state.selectedCategory!,
                             state: state,
                             viewModel: viewModel,
@@ -183,17 +203,52 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
     ReportsViewModel viewModel,
   ) {
     if (state.loading && state.salesSummary == null) {
-      return Center(child: CircularProgressIndicator(color: AppColors.primary));
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(color: AppColors.primary),
+            const SizedBox(height: AppSpacing.lg),
+            const Text(
+              'Cargando informes...',
+              style: TextStyle(
+                color: AppColors.mutedForeground,
+                fontSize: 14,
+              ),
+            ),
+          ],
+        ),
+      );
     }
 
     if (state.error != null && state.selectedCategory == null) {
       return Center(
         child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Text(
-            state.error!,
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: AppColors.destructive),
+          padding: const EdgeInsets.all(AppSpacing.containerPadding),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.error_outline_rounded,
+                size: 48,
+                color: AppColors.destructive.withValues(alpha: 0.7),
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              Text(
+                state.error!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: AppColors.destructive,
+                  fontSize: 15,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              OutlinedButton.icon(
+                onPressed: viewModel.load,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Reintentar'),
+              ),
+            ],
           ),
         ),
       );
@@ -202,19 +257,15 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
     if (state.selectedCategory == ReportCategory.sales) {
       return _SalesReportSection(state: state, viewModel: viewModel);
     }
-
     if (state.selectedCategory == ReportCategory.finances) {
       return _FinanceReportSection(state: state, viewModel: viewModel);
     }
-
     if (state.selectedCategory == ReportCategory.inventory) {
       return _InventoryReportSection(state: state, viewModel: viewModel);
     }
-
     if (state.selectedCategory == ReportCategory.purchases) {
       return _PurchasesReportSection(state: state, viewModel: viewModel);
     }
-
     if (state.selectedCategory == ReportCategory.taxes) {
       return _TaxReportSection(state: state, viewModel: viewModel);
     }
@@ -225,19 +276,31 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
   }
 
   Widget _buildGrid(BuildContext context, ReportsViewModel viewModel) {
-    return GridView.count(
-      crossAxisCount: 5,
-      padding: const EdgeInsets.all(24),
-      mainAxisSpacing: 24,
-      crossAxisSpacing: 24,
-      childAspectRatio: 1.0,
-      children: ReportCategory.values.map((category) {
-        return _ReportCard(
-          title: viewModel.getCategoryTitle(category),
-          icon: viewModel.getCategoryIcon(category),
-          onTap: () => viewModel.selectCategory(category),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final crossAxisCount =
+            constraints.maxWidth >= AppBreakpoints.desktop
+                ? 5
+                : constraints.maxWidth >= AppBreakpoints.tablet
+                    ? 4
+                    : constraints.maxWidth >= AppBreakpoints.mobile
+                        ? 3
+                        : 2;
+        return GridView.count(
+          crossAxisCount: crossAxisCount,
+          padding: const EdgeInsets.all(AppSpacing.sectionGap),
+          mainAxisSpacing: AppSpacing.sectionGap,
+          crossAxisSpacing: AppSpacing.sectionGap,
+          childAspectRatio: 1.0,
+          children: ReportCategory.values.map((category) {
+            return _ReportCard(
+              title: viewModel.getCategoryTitle(category),
+              icon: viewModel.getCategoryIcon(category),
+              onTap: () => viewModel.selectCategory(category),
+            );
+          }).toList(),
         );
-      }).toList(),
+      },
     );
   }
 
@@ -249,9 +312,10 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
     final reports = viewModel.getReportsForCategory(category);
 
     return ListView.separated(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.all(AppSpacing.containerPadding),
       itemCount: reports.length,
-      separatorBuilder: (context, index) => const SizedBox(height: 16),
+      separatorBuilder: (context, index) =>
+          const SizedBox(height: AppSpacing.itemGap),
       itemBuilder: (context, index) {
         final report = reports[index];
         return _ReportListItem(
@@ -263,6 +327,10 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+// Toolbar
+// ---------------------------------------------------------------------------
 
 class _ReportsToolbar extends StatelessWidget {
   const _ReportsToolbar({
@@ -283,32 +351,37 @@ class _ReportsToolbar extends StatelessWidget {
     final displayedTo = state.salesTo.subtract(const Duration(days: 1));
 
     return Wrap(
-      spacing: 12,
-      runSpacing: 12,
+      spacing: AppSpacing.tightGap,
+      runSpacing: AppSpacing.tightGap,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         _RangeChip(
           label: 'Hoy',
-          selected: state.salesRangePreset == SalesReportRangePreset.today,
-          onTap: () => viewModel.setSalesPreset(SalesReportRangePreset.today),
+          selected:
+              state.salesRangePreset == SalesReportRangePreset.today,
+          onTap: () =>
+              viewModel.setSalesPreset(SalesReportRangePreset.today),
         ),
         _RangeChip(
           label: 'Ayer',
-          selected: state.salesRangePreset == SalesReportRangePreset.yesterday,
-          onTap: () =>
-              viewModel.setSalesPreset(SalesReportRangePreset.yesterday),
+          selected:
+              state.salesRangePreset == SalesReportRangePreset.yesterday,
+          onTap: () => viewModel
+              .setSalesPreset(SalesReportRangePreset.yesterday),
         ),
         _RangeChip(
           label: 'Esta semana',
-          selected: state.salesRangePreset == SalesReportRangePreset.thisWeek,
-          onTap: () =>
-              viewModel.setSalesPreset(SalesReportRangePreset.thisWeek),
+          selected:
+              state.salesRangePreset == SalesReportRangePreset.thisWeek,
+          onTap: () => viewModel
+              .setSalesPreset(SalesReportRangePreset.thisWeek),
         ),
         _RangeChip(
           label: 'Este mes',
-          selected: state.salesRangePreset == SalesReportRangePreset.thisMonth,
-          onTap: () =>
-              viewModel.setSalesPreset(SalesReportRangePreset.thisMonth),
+          selected:
+              state.salesRangePreset == SalesReportRangePreset.thisMonth,
+          onTap: () => viewModel
+              .setSalesPreset(SalesReportRangePreset.thisMonth),
         ),
         OutlinedButton.icon(
           onPressed: () async {
@@ -322,7 +395,8 @@ class _ReportsToolbar extends StatelessWidget {
               ),
             );
             if (picked == null) return;
-            await viewModel.setCustomSalesRange(picked.start, picked.end);
+            await viewModel.setCustomSalesRange(
+                picked.start, picked.end);
           },
           icon: const Icon(Icons.date_range_outlined),
           label: const Text('Rango personalizado'),
@@ -330,23 +404,33 @@ class _ReportsToolbar extends StatelessWidget {
         OutlinedButton.icon(
           onPressed: onExportPdf,
           icon: const Icon(Icons.picture_as_pdf_outlined),
-          label: const Text('Exportar PDF'),
+          label: const Text('PDF'),
         ),
         OutlinedButton.icon(
           onPressed: onExportCsv,
           icon: const Icon(Icons.table_view_outlined),
-          label: const Text('Exportar CSV'),
+          label: const Text('CSV'),
         ),
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          padding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
             color: AppColors.secondary,
             borderRadius: BorderRadius.circular(AppRadius.card),
             border: Border.all(color: AppColors.border),
           ),
-          child: Text(
-            '${dateFormat.format(state.salesFrom)} - ${dateFormat.format(displayedTo)}',
-            style: const TextStyle(fontWeight: FontWeight.w600),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.calendar_today,
+                  size: 14, color: AppColors.mutedForeground),
+              const SizedBox(width: AppSpacing.sm),
+              Text(
+                '${dateFormat.format(state.salesFrom)} – ${dateFormat.format(displayedTo)}',
+                style: const TextStyle(
+                    fontWeight: FontWeight.w600, fontSize: 13),
+              ),
+            ],
           ),
         ),
       ],
@@ -354,100 +438,134 @@ class _ReportsToolbar extends StatelessWidget {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Report sections
+// ---------------------------------------------------------------------------
+
+Widget _buildMetricsWrap(List<SalesMetricCardData> metrics) {
+  return LayoutBuilder(
+    builder: (context, constraints) {
+      final availableWidth = constraints.maxWidth;
+      const cardMinWidth = 220.0;
+      final cols =
+          (availableWidth / (cardMinWidth + AppSpacing.itemGap))
+              .floor()
+              .clamp(1, metrics.length);
+      final cardWidth =
+          (availableWidth - (cols - 1) * AppSpacing.itemGap) / cols;
+
+      return Wrap(
+        spacing: AppSpacing.itemGap,
+        runSpacing: AppSpacing.itemGap,
+        children: metrics
+            .map(
+              (metric) => SizedBox(
+                width: cardWidth,
+                child: _MetricCard(
+                  title: metric.title,
+                  value: metric.value,
+                  subtitle: metric.subtitle,
+                  icon: metric.icon,
+                  color: metric.color,
+                ),
+              ),
+            )
+            .toList(),
+      );
+    },
+  );
+}
+
+const _sectionPadding = EdgeInsets.fromLTRB(
+    AppSpacing.containerPadding,
+    0,
+    AppSpacing.containerPadding,
+    AppSpacing.containerPadding);
+
 class _SalesReportSection extends StatelessWidget {
-  const _SalesReportSection({required this.state, required this.viewModel});
+  const _SalesReportSection(
+      {required this.state, required this.viewModel});
 
   final ReportsState state;
   final ReportsViewModel viewModel;
 
   @override
   Widget build(BuildContext context) {
-    final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
+    final currency =
+        NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
     final metrics = viewModel.getSalesMetricCards();
     final methodRows = viewModel.getPaymentMethodRows();
     final hourlyRows = viewModel.getHourlyRows();
     final productRows = viewModel.getTopProductRows();
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      padding: _sectionPadding,
       children: [
         if (state.error != null) ...[
-          const SizedBox(height: 16),
-          Text(state.error!, style: const TextStyle(color: AppColors.destructive)),
+          const SizedBox(height: AppSpacing.itemGap),
+          Text(state.error!,
+              style: const TextStyle(color: AppColors.destructive)),
         ],
-        const SizedBox(height: 20),
-        Wrap(
-          spacing: 16,
-          runSpacing: 16,
-          children: metrics
-              .map(
-                (metric) => SizedBox(
-                  width: 250,
-                  child: _MetricCard(
-                    title: metric.title,
-                    value: metric.value,
-                    subtitle: metric.subtitle,
-                    icon: metric.icon,
-                    color: metric.color,
-                  ),
-                ),
-              )
-              .toList(),
-        ),
-        const SizedBox(height: 24),
+        const SizedBox(height: AppSpacing.xl),
+        _buildMetricsWrap(metrics),
+        const SizedBox(height: AppSpacing.sectionGap),
         _ChartCard(
           title: 'Distribución de ventas',
           rows: methodRows,
           color: AppColors.primary,
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: AppSpacing.itemGap),
         LayoutBuilder(
           builder: (context, constraints) {
-            final singleColumn = constraints.maxWidth < 1100;
+            final singleColumn =
+                constraints.maxWidth < AppBreakpoints.tablet;
+            final cards = [
+              _BreakdownCard(
+                title: 'Ventas por método de pago',
+                emptyText: 'No hay pagos en el rango seleccionado.',
+                emptyIcon: Icons.payment_outlined,
+                children: methodRows
+                    .map((row) => _AmountRow(
+                          label: row.label,
+                          trailing:
+                              '${currency.format(row.amount)} · ${row.count} tx',
+                        ))
+                    .toList(),
+              ),
+              _BreakdownCard(
+                title: 'Top productos vendidos',
+                emptyText: 'No hay productos cobrados en el rango.',
+                emptyIcon: Icons.inventory_2_outlined,
+                children: productRows
+                    .map((row) => _AmountRow(
+                          label: row.label,
+                          trailing:
+                              '${row.quantity.toStringAsFixed(0)} uds · ${currency.format(row.amount)}',
+                        ))
+                    .toList(),
+              ),
+              _BreakdownCard(
+                title: 'Ventas por hora',
+                emptyText: 'No hay actividad en el rango.',
+                emptyIcon: Icons.schedule_outlined,
+                children: hourlyRows
+                    .map((row) => _AmountRow(
+                          label: row.label,
+                          trailing:
+                              '${currency.format(row.amount)} · ${row.count} tx',
+                        ))
+                    .toList(),
+              ),
+            ];
+
             if (singleColumn) {
               return Column(
                 children: [
-                  _BreakdownCard(
-                    title: 'Ventas por método de pago',
-                    emptyText: 'No hay pagos en el rango seleccionado.',
-                    children: methodRows
-                        .map(
-                          (row) => _AmountRow(
-                            label: row.label,
-                            trailing:
-                                '${currency.format(row.amount)} · ${row.count} tx',
-                          ),
-                        )
-                        .toList(),
-                  ),
-                  const SizedBox(height: 16),
-                  _BreakdownCard(
-                    title: 'Top productos vendidos',
-                    emptyText: 'No hay productos cobrados en el rango.',
-                    children: productRows
-                        .map(
-                          (row) => _AmountRow(
-                            label: row.label,
-                            trailing:
-                                '${row.quantity.toStringAsFixed(0)} uds · ${currency.format(row.amount)}',
-                          ),
-                        )
-                        .toList(),
-                  ),
-                  const SizedBox(height: 16),
-                  _BreakdownCard(
-                    title: 'Ventas por hora',
-                    emptyText: 'No hay actividad en el rango.',
-                    children: hourlyRows
-                        .map(
-                          (row) => _AmountRow(
-                            label: row.label,
-                            trailing:
-                                '${currency.format(row.amount)} · ${row.count} tx',
-                          ),
-                        )
-                        .toList(),
-                  ),
+                  for (int i = 0; i < cards.length; i++) ...[
+                    if (i > 0)
+                      const SizedBox(height: AppSpacing.itemGap),
+                    cards[i],
+                  ],
                 ],
               );
             }
@@ -455,53 +573,11 @@ class _SalesReportSection extends StatelessWidget {
             return Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: _BreakdownCard(
-                    title: 'Ventas por método de pago',
-                    emptyText: 'No hay pagos en el rango seleccionado.',
-                    children: methodRows
-                        .map(
-                          (row) => _AmountRow(
-                            label: row.label,
-                            trailing:
-                                '${currency.format(row.amount)} · ${row.count} tx',
-                          ),
-                        )
-                        .toList(),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _BreakdownCard(
-                    title: 'Top productos vendidos',
-                    emptyText: 'No hay productos cobrados en el rango.',
-                    children: productRows
-                        .map(
-                          (row) => _AmountRow(
-                            label: row.label,
-                            trailing:
-                                '${row.quantity.toStringAsFixed(0)} uds · ${currency.format(row.amount)}',
-                          ),
-                        )
-                        .toList(),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _BreakdownCard(
-                    title: 'Ventas por hora',
-                    emptyText: 'No hay actividad en el rango.',
-                    children: hourlyRows
-                        .map(
-                          (row) => _AmountRow(
-                            label: row.label,
-                            trailing:
-                                '${currency.format(row.amount)} · ${row.count} tx',
-                          ),
-                        )
-                        .toList(),
-                  ),
-                ),
+                for (int i = 0; i < cards.length; i++) ...[
+                  if (i > 0)
+                    const SizedBox(width: AppSpacing.itemGap),
+                  Expanded(child: cards[i]),
+                ],
               ],
             );
           },
@@ -512,85 +588,81 @@ class _SalesReportSection extends StatelessWidget {
 }
 
 class _FinanceReportSection extends StatelessWidget {
-  const _FinanceReportSection({required this.state, required this.viewModel});
+  const _FinanceReportSection(
+      {required this.state, required this.viewModel});
 
   final ReportsState state;
   final ReportsViewModel viewModel;
 
   @override
   Widget build(BuildContext context) {
-    final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
+    final currency =
+        NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
     final metrics = viewModel.getFinanceMetricCards();
     final typeRows = viewModel.getFinanceTypeRows();
     final sessionRows = viewModel.getFinanceSessionRows();
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      padding: _sectionPadding,
       children: [
         const Text(
           'Resumen consolidado de caja en el rango seleccionado.',
-          style: TextStyle(color: AppColors.mutedForeground, fontSize: 15),
+          style:
+              TextStyle(color: AppColors.mutedForeground, fontSize: 15),
         ),
         if (state.error != null) ...[
-          const SizedBox(height: 16),
-          Text(state.error!, style: const TextStyle(color: AppColors.destructive)),
+          const SizedBox(height: AppSpacing.itemGap),
+          Text(state.error!,
+              style: const TextStyle(color: AppColors.destructive)),
         ],
-        const SizedBox(height: 20),
-        Wrap(
-          spacing: 16,
-          runSpacing: 16,
-          children: metrics
-              .map(
-                (metric) => SizedBox(
-                  width: 250,
-                  child: _MetricCard(
-                    title: metric.title,
-                    value: metric.value,
-                    subtitle: metric.subtitle,
-                    icon: metric.icon,
-                    color: metric.color,
-                  ),
-                ),
-              )
-              .toList(),
-        ),
-        const SizedBox(height: 24),
+        const SizedBox(height: AppSpacing.xl),
+        _buildMetricsWrap(metrics),
+        const SizedBox(height: AppSpacing.sectionGap),
         _ChartCard(
           title: 'Movimientos de caja',
           rows: typeRows,
           color: const Color(0xFF2563EB),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: AppSpacing.itemGap),
         LayoutBuilder(
           builder: (context, constraints) {
-            final singleColumn = constraints.maxWidth < 900;
+            final singleColumn =
+                constraints.maxWidth < AppBreakpoints.tablet;
+            final cards = [
+              _BreakdownCard(
+                title: 'Movimientos por tipo',
+                emptyText: 'No hay movimientos de caja en el rango.',
+                emptyIcon: Icons.swap_vert_outlined,
+                children: typeRows
+                    .map((row) => _AmountRow(
+                          label: row.label,
+                          trailing:
+                              '${currency.format(row.amount)} · ${row.count} movs',
+                        ))
+                    .toList(),
+              ),
+              _BreakdownCard(
+                title: 'Estado de sesiones',
+                emptyText: 'No hay sesiones de caja en el rango.',
+                emptyIcon: Icons.lock_clock_outlined,
+                children: sessionRows.map((row) {
+                  final trailing = row.amount != 0
+                      ? currency.format(row.amount)
+                      : '${row.count} sesiones';
+                  return _AmountRow(
+                      label: row.label, trailing: trailing);
+                }).toList(),
+              ),
+            ];
+
             if (singleColumn) {
               return Column(
                 children: [
-                  _BreakdownCard(
-                    title: 'Movimientos por tipo',
-                    emptyText: 'No hay movimientos de caja en el rango.',
-                    children: typeRows
-                        .map(
-                          (row) => _AmountRow(
-                            label: row.label,
-                            trailing:
-                                '${currency.format(row.amount)} · ${row.count} movs',
-                          ),
-                        )
-                        .toList(),
-                  ),
-                  const SizedBox(height: 16),
-                  _BreakdownCard(
-                    title: 'Estado de sesiones',
-                    emptyText: 'No hay sesiones de caja en el rango.',
-                    children: sessionRows.map((row) {
-                      final trailing = row.amount != 0
-                          ? currency.format(row.amount)
-                          : '${row.count} sesiones';
-                      return _AmountRow(label: row.label, trailing: trailing);
-                    }).toList(),
-                  ),
+                  for (int i = 0; i < cards.length; i++) ...[
+                    if (i > 0)
+                      const SizedBox(height: AppSpacing.itemGap),
+                    cards[i],
+                  ],
                 ],
               );
             }
@@ -598,34 +670,11 @@ class _FinanceReportSection extends StatelessWidget {
             return Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: _BreakdownCard(
-                    title: 'Movimientos por tipo',
-                    emptyText: 'No hay movimientos de caja en el rango.',
-                    children: typeRows
-                        .map(
-                          (row) => _AmountRow(
-                            label: row.label,
-                            trailing:
-                                '${currency.format(row.amount)} · ${row.count} movs',
-                          ),
-                        )
-                        .toList(),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _BreakdownCard(
-                    title: 'Estado de sesiones',
-                    emptyText: 'No hay sesiones de caja en el rango.',
-                    children: sessionRows.map((row) {
-                      final trailing = row.amount != 0
-                          ? currency.format(row.amount)
-                          : '${row.count} sesiones';
-                      return _AmountRow(label: row.label, trailing: trailing);
-                    }).toList(),
-                  ),
-                ),
+                for (int i = 0; i < cards.length; i++) ...[
+                  if (i > 0)
+                    const SizedBox(width: AppSpacing.itemGap),
+                  Expanded(child: cards[i]),
+                ],
               ],
             );
           },
@@ -636,103 +685,95 @@ class _FinanceReportSection extends StatelessWidget {
 }
 
 class _InventoryReportSection extends StatelessWidget {
-  const _InventoryReportSection({required this.state, required this.viewModel});
+  const _InventoryReportSection(
+      {required this.state, required this.viewModel});
 
   final ReportsState state;
   final ReportsViewModel viewModel;
 
   @override
   Widget build(BuildContext context) {
-    final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
+    final currency =
+        NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
     final metrics = viewModel.getInventoryMetricCards();
     final topRows = viewModel.getInventoryTopStockRows();
     final alertRows = viewModel.getInventoryAlertRows();
     final movementRows = viewModel.getInventoryMovementRows();
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      padding: _sectionPadding,
       children: [
         const Text(
           'Visión general de existencias, alertas y movimientos recientes.',
-          style: TextStyle(color: AppColors.mutedForeground, fontSize: 15),
+          style:
+              TextStyle(color: AppColors.mutedForeground, fontSize: 15),
         ),
         if (state.error != null) ...[
-          const SizedBox(height: 16),
-          Text(state.error!, style: const TextStyle(color: AppColors.destructive)),
+          const SizedBox(height: AppSpacing.itemGap),
+          Text(state.error!,
+              style: const TextStyle(color: AppColors.destructive)),
         ],
-        const SizedBox(height: 20),
-        Wrap(
-          spacing: 16,
-          runSpacing: 16,
-          children: metrics
-              .map(
-                (metric) => SizedBox(
-                  width: 250,
-                  child: _MetricCard(
-                    title: metric.title,
-                    value: metric.value,
-                    subtitle: metric.subtitle,
-                    icon: metric.icon,
-                    color: metric.color,
-                  ),
-                ),
-              )
-              .toList(),
-        ),
-        const SizedBox(height: 24),
+        const SizedBox(height: AppSpacing.xl),
+        _buildMetricsWrap(metrics),
+        const SizedBox(height: AppSpacing.sectionGap),
         _ChartCard(
           title: 'Movimientos de inventario',
           rows: movementRows,
           color: const Color(0xFF059669),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: AppSpacing.itemGap),
         LayoutBuilder(
           builder: (context, constraints) {
-            final singleColumn = constraints.maxWidth < 1100;
+            final singleColumn =
+                constraints.maxWidth < AppBreakpoints.tablet;
+            final cards = [
+              _BreakdownCard(
+                title: 'Top insumos por existencia',
+                emptyText: 'No hay datos de stock para mostrar.',
+                emptyIcon: Icons.inventory_outlined,
+                children: topRows
+                    .map((row) => _AmountRow(
+                          label: row.label,
+                          trailing:
+                              '${row.quantity.toStringAsFixed(2)} uds',
+                        ))
+                    .toList(),
+              ),
+              _BreakdownCard(
+                title: 'Alertas de inventario',
+                emptyText: 'No hay insumos en alerta ahora mismo.',
+                emptyIcon: Icons.warning_amber_outlined,
+                children: alertRows
+                    .map((row) => _AmountRow(
+                          label: row.label,
+                          trailing: row.amount <= 0
+                              ? 'Agotado'
+                              : 'Stock ${row.amount.toStringAsFixed(2)} · mín ${row.quantity.toStringAsFixed(2)}',
+                        ))
+                    .toList(),
+              ),
+              _BreakdownCard(
+                title: 'Movimientos recientes por tipo',
+                emptyText: 'No hay movimientos recientes.',
+                emptyIcon: Icons.swap_horiz_outlined,
+                children: movementRows
+                    .map((row) => _AmountRow(
+                          label: row.label,
+                          trailing:
+                              '${row.amount.toStringAsFixed(2)} uds · ${row.count} movs',
+                        ))
+                    .toList(),
+              ),
+            ];
+
             if (singleColumn) {
               return Column(
                 children: [
-                  _BreakdownCard(
-                    title: 'Top insumos por existencia',
-                    emptyText: 'No hay datos de stock para mostrar.',
-                    children: topRows
-                        .map(
-                          (row) => _AmountRow(
-                            label: row.label,
-                            trailing: '${row.quantity.toStringAsFixed(2)} uds',
-                          ),
-                        )
-                        .toList(),
-                  ),
-                  const SizedBox(height: 16),
-                  _BreakdownCard(
-                    title: 'Alertas de inventario',
-                    emptyText: 'No hay insumos en alerta ahora mismo.',
-                    children: alertRows
-                        .map(
-                          (row) => _AmountRow(
-                            label: row.label,
-                            trailing: row.amount <= 0
-                                ? 'Agotado'
-                                : 'Stock ${row.amount.toStringAsFixed(2)} · mín ${row.quantity.toStringAsFixed(2)}',
-                          ),
-                        )
-                        .toList(),
-                  ),
-                  const SizedBox(height: 16),
-                  _BreakdownCard(
-                    title: 'Movimientos recientes por tipo',
-                    emptyText: 'No hay movimientos recientes.',
-                    children: movementRows
-                        .map(
-                          (row) => _AmountRow(
-                            label: row.label,
-                            trailing:
-                                '${row.amount.toStringAsFixed(2)} uds · ${row.count} movs',
-                          ),
-                        )
-                        .toList(),
-                  ),
+                  for (int i = 0; i < cards.length; i++) ...[
+                    if (i > 0)
+                      const SizedBox(height: AppSpacing.itemGap),
+                    cards[i],
+                  ],
                 ],
               );
             }
@@ -740,63 +781,40 @@ class _InventoryReportSection extends StatelessWidget {
             return Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: _BreakdownCard(
-                    title: 'Top insumos por existencia',
-                    emptyText: 'No hay datos de stock para mostrar.',
-                    children: topRows
-                        .map(
-                          (row) => _AmountRow(
-                            label: row.label,
-                            trailing: '${row.quantity.toStringAsFixed(2)} uds',
-                          ),
-                        )
-                        .toList(),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _BreakdownCard(
-                    title: 'Alertas de inventario',
-                    emptyText: 'No hay insumos en alerta ahora mismo.',
-                    children: alertRows
-                        .map(
-                          (row) => _AmountRow(
-                            label: row.label,
-                            trailing: row.amount <= 0
-                                ? 'Agotado'
-                                : 'Stock ${row.amount.toStringAsFixed(2)} · mín ${row.quantity.toStringAsFixed(2)}',
-                          ),
-                        )
-                        .toList(),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _BreakdownCard(
-                    title: 'Movimientos recientes por tipo',
-                    emptyText: 'No hay movimientos recientes.',
-                    children: movementRows
-                        .map(
-                          (row) => _AmountRow(
-                            label: row.label,
-                            trailing:
-                                '${row.amount.toStringAsFixed(2)} uds · ${row.count} movs',
-                          ),
-                        )
-                        .toList(),
-                  ),
-                ),
+                for (int i = 0; i < cards.length; i++) ...[
+                  if (i > 0)
+                    const SizedBox(width: AppSpacing.itemGap),
+                  Expanded(child: cards[i]),
+                ],
               ],
             );
           },
         ),
-        const SizedBox(height: 16),
-        Text(
-          'Valor de inventario estimado: ${currency.format((state.inventorySummary?['total_stock_value'] as num?)?.toDouble() ?? 0)}',
-          style: const TextStyle(
-            fontWeight: FontWeight.w700,
-            color: AppColors.foreground,
+        const SizedBox(height: AppSpacing.itemGap),
+        Container(
+          padding: const EdgeInsets.all(AppSpacing.cardPadding),
+          decoration: BoxDecoration(
+            color: const Color(0xFF059669).withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            border: Border.all(
+                color:
+                    const Color(0xFF059669).withValues(alpha: 0.15)),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.assessment_outlined,
+                  color: Color(0xFF059669)),
+              const SizedBox(width: AppSpacing.tightGap),
+              Expanded(
+                child: Text(
+                  'Valor de inventario estimado: ${currency.format((state.inventorySummary?['total_stock_value'] as num?)?.toDouble() ?? 0)}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.foreground,
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ],
@@ -805,88 +823,82 @@ class _InventoryReportSection extends StatelessWidget {
 }
 
 class _PurchasesReportSection extends StatelessWidget {
-  const _PurchasesReportSection({required this.state, required this.viewModel});
+  const _PurchasesReportSection(
+      {required this.state, required this.viewModel});
 
   final ReportsState state;
   final ReportsViewModel viewModel;
 
   @override
   Widget build(BuildContext context) {
-    final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
+    final currency =
+        NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
     final metrics = viewModel.getPurchaseMetricCards();
     final statusRows = viewModel.getPurchaseStatusRows();
     final supplierRows = viewModel.getPurchaseSupplierRows();
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      padding: _sectionPadding,
       children: [
         const Text(
           'Resumen de órdenes, recepción y proveedores del período.',
-          style: TextStyle(color: AppColors.mutedForeground, fontSize: 15),
+          style:
+              TextStyle(color: AppColors.mutedForeground, fontSize: 15),
         ),
         if (state.error != null) ...[
-          const SizedBox(height: 16),
-          Text(state.error!, style: const TextStyle(color: AppColors.destructive)),
+          const SizedBox(height: AppSpacing.itemGap),
+          Text(state.error!,
+              style: const TextStyle(color: AppColors.destructive)),
         ],
-        const SizedBox(height: 20),
-        Wrap(
-          spacing: 16,
-          runSpacing: 16,
-          children: metrics
-              .map(
-                (metric) => SizedBox(
-                  width: 250,
-                  child: _MetricCard(
-                    title: metric.title,
-                    value: metric.value,
-                    subtitle: metric.subtitle,
-                    icon: metric.icon,
-                    color: metric.color,
-                  ),
-                ),
-              )
-              .toList(),
-        ),
-        const SizedBox(height: 24),
+        const SizedBox(height: AppSpacing.xl),
+        _buildMetricsWrap(metrics),
+        const SizedBox(height: AppSpacing.sectionGap),
         _ChartCard(
           title: 'Compras por estado',
           rows: statusRows,
           color: const Color(0xFF7C3AED),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: AppSpacing.itemGap),
         LayoutBuilder(
           builder: (context, constraints) {
-            final singleColumn = constraints.maxWidth < 900;
+            final singleColumn =
+                constraints.maxWidth < AppBreakpoints.tablet;
+            final cards = [
+              _BreakdownCard(
+                title: 'Órdenes por estado',
+                emptyText: 'No hay órdenes en el período.',
+                emptyIcon: Icons.receipt_long_outlined,
+                children: statusRows
+                    .map((row) => _AmountRow(
+                          label: row.label,
+                          trailing:
+                              '${currency.format(row.amount)} · ${row.count} órdenes',
+                        ))
+                    .toList(),
+              ),
+              _BreakdownCard(
+                title: 'Top proveedores',
+                emptyText:
+                    'No hay proveedores con órdenes en el período.',
+                emptyIcon: Icons.local_shipping_outlined,
+                children: supplierRows
+                    .map((row) => _AmountRow(
+                          label: row.label,
+                          trailing:
+                              '${currency.format(row.amount)} · ${row.count} órdenes',
+                        ))
+                    .toList(),
+              ),
+            ];
+
             if (singleColumn) {
               return Column(
                 children: [
-                  _BreakdownCard(
-                    title: 'Órdenes por estado',
-                    emptyText: 'No hay órdenes en el período.',
-                    children: statusRows
-                        .map(
-                          (row) => _AmountRow(
-                            label: row.label,
-                            trailing:
-                                '${currency.format(row.amount)} · ${row.count} órdenes',
-                          ),
-                        )
-                        .toList(),
-                  ),
-                  const SizedBox(height: 16),
-                  _BreakdownCard(
-                    title: 'Top proveedores',
-                    emptyText: 'No hay proveedores con órdenes en el período.',
-                    children: supplierRows
-                        .map(
-                          (row) => _AmountRow(
-                            label: row.label,
-                            trailing:
-                                '${currency.format(row.amount)} · ${row.count} órdenes',
-                          ),
-                        )
-                        .toList(),
-                  ),
+                  for (int i = 0; i < cards.length; i++) ...[
+                    if (i > 0)
+                      const SizedBox(height: AppSpacing.itemGap),
+                    cards[i],
+                  ],
                 ],
               );
             }
@@ -894,37 +906,11 @@ class _PurchasesReportSection extends StatelessWidget {
             return Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: _BreakdownCard(
-                    title: 'Órdenes por estado',
-                    emptyText: 'No hay órdenes en el período.',
-                    children: statusRows
-                        .map(
-                          (row) => _AmountRow(
-                            label: row.label,
-                            trailing:
-                                '${currency.format(row.amount)} · ${row.count} órdenes',
-                          ),
-                        )
-                        .toList(),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _BreakdownCard(
-                    title: 'Top proveedores',
-                    emptyText: 'No hay proveedores con órdenes en el período.',
-                    children: supplierRows
-                        .map(
-                          (row) => _AmountRow(
-                            label: row.label,
-                            trailing:
-                                '${currency.format(row.amount)} · ${row.count} órdenes',
-                          ),
-                        )
-                        .toList(),
-                  ),
-                ),
+                for (int i = 0; i < cards.length; i++) ...[
+                  if (i > 0)
+                    const SizedBox(width: AppSpacing.itemGap),
+                  Expanded(child: cards[i]),
+                ],
               ],
             );
           },
@@ -935,65 +921,52 @@ class _PurchasesReportSection extends StatelessWidget {
 }
 
 class _TaxReportSection extends StatelessWidget {
-  const _TaxReportSection({required this.state, required this.viewModel});
+  const _TaxReportSection(
+      {required this.state, required this.viewModel});
 
   final ReportsState state;
   final ReportsViewModel viewModel;
 
   @override
   Widget build(BuildContext context) {
-    final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
+    final currency =
+        NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
     final metrics = viewModel.getTaxMetricCards();
     final taxRows = viewModel.getTaxTypeRows();
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      padding: _sectionPadding,
       children: [
         const Text(
           'Resumen de impuestos y propina de ley cobrados por tipo en el rango seleccionado.',
-          style: TextStyle(color: AppColors.mutedForeground, fontSize: 15),
+          style:
+              TextStyle(color: AppColors.mutedForeground, fontSize: 15),
         ),
         if (state.error != null) ...[
-          const SizedBox(height: 16),
-          Text(state.error!, style: const TextStyle(color: AppColors.destructive)),
+          const SizedBox(height: AppSpacing.itemGap),
+          Text(state.error!,
+              style: const TextStyle(color: AppColors.destructive)),
         ],
-        const SizedBox(height: 20),
-        Wrap(
-          spacing: 16,
-          runSpacing: 16,
-          children: metrics
-              .map(
-                (metric) => SizedBox(
-                  width: 250,
-                  child: _MetricCard(
-                    title: metric.title,
-                    value: metric.value,
-                    subtitle: metric.subtitle,
-                    icon: metric.icon,
-                    color: metric.color,
-                  ),
-                ),
-              )
-              .toList(),
-        ),
-        const SizedBox(height: 24),
+        const SizedBox(height: AppSpacing.xl),
+        _buildMetricsWrap(metrics),
+        const SizedBox(height: AppSpacing.sectionGap),
         _ChartCard(
           title: 'Impuestos y ley por tipo',
           rows: taxRows,
           color: const Color(0xFFB45309),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: AppSpacing.itemGap),
         _BreakdownCard(
           title: 'Detalle por tipo de impuesto o ley',
-          emptyText: 'No hay impuestos o propina de ley generados en el rango.',
+          emptyText:
+              'No hay impuestos o propina de ley generados en el rango.',
+          emptyIcon: Icons.receipt_outlined,
           children: taxRows
-              .map(
-                (row) => _AmountRow(
-                  label: row.label,
-                  trailing:
-                      '${currency.format(row.amount)} · Base ${currency.format(row.quantity)} · ${row.count} items',
-                ),
-              )
+              .map((row) => _AmountRow(
+                    label: row.label,
+                    trailing:
+                        '${currency.format(row.amount)} · Base ${currency.format(row.quantity)} · ${row.count} items',
+                  ))
               .toList(),
         ),
       ],
@@ -1001,7 +974,11 @@ class _TaxReportSection extends StatelessWidget {
   }
 }
 
-class _RangeChip extends StatelessWidget {
+// ---------------------------------------------------------------------------
+// Shared widgets
+// ---------------------------------------------------------------------------
+
+class _RangeChip extends StatefulWidget {
   const _RangeChip({
     required this.label,
     required this.selected,
@@ -1013,26 +990,48 @@ class _RangeChip extends StatelessWidget {
   final VoidCallback onTap;
 
   @override
+  State<_RangeChip> createState() => _RangeChipState();
+}
+
+class _RangeChipState extends State<_RangeChip> {
+  bool _isHovered = false;
+
+  @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(AppRadius.full),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: selected ? AppColors.primary : AppColors.card,
-          borderRadius: BorderRadius.circular(AppRadius.full),
-          border: Border.all(
-            color: selected
+    return MouseRegion(
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: widget.selected
                 ? AppColors.primary
-                : AppColors.border,
+                : _isHovered
+                    ? AppColors.primary.withValues(alpha: 0.08)
+                    : AppColors.card,
+            borderRadius: BorderRadius.circular(AppRadius.full),
+            border: Border.all(
+              color: widget.selected
+                  ? AppColors.primary
+                  : _isHovered
+                      ? AppColors.primary.withValues(alpha: 0.3)
+                      : AppColors.border,
+            ),
           ),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontWeight: FontWeight.w700,
-            color: selected ? Colors.white : AppColors.foreground,
+          child: Text(
+            widget.label,
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 13,
+              color: widget.selected
+                  ? Colors.white
+                  : AppColors.foreground,
+            ),
           ),
         ),
       ),
@@ -1053,16 +1052,17 @@ class _ChartCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final visibleRows = rows.take(6).toList(growable: false);
+    final visibleRows = rows.take(8).toList(growable: false);
     final maxY = visibleRows.isEmpty
         ? 1.0
         : visibleRows
-                  .map((e) => e.amount > 0 ? e.amount : e.count.toDouble())
-                  .reduce((a, b) => a > b ? a : b) *
-              1.2;
+                .map(
+                    (e) => e.amount > 0 ? e.amount : e.count.toDouble())
+                .reduce((a, b) => a > b ? a : b) *
+            1.2;
 
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(AppSpacing.cardPadding),
       decoration: BoxDecoration(
         color: AppColors.card,
         borderRadius: BorderRadius.circular(AppRadius.card),
@@ -1072,23 +1072,37 @@ class _ChartCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w800,
-              color: AppColors.foreground,
-            ),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(AppRadius.sm),
+                ),
+                child: Icon(Icons.bar_chart_rounded,
+                    size: 18, color: color),
+              ),
+              const SizedBox(width: AppSpacing.tightGap),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.foreground,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: AppSpacing.lg),
           if (visibleRows.isEmpty)
-            const Text(
-              'No hay datos suficientes para graficar.',
-              style: TextStyle(color: AppColors.mutedForeground),
+            const _EmptyPlaceholder(
+              icon: Icons.bar_chart_outlined,
+              message: 'No hay datos suficientes para graficar.',
             )
           else
             SizedBox(
-              height: 220,
+              height: 240,
               child: BarChart(
                 BarChartData(
                   alignment: BarChartAlignment.spaceAround,
@@ -1113,7 +1127,7 @@ class _ChartCard extends StatelessWidget {
                     leftTitles: AxisTitles(
                       sideTitles: SideTitles(
                         showTitles: true,
-                        reservedSize: 36,
+                        reservedSize: 40,
                         getTitlesWidget: (value, meta) => Text(
                           NumberFormat.compact().format(value),
                           style: const TextStyle(
@@ -1128,7 +1142,8 @@ class _ChartCard extends StatelessWidget {
                         showTitles: true,
                         getTitlesWidget: (value, meta) {
                           final index = value.toInt();
-                          if (index < 0 || index >= visibleRows.length) {
+                          if (index < 0 ||
+                              index >= visibleRows.length) {
                             return const SizedBox.shrink();
                           }
                           final label = visibleRows[index].label;
@@ -1149,7 +1164,8 @@ class _ChartCard extends StatelessWidget {
                       ),
                     ),
                   ),
-                  barGroups: List.generate(visibleRows.length, (index) {
+                  barGroups:
+                      List.generate(visibleRows.length, (index) {
                     final row = visibleRows[index];
                     final y = row.amount > 0
                         ? row.amount
@@ -1160,8 +1176,16 @@ class _ChartCard extends StatelessWidget {
                         BarChartRodData(
                           toY: y,
                           width: 24,
-                          borderRadius: BorderRadius.circular(6),
-                          color: color,
+                          borderRadius:
+                              BorderRadius.circular(AppRadius.sm),
+                          gradient: LinearGradient(
+                            begin: Alignment.bottomCenter,
+                            end: Alignment.topCenter,
+                            colors: [
+                              color,
+                              color.withValues(alpha: 0.7),
+                            ],
+                          ),
                         ),
                       ],
                     );
@@ -1175,7 +1199,7 @@ class _ChartCard extends StatelessWidget {
   }
 }
 
-class _MetricCard extends StatelessWidget {
+class _MetricCard extends StatefulWidget {
   const _MetricCard({
     required this.title,
     required this.value,
@@ -1191,49 +1215,71 @@ class _MetricCard extends StatelessWidget {
   final Color color;
 
   @override
+  State<_MetricCard> createState() => _MetricCardState();
+}
+
+class _MetricCardState extends State<_MetricCard> {
+  bool _isHovered = false;
+
+  @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: AppColors.card,
-        borderRadius: BorderRadius.circular(AppRadius.card),
-        border: Border.all(color: AppColors.border),
-        boxShadow: AppShadows.cardElevated,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(AppRadius.card),
+    return MouseRegion(
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeInOut,
+        padding: const EdgeInsets.all(AppSpacing.cardPadding),
+        decoration: BoxDecoration(
+          color: AppColors.card,
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          border: Border.all(
+            color: _isHovered
+                ? widget.color.withValues(alpha: 0.3)
+                : AppColors.border,
+          ),
+          boxShadow:
+              _isHovered ? AppShadows.cardInteractive : AppShadows.soft,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: widget.color.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(AppRadius.card),
+              ),
+              child: Icon(widget.icon, color: widget.color),
             ),
-            child: Icon(icon, color: color),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            title,
-            style: const TextStyle(
-              color: AppColors.mutedForeground,
-              fontWeight: FontWeight.w600,
+            const SizedBox(height: AppSpacing.lg),
+            Text(
+              widget.title,
+              style: const TextStyle(
+                color: AppColors.mutedForeground,
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+              ),
             ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            value,
-            style: const TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.w800,
-              color: AppColors.foreground,
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              widget.value,
+              style: const TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.w800,
+                color: AppColors.foreground,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            subtitle,
-            style: const TextStyle(color: AppColors.mutedForeground, fontSize: 12),
-          ),
-        ],
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              widget.subtitle,
+              style: const TextStyle(
+                  color: AppColors.mutedForeground, fontSize: 12),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1244,16 +1290,18 @@ class _BreakdownCard extends StatelessWidget {
     required this.title,
     required this.children,
     required this.emptyText,
+    this.emptyIcon = Icons.info_outline,
   });
 
   final String title;
   final List<Widget> children;
   final String emptyText;
+  final IconData emptyIcon;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(AppSpacing.cardPadding),
       decoration: BoxDecoration(
         color: AppColors.card,
         borderRadius: BorderRadius.circular(AppRadius.card),
@@ -1271,11 +1319,23 @@ class _BreakdownCard extends StatelessWidget {
               color: AppColors.foreground,
             ),
           ),
-          const SizedBox(height: 14),
+          const Divider(height: AppSpacing.sectionGap),
           if (children.isEmpty)
-            Text(emptyText, style: const TextStyle(color: AppColors.mutedForeground))
+            _EmptyPlaceholder(
+              icon: emptyIcon,
+              message: emptyText,
+            )
           else
-            ...children,
+            ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: children.length,
+              separatorBuilder: (_, index) => Divider(
+                height: 1,
+                color: AppColors.border.withValues(alpha: 0.5),
+              ),
+              itemBuilder: (_, index) => children[index],
+            ),
         ],
       ),
     );
@@ -1291,7 +1351,8 @@ class _AmountRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding:
+          const EdgeInsets.symmetric(vertical: AppSpacing.tightGap),
       child: Row(
         children: [
           Expanded(
@@ -1300,15 +1361,70 @@ class _AmountRow extends StatelessWidget {
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
           ),
-          const SizedBox(width: 12),
-          Text(trailing, style: const TextStyle(color: AppColors.mutedForeground)),
+          const SizedBox(width: AppSpacing.tightGap),
+          Flexible(
+            child: Text(
+              trailing,
+              style: const TextStyle(
+                  color: AppColors.mutedForeground, fontSize: 13),
+              textAlign: TextAlign.end,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
         ],
       ),
     );
   }
 }
 
-class _ReportCard extends StatelessWidget {
+class _EmptyPlaceholder extends StatelessWidget {
+  const _EmptyPlaceholder({
+    required this.icon,
+    required this.message,
+  });
+
+  final IconData icon;
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding:
+          const EdgeInsets.symmetric(vertical: AppSpacing.sectionGap),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(AppSpacing.lg),
+              decoration: BoxDecoration(
+                color: AppColors.secondary.withValues(alpha: 0.5),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                icon,
+                size: 32,
+                color: AppColors.mutedForeground,
+              ),
+            ),
+            const SizedBox(height: AppSpacing.tightGap),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: AppColors.mutedForeground,
+                fontSize: 14,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ReportCard extends StatefulWidget {
   final String title;
   final IconData icon;
   final VoidCallback onTap;
@@ -1320,46 +1436,80 @@ class _ReportCard extends StatelessWidget {
   });
 
   @override
+  State<_ReportCard> createState() => _ReportCardState();
+}
+
+class _ReportCardState extends State<_ReportCard> {
+  bool _isHovered = false;
+
+  @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(AppRadius.card),
-      child: Container(
-        decoration: BoxDecoration(
-          color: AppColors.card,
-          borderRadius: BorderRadius.circular(AppRadius.card),
-          border: Border.all(color: AppColors.border),
-          boxShadow: AppShadows.cardElevated,
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: AppColors.primary.withValues(alpha: 0.1),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(icon, size: 40, color: AppColors.primary),
+    return MouseRegion(
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeInOut,
+          transform: _isHovered
+              ? (Matrix4.identity()..storage[13] = -4.0)
+              : Matrix4.identity(),
+          decoration: BoxDecoration(
+            color: AppColors.card,
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            border: Border.all(
+              color: _isHovered
+                  ? AppColors.primary.withValues(alpha: 0.4)
+                  : AppColors.border,
             ),
-            const SizedBox(height: 16),
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: AppColors.foreground,
+            boxShadow: _isHovered
+                ? AppShadows.cardInteractive
+                : AppShadows.soft,
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding: const EdgeInsets.all(AppSpacing.lg),
+                decoration: BoxDecoration(
+                  color: _isHovered
+                      ? AppColors.primary.withValues(alpha: 0.15)
+                      : AppColors.primary.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child:
+                    Icon(widget.icon, size: 40, color: AppColors.primary),
               ),
-            ),
-          ],
+              const SizedBox(height: AppSpacing.lg),
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.sm),
+                child: Text(
+                  widget.title,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: _isHovered
+                        ? AppColors.primary
+                        : AppColors.foreground,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-class _ReportListItem extends StatelessWidget {
+class _ReportListItem extends StatefulWidget {
   final String title;
   final String description;
   final VoidCallback onTap;
@@ -1371,44 +1521,68 @@ class _ReportListItem extends StatelessWidget {
   });
 
   @override
+  State<_ReportListItem> createState() => _ReportListItemState();
+}
+
+class _ReportListItemState extends State<_ReportListItem> {
+  bool _isHovered = false;
+
+  @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(AppRadius.card),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: AppColors.card,
-          borderRadius: BorderRadius.circular(AppRadius.card),
-          border: Border.all(color: AppColors.border),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.foreground,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    description,
-                    style: const TextStyle(
-                      color: AppColors.mutedForeground,
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
-              ),
+    return MouseRegion(
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.all(AppSpacing.cardPadding),
+          decoration: BoxDecoration(
+            color: AppColors.card,
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            border: Border.all(
+              color: _isHovered
+                  ? AppColors.primary.withValues(alpha: 0.3)
+                  : AppColors.border,
             ),
-            const Icon(Icons.chevron_right, color: AppColors.mutedForeground),
-          ],
+            boxShadow: _isHovered
+                ? AppShadows.cardInteractive
+                : AppShadows.soft,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.title,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.foreground,
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.xs),
+                    Text(
+                      widget.description,
+                      style: const TextStyle(
+                        color: AppColors.mutedForeground,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.chevron_right,
+                color: _isHovered
+                    ? AppColors.primary
+                    : AppColors.mutedForeground,
+              ),
+            ],
+          ),
         ),
       ),
     );

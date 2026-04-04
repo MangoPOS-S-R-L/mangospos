@@ -204,6 +204,7 @@ class _SettingsUsersViewState extends State<SettingsUsersView> {
                               user: u,
                               onEdit: () => _openUserDialog(context, user: u),
                               onDelete: () => _deleteUser(u),
+                              repo: _repo,
                             ),
                           ),
                       ],
@@ -555,10 +556,12 @@ class _UserRow extends StatelessWidget {
     required this.user,
     required this.onEdit,
     required this.onDelete,
+    required this.repo,
   });
   final Employee user;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
+  final EmployeeRepository repo;
 
   String _formatMoney(double? value) {
     if (value == null) return 'RD\$0';
@@ -753,30 +756,26 @@ class _UserRow extends StatelessWidget {
   }
 
   void _showResetPasswordDialog(BuildContext context, Employee user) {
+    if (user.userId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Este empleado no tiene un usuario de acceso vinculado.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final passwordController = TextEditingController();
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Resetear Contraseña'),
-        content: Text('¿Deseas resetear la contraseña de ${user.fullName}?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancelar'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              // TODO: Implementar reset de contraseña
-              Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Contraseña reseteada')),
-              );
-            },
-            child: const Text('Resetear'),
-          ),
-        ],
+      builder: (dialogContext) => _ResetPasswordDialog(
+        user: user,
+        passwordController: passwordController,
+        repo: repo,
       ),
-    );
+    ).whenComplete(() => passwordController.dispose());
   }
 
   void _showDeactivateDialog(BuildContext context, Employee user) {
@@ -1475,6 +1474,26 @@ class _UserDialogState extends State<_UserDialog> {
           pin: normalizedPin.isNotEmpty ? normalizedPin : null,
         );
 
+        // Actualizar contraseña si se proporcionó una nueva
+        final newPassword = _password.text.trim();
+        if (newPassword.isNotEmpty && widget.user!.userId != null) {
+          if (newPassword.length < 6) {
+            setState(() => _saving = false);
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('La contraseña debe tener al menos 6 caracteres.'),
+                ),
+              );
+            }
+            return;
+          }
+          await widget.repo.updateUserPassword(
+            userId: widget.user!.userId!,
+            newPassword: newPassword,
+          );
+        }
+
         // Actualizar roles
         await widget.repo.updateEmployeeRoles(
           employeeId: widget.user!.id,
@@ -1844,12 +1863,15 @@ class _UserDialogState extends State<_UserDialog> {
               children: [
                 Expanded(
                   child: _LabeledField(
-                    label: 'Contraseña *',
+                    label: widget.user == null
+                        ? 'Contraseña *'
+                        : 'Nueva Contraseña',
                     controller: _password,
                     hint: widget.user == null
                         ? 'Mínimo 6 caracteres'
-                        : 'Bloqueado por seguridad',
-                    enabled: widget.user == null,
+                        : 'Dejar vacío para no cambiar',
+                    obscureText: true,
+                    showVisibilityToggle: true,
                   ),
                 ),
                 const SizedBox(width: 16),
@@ -1862,6 +1884,7 @@ class _UserDialogState extends State<_UserDialog> {
                     maxLength: 4,
                     digitsOnly: true,
                     obscureText: true,
+                    showVisibilityToggle: true,
                   ),
                 ),
               ],
@@ -2213,7 +2236,114 @@ class _UserDialogState extends State<_UserDialog> {
   }
 }
 
-class _LabeledField extends StatelessWidget {
+class _ResetPasswordDialog extends StatefulWidget {
+  const _ResetPasswordDialog({
+    required this.user,
+    required this.passwordController,
+    required this.repo,
+  });
+  final Employee user;
+  final TextEditingController passwordController;
+  final EmployeeRepository repo;
+
+  @override
+  State<_ResetPasswordDialog> createState() => _ResetPasswordDialogState();
+}
+
+class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
+  bool _saving = false;
+  bool _obscured = true;
+
+  Future<void> _handleReset() async {
+    final password = widget.passwordController.text.trim();
+    if (password.isEmpty || password.length < 6) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('La contraseña debe tener al menos 6 caracteres.'),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      await widget.repo.updateUserPassword(
+        userId: widget.user.userId!,
+        newPassword: password,
+      );
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Contraseña de ${widget.user.fullName} actualizada correctamente.',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _saving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error al cambiar contraseña: $e')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Text('Cambiar Contraseña'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Nueva contraseña para ${widget.user.fullName}:'),
+          const SizedBox(height: 16),
+          TextField(
+            controller: widget.passwordController,
+            obscureText: _obscured,
+            decoration: InputDecoration(
+              hintText: 'Mínimo 6 caracteres',
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              suffixIcon: IconButton(
+                icon: Icon(
+                  _obscured
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
+                  size: 20,
+                ),
+                onPressed: () => setState(() => _obscured = !_obscured),
+              ),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        ElevatedButton(
+          onPressed: _saving ? null : _handleReset,
+          child: _saving
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Cambiar'),
+        ),
+      ],
+    );
+  }
+}
+
+class _LabeledField extends StatefulWidget {
   const _LabeledField({
     required this.label,
     this.hint,
@@ -2223,6 +2353,7 @@ class _LabeledField extends StatelessWidget {
     this.maxLength,
     this.digitsOnly = false,
     this.obscureText = false,
+    this.showVisibilityToggle = false,
   });
   final String label;
   final String? hint;
@@ -2232,13 +2363,23 @@ class _LabeledField extends StatelessWidget {
   final int? maxLength;
   final bool digitsOnly;
   final bool obscureText;
+  final bool showVisibilityToggle;
+
+  @override
+  State<_LabeledField> createState() => _LabeledFieldState();
+}
+
+class _LabeledFieldState extends State<_LabeledField> {
+  bool _obscured = true;
+
   @override
   Widget build(BuildContext context) {
+    final effectiveObscure = widget.obscureText && _obscured;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          label,
+          widget.label,
           style: const TextStyle(
             fontSize: 13,
             fontWeight: FontWeight.w500,
@@ -2247,26 +2388,40 @@ class _LabeledField extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         TextField(
-          controller: controller,
-          enabled: enabled,
-          keyboardType: keyboardType,
-          obscureText: obscureText,
-          maxLength: maxLength,
+          controller: widget.controller,
+          enabled: widget.enabled,
+          keyboardType: widget.keyboardType,
+          obscureText: effectiveObscure,
+          maxLength: widget.maxLength,
           inputFormatters: [
-            if (digitsOnly) FilteringTextInputFormatter.digitsOnly,
-            if (maxLength != null) LengthLimitingTextInputFormatter(maxLength),
+            if (widget.digitsOnly) FilteringTextInputFormatter.digitsOnly,
+            if (widget.maxLength != null)
+              LengthLimitingTextInputFormatter(widget.maxLength),
           ],
           style: const TextStyle(fontSize: 14, color: Color(0xFF1A1A1A)),
           decoration: InputDecoration(
-            hintText: hint,
+            hintText: widget.hint,
             counterText: '',
             hintStyle: TextStyle(fontSize: 14, color: Colors.grey.shade400),
             filled: true,
-            fillColor: enabled ? Colors.white : const Color(0xFFF9F9F9),
+            fillColor:
+                widget.enabled ? Colors.white : const Color(0xFFF9F9F9),
             contentPadding: const EdgeInsets.symmetric(
               horizontal: 14,
               vertical: 12,
             ),
+            suffixIcon: widget.showVisibilityToggle && widget.obscureText
+                ? IconButton(
+                    icon: Icon(
+                      _obscured
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined,
+                      size: 20,
+                      color: Colors.grey.shade500,
+                    ),
+                    onPressed: () => setState(() => _obscured = !_obscured),
+                  )
+                : null,
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),
               borderSide: BorderSide(color: Colors.grey.shade300, width: 1),
