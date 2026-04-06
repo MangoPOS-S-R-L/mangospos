@@ -161,9 +161,9 @@ class _CashierViewState extends ConsumerState<CashierView> {
       final confirm = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
-          title: const Text('Mesas abiertas'),
+          title: const Text('Órdenes abiertas'),
           content: Text(
-            'Hay $pending mesa(s) con orden abierta. ¿Deseas cerrar la caja de todas formas?',
+            'Hay $pending orden(es) activas sin cobrar o anular. ¿Deseas cerrar la caja de todas formas?',
           ),
           actions: [
             TextButton(

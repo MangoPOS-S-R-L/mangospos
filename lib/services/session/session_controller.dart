@@ -234,6 +234,14 @@ class SessionState {
   }
 
   bool get isAuthenticated => status == AuthStatus.authenticated;
+
+  bool get isOwner {
+    if (activeBusinessId == null) return false;
+    for (final b in availableBusinesses) {
+      if (b.id == activeBusinessId && b.role == 'owner') return true;
+    }
+    return false;
+  }
 }
 
 class SessionController extends Notifier<SessionState> {

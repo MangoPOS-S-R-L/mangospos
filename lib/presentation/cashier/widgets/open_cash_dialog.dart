@@ -138,30 +138,46 @@ class _OpenCashDialogState extends ConsumerState<OpenCashDialog> {
         );
       }
     } catch (e) {
+      if (!mounted) return;
+      
       setState(() {
         _isSubmitting = false;
       });
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
+      final message = e.toString();
+      final isConflict = message.contains('abierta') || message.contains('DEVICE_ALREADY_OPEN') || message.contains('USER_ALREADY_OPEN');
+
+      if (isConflict) {
+        // Mostrar Modal Error como pidió el usuario
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: Row(
               children: [
-                const Icon(Icons.error_outline, color: Colors.white),
-                SizedBox(width: context.wp(2)),
-                Expanded(
-                  child: Text(
-                    'Error: ${e.toString()}',
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                ),
+                Icon(Icons.error_outline, color: Colors.red[700], size: 28),
+                const SizedBox(width: 10),
+                const Text('Caja ya abierta'),
               ],
             ),
+            content: Text(
+              message.replaceAll('Exception: ', '').replaceAll('CashRegisterException: ', ''),
+              style: const TextStyle(fontSize: 16),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Entendido', style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $message'),
             backgroundColor: Colors.red[600],
             behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
           ),
         );
       }

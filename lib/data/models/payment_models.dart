@@ -101,6 +101,19 @@ class CashRegisterSession extends Equatable {
   bool get isOpen => status == 'open' && closedAt == null;
   bool get isClosed => status == 'closed' || closedAt != null;
 
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'cash_register_id': cashRegisterId,
+        'user_id': userId,
+        'opened_at': openedAt.toIso8601String(),
+        'closed_at': closedAt?.toIso8601String(),
+        'start_amount': startAmount,
+        'end_amount': endAmount,
+        'difference': difference,
+        'status': status,
+        'notes': notes,
+      };
+
   @override
   List<Object?> get props => [
     id,

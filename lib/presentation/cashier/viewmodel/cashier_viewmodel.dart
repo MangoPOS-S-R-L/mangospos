@@ -11,6 +11,7 @@ import 'package:mangopos/core/cache/cache_config.dart';
 import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
+import 'package:mangopos/core/utils/device_utils.dart';
 
 final cashierRepositoryProvider = Provider<CashierRepository>((ref) {
   return CashierRepository(Supabase.instance.client);
@@ -107,7 +108,21 @@ class CashierViewModel extends ChangeNotifier {
               created['name']?.toString() ?? 'Caja principal';
         }
         if (_currentRegisterId != null) {
-          _lastSession = await _repository.getLastSession(_currentRegisterId!);
+          // Rule: Check for ANY open session for this user first
+          final activeSession = await _repository.getCurrentUserActiveSession();
+          if (activeSession != null) {
+            _lastSession = activeSession.toMap();
+          } else {
+            // Also check for ANY open session on this DEVICE (Rule v2)
+            final deviceId = await DeviceUtils.getDeviceId();
+            final deviceSession = await _repository.getDeviceActiveSession(deviceId);
+            if (deviceSession != null) {
+              _lastSession = deviceSession.toMap();
+            } else {
+              _lastSession = await _repository.getLastSession(_currentRegisterId!);
+            }
+          }
+          
           _lastCashOpenValidationAt = AppTime.nowAst();
           _pendingTables = await _salesRepository.getOpenTablesCount(
             _businessId!,
@@ -658,10 +673,32 @@ class CashierViewModel extends ChangeNotifier {
     _isLoading = true;
     notifyListeners();
     try {
+      final deviceId = await DeviceUtils.getDeviceId();
+      final deviceName = DeviceUtils.getDeviceName();
+
+      // Final check before sending to DB to provide better error message
+      final existingDeviceSession = await _repository.getDeviceActiveSession(deviceId);
+      if (existingDeviceSession != null) {
+        throw const CashRegisterException(
+          errorCode: 'DEVICE_ALREADY_OPEN',
+          message: 'No se puede abrir otra caja ya que hay una caja abierta actualmente en este dispositivo.',
+        );
+      }
+
+      final existingUserSession = await _repository.getCurrentUserActiveSession();
+      if (existingUserSession != null) {
+        throw const CashRegisterException(
+          errorCode: 'USER_ALREADY_OPEN',
+          message: 'Ya tienes una sesión de caja abierta en otro dispositivo o caja.',
+        );
+      }
+
       await _repository.openSession(
         cashRegisterId: _currentRegisterId!,
         userId: userId,
         startAmount: amount,
+        deviceId: deviceId,
+        deviceName: deviceName,
       );
       await init(); // Refresh
     } catch (e) {

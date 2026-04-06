@@ -45,13 +45,13 @@ class SettingsView extends ConsumerWidget {
             businessName: ref.watch(sessionProvider).activeBusinessName,
           ),
           const SizedBox(height: 18),
-          ..._sections(context),
+          ..._sections(context, ref),
         ],
       ),
     );
   }
 
-  List<Widget> _sections(BuildContext context) {
+  List<Widget> _sections(BuildContext context, WidgetRef ref) {
     return [
       _SettingsSection(
         title: 'Punto de Venta',
@@ -249,13 +249,14 @@ class SettingsView extends ConsumerWidget {
             color: Color(0xFFF1F1F1),
             route: AppRoutes.settingsRegional,
           ),
-          const _SettingsOption(
-            title: 'Sucursales',
-            subtitle: 'Gestión de múltiples locales',
-            icon: Icons.store_mall_directory_rounded,
-            color: Color(0xFFFFEDED),
-            route: AppRoutes.settingsBranches,
-          ),
+          if (ref.watch(sessionProvider).isOwner)
+            const _SettingsOption(
+              title: 'Sucursales',
+              subtitle: 'Gestión de múltiples locales',
+              icon: Icons.store_mall_directory_rounded,
+              color: Color(0xFFFFEDED),
+              route: AppRoutes.settingsBranches,
+            ),
         ],
       ),
       _SettingsSection(
@@ -486,39 +487,40 @@ class SettingsView extends ConsumerWidget {
       ),
       _SettingsSection(
         title: 'Sistema',
-        items: const [
-          _SettingsOption(
+        items: [
+          const _SettingsOption(
             title: 'Opciones del Sistema',
             subtitle: 'Configuración general del sistema',
             icon: Icons.tune_rounded,
             color: Color(0xFFFFE6D5),
           ),
-          _SettingsOption(
+          const _SettingsOption(
             title: 'Opciones de APP MangoPOS',
             subtitle: 'Configuración de la aplicación móvil',
             icon: Icons.smartphone_rounded,
             color: Color(0xFFEAF0FF),
           ),
-          _SettingsOption(
+          const _SettingsOption(
             title: 'Información del Restaurante',
             subtitle: 'Datos del negocio',
             icon: Icons.business_rounded,
             color: Color(0xFFE6F7EE),
           ),
-          _SettingsOption(
-            title: 'Gestión de Sucursales',
-            subtitle: 'Administración multisucursal',
-            icon: Icons.store_rounded,
-            color: Color(0xFFFFF0D9),
-            route: AppRoutes.settingsBranches,
-          ),
-          _SettingsOption(
+          if (ref.watch(sessionProvider).isOwner)
+            const _SettingsOption(
+              title: 'Gestión de Sucursales',
+              subtitle: 'Administración multisucursal',
+              icon: Icons.store_rounded,
+              color: Color(0xFFFFF0D9),
+              route: AppRoutes.settingsBranches,
+            ),
+          const _SettingsOption(
             title: 'Actualizaciones',
             subtitle: 'Versiones y actualizaciones',
             icon: Icons.system_update_alt_rounded,
             color: Color(0xFFF1F1F1),
           ),
-          _SettingsOption(
+          const _SettingsOption(
             title: 'Integración con Marketing',
             subtitle: 'Conexión con herramientas de marketing',
             icon: Icons.track_changes_rounded,

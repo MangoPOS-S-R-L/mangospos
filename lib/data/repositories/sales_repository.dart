@@ -1556,7 +1556,6 @@ class SalesRepository {
         .from('orders')
         .select('session_id, table_sessions!inner(id)')
         .eq('table_sessions.business_id', businessId)
-        .eq('table_sessions.origin', 'dine_in')
         .isFilter('table_sessions.closed_at', null)
         .isFilter('closed_at', null)
         .not('status_ext', 'in', '(paid,void)');

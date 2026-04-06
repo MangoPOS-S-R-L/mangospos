@@ -124,64 +124,259 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
       if (!mounted) return;
 
       final currency = NumberFormat.currency(symbol: 'RD\$ ', decimalDigits: 2);
-      final totalSales = (summary["total_sales"] as num?)?.toDouble() ?? 0;
+      final cashSales = (summary["cash_sales_net"] as num?)?.toDouble() ??
+          (summary["total_sales"] as num?)?.toDouble() ?? 0;
+      final cardSales = (summary["expected_card"] as num?)?.toDouble() ?? 0;
+      final transferSales =
+          (summary["expected_transfer"] as num?)?.toDouble() ?? 0;
+      final totalSalesAll =
+          (summary["total_sales_all_methods"] as num?)?.toDouble() ??
+          (cashSales + cardSales + transferSales);
       final totalDeposits =
           (summary["total_deposits"] as num?)?.toDouble() ?? 0;
       final totalWithdrawals =
           (summary["total_withdrawals"] as num?)?.toDouble() ?? 0;
       final totalExpenses =
           (summary["total_expenses"] as num?)?.toDouble() ?? 0;
-      final expectedAmount =
-          (summary["expected_amount"] as num?)?.toDouble() ??
-          (totalSales + totalDeposits - totalWithdrawals - totalExpenses);
       final expectedCash =
-          (summary["expected_cash"] as num?)?.toDouble() ?? expectedAmount;
-      final expectedCard = (summary["expected_card"] as num?)?.toDouble() ?? 0;
-      final expectedTransfer =
-          (summary["expected_transfer"] as num?)?.toDouble() ?? 0;
+          (summary["expected_cash"] as num?)?.toDouble() ?? 0;
+      final expectedCard = cardSales;
+      final expectedTransfer = transferSales;
+      final expectedAmount =
+          (summary["expected_total"] as num?)?.toDouble() ??
+          (expectedCash + expectedCard + expectedTransfer);
       final reported = _reportedBreakdown(session);
       final cashierName = _resolveCashierName(session);
       showDialog<void>(
         context: context,
-        builder: (context) => AlertDialog(
-          title: Text('Cierre ${session.id.substring(0, 8).toUpperCase()}'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Cajero: $cashierName'),
-              const SizedBox(height: 4),
-              Text(
-                'Monto inicial: ${currency.format((summary["start_amount"] as num?)?.toDouble() ?? 0)}',
-              ),
-              Text('Ventas: ${currency.format(totalSales)}'),
-              Text('Depósitos: ${currency.format(totalDeposits)}'),
-              Text('Retiros: ${currency.format(totalWithdrawals)}'),
-              Text('Gastos: ${currency.format(totalExpenses)}'),
-              const SizedBox(height: 8),
-              Text('Esperado efectivo: ${currency.format(expectedCash)}'),
-              Text('Esperado tarjeta: ${currency.format(expectedCard)}'),
-              Text(
-                'Esperado transferencia: ${currency.format(expectedTransfer)}',
-              ),
-              const SizedBox(height: 8),
-              Text('Reportado efectivo: ${currency.format(reported.cash)}'),
-              Text('Reportado tarjeta: ${currency.format(reported.card)}'),
-              Text(
-                'Reportado transferencia: ${currency.format(reported.transfer)}',
-              ),
-              Text('Esperado: ${currency.format(expectedAmount)}'),
-              Text('Monto final: ${currency.format(reported.total)}'),
-              Text('Diferencia: ${currency.format(session.difference)}'),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cerrar'),
+        builder: (context) {
+          final difference = session.difference;
+          final diffColor = difference == 0
+              ? Colors.grey[700]
+              : (difference > 0 ? Colors.green[700] : Colors.red[700]);
+
+          return Dialog(
+            backgroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
             ),
-          ],
-        ),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 450),
+              padding: const EdgeInsets.all(28),
+              child: SingleChildScrollView(
+                child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: MangoColors.primaryOrange.withValues(
+                            alpha: 0.12,
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(
+                          Icons.receipt_long_rounded,
+                          color: MangoColors.primaryOrange,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Resumen de Cierre',
+                              style: const TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w800,
+                                color: Colors.black87,
+                              ),
+                            ),
+                            Text(
+                              'Sesión ${session.id.substring(0, 8).toUpperCase()}',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.grey[600],
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.close),
+                        style: IconButton.styleFrom(
+                          backgroundColor: Colors.grey[100],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  _SummarySection(
+                    title: 'INFORMACIÓN GENERAL',
+                    children: [
+                      _SummaryRow(label: 'Cajero', value: cashierName),
+                      _SummaryRow(
+                        label: 'Abierta',
+                        value: DateFormat(
+                          'dd/MM/yyyy HH:mm',
+                        ).format(AppTime.astFromInstant(session.openedAt)),
+                      ),
+                      if (session.closedAt != null)
+                        _SummaryRow(
+                          label: 'Cerrada',
+                          value: DateFormat(
+                            'dd/MM/yyyy HH:mm',
+                          ).format(AppTime.astFromInstant(session.closedAt!)),
+                        ),
+                    ],
+                  ),
+                  const Divider(height: 32),
+                  _SummarySection(
+                    title: 'VENTAS',
+                    children: [
+                      _SummaryRow(
+                        label: 'Efectivo',
+                        value: currency.format(cashSales),
+                      ),
+                      _SummaryRow(
+                        label: 'Tarjeta',
+                        value: currency.format(cardSales),
+                      ),
+                      _SummaryRow(
+                        label: 'Transferencia',
+                        value: currency.format(transferSales),
+                      ),
+                      _SummaryRow(
+                        label: 'Total ventas',
+                        value: currency.format(totalSalesAll),
+                        isBold: true,
+                      ),
+                    ],
+                  ),
+                  const Divider(height: 32),
+                  _SummarySection(
+                    title: 'FLUJO DE EFECTIVO',
+                    children: [
+                      _SummaryRow(
+                        label: 'Monto inicial',
+                        value: currency.format(
+                          (summary["start_amount"] as num?)?.toDouble() ?? 0,
+                        ),
+                        isBold: true,
+                      ),
+                      _SummaryRow(
+                        label: 'Depósitos (+)',
+                        value: currency.format(totalDeposits),
+                      ),
+                      _SummaryRow(
+                        label: 'Retiros (-)',
+                        value: currency.format(totalWithdrawals),
+                      ),
+                      _SummaryRow(
+                        label: 'Gastos (-)',
+                        value: currency.format(totalExpenses),
+                      ),
+                    ],
+                  ),
+                  const Divider(height: 32),
+                  _SummarySection(
+                    title: 'ESPERADO POR MÉTODO',
+                    children: [
+                      _SummaryRow(
+                        label: 'Esperado Efectivo',
+                        value: currency.format(expectedCash),
+                        color: MangoColors.primaryOrange,
+                        isBold: true,
+                      ),
+                      _SummaryRow(
+                        label: 'Esperado Tarjeta',
+                        value: currency.format(expectedCard),
+                      ),
+                      _SummaryRow(
+                        label: 'Esperado Transferencia',
+                        value: currency.format(expectedTransfer),
+                      ),
+                    ],
+                  ),
+                  const Divider(height: 32),
+                  _SummarySection(
+                    title: 'RESULTADOS DEL CIERRE',
+                    children: [
+                      _SummaryRow(
+                        label: 'Total Esperado',
+                        value: currency.format(expectedAmount),
+                        isBold: true,
+                      ),
+                      _SummaryRow(
+                        label: 'Total Reportado',
+                        value: currency.format(reported.total),
+                        isBold: true,
+                        color: Colors.black87,
+                      ),
+                      Container(
+                        margin: const EdgeInsets.only(top: 8),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: diffColor?.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: _SummaryRow(
+                          label: 'Diferencia',
+                          value: currency.format(difference),
+                          isBold: true,
+                          color: diffColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  if (session.notes != null && session.notes!.isNotEmpty) ...[
+                    _SummarySection(
+                      title: 'NOTAS',
+                      children: [
+                        Text(
+                          session.notes!,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.grey[700],
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+                  ],
+                  ElevatedButton(
+                    onPressed: () => Navigator.pop(context),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: MangoColors.primaryOrange,
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size.fromHeight(50),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      elevation: 0,
+                    ),
+                    child: const Text(
+                      'Entendido',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ],
+              ),
+              ),
+            ),
+          );
+        },
       );
     } catch (e) {
       if (!mounted) return;
@@ -316,6 +511,75 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
             );
           },
         ),
+      ),
+    );
+  }
+}
+
+class _SummarySection extends StatelessWidget {
+  final String title;
+  final List<Widget> children;
+
+  const _SummarySection({required this.title, required this.children});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            color: Colors.grey[500],
+            letterSpacing: 0.8,
+          ),
+        ),
+        const SizedBox(height: 12),
+        ...children,
+      ],
+    );
+  }
+}
+
+class _SummaryRow extends StatelessWidget {
+  final String label;
+  final String value;
+  final bool isBold;
+  final Color? color;
+
+  const _SummaryRow({
+    required this.label,
+    required this.value,
+    this.isBold = false,
+    this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.grey[700],
+              fontWeight: isBold ? FontWeight.w600 : FontWeight.normal,
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: isBold ? FontWeight.w700 : FontWeight.w600,
+              color: color ?? Colors.grey[900],
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -93,6 +93,34 @@ class BranchManagementController extends ChangeNotifier {
       );
 
       await load();
+    } catch (e) {
+      _error = 'No se pudo crear la sucursal: $e';
+    } finally {
+      _saving = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> deleteBranch(String businessId) async {
+    _saving = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final response = await _client.rpc(
+        'fn_delete_business',
+        params: {'p_business_id': businessId},
+      );
+
+      final result = response as Map<String, dynamic>?;
+      if (result?['success'] == false) {
+        throw Exception(result?['error'] ?? 'Error al eliminar la sucursal');
+      }
+
+      await load();
+    } catch (e) {
+      _error = e.toString().replaceAll('Exception: ', '');
+      rethrow;
     } finally {
       _saving = false;
       notifyListeners();
@@ -139,7 +167,7 @@ class _BranchManagementViewState extends ConsumerState<BranchManagementView> {
                 activeName: activeName,
                 totalBranches: vm.branches.length,
                 isSaving: vm.saving,
-                onCreate: vm.saving
+                onCreate: (vm.saving || !session.isOwner)
                     ? null
                     : () => _showCreateBranchDialog(context),
               ),
@@ -193,12 +221,14 @@ class _BranchManagementViewState extends ConsumerState<BranchManagementView> {
               else
                 ...vm.branches.map((branch) {
                   final isActive = branch.id == session.activeBusinessId;
+                  final canManage = session.isOwner;
+
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 14),
                     child: _BranchCard(
                       branch: branch,
                       isActive: isActive,
-                      onSwitch: isActive
+                      onSwitch: (isActive || !canManage)
                           ? null
                           : () async {
                               await ref
@@ -214,6 +244,9 @@ class _BranchManagementViewState extends ConsumerState<BranchManagementView> {
                                 ),
                               );
                             },
+                      onDelete: (isActive || !canManage)
+                          ? null
+                          : () => _confirmDelete(context, branch),
                     ),
                   );
                 }),
@@ -397,6 +430,44 @@ class _BranchManagementViewState extends ConsumerState<BranchManagementView> {
         );
       },
     );
+  }
+
+  Future<void> _confirmDelete(BuildContext context, SessionBusiness branch) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('¿Eliminar sucursal?'),
+        content: Text(
+          'Esta acción es irreversible y eliminará todos los datos asociados a "${branch.name}" (ventas, productos, clientes, etc.).\n\n¿Estás seguro?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: AppColors.destructive),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Eliminar definitivamente'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        await ref.read(branchManagementProvider).deleteBranch(branch.id);
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Sucursal "${branch.name}" eliminada.')),
+        );
+      } catch (e) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
+    }
   }
 }
 
@@ -626,11 +697,13 @@ class _BranchCard extends StatelessWidget {
     required this.branch,
     required this.isActive,
     required this.onSwitch,
+    this.onDelete,
   });
 
   final SessionBusiness branch;
   final bool isActive;
   final VoidCallback? onSwitch;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -773,6 +846,17 @@ class _BranchCard extends StatelessWidget {
                     ),
                   ),
                 ),
+          if (onDelete != null) ...[
+            const SizedBox(width: 8),
+            IconButton(
+              onPressed: onDelete,
+              icon: const Icon(
+                Icons.delete_outline_rounded,
+                color: AppColors.destructive,
+              ),
+              tooltip: 'Eliminar sucursal',
+            ),
+          ],
         ],
       ),
     );

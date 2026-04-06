@@ -61,6 +61,8 @@ class CashierRepository {
     required String cashRegisterId,
     required String userId,
     required double startAmount,
+    required String deviceId,
+    String? deviceName,
   }) async {
     final response = Map<String, dynamic>.from(
       await _client.rpc(
@@ -69,6 +71,8 @@ class CashierRepository {
           'p_cash_register_id': cashRegisterId,
           'p_user_id': userId,
           'p_start_amount': startAmount,
+          'p_device_id': deviceId,
+          'p_device_name': deviceName,
         },
       ),
     );
@@ -76,7 +80,7 @@ class CashierRepository {
     final success = response['success'] as bool? ?? true;
     if (!success) {
       throw CashRegisterException(
-        errorCode: response['error_code']?.toString() ?? 'UNKNOWN_ERROR',
+        errorCode: response['error_code']?.toString() ?? 'CONFLICT',
         message: response['error']?.toString() ?? 'Error al abrir la caja.',
       );
     }
@@ -90,28 +94,54 @@ class CashierRepository {
     String? notes,
     bool forceWithOpenTables = false,
   }) async {
-    final response = Map<String, dynamic>.from(
-      await _client.rpc(
-        'fn_close_cash_session',
-        params: {
-          'p_session_id': sessionId,
-          'p_end_amount': endAmount,
-          'p_notes': notes,
-          'p_force_with_open_tables': forceWithOpenTables,
-        },
-      ),
-    );
+    try {
+      final response = Map<String, dynamic>.from(
+        await _client.rpc(
+          'fn_close_cash_session',
+          params: {
+            'p_session_id': sessionId,
+            'p_end_amount': endAmount,
+            'p_notes': notes,
+            'p_force_with_open_tables': forceWithOpenTables,
+          },
+        ),
+      );
 
-    final success = response['success'] as bool? ?? true;
-    if (!success) {
+      final success = response['success'] as bool? ?? true;
+      if (!success) {
+        throw CashRegisterException(
+          errorCode: response['error_code']?.toString() ?? 'UNKNOWN_ERROR',
+          message: response['error']?.toString() ?? 'Error al cerrar la caja.',
+          openTablesCount: response['open_tables_count'] as int?,
+        );
+      }
+
+      return response;
+    } on PostgrestException catch (e) {
+      if (e.message.contains('OPEN_TABLES_EXIST')) {
+        throw const CashRegisterException(
+          errorCode: 'OPEN_TABLES_EXIST',
+          message:
+              'Existen órdenes abiertas sin cobrar. Debes cobrarlas o anularlas antes de cerrar.',
+        );
+      }
+      if (e.message.contains('SESSION_ALREADY_CLOSED')) {
+        throw const CashRegisterException(
+          errorCode: 'SESSION_ALREADY_CLOSED',
+          message: 'Esta sesión de caja ya fue cerrada.',
+        );
+      }
       throw CashRegisterException(
-        errorCode: response['error_code']?.toString() ?? 'UNKNOWN_ERROR',
-        message: response['error']?.toString() ?? 'Error al cerrar la caja.',
-        openTablesCount: response['open_tables_count'] as int?,
+        errorCode: e.code ?? 'DATABASE_ERROR',
+        message: 'Error de base de datos: ${e.message}',
+      );
+    } catch (e) {
+      if (e is CashRegisterException) rethrow;
+      throw CashRegisterException(
+        errorCode: 'UNKNOWN_ERROR',
+        message: 'Ocurrió un error inesperado al cerrar la caja: $e',
       );
     }
-
-    return response;
   }
 
   Future<Map<String, dynamic>> getSessionSummary(String sessionId) async {
@@ -177,6 +207,19 @@ class CashierRepository {
         .from('cash_register_sessions')
         .select()
         .eq('user_id', userId)
+        .eq('status', 'open')
+        .isFilter('closed_at', null)
+        .maybeSingle();
+
+    if (data == null) return null;
+    return CashRegisterSession.fromMap(data);
+  }
+
+  Future<CashRegisterSession?> getDeviceActiveSession(String deviceId) async {
+    final data = await _client
+        .from('cash_register_sessions')
+        .select()
+        .eq('device_id', deviceId)
         .eq('status', 'open')
         .isFilter('closed_at', null)
         .maybeSingle();
