@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import 'package:mangopos/presentation/settings/widgets/system_update_dialog.dart';
 
 class SettingsView extends ConsumerWidget {
   const SettingsView({super.key, this.businessId = ''});
@@ -514,11 +515,17 @@ class SettingsView extends ConsumerWidget {
               color: Color(0xFFFFF0D9),
               route: AppRoutes.settingsBranches,
             ),
-          const _SettingsOption(
+          _SettingsOption(
             title: 'Actualizaciones',
             subtitle: 'Versiones y actualizaciones',
             icon: Icons.system_update_alt_rounded,
-            color: Color(0xFFF1F1F1),
+            color: const Color(0xFFF1F1F1),
+            onTap: () {
+              showDialog(
+                context: context,
+                builder: (context) => const SystemUpdateDialog(),
+              );
+            },
           ),
           const _SettingsOption(
             title: 'Integración con Marketing',
@@ -852,6 +859,7 @@ class _SettingsOption {
   final IconData icon;
   final Color color;
   final String? route;
+  final VoidCallback? onTap;
 
   const _SettingsOption({
     required this.title,
@@ -859,6 +867,7 @@ class _SettingsOption {
     required this.icon,
     required this.color,
     this.route,
+    this.onTap,
   });
 }
 
@@ -898,11 +907,11 @@ class _SettingsCardItemState extends State<_SettingsCardItem> {
   Widget build(BuildContext context) {
     final data = widget.data;
     final accent = _accentFor(data.color);
-    final isLink = data.route != null;
-    final active = isLink && _hovered;
+    final isClickable = data.route != null || data.onTap != null;
+    final active = isClickable && _hovered;
 
     return MouseRegion(
-      cursor: isLink ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      cursor: isClickable ? SystemMouseCursors.click : SystemMouseCursors.basic,
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: AnimatedContainer(
@@ -910,14 +919,14 @@ class _SettingsCardItemState extends State<_SettingsCardItem> {
         curve: Curves.easeOut,
         transform: Matrix4.translationValues(0, active ? -2 : 0, 0),
         decoration: BoxDecoration(
-          color: isLink ? Colors.white : const Color(0xFFF5F5F5),
+          color: isClickable ? Colors.white : const Color(0xFFF5F5F5),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
             color: active
                 ? accent.withValues(alpha: 0.30)
-                : (isLink ? _SettingsSurface.border : Colors.transparent),
+                : (isClickable ? _SettingsSurface.border : Colors.transparent),
           ),
-          boxShadow: isLink
+          boxShadow: isClickable
               ? [
                   BoxShadow(
                     color: const Color(0x0D1C1917),
@@ -936,9 +945,15 @@ class _SettingsCardItemState extends State<_SettingsCardItem> {
           color: Colors.transparent,
           child: InkWell(
             borderRadius: BorderRadius.circular(16),
-            onTap: isLink ? () => context.go(data.route!) : null,
+            onTap: isClickable ? () {
+              if (data.route != null) {
+                context.go(data.route!);
+              } else if (data.onTap != null) {
+                data.onTap!();
+              }
+            } : null,
             child: Opacity(
-              opacity: isLink ? 1.0 : 0.62,
+              opacity: isClickable ? 1.0 : 0.62,
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Row(
@@ -949,12 +964,12 @@ class _SettingsCardItemState extends State<_SettingsCardItem> {
                       width: 40,
                       height: 40,
                       decoration: BoxDecoration(
-                        color: isLink
+                        color: isClickable
                             ? accent.withValues(alpha: 0.10)
                             : Colors.grey[300],
                         borderRadius: BorderRadius.circular(14),
                         border: Border.all(
-                          color: isLink
+                          color: isClickable
                               ? accent.withValues(alpha: active ? 0.20 : 0.12)
                               : Colors.transparent,
                         ),
@@ -962,7 +977,7 @@ class _SettingsCardItemState extends State<_SettingsCardItem> {
                       child: Icon(
                         data.icon,
                         size: 20,
-                        color: isLink ? accent : Colors.grey[600],
+                        color: isClickable ? accent : Colors.grey[600],
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -979,7 +994,7 @@ class _SettingsCardItemState extends State<_SettingsCardItem> {
                             style: TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w600,
-                              color: isLink
+                              color: isClickable
                                   ? _SettingsSurface.foreground
                                   : Colors.grey[700],
                               letterSpacing: -0.1,
@@ -993,7 +1008,7 @@ class _SettingsCardItemState extends State<_SettingsCardItem> {
                             style: TextStyle(
                               height: 1.25,
                               fontSize: 12,
-                              color: isLink
+                              color: isClickable
                                   ? _SettingsSurface.muted
                                   : Colors.grey[500],
                             ),
@@ -1002,7 +1017,7 @@ class _SettingsCardItemState extends State<_SettingsCardItem> {
                       ),
                     ),
                     const SizedBox(width: 10),
-                    if (isLink)
+                    if (isClickable)
                       AnimatedContainer(
                         duration: const Duration(milliseconds: 180),
                         width: 24,

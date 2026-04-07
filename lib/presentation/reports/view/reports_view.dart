@@ -489,14 +489,88 @@ class _SalesReportSection extends StatelessWidget {
   final ReportsState state;
   final ReportsViewModel viewModel;
 
+  static IconData _filterIcon(SalesBreakdownFilter filter) {
+    switch (filter) {
+      case SalesBreakdownFilter.paymentMethod:
+        return Icons.payment_outlined;
+      case SalesBreakdownFilter.product:
+        return Icons.inventory_2_outlined;
+      case SalesBreakdownFilter.category:
+        return Icons.category_outlined;
+      case SalesBreakdownFilter.employee:
+        return Icons.person_outlined;
+      case SalesBreakdownFilter.zone:
+        return Icons.place_outlined;
+      case SalesBreakdownFilter.hourly:
+        return Icons.schedule_outlined;
+    }
+  }
+
+  ({String title, String emptyText, IconData emptyIcon, List<SalesBreakdownRow> rows})
+      _breakdownData(SalesBreakdownFilter filter) {
+    switch (filter) {
+      case SalesBreakdownFilter.paymentMethod:
+        return (
+          title: 'Ventas por método de pago',
+          emptyText: 'No hay pagos en el rango seleccionado.',
+          emptyIcon: Icons.payment_outlined,
+          rows: viewModel.getPaymentMethodRows(),
+        );
+      case SalesBreakdownFilter.product:
+        return (
+          title: 'Top productos vendidos',
+          emptyText: 'No hay productos cobrados en el rango.',
+          emptyIcon: Icons.inventory_2_outlined,
+          rows: viewModel.getTopProductRows(),
+        );
+      case SalesBreakdownFilter.category:
+        return (
+          title: 'Ventas por categoría',
+          emptyText: 'No hay ventas por categoría en el rango.',
+          emptyIcon: Icons.category_outlined,
+          rows: viewModel.getCategoryRows(),
+        );
+      case SalesBreakdownFilter.employee:
+        return (
+          title: 'Ventas por empleado',
+          emptyText: 'No hay ventas por empleado en el rango.',
+          emptyIcon: Icons.person_outlined,
+          rows: viewModel.getEmployeeRows(),
+        );
+      case SalesBreakdownFilter.zone:
+        return (
+          title: 'Ventas por zona',
+          emptyText: 'No hay ventas por zona en el rango.',
+          emptyIcon: Icons.place_outlined,
+          rows: viewModel.getZoneRows(),
+        );
+      case SalesBreakdownFilter.hourly:
+        return (
+          title: 'Ventas por hora',
+          emptyText: 'No hay actividad en el rango.',
+          emptyIcon: Icons.schedule_outlined,
+          rows: viewModel.getHourlyRows(),
+        );
+    }
+  }
+
+  bool _showQuantity(SalesBreakdownFilter filter) =>
+      filter == SalesBreakdownFilter.product ||
+      filter == SalesBreakdownFilter.category;
+
   @override
   Widget build(BuildContext context) {
     final currency =
         NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
     final metrics = viewModel.getSalesMetricCards();
     final methodRows = viewModel.getPaymentMethodRows();
-    final hourlyRows = viewModel.getHourlyRows();
-    final productRows = viewModel.getTopProductRows();
+    final selectedFilter = state.salesBreakdownFilter;
+    final data = _breakdownData(selectedFilter);
+    final maxAmount = data.rows.isEmpty
+        ? 1.0
+        : data.rows
+            .map((r) => r.amount)
+            .reduce((a, b) => a > b ? a : b);
 
     return ListView(
       padding: _sectionPadding,
@@ -514,73 +588,241 @@ class _SalesReportSection extends StatelessWidget {
           rows: methodRows,
           color: AppColors.primary,
         ),
-        const SizedBox(height: AppSpacing.itemGap),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final singleColumn =
-                constraints.maxWidth < AppBreakpoints.tablet;
-            final cards = [
-              _BreakdownCard(
-                title: 'Ventas por método de pago',
-                emptyText: 'No hay pagos en el rango seleccionado.',
-                emptyIcon: Icons.payment_outlined,
-                children: methodRows
-                    .map((row) => _AmountRow(
-                          label: row.label,
-                          trailing:
-                              '${currency.format(row.amount)} · ${row.count} tx',
-                        ))
-                    .toList(),
-              ),
-              _BreakdownCard(
-                title: 'Top productos vendidos',
-                emptyText: 'No hay productos cobrados en el rango.',
-                emptyIcon: Icons.inventory_2_outlined,
-                children: productRows
-                    .map((row) => _AmountRow(
-                          label: row.label,
-                          trailing:
-                              '${row.quantity.toStringAsFixed(0)} uds · ${currency.format(row.amount)}',
-                        ))
-                    .toList(),
-              ),
-              _BreakdownCard(
-                title: 'Ventas por hora',
-                emptyText: 'No hay actividad en el rango.',
-                emptyIcon: Icons.schedule_outlined,
-                children: hourlyRows
-                    .map((row) => _AmountRow(
-                          label: row.label,
-                          trailing:
-                              '${currency.format(row.amount)} · ${row.count} tx',
-                        ))
-                    .toList(),
-              ),
-            ];
-
-            if (singleColumn) {
-              return Column(
+        const SizedBox(height: AppSpacing.sectionGap),
+        // --- Breakdown filter selector ---
+        Container(
+          padding: const EdgeInsets.all(AppSpacing.cardPadding),
+          decoration: BoxDecoration(
+            color: AppColors.card,
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            border: Border.all(color: AppColors.border),
+            boxShadow: AppShadows.soft,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header
+              Row(
                 children: [
-                  for (int i = 0; i < cards.length; i++) ...[
-                    if (i > 0)
-                      const SizedBox(height: AppSpacing.itemGap),
-                    cards[i],
-                  ],
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.1),
+                      borderRadius:
+                          BorderRadius.circular(AppRadius.sm),
+                    ),
+                    child: Icon(
+                      _filterIcon(selectedFilter),
+                      size: 18,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                  const SizedBox(width: AppSpacing.tightGap),
+                  Expanded(
+                    child: Text(
+                      data.title,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.foreground,
+                      ),
+                    ),
+                  ),
                 ],
-              );
-            }
-
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (int i = 0; i < cards.length; i++) ...[
-                  if (i > 0)
-                    const SizedBox(width: AppSpacing.itemGap),
-                  Expanded(child: cards[i]),
-                ],
-              ],
-            );
-          },
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              // Filter chips
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: SalesBreakdownFilter.values.map((filter) {
+                    final selected = filter == selectedFilter;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          borderRadius:
+                              BorderRadius.circular(20),
+                          onTap: () => viewModel
+                              .setSalesBreakdownFilter(filter),
+                          child: AnimatedContainer(
+                            duration:
+                                const Duration(milliseconds: 200),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: selected
+                                  ? AppColors.primary
+                                  : AppColors.secondary,
+                              borderRadius:
+                                  BorderRadius.circular(20),
+                              border: Border.all(
+                                color: selected
+                                    ? AppColors.primary
+                                    : AppColors.border,
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  _filterIcon(filter),
+                                  size: 15,
+                                  color: selected
+                                      ? Colors.white
+                                      : AppColors.mutedForeground,
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  viewModel
+                                      .breakdownFilterLabel(filter),
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: selected
+                                        ? FontWeight.w700
+                                        : FontWeight.w500,
+                                    color: selected
+                                        ? Colors.white
+                                        : AppColors.foreground,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+              const Divider(height: AppSpacing.sectionGap),
+              // Rows
+              if (data.rows.isEmpty)
+                _EmptyPlaceholder(
+                  icon: data.emptyIcon,
+                  message: data.emptyText,
+                )
+              else
+                ListView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: data.rows.length,
+                  itemBuilder: (_, index) {
+                    final row = data.rows[index];
+                    final fraction =
+                        maxAmount > 0 ? row.amount / maxAmount : 0.0;
+                    final showQty = _showQuantity(selectedFilter);
+                    return Padding(
+                      padding: const EdgeInsets.only(
+                          bottom: AppSpacing.sm),
+                      child: Column(
+                        crossAxisAlignment:
+                            CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              // Rank badge
+                              Container(
+                                width: 26,
+                                height: 26,
+                                alignment: Alignment.center,
+                                decoration: BoxDecoration(
+                                  color: index < 3
+                                      ? AppColors.primary
+                                          .withValues(alpha: 0.1)
+                                      : AppColors.secondary,
+                                  borderRadius:
+                                      BorderRadius.circular(
+                                          AppRadius.sm),
+                                ),
+                                child: Text(
+                                  '${index + 1}',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: index < 3
+                                        ? AppColors.primary
+                                        : AppColors.mutedForeground,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(
+                                  width: AppSpacing.tightGap),
+                              Expanded(
+                                child: Text(
+                                  row.label,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 14,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              const SizedBox(
+                                  width: AppSpacing.sm),
+                              Column(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.end,
+                                children: [
+                                  Text(
+                                    currency.format(row.amount),
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 14,
+                                      color: AppColors.foreground,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    showQty
+                                        ? '${row.quantity.toStringAsFixed(0)} uds · ${row.count} ventas'
+                                        : '${row.count} transacciones',
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      color:
+                                          AppColors.mutedForeground,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          // Progress bar
+                          ClipRRect(
+                            borderRadius:
+                                BorderRadius.circular(4),
+                            child: LinearProgressIndicator(
+                              value: fraction,
+                              minHeight: 4,
+                              backgroundColor:
+                                  AppColors.secondary,
+                              valueColor:
+                                  AlwaysStoppedAnimation<Color>(
+                                index == 0
+                                    ? AppColors.primary
+                                    : AppColors.primary
+                                        .withValues(
+                                            alpha:
+                                                0.4 +
+                                                    0.6 * fraction),
+                              ),
+                            ),
+                          ),
+                          if (index < data.rows.length - 1)
+                            const SizedBox(
+                                height: AppSpacing.sm),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+            ],
+          ),
         ),
       ],
     );

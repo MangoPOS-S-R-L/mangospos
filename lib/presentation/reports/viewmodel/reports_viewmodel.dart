@@ -10,6 +10,15 @@ enum ReportCategory { sales, purchases, finances, inventory, taxes }
 
 enum SalesReportRangePreset { today, yesterday, thisWeek, thisMonth, custom }
 
+enum SalesBreakdownFilter {
+  paymentMethod,
+  product,
+  category,
+  employee,
+  zone,
+  hourly,
+}
+
 class ReportItem {
   final String title;
   final String description;
@@ -62,6 +71,7 @@ class ReportsState {
   final Map<String, dynamic>? inventorySummary;
   final Map<String, dynamic>? taxSummary;
   final SalesReportRangePreset salesRangePreset;
+  final SalesBreakdownFilter salesBreakdownFilter;
   final DateTime salesFrom;
   final DateTime salesTo;
 
@@ -75,6 +85,7 @@ class ReportsState {
     this.inventorySummary,
     this.taxSummary,
     this.salesRangePreset = SalesReportRangePreset.thisWeek,
+    this.salesBreakdownFilter = SalesBreakdownFilter.paymentMethod,
     required this.salesFrom,
     required this.salesTo,
   });
@@ -100,6 +111,7 @@ class ReportsState {
     Map<String, dynamic>? inventorySummary,
     Map<String, dynamic>? taxSummary,
     SalesReportRangePreset? salesRangePreset,
+    SalesBreakdownFilter? salesBreakdownFilter,
     DateTime? salesFrom,
     DateTime? salesTo,
     bool clearError = false,
@@ -117,6 +129,8 @@ class ReportsState {
       inventorySummary: inventorySummary ?? this.inventorySummary,
       taxSummary: taxSummary ?? this.taxSummary,
       salesRangePreset: salesRangePreset ?? this.salesRangePreset,
+      salesBreakdownFilter:
+          salesBreakdownFilter ?? this.salesBreakdownFilter,
       salesFrom: salesFrom ?? this.salesFrom,
       salesTo: salesTo ?? this.salesTo,
     );
@@ -248,6 +262,10 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
       salesTo: endExclusive,
     );
     await load();
+  }
+
+  void setSalesBreakdownFilter(SalesBreakdownFilter filter) {
+    state = state.copyWith(salesBreakdownFilter: filter);
   }
 
   void selectCategory(ReportCategory? category) {
@@ -454,6 +472,69 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
           ),
         )
         .toList(growable: false);
+  }
+
+  List<SalesBreakdownRow> getCategoryRows() {
+    final rows =
+        (state.salesSummary?['sales_by_category'] as List?) ?? const [];
+    return rows
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .map(
+          (row) => SalesBreakdownRow(
+            label: row['label']?.toString() ?? 'Sin categoría',
+            amount: (row['amount'] as num?)?.toDouble() ?? 0,
+            quantity: (row['quantity'] as num?)?.toDouble() ?? 0,
+            count: (row['count'] as num?)?.toInt() ?? 0,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  List<SalesBreakdownRow> getEmployeeRows() {
+    final rows =
+        (state.salesSummary?['sales_by_employee'] as List?) ?? const [];
+    return rows
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .map(
+          (row) => SalesBreakdownRow(
+            label: row['label']?.toString() ?? 'Sin empleado',
+            amount: (row['amount'] as num?)?.toDouble() ?? 0,
+            count: (row['count'] as num?)?.toInt() ?? 0,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  List<SalesBreakdownRow> getZoneRows() {
+    final rows =
+        (state.salesSummary?['sales_by_zone'] as List?) ?? const [];
+    return rows
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .map(
+          (row) => SalesBreakdownRow(
+            label: row['label']?.toString() ?? 'Sin zona',
+            amount: (row['amount'] as num?)?.toDouble() ?? 0,
+            count: (row['count'] as num?)?.toInt() ?? 0,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  String breakdownFilterLabel(SalesBreakdownFilter filter) {
+    switch (filter) {
+      case SalesBreakdownFilter.paymentMethod:
+        return 'Método de pago';
+      case SalesBreakdownFilter.product:
+        return 'Productos';
+      case SalesBreakdownFilter.category:
+        return 'Categorías';
+      case SalesBreakdownFilter.employee:
+        return 'Empleados';
+      case SalesBreakdownFilter.zone:
+        return 'Zonas';
+      case SalesBreakdownFilter.hourly:
+        return 'Por hora';
+    }
   }
 
   List<SalesMetricCardData> getFinanceMetricCards() {

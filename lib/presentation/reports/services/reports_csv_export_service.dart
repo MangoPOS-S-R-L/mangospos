@@ -66,6 +66,15 @@ class ReportsCsvExportService {
           viewModel.getPaymentMethodRows(),
         );
         addBreakdownSection('Top productos', viewModel.getTopProductRows());
+        addBreakdownSection(
+          'Ventas por categoría',
+          viewModel.getCategoryRows(),
+        );
+        addBreakdownSection(
+          'Ventas por empleado',
+          viewModel.getEmployeeRows(),
+        );
+        addBreakdownSection('Ventas por zona', viewModel.getZoneRows());
         addBreakdownSection('Ventas por hora', viewModel.getHourlyRows());
         break;
       case ReportCategory.finances:

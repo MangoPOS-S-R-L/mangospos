@@ -140,13 +140,44 @@ class ReportsRepository {
 
     final items = await _selectInBatches(
       table: ReportsQueries.tableOrderItems,
-      select: 'order_id, product_name, quantity, qty, total, status',
+      select: 'order_id, product_name, quantity, qty, total, status, product_id',
       column: 'order_id',
       values: orderIds,
     );
 
+    // Collect unique product_ids to look up their categories
+    final productIds = items
+        .map((i) => i['product_id']?.toString())
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    final categoryByProductId = <String, String>{};
+    if (productIds.isNotEmpty) {
+      final menuItems = await _selectInBatches(
+        table: 'menu_items',
+        select: 'id, category_id, categories(name)',
+        column: 'id',
+        values: productIds,
+      );
+      for (final mi in menuItems) {
+        final pid = mi['id']?.toString() ?? '';
+        final cat = mi['categories'];
+        final catMap = cat is Map<String, dynamic>
+            ? cat
+            : (cat is Map
+                  ? Map<String, dynamic>.from(cat)
+                  : <String, dynamic>{});
+        final catName = catMap['name']?.toString().trim();
+        if (pid.isNotEmpty && catName != null && catName.isNotEmpty) {
+          categoryByProductId[pid] = catName;
+        }
+      }
+    }
+
     double totalItems = 0;
     final topProducts = <String, Map<String, dynamic>>{};
+    final byCategory = <String, Map<String, dynamic>>{};
     for (final item in items) {
       final status = item['status']?.toString();
       if (status == 'void') continue;
@@ -164,6 +195,24 @@ class ReportsRepository {
       bucket['amount'] = _toDouble(bucket['amount']) + _toDouble(item['total']);
       bucket['quantity'] = _toDouble(bucket['quantity']) + qty;
       bucket['count'] = (bucket['count'] as int) + 1;
+
+      // Aggregate by category
+      final productId = item['product_id']?.toString() ?? '';
+      final categoryName =
+          categoryByProductId[productId] ?? 'Sin categoría';
+      final catBucket = byCategory.putIfAbsent(
+        categoryName,
+        () => {
+          'label': categoryName,
+          'amount': 0.0,
+          'quantity': 0.0,
+          'count': 0,
+        },
+      );
+      catBucket['amount'] =
+          _toDouble(catBucket['amount']) + _toDouble(item['total']);
+      catBucket['quantity'] = _toDouble(catBucket['quantity']) + qty;
+      catBucket['count'] = (catBucket['count'] as int) + 1;
     }
 
     final byMethod = <String, Map<String, dynamic>>{};
@@ -212,6 +261,80 @@ class ReportsRepository {
       }
     }
 
+    // --- Sales by employee & zone ---
+    // Build a map: orderId -> payment amount for completed payments
+    final amountByOrder = <String, double>{};
+    for (final payment in completedPayments) {
+      final oid = payment['order_id']?.toString() ?? '';
+      if (oid.isEmpty) continue;
+      amountByOrder[oid] = (amountByOrder[oid] ?? 0.0) +
+          netPaymentAmount(payment['amount'], payment['change_amount']);
+    }
+
+    // Fetch table_sessions with waiter and table→zone info
+    final orderSessionRows = await _selectInBatches(
+      table: ReportsQueries.tableOrders,
+      select:
+          'id, session_id, table_sessions!inner(waiter_user_id, profiles!table_sessions_waiter_user_id_profiles_fkey(full_name), dining_tables!left(zones!left(name)))',
+      column: 'id',
+      values: orderIds,
+    );
+
+    final byEmployee = <String, Map<String, dynamic>>{};
+    final byZone = <String, Map<String, dynamic>>{};
+    for (final row in orderSessionRows) {
+      final oid = row['id']?.toString() ?? '';
+      final amount = amountByOrder[oid] ?? 0.0;
+      if (amount == 0) continue;
+
+      final session = row['table_sessions'];
+      final sessionMap = session is Map<String, dynamic>
+          ? session
+          : (session is Map
+                ? Map<String, dynamic>.from(session)
+                : <String, dynamic>{});
+
+      // Employee
+      final profile = sessionMap['profiles'];
+      final profileMap = profile is Map<String, dynamic>
+          ? profile
+          : (profile is Map
+                ? Map<String, dynamic>.from(profile)
+                : <String, dynamic>{});
+      final empName = profileMap['full_name']?.toString().trim().isNotEmpty == true
+          ? profileMap['full_name'].toString().trim()
+          : 'Sin empleado';
+      final empBucket = byEmployee.putIfAbsent(
+        empName,
+        () => {'label': empName, 'amount': 0.0, 'count': 0},
+      );
+      empBucket['amount'] = _toDouble(empBucket['amount']) + amount;
+      empBucket['count'] = (empBucket['count'] as int) + 1;
+
+      // Zone
+      final table = sessionMap['dining_tables'];
+      final tableMap = table is Map<String, dynamic>
+          ? table
+          : (table is Map
+                ? Map<String, dynamic>.from(table)
+                : <String, dynamic>{});
+      final zone = tableMap['zones'];
+      final zoneMap = zone is Map<String, dynamic>
+          ? zone
+          : (zone is Map
+                ? Map<String, dynamic>.from(zone)
+                : <String, dynamic>{});
+      final zoneName = zoneMap['name']?.toString().trim().isNotEmpty == true
+          ? zoneMap['name'].toString().trim()
+          : 'Sin zona';
+      final zoneBucket = byZone.putIfAbsent(
+        zoneName,
+        () => {'label': zoneName, 'amount': 0.0, 'count': 0},
+      );
+      zoneBucket['amount'] = _toDouble(zoneBucket['amount']) + amount;
+      zoneBucket['count'] = (zoneBucket['count'] as int) + 1;
+    }
+
     final avgTicket = completedPayments.isEmpty
         ? 0.0
         : totalSales / completedPayments.length;
@@ -238,6 +361,18 @@ class ReportsRepository {
       'sales_by_method': salesByMethod.take(6).toList(growable: false),
       'sales_by_hour': salesByHour,
       'top_products': topProductsList.take(8).toList(growable: false),
+      'sales_by_category': byCategory.values.toList(growable: false)
+        ..sort(
+            (a, b) =>
+                _toDouble(b['amount']).compareTo(_toDouble(a['amount']))),
+      'sales_by_employee': byEmployee.values.toList(growable: false)
+        ..sort(
+            (a, b) =>
+                _toDouble(b['amount']).compareTo(_toDouble(a['amount']))),
+      'sales_by_zone': byZone.values.toList(growable: false)
+        ..sort(
+            (a, b) =>
+                _toDouble(b['amount']).compareTo(_toDouble(a['amount']))),
     };
   }
 

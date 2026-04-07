@@ -55,6 +55,17 @@ class ReportsExportService {
             showQuantity: true,
           ),
           pw.SizedBox(height: 12),
+          _breakdownTable(
+            'Ventas por categoría',
+            viewModel.getCategoryRows(),
+            showQuantity: true,
+          ),
+          pw.SizedBox(height: 12),
+          _breakdownTable(
+              'Ventas por empleado', viewModel.getEmployeeRows()),
+          pw.SizedBox(height: 12),
+          _breakdownTable('Ventas por zona', viewModel.getZoneRows()),
+          pw.SizedBox(height: 12),
           _breakdownTable('Ventas por hora', viewModel.getHourlyRows()),
         ];
       case ReportCategory.finances:

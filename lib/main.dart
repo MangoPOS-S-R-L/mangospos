@@ -15,6 +15,7 @@ import 'package:http/http.dart' as http;
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:path/path.dart' as p;
+import 'package:auto_updater/auto_updater.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -165,6 +166,18 @@ Future<void> _bootstrapApp() async {
 
     if (!kIsWeb && Platform.isWindows) {
       await windowManager.ensureInitialized();
+    }
+
+    if (!kIsWeb && (Platform.isMacOS || Platform.isWindows)) {
+      try {
+        final feedURL = 'https://mangopos.com/appcast.xml'; // URL temporal para appcast
+        await autoUpdater.setFeedURL(feedURL);
+        await autoUpdater.checkForUpdates(inBackground: true);
+        await autoUpdater.setScheduledCheckInterval(3600);
+        AppLogger.d('AutoUpdater inicializado con feed: $feedURL');
+      } catch (e) {
+        AppLogger.w('AutoUpdater no soportado en esta compilación', error: e);
+      }
     }
 
     await initializeDateFormatting('es_DO', null);
