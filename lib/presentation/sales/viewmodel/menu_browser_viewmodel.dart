@@ -47,6 +47,8 @@ class MenuProduct {
   final String? menuId;
   final String itemType;
 
+  final List<Map<String, dynamic>> associatedTaxes;
+
   const MenuProduct({
     required this.id,
     required this.name,
@@ -57,32 +59,38 @@ class MenuProduct {
     this.imageUrl,
     this.menuId,
     this.itemType = 'standard',
+    this.associatedTaxes = const [],
   });
+
 
   factory MenuProduct.fromMap(Map<String, dynamic> m) {
     double resolvedRate = 0;
+    final taxList = <Map<String, dynamic>>[];
+    final taxLinks = m['menu_item_taxes'];
+
+    if (taxLinks is List) {
+      for (final rawLink in taxLinks) {
+        if (rawLink is! Map) continue;
+        final rawTax = rawLink['taxes'];
+        if (rawTax is Map) {
+          taxList.add(Map<String, dynamic>.from(rawTax));
+        }
+      }
+    }
+
     final rawEffectiveRate = m['effective_tax_rate'];
     if (rawEffectiveRate is num) {
       resolvedRate = rawEffectiveRate.toDouble();
     } else if (rawEffectiveRate != null) {
       resolvedRate = double.tryParse(rawEffectiveRate.toString()) ?? 0;
     } else {
-      final taxLinks = m['menu_item_taxes'];
-      if (taxLinks is List) {
-        for (final rawLink in taxLinks) {
-          if (rawLink is! Map) continue;
-          final rawTax = rawLink['taxes'];
-          if (rawTax is Map) {
-            final rate = rawTax['rate'];
-            if (rate is num) {
-              resolvedRate += rate.toDouble();
-            } else if (rate != null) {
-              resolvedRate += double.tryParse(rate.toString()) ?? 0;
-            }
-          }
-        }
+      // Sum all active taxes if no effective rate is provided by the view
+      for (final tx in taxList) {
+        final rate = tx['rate'];
+        if (rate is num) resolvedRate += rate.toDouble();
       }
     }
+
 
     return MenuProduct(
       id: m['id'] as String,
@@ -96,9 +104,36 @@ class MenuProduct {
       imageUrl: m['image_url'] as String?,
       menuId: m['menu_id'] as String?,
       itemType: m['item_type']?.toString() ?? 'standard',
+      associatedTaxes: taxList,
     );
   }
+
+  double calculateTaxRate(String origin) {
+    // origin: 'table', 'manual', 'quick'
+    double total = 0;
+    for (final tx in associatedTaxes) {
+      final rate = tx['rate'] as num? ?? 0;
+      final onZone = tx['apply_on_zone'] as bool? ?? true;
+      final onManual = tx['apply_on_manual'] as bool? ?? true;
+      final onQuick = tx['apply_on_quick'] as bool? ?? true;
+
+      bool applies = true;
+      if (origin == 'table' || origin == 'dine_in') {
+        applies = onZone;
+      } else if (origin == 'manual') {
+        applies = onManual;
+      } else if (origin == 'quick') {
+        applies = onQuick;
+      }
+
+      if (applies) {
+        total += rate.toDouble();
+      }
+    }
+    return total > 0 ? total : taxRate; // Fallback to global total if list empty or sum 0
+  }
 }
+
 
 enum MenuProductsMode { none, category, menu, all, search, favorites }
 
@@ -188,9 +223,10 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
   final OfflineCatalogService _offlineCatalog = OfflineCatalogService();
 
   static const _menuItemsSelect =
-      'id,name,price,image_url,category_id,is_active,position,tax_mode,item_type,menu_item_taxes(tax_id,taxes(rate))';
+      'id,name,price,image_url,category_id,is_active,position,tax_mode,item_type,menu_item_taxes(tax_id,taxes(rate,apply_on_zone,apply_on_manual,apply_on_quick))';
   static const _menuListSelect =
-      'id,name,price,image_url,category_id,menu_id,is_active,position,tax_mode,item_type,effective_tax_rate';
+      'id,name,price,image_url,category_id,menu_id,is_active,position,tax_mode,item_type,effective_tax_rate,menu_item_taxes(tax_id,taxes(rate,apply_on_zone,apply_on_manual,apply_on_quick))';
+
 
   Future<String> _resolveBusinessId() async {
     final sessionBusinessId = ref.read(sessionProvider).activeBusinessId;

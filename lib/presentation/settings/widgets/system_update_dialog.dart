@@ -12,9 +12,13 @@ class SystemUpdateDialog extends StatefulWidget {
 
 class _SystemUpdateDialogState extends State<SystemUpdateDialog> {
   bool _isChecking = true;
-  bool _updateAvailable = false;
-  String _currentVersion = "1.0.0+1";
-  String _latestVersion = "1.1.0+3";
+  bool _hasError = false;
+  String _errorMessage = '';
+
+  static const _currentVersion = String.fromEnvironment(
+    'APP_VERSION',
+    defaultValue: '1.0.0',
+  );
 
   @override
   void initState() {
@@ -23,19 +27,41 @@ class _SystemUpdateDialogState extends State<SystemUpdateDialog> {
   }
 
   Future<void> _checkForUpdates() async {
-    // Simula la llamada al backend o servidor de actualizaciones
-    await Future.delayed(const Duration(seconds: 2));
-    if (mounted) {
-      setState(() {
-        _isChecking = false;
-        // Por motivos de demostración, establecemos que sí hay una actualización
-        _updateAvailable = true; 
-      });
+    if (kIsWeb || !(Platform.isMacOS || Platform.isWindows)) {
+      if (mounted) {
+        setState(() {
+          _isChecking = false;
+          _hasError = true;
+          _errorMessage = 'Actualización no soportada en esta plataforma.';
+        });
+      }
+      return;
+    }
+
+    try {
+      await autoUpdater.setFeedURL('https://mangopos.com/appcast.xml');
+      await autoUpdater.checkForUpdates(inBackground: true);
+
+      // auto_updater maneja la UI de actualización internamente.
+      // Si llegamos aquí sin excepción, el check fue exitoso.
+      if (mounted) {
+        setState(() {
+          _isChecking = false;
+          _hasError = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isChecking = false;
+          _hasError = true;
+          _errorMessage = 'No se pudo verificar actualizaciones: $e';
+        });
+      }
     }
   }
 
   Future<void> _startUpdate() async {
-    Navigator.of(context).pop();
     if (!kIsWeb && (Platform.isMacOS || Platform.isWindows)) {
       try {
         await autoUpdater.checkForUpdates();
@@ -49,13 +75,6 @@ class _SystemUpdateDialogState extends State<SystemUpdateDialog> {
           );
         }
       }
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Actualización no soportada en esta plataforma.'),
-          backgroundColor: Colors.orange,
-        ),
-      );
     }
   }
 
@@ -96,7 +115,7 @@ class _SystemUpdateDialogState extends State<SystemUpdateDialog> {
               Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                   Text(
+                  Text(
                     'Buscando actualizaciones disponibles...',
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 14, color: Colors.grey[600]),
@@ -105,51 +124,41 @@ class _SystemUpdateDialogState extends State<SystemUpdateDialog> {
                   const CircularProgressIndicator(color: Color(0xFF1C1917)),
                 ],
               )
-            else if (_updateAvailable)
+            else if (_hasError)
               Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  Icon(Icons.error_outline, color: Colors.red[400], size: 32),
+                  const SizedBox(height: 12),
                   Text(
-                    '¡Nueva versión encontrada!',
+                    _errorMessage,
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.green[700]),
+                    style: TextStyle(fontSize: 14, color: Colors.red[600]),
                   ),
-                  const SizedBox(height: 16),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[50],
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.grey[200]!),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                         Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('Versión actual', style: TextStyle(fontSize: 12, color: Colors.grey[500])),
-                            Text(_currentVersion, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                          ],
-                        ),
-                        const Icon(Icons.arrow_forward_rounded, color: Colors.grey, size: 20),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Text('Versión nueva', style: TextStyle(fontSize: 12, color: Colors.grey[500])),
-                            Text(_latestVersion, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFFF97316))),
-                          ],
-                        ),
-                      ],
-                    ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Versión actual: $_currentVersion',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[500]),
                   ),
                 ],
               )
             else
-              Text(
-                'Tu sistema ya cuenta con la versión más reciente.',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.check_circle_outline, color: Colors.green[600], size: 32),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Tu sistema está actualizado.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.green[700]),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Versión: $_currentVersion',
+                    style: TextStyle(fontSize: 13, color: Colors.grey[500]),
+                  ),
+                ],
               ),
             const SizedBox(height: 32),
             Row(
@@ -174,30 +183,28 @@ class _SystemUpdateDialogState extends State<SystemUpdateDialog> {
                     ),
                   ),
                 ),
-                if (!_isChecking && _updateAvailable) ...[
-                  const SizedBox(width: 16),
-                  Expanded(
-                    flex: 2,
-                    child: FilledButton(
-                      onPressed: _startUpdate,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFFF97316),
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
+                const SizedBox(width: 16),
+                Expanded(
+                  flex: 2,
+                  child: FilledButton(
+                    onPressed: _isChecking ? null : _startUpdate,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFFF97316),
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
                       ),
-                      child: const Text(
-                        'Actualizar ahora',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
-                        ),
+                    ),
+                    child: const Text(
+                      'Buscar actualizaciones',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
                       ),
                     ),
                   ),
-                ],
+                ),
               ],
             ),
           ],

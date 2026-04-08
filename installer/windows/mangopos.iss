@@ -75,7 +75,8 @@ var
   Version: TWindowsVersion;
 begin
   GetWindowsVersionEx(Version);
-  Result := (Version.Major >= 10);
+  // Windows 7 = 6.1, Windows 8 = 6.2, Windows 8.1 = 6.3, Windows 10+ = 10.0
+  Result := (Version.Major > 6) or ((Version.Major = 6) and (Version.Minor >= 1));
 end;
 
 function InitializeSetup: Boolean;
@@ -83,7 +84,7 @@ begin
   if not IsSupportedWindows then
   begin
     MsgBox(
-      'MangoPOS requiere Windows 10 o superior en 64 bits.' + #13#10 +
+      'MangoPOS requiere Windows 7 o superior en 64 bits.' + #13#10 +
       'Esta maquina no cumple el requisito minimo del sistema.',
       mbCriticalError,
       MB_OK

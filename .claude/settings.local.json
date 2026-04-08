@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(powershell.exe -ExecutionPolicy Bypass -File installer/windows/build_inno.ps1)"
+      "Bash(powershell.exe -ExecutionPolicy Bypass -File installer/windows/build_inno.ps1)",
+      "Read(//d d:/MangoPos/Dev/**)",
+      "Bash(find . -name \"*.dart\" -type f -exec grep -l \"_loadBusinesses\\\\|SelectBusinessView\" {} \\\\;)"
     ]
   }
 }

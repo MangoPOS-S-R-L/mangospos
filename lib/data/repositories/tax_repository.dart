@@ -18,6 +18,9 @@ class TaxRepository {
     required String name,
     required double rate,
     bool isActive = true,
+    bool applyOnZone = true,
+    bool applyOnManual = true,
+    bool applyOnQuick = true,
   }) async {
     final bid = await BusinessResolver.ensure(businessId);
     final row = await _sp.from(_table).insert({
@@ -25,9 +28,13 @@ class TaxRepository {
       'name': name,
       'rate': rate,
       'is_active': isActive,
+      'apply_on_zone': applyOnZone,
+      'apply_on_manual': applyOnManual,
+      'apply_on_quick': applyOnQuick,
     }).select().single();
     return Tax.fromMap(row);
   }
+
 
   Future<void> update(String id, Map<String, dynamic> patch) async {
     await _sp.from(_table).update(patch).eq('id', id);

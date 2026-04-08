@@ -685,7 +685,7 @@ class _UserInfo extends ConsumerWidget {
                 color: Color(0xFFF8FAFC),
                 child: Center(
                   child: Text(
-                    'version 1.0.0',
+                    'version ${String.fromEnvironment('APP_VERSION', defaultValue: '1.0.0')}',
                     style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
                   ),
                 ),

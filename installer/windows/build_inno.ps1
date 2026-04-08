@@ -133,7 +133,8 @@ Require-Tool robocopy
 if (-not $SkipFlutterBuild) {
   Require-Tool flutter
   Write-Host "==> Building Flutter Windows app" -ForegroundColor Cyan
-  flutter build windows --release
+  $pubspecVersion = Get-AppVersionFromPubspec (Join-Path $root "pubspec.yaml")
+  flutter build windows --release --dart-define="APP_VERSION=$pubspecVersion"
 }
 
 if (-not (Test-Path $appExe)) {

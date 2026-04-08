@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/data/models/tax.dart';
+import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../viewmodel/taxes_viewmodel.dart';
 
 class TaxesView extends ConsumerStatefulWidget {
@@ -49,6 +52,8 @@ class _TaxesViewState extends ConsumerState<TaxesView> {
         child: Column(
           children: [
             _InfoBanner(),
+            const SizedBox(height: 12),
+            _ServiceFeeSectionToggles(businessId: widget.businessId),
             const SizedBox(height: 12),
             Row(
               children: [
@@ -346,6 +351,10 @@ class _TaxFormDialogState extends ConsumerState<_TaxFormDialog> {
   final _name = TextEditingController();
   final _rate = TextEditingController();
   bool _isActive = true;
+  bool _applyOnZone = true;
+  bool _applyOnManual = true;
+  bool _applyOnQuick = true;
+
 
   @override
   void initState() {
@@ -355,7 +364,11 @@ class _TaxFormDialogState extends ConsumerState<_TaxFormDialog> {
       _name.text = e.name;
       _rate.text = e.rate.toStringAsFixed(0);
       _isActive = e.isActive;
+      _applyOnZone = e.applyOnZone;
+      _applyOnManual = e.applyOnManual;
+      _applyOnQuick = e.applyOnQuick;
     }
+
   }
 
   @override
@@ -500,9 +513,47 @@ class _TaxFormDialogState extends ConsumerState<_TaxFormDialog> {
                       ],
                     ),
                   ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Aplicar en áreas de venta',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: MangoColors.darkGray,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: MangoColors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: MangoColors.cardBorder),
+                    ),
+                    child: Column(
+                      children: [
+                        _dialogToggleRow(
+                          label: 'Ventas por zona (mesas)',
+                          value: _applyOnZone,
+                          onChanged: (v) => setState(() => _applyOnZone = v),
+                        ),
+                        const Divider(height: 1, color: MangoColors.cardBorder),
+                        _dialogToggleRow(
+                          label: 'Venta manual',
+                          value: _applyOnManual,
+                          onChanged: (v) => setState(() => _applyOnManual = v),
+                        ),
+                        const Divider(height: 1, color: MangoColors.cardBorder),
+                        _dialogToggleRow(
+                          label: 'Venta rápida',
+                          value: _applyOnQuick,
+                          onChanged: (v) => setState(() => _applyOnQuick = v),
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
               ),
             ),
+
 
             // Footer
             Container(
@@ -562,14 +613,21 @@ class _TaxFormDialogState extends ConsumerState<_TaxFormDialog> {
                             name: name,
                             rate: rate,
                             isActive: _isActive,
+                            applyOnZone: _applyOnZone,
+                            applyOnManual: _applyOnManual,
+                            applyOnQuick: _applyOnQuick,
                           );
                         } else {
                           await vm.create(
                             name: name,
                             rate: rate,
                             isActive: _isActive,
+                            applyOnZone: _applyOnZone,
+                            applyOnManual: _applyOnManual,
+                            applyOnQuick: _applyOnQuick,
                           );
                         }
+
 
                         if (mounted) Navigator.pop(context, true);
                       },
@@ -586,6 +644,268 @@ class _TaxFormDialogState extends ConsumerState<_TaxFormDialog> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _dialogToggleRow({
+    required String label,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 14),
+          ),
+          Switch(
+            value: value,
+            onChanged: onChanged,
+            activeThumbColor: MangoColors.successGreen,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+
+class _ServiceFeeSectionToggles extends ConsumerStatefulWidget {
+  final String businessId;
+  const _ServiceFeeSectionToggles({required this.businessId});
+
+  @override
+  ConsumerState<_ServiceFeeSectionToggles> createState() =>
+      _ServiceFeeSectionTogglesState();
+}
+
+class _ServiceFeeSectionTogglesState
+    extends ConsumerState<_ServiceFeeSectionToggles> {
+  bool _loading = true;
+  bool _onZone = true;
+  bool _onManual = true;
+  bool _onQuick = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<String> _resolveBusinessId() async {
+    if (widget.businessId != 'auto') return widget.businessId;
+    return BusinessResolver.ensure(widget.businessId);
+  }
+
+  Future<void> _load() async {
+    try {
+      final bid = await _resolveBusinessId();
+      final row = await Supabase.instance.client
+          .from('business_settings')
+          .select(
+            'service_fee_on_zone,service_fee_on_manual,service_fee_on_quick',
+          )
+          .eq('business_id', bid)
+          .maybeSingle();
+
+      if (mounted) {
+        setState(() {
+          _onZone = (row?['service_fee_on_zone'] as bool?) ?? true;
+          _onManual = (row?['service_fee_on_manual'] as bool?) ?? true;
+          _onQuick = (row?['service_fee_on_quick'] as bool?) ?? false;
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _toggle(String column, bool value) async {
+    try {
+      final bid = await _resolveBusinessId();
+      await Supabase.instance.client
+          .from('business_settings')
+          .update({column: value}).eq('business_id', bid);
+
+      // Invalida el cache del viewmodel de ventas para que
+      // recargue la config la próxima vez que se abra una venta.
+      ref.read(currentOrderProvider.notifier).invalidateTaxSettings();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error al guardar: $e')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: MangoColors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: MangoColors.cardBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.percent,
+                color: MangoColors.primaryOrange,
+                size: 20,
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  'Propina de ley (10%) por sección',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 15,
+                    color: MangoColors.darkGray,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Elige en qué tipos de venta se aplica la propina de ley.',
+            style: TextStyle(fontSize: 13, color: MangoColors.muted),
+          ),
+          const SizedBox(height: 12),
+          if (_loading)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(12),
+                child: CircularProgressIndicator(
+                  color: MangoColors.primaryOrange,
+                  strokeWidth: 2,
+                ),
+              ),
+            )
+          else ...[
+            _SectionToggleRow(
+              label: 'Ventas por zona (mesas)',
+              subtitle: 'Dine-in / mesas del salón',
+              icon: Icons.table_restaurant,
+              value: _onZone,
+              onChanged: (v) {
+                setState(() => _onZone = v);
+                _toggle('service_fee_on_zone', v);
+              },
+            ),
+            const Divider(height: 1, color: MangoColors.cardBorder),
+            _SectionToggleRow(
+              label: 'Venta manual',
+              subtitle: 'Ventas de mostrador / walk-in',
+              icon: Icons.point_of_sale,
+              value: _onManual,
+              onChanged: (v) {
+                setState(() => _onManual = v);
+                _toggle('service_fee_on_manual', v);
+              },
+            ),
+            const Divider(height: 1, color: MangoColors.cardBorder),
+            _SectionToggleRow(
+              label: 'Venta rápida',
+              subtitle: 'Quick sale / venta express',
+              icon: Icons.flash_on,
+              value: _onQuick,
+              onChanged: (v) {
+                setState(() => _onQuick = v);
+                _toggle('service_fee_on_quick', v);
+              },
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _SectionToggleRow extends StatelessWidget {
+  final String label;
+  final String subtitle;
+  final IconData icon;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  const _SectionToggleRow({
+    required this.label,
+    required this.subtitle,
+    required this.icon,
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: MangoColors.darkGray),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: MangoColors.darkGray,
+                  ),
+                ),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: MangoColors.muted,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: value
+                  ? MangoColors.successGreen.withValues(alpha: 0.1)
+                  : MangoColors.muted.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  value ? 'Activo' : 'Inactivo',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color:
+                        value ? MangoColors.successGreen : MangoColors.muted,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Switch(
+                  value: value,
+                  onChanged: onChanged,
+                  activeThumbColor: MangoColors.successGreen,
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

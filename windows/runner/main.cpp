@@ -3,40 +3,92 @@
 #include <windows.h>
 
 #include "flutter_window.h"
+#include "startup_log.h"
 #include "utils.h"
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command) {
+  // Start diagnostic logging immediately
+  StartupLog::Init();
+  StartupLog::Log("wWinMain entered");
+  StartupLog::LogSystemInfo();
+
   // Attach to console when present (e.g., 'flutter run') or create a
   // new console when running with a debugger.
   if (!::AttachConsole(ATTACH_PARENT_PROCESS) && ::IsDebuggerPresent()) {
     CreateAndAttachConsole();
+    StartupLog::Log("Console attached (debugger detected)");
   }
 
   // Initialize COM, so that it is available for use in the library and/or
   // plugins.
-  ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  HRESULT com_result = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  if (SUCCEEDED(com_result)) {
+    StartupLog::Log("COM initialized OK");
+  } else {
+    char buf[128];
+    snprintf(buf, sizeof(buf), "COM initialization FAILED: HRESULT=0x%08lX",
+             com_result);
+    StartupLog::Log(buf);
+  }
 
+  StartupLog::Log("Creating DartProject...");
   flutter::DartProject project(L"data");
 
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();
-
   project.set_dart_entrypoint_arguments(std::move(command_line_arguments));
+  StartupLog::Log("DartProject created");
 
+  // Detect primary monitor size and adapt window to fit any screen
+  int screenWidth = ::GetSystemMetrics(SM_CXSCREEN);
+  int screenHeight = ::GetSystemMetrics(SM_CYSCREEN);
+
+  // Use 90% of screen or 1280x720, whichever is smaller
+  int winWidth = (screenWidth * 90) / 100;
+  int winHeight = (screenHeight * 90) / 100;
+  if (winWidth > 1280) winWidth = 1280;
+  if (winHeight > 720) winHeight = 720;
+  // Minimum usable size
+  if (winWidth < 800) winWidth = 800;
+  if (winHeight < 600) winHeight = 600;
+
+  // Center on screen
+  int originX = (screenWidth - winWidth) / 2;
+  int originY = (screenHeight - winHeight) / 2;
+  if (originX < 0) originX = 0;
+  if (originY < 0) originY = 0;
+
+  char size_buf[128];
+  snprintf(size_buf, sizeof(size_buf),
+           "Window: %dx%d at (%d,%d) | Screen: %dx%d",
+           winWidth, winHeight, originX, originY, screenWidth, screenHeight);
+  StartupLog::Log(size_buf);
+
+  StartupLog::Log("Creating FlutterWindow...");
   FlutterWindow window(project);
-  Win32Window::Point origin(10, 10);
-  Win32Window::Size size(1280, 720);
+  Win32Window::Point origin(originX, originY);
+  Win32Window::Size size(winWidth, winHeight);
+
+  StartupLog::Log("Calling window.Create()...");
   if (!window.Create(L"mangopos", origin, size)) {
+    StartupLog::Log("ERROR: window.Create() FAILED - exiting");
+    StartupLog::Close();
     return EXIT_FAILURE;
   }
+  StartupLog::Log("window.Create() succeeded");
+
   window.SetQuitOnClose(true);
+  StartupLog::Log("Entering message loop (Flutter should render first frame soon)...");
 
   ::MSG msg;
   while (::GetMessage(&msg, nullptr, 0, 0)) {
     ::TranslateMessage(&msg);
     ::DispatchMessage(&msg);
   }
+
+  StartupLog::Log("Message loop exited, shutting down");
+  StartupLog::Close();
 
   ::CoUninitialize();
   return EXIT_SUCCESS;

@@ -59,6 +59,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   double _cachedTaxRatePct = _defaultTaxRatePct;
   double _cachedServiceFeeRatePct = _defaultServiceFeeRatePct;
   bool _cachedServiceFeeEnabled = false;
+  bool _cachedServiceFeeOnZone = true;
+  bool _cachedServiceFeeOnManual = true;
+  bool _cachedServiceFeeOnQuick = false;
 
   double _roundMoney(double value) => double.parse(value.toStringAsFixed(2));
 
@@ -125,6 +128,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       _cachedTaxRatePct = _defaultTaxRatePct;
       _cachedServiceFeeRatePct = _defaultServiceFeeRatePct;
       _cachedServiceFeeEnabled = false;
+      _cachedServiceFeeOnZone = true;
+      _cachedServiceFeeOnManual = true;
+      _cachedServiceFeeOnQuick = false;
       return;
     }
 
@@ -133,7 +139,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     try {
       final row = await Supabase.instance.client
           .from('business_settings')
-          .select('default_tax_rate,service_fee_enabled,service_fee_rate')
+          .select(
+            'default_tax_rate,service_fee_enabled,service_fee_rate,'
+            'service_fee_on_zone,service_fee_on_manual,service_fee_on_quick',
+          )
           .eq('business_id', businessId)
           .maybeSingle();
 
@@ -143,13 +152,42 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       _cachedServiceFeeRatePct =
           (row?['service_fee_rate'] as num?)?.toDouble() ??
           _defaultServiceFeeRatePct;
+      _cachedServiceFeeOnZone = (row?['service_fee_on_zone'] as bool?) ?? true;
+      _cachedServiceFeeOnManual =
+          (row?['service_fee_on_manual'] as bool?) ?? true;
+      _cachedServiceFeeOnQuick =
+          (row?['service_fee_on_quick'] as bool?) ?? false;
       _taxSettingsBusinessId = businessId;
     } catch (_) {
       _cachedTaxRatePct = _defaultTaxRatePct;
       _cachedServiceFeeRatePct = _defaultServiceFeeRatePct;
       _cachedServiceFeeEnabled = false;
+      _cachedServiceFeeOnZone = true;
+      _cachedServiceFeeOnManual = true;
+      _cachedServiceFeeOnQuick = false;
       _taxSettingsBusinessId = businessId;
     }
+  }
+
+  /// Determina si el service fee (propina de ley) aplica para el origin actual.
+  bool _isServiceFeeActiveForOrigin([String? originOverride]) {
+    if (!_cachedServiceFeeEnabled) return false;
+    final origin = originOverride ?? state.origin;
+    switch (origin) {
+      case 'table':
+        return _cachedServiceFeeOnZone;
+      case 'manual':
+        return _cachedServiceFeeOnManual;
+      case 'quick':
+        return _cachedServiceFeeOnQuick;
+      default:
+        return _cachedServiceFeeEnabled;
+    }
+  }
+
+  /// Fuerza recarga de las configuraciones de impuestos/service fee.
+  void invalidateTaxSettings() {
+    _taxSettingsBusinessId = null;
   }
 
   double _sanitizeProductTaxRatePct({
@@ -161,7 +199,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         .clamp(0, 100)
         .toDouble();
 
-    if (taxMode != 'inclusive' || takeout || !_cachedServiceFeeEnabled) {
+    if (taxMode != 'inclusive' || takeout || !_isServiceFeeActiveForOrigin()) {
       return resolvedRawTaxRate;
     }
 
@@ -174,7 +212,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }
 
   Order _pricingOrderContext(Order order, List<OrderItem> items) {
-    if (!_cachedServiceFeeEnabled) {
+    if (!_isServiceFeeActiveForOrigin()) {
       return order.copyWith(serviceFee: 0);
     }
 
@@ -599,7 +637,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       );
       // El estimador recibe la tasa como fracción decimal (0.18 = 18%)
       final taxRateDecimal = effectiveTaxRatePct / 100.0;
-      final optimisticServiceRate = takeout || !_cachedServiceFeeEnabled
+      final optimisticServiceRate = takeout || !_isServiceFeeActiveForOrigin()
           ? 0.0
           : (_cachedServiceFeeRatePct / 100.0);
       final optimisticAmounts = _estimateOptimisticItemAmounts(
@@ -913,7 +951,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
               final taxRate = item.subtotal > 0
                   ? (item.tax / item.subtotal)
                   : 0.0;
-              final serviceRate = item.isTakeout ? 0.0 : 0.10;
+              final serviceRate = item.isTakeout || !_isServiceFeeActiveForOrigin()
+                  ? 0.0
+                  : (_cachedServiceFeeRatePct / 100.0);
               final optimisticAmounts = _estimateOptimisticItemAmounts(
                 grossAmount: item.unitPrice * quantity,
                 taxMode: item.taxMode,

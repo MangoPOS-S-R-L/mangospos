@@ -110,19 +110,43 @@ class CacheManager {
     }
   }
 
-  /// Verificar versión del caché (migración futura)
+  /// Verificar versión del caché y limpiar si hay nueva instalación/actualización
   Future<void> _checkCacheVersion() async {
     final storedVersion = await _storage.read('system_cache_version');
     final currentVersion = CacheConfig.cacheVersion.toString();
 
-    if (storedVersion == null) {
-      // Primera vez, guardar versión actual
+    // Detectar la versión de la app embebida en el build
+    final storedAppVersion = await _storage.read('system_app_version');
+    const currentAppVersion = String.fromEnvironment(
+      'APP_VERSION',
+      defaultValue: '1.0.0+1',
+    );
+
+    final isNewInstall = storedVersion == null || storedAppVersion == null;
+    final isAppUpdate = storedAppVersion != null && storedAppVersion != currentAppVersion;
+    final isCacheUpdate = storedVersion != null && storedVersion != currentVersion;
+
+    if (isNewInstall || isAppUpdate || isCacheUpdate) {
+      final reason = isNewInstall
+          ? 'nueva instalación'
+          : isAppUpdate
+              ? 'actualización de app ($storedAppVersion → $currentAppVersion)'
+              : 'actualización de cache ($storedVersion → $currentVersion)';
+      debugPrint('🧹 Limpiando cache: $reason');
+
+      // Limpiar todo el cache de datos (preservar keys de sesión/auth)
+      await _storage.deleteByPrefix(StorageKeys.cachePrefix);
+      await _storage.deleteByPrefix(StorageKeys.metadataPrefix);
+      await _storage.deleteByPrefix(StorageKeys.queuePrefix);
+      await _storage.deleteByPrefix(StorageKeys.hashPrefix);
+      await _storage.delete(StorageKeys.totalCacheSize);
+      await _storage.delete(StorageKeys.lastCleanup);
+
+      // Guardar versiones actuales
       await _storage.write('system_cache_version', currentVersion);
-      debugPrint('Cache version set to $currentVersion');
-    } else if (storedVersion != currentVersion) {
-      // Migración futura
-      debugPrint('Cache version mismatch. Migration needed.');
-      // TODO DÍA 5: Implementar migración
+      await _storage.write('system_app_version', currentAppVersion);
+
+      debugPrint('✅ Cache limpiado y versiones actualizadas');
     }
   }
 

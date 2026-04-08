@@ -1,7 +1,8 @@
 // lib/main.dart
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Directory, File, Platform, Process, ProcessStartMode;
+import 'dart:io'
+    show Directory, File, FileMode, Platform, Process, ProcessStartMode;
 import 'dart:ui' show PlatformDispatcher;
 
 import 'package:flutter/foundation.dart'
@@ -28,6 +29,25 @@ import 'core/utils/logger.dart';
 import 'env/env.dart';
 
 const String agentHost = '127.0.0.1';
+
+/// Escribe logs de diagnóstico a archivo junto al ejecutable.
+/// Complementa el log nativo C++ (mangopos_startup.log) con info de Dart.
+void _logToFile(String message) {
+  try {
+    if (kIsWeb) return;
+    final userProfile = Platform.environment['USERPROFILE'] ?? '';
+    if (userProfile.isEmpty) return;
+    final logFile = File(p.join(userProfile, 'Desktop', 'mangopos_startup.log'));
+    final timestamp = DateTime.now().toIso8601String().substring(0, 19);
+    logFile.writeAsStringSync(
+      '[$timestamp] [Dart] $message\n',
+      mode: FileMode.append,
+      flush: true,
+    );
+  } catch (_) {
+    // Si no puede escribir el log, no romper la app
+  }
+}
 const int agentPort = 4000;
 bool _authRecoveryScheduled = false;
 bool _authResetScheduled = false;
@@ -128,10 +148,12 @@ void main() {
   runZonedGuarded(
     () async {
       WidgetsFlutterBinding.ensureInitialized();
+      _logToFile('main() - WidgetsBinding initialized');
       _installGlobalErrorHandlers();
       await _bootstrapApp();
     },
     (error, stackTrace) {
+      _logToFile('ZONE ERROR: $error\n$stackTrace');
       if (_isSupabaseAuthRefreshSchemaMismatch(error)) {
         _scheduleExpiredAuthReset(error, stackTrace);
         return;
@@ -160,60 +182,95 @@ void main() {
 
 Future<void> _bootstrapApp() async {
   try {
-    AppLogger.i('Arrancando MangoPOS...');
+    _logToFile('_bootstrapApp() started');
 
     if (kIsWeb) usePathUrlStrategy();
 
     if (!kIsWeb && Platform.isWindows) {
+      _logToFile('windowManager.ensureInitialized()...');
       await windowManager.ensureInitialized();
+      await windowManager.setMinimumSize(const Size(800, 600));
+      _logToFile('windowManager OK, min size set to 800x600');
     }
 
-    if (!kIsWeb && (Platform.isMacOS || Platform.isWindows)) {
-      try {
-        final feedURL = 'https://mangopos.com/appcast.xml'; // URL temporal para appcast
-        await autoUpdater.setFeedURL(feedURL);
-        await autoUpdater.checkForUpdates(inBackground: true);
-        await autoUpdater.setScheduledCheckInterval(3600);
-        AppLogger.d('AutoUpdater inicializado con feed: $feedURL');
-      } catch (e) {
-        AppLogger.w('AutoUpdater no soportado en esta compilación', error: e);
-      }
-    }
-
+    _logToFile('initializeDateFormatting...');
     await initializeDateFormatting('es_DO', null);
-    AppLogger.d('Localizacion (es_DO) inicializada');
 
+    // ── Inicializar Supabase ANTES de montar la UI (requerido por auth/router) ──
+    _logToFile('Supabase.initialize() -> ${Env.supabaseUrl}');
     await SupabaseConfig.initialize(
       url: Env.supabaseUrl,
       anonKey: Env.supabaseAnonKey,
     );
-    AppLogger.i(
-      'Supabase inicializado correctamente conectando a: ${Env.supabaseUrl}',
-    );
+    _logToFile('Supabase OK');
 
     if (!kIsWeb && defaultTargetPlatform != TargetPlatform.windows) {
+      _logToFile('MediaKit.ensureInitialized()...');
       MediaKit.ensureInitialized();
-      AppLogger.d('MediaKit inicializado');
+      _logToFile('MediaKit OK');
     } else {
-      AppLogger.d('MediaKit omitido en esta plataforma');
+      _logToFile('MediaKit skipped (Windows)');
     }
 
     await _lockLandscapeIfMobile();
-    await _ensurePrinterAgentStarted();
-    LocalPrintService.primeBaseUrl('http://$agentHost:$agentPort');
-    unawaited(LocalPrintService().warmup());
-    await CacheManager.initialize();
-    AppLogger.d('CacheManager inicializado');
 
-    AppLogger.i('MangoPOS inicializacion completa. Montando UI.');
+    // ── Montar la UI de inmediato para que la ventana aparezca ──
+    _logToFile('runApp() - mounting UI...');
     runApp(const ProviderScope(child: MyApp()));
+    _logToFile('runApp() done - UI mounted, waiting for first frame');
+
+    // ── Inicialización pesada DESPUÉS del primer frame ──
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _logToFile('First frame rendered - starting background services');
+      _initializeBackgroundServices();
+    });
   } catch (e, st) {
+    _logToFile('FATAL ERROR in _bootstrapApp: $e\n$st');
     AppLogger.f(
       'Error FATAL durante la inicializacion de la app',
       error: e,
       stackTrace: st,
     );
     rethrow;
+  }
+}
+
+/// Servicios que no necesitan bloquear el arranque de la UI.
+Future<void> _initializeBackgroundServices() async {
+  try {
+    // Auto-updater
+    if (!kIsWeb && (Platform.isMacOS || Platform.isWindows)) {
+      try {
+        const feedURL = 'https://mangopos.com/appcast.xml';
+        await autoUpdater.setFeedURL(feedURL);
+        await autoUpdater.setScheduledCheckInterval(3600);
+        unawaited(
+          autoUpdater.checkForUpdates(inBackground: true).catchError((e) {
+            AppLogger.w('Auto-update check falló', error: e);
+          }),
+        );
+        AppLogger.d('AutoUpdater inicializado con feed: $feedURL');
+      } catch (e) {
+        AppLogger.w('AutoUpdater no soportado en esta compilación', error: e);
+      }
+    }
+
+    // Printer agent (puede tardar hasta 8s con los pings)
+    await _ensurePrinterAgentStarted();
+    LocalPrintService.primeBaseUrl('http://$agentHost:$agentPort');
+    unawaited(LocalPrintService().warmup());
+
+    // Cache
+    await CacheManager.initialize();
+    AppLogger.d('CacheManager inicializado');
+
+    AppLogger.i('Servicios en background inicializados correctamente.');
+  } catch (e, st) {
+    AppLogger.e(
+      'Error inicializando servicios en background',
+      error: e,
+      stackTrace: st,
+    );
   }
 }
 

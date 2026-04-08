@@ -68,7 +68,14 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 1180, maxHeight: 860),
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width < 1200
+                ? MediaQuery.of(context).size.width - 48
+                : 1180,
+            maxHeight: MediaQuery.of(context).size.height < 880
+                ? MediaQuery.of(context).size.height - 40
+                : 860,
+          ),
           child: Container(
             decoration: BoxDecoration(
               color: Colors.white,

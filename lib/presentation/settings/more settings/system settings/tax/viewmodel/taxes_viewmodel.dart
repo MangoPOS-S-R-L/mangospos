@@ -36,30 +36,44 @@ class TaxesVm extends Notifier<TaxesState> {
     required String name,
     required double rate,
     bool isActive = true,
+    bool applyOnZone = true,
+    bool applyOnManual = true,
+    bool applyOnQuick = true,
   }) async {
     await _repo.create(
       businessId: _businessId,
       name: name,
       rate: rate,
       isActive: isActive,
+      applyOnZone: applyOnZone,
+      applyOnManual: applyOnManual,
+      applyOnQuick: applyOnQuick,
     );
     await refresh();
   }
+
 
   Future<void> update(
     String id, {
     String? name,
     double? rate,
     bool? isActive,
+    bool? applyOnZone,
+    bool? applyOnManual,
+    bool? applyOnQuick,
   }) async {
     final patch = <String, dynamic>{
       if (name != null) 'name': name,
       if (rate != null) 'rate': rate,
       if (isActive != null) 'is_active': isActive,
+      if (applyOnZone != null) 'apply_on_zone': applyOnZone,
+      if (applyOnManual != null) 'apply_on_manual': applyOnManual,
+      if (applyOnQuick != null) 'apply_on_quick': applyOnQuick,
     };
     await _repo.update(id, patch);
     await refresh();
   }
+
 
   Future<void> toggleActive(String id, bool v) async {
     await _repo.update(id, {'is_active': v});
