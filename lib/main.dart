@@ -5,8 +5,7 @@ import 'dart:io'
     show Directory, File, FileMode, Platform, Process, ProcessStartMode;
 import 'dart:ui' show PlatformDispatcher;
 
-import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform, kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -35,9 +34,15 @@ const String agentHost = '127.0.0.1';
 void _logToFile(String message) {
   try {
     if (kIsWeb) return;
-    final userProfile = Platform.environment['USERPROFILE'] ?? '';
-    if (userProfile.isEmpty) return;
-    final logFile = File(p.join(userProfile, 'Desktop', 'mangopos_startup.log'));
+    // Platform-aware home directory resolution
+    final home = Platform.environment['USERPROFILE'] // Windows
+        ?? Platform.environment['HOME']              // macOS / Linux
+        ?? '';
+    if (home.isEmpty) return;
+    final logDir = Platform.isWindows
+        ? p.join(home, 'Desktop')
+        : home; // macOS/Linux: log in home dir instead of Desktop
+    final logFile = File(p.join(logDir, 'mangopos_startup.log'));
     final timestamp = DateTime.now().toIso8601String().substring(0, 19);
     logFile.writeAsStringSync(
       '[$timestamp] [Dart] $message\n',
@@ -83,10 +88,23 @@ Future<void> _ensurePrinterAgentStarted() async {
   List<String> args;
   String workingDir;
 
+  final agentBinaryName = Platform.isWindows
+      ? 'mangopos-agent.exe'
+      : 'mangopos-agent';
+
   final appDir = p.dirname(Platform.resolvedExecutable);
-  final prodAgentPath = p.normalize(
-    p.join(appDir, '..', 'Agent', 'mangopos-agent.exe'),
-  );
+
+  // Platform-aware agent directory resolution
+  final String agentDir;
+  if (Platform.isMacOS) {
+    // macOS .app bundle: Contents/MacOS/../Resources/Agent/
+    agentDir = p.normalize(p.join(appDir, '..', 'Resources', 'Agent'));
+  } else {
+    // Windows/Linux: Agent/ folder alongside the executable
+    agentDir = p.normalize(p.join(appDir, '..', 'Agent'));
+  }
+
+  final prodAgentPath = p.join(agentDir, agentBinaryName);
   final hasProdAgent = File(prodAgentPath).existsSync();
 
   if (hasProdAgent) {
@@ -186,7 +204,7 @@ Future<void> _bootstrapApp() async {
 
     if (kIsWeb) usePathUrlStrategy();
 
-    if (!kIsWeb && Platform.isWindows) {
+    if (!kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux)) {
       _logToFile('windowManager.ensureInitialized()...');
       await windowManager.ensureInitialized();
       await windowManager.setMinimumSize(const Size(800, 600));
@@ -204,12 +222,14 @@ Future<void> _bootstrapApp() async {
     );
     _logToFile('Supabase OK');
 
-    if (!kIsWeb && defaultTargetPlatform != TargetPlatform.windows) {
-      _logToFile('MediaKit.ensureInitialized()...');
-      MediaKit.ensureInitialized();
-      _logToFile('MediaKit OK');
-    } else {
-      _logToFile('MediaKit skipped (Windows)');
+    if (!kIsWeb) {
+      try {
+        _logToFile('MediaKit.ensureInitialized()...');
+        MediaKit.ensureInitialized();
+        _logToFile('MediaKit OK');
+      } catch (e) {
+        _logToFile('MediaKit init failed (non-fatal): $e');
+      }
     }
 
     await _lockLandscapeIfMobile();

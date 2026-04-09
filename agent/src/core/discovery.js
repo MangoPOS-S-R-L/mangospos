@@ -22,13 +22,25 @@ class DiscoveryService {
             await this.scanNetwork();
         }
 
-        // 2. Scan USB (Windows PowerShell)
+        // 2. Scan USB (platform-aware)
         if (config.discovery.protocols.includes('usb')) {
-            await this.scanUSBWindows();
+            await this.scanUSB();
         }
 
         this.isScanning = false;
         return this.discoveredDevices;
+    }
+
+    async scanUSB() {
+        const platform = os.platform();
+        if (platform === 'win32') {
+            return this.scanUSBWindows();
+        } else if (platform === 'darwin') {
+            return this.scanUSBMacOS();
+        } else if (platform === 'linux') {
+            return this.scanUSBLinux();
+        }
+        logger.warn(`USB scan not supported on platform: ${platform}`);
     }
 
     async scanUSBWindows() {
@@ -75,6 +87,81 @@ class DiscoveryService {
                     });
                 } catch (e) {
                     // JSON parse error often means no devices found (empty output)
+                }
+                resolve();
+            });
+        });
+    }
+
+    async scanUSBMacOS() {
+        const cmd = 'system_profiler SPUSBDataType -json 2>/dev/null';
+        return new Promise((resolve) => {
+            exec(cmd, { maxBuffer: 1024 * 1024 }, (error, stdout) => {
+                if (error) {
+                    logger.warn(`macOS USB scan failed: ${error.message}`);
+                    resolve();
+                    return;
+                }
+                try {
+                    const data = JSON.parse(stdout);
+                    const items = data.SPUSBDataType || [];
+                    const printerPattern = /POS|Printer|2con|XP-|TM-|Epson|Bixolon|Star|Brother/i;
+                    const flatten = (nodes) => {
+                        for (const node of nodes) {
+                            const name = node._name || '';
+                            if (printerPattern.test(name)) {
+                                const vid = node.vendor_id ? `0x${node.vendor_id.replace(/^0x/i, '')}` : null;
+                                const pid = node.product_id ? `0x${node.product_id.replace(/^0x/i, '')}` : null;
+                                this.discoveredDevices.push({
+                                    type: 'usb',
+                                    name,
+                                    vid,
+                                    pid,
+                                    deviceId: `${vid || ''}:${pid || ''}`,
+                                    address: node.location_id || `${vid}:${pid}`,
+                                });
+                            }
+                            if (node._items) flatten(node._items);
+                        }
+                    };
+                    flatten(items);
+                } catch (e) {
+                    logger.warn(`macOS USB parse error: ${e.message}`);
+                }
+                resolve();
+            });
+        });
+    }
+
+    async scanUSBLinux() {
+        const cmd = 'lsusb 2>/dev/null';
+        return new Promise((resolve) => {
+            exec(cmd, (error, stdout) => {
+                if (error) {
+                    logger.warn(`Linux USB scan failed: ${error.message}`);
+                    resolve();
+                    return;
+                }
+                try {
+                    const printerPattern = /POS|Printer|2con|XP-|TM-|Epson|Bixolon|Star|Brother/i;
+                    const lines = stdout.trim().split('\n');
+                    for (const line of lines) {
+                        // Format: Bus 001 Device 003: ID 2cb7:811b Device Name
+                        const match = line.match(/ID\s+([0-9a-f]{4}):([0-9a-f]{4})\s+(.*)/i);
+                        if (!match) continue;
+                        const [, vid, pid, name] = match;
+                        if (!printerPattern.test(name) && !printerPattern.test(line)) continue;
+                        this.discoveredDevices.push({
+                            type: 'usb',
+                            name: name.trim() || `USB ${vid}:${pid}`,
+                            vid: `0x${vid}`,
+                            pid: `0x${pid}`,
+                            deviceId: `${vid}:${pid}`,
+                            address: `${vid}:${pid}`,
+                        });
+                    }
+                } catch (e) {
+                    logger.warn(`Linux USB parse error: ${e.message}`);
                 }
                 resolve();
             });

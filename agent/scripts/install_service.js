@@ -1,3 +1,9 @@
+const os = require('os');
+if (os.platform() !== 'win32') {
+    console.error('Windows service install is only supported on Windows.');
+    console.log('On macOS/Linux, use a process manager like pm2 or systemd instead.');
+    process.exit(1);
+}
 const Service = require('node-windows').Service;
 const path = require('path');
 const config = require('../src/config'); // Load config to get service name

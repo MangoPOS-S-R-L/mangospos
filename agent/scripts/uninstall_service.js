@@ -1,3 +1,8 @@
+const os = require('os');
+if (os.platform() !== 'win32') {
+    console.error('Windows service uninstall is only supported on Windows.');
+    process.exit(1);
+}
 const Service = require('node-windows').Service;
 const path = require('path');
 const config = require('../src/config');

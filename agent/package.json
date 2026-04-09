@@ -10,7 +10,12 @@
         "usb-scan": "powershell -NoProfile -ExecutionPolicy Bypass -File ./usb_scan.ps1",
         "install-service": "node scripts/install_service.js",
         "uninstall-service": "node scripts/uninstall_service.js",
-        "build:exe": "pkg . --targets node18-win-x64 --output dist/mangopos-agent.exe --compress GZip"
+        "build:exe": "pkg . --targets node18-win-x64 --output dist/mangopos-agent.exe --compress GZip",
+        "build:win-arm64": "pkg . --targets node18-win-arm64 --output dist/mangopos-agent-arm64.exe --compress GZip",
+        "build:macos": "pkg . --targets node18-macos-x64 --output dist/mangopos-agent-macos --compress GZip",
+        "build:macos-arm64": "pkg . --targets node18-macos-arm64 --output dist/mangopos-agent-macos-arm64 --compress GZip",
+        "build:linux": "pkg . --targets node18-linux-x64 --output dist/mangopos-agent-linux --compress GZip",
+        "build:all": "npm run build:exe && npm run build:win-arm64 && npm run build:macos && npm run build:macos-arm64 && npm run build:linux"
     },
     "pkg": {
         "assets": [
