@@ -281,22 +281,26 @@ double _catalogItemGrossAmount(OrderItem item) {
   final netTax = (baseTax - discountOnTax).clamp(0, double.infinity).toDouble();
   var netTotal = (netSubtotal + netTax).clamp(0, double.infinity).toDouble();
 
-  // En productos inclusivos el total almacenado puede traer propina incluida.
+  // En productos inclusivos con impuestos extraídos (ej: Delivery),
+  // el total real es menor al precio del menú. No debemos "forzar" el precio original.
   final catalogTotal = (_catalogItemGrossAmount(item) - item.discounts).clamp(
     0,
     double.infinity,
   );
+  
   final useCatalogTotalForFractionalInclusive =
       item.taxMode == 'inclusive' &&
       isFractionalQty &&
       item.total > 0 &&
       (item.total - catalogTotal).abs() > 0.01;
+
   final storedTotal = item.taxMode == 'inclusive'
       ? (useCatalogTotalForFractionalInclusive
                 ? catalogTotal
-                : (item.total >= catalogTotal ? item.total : catalogTotal))
+                : item.total) // <--- Cambio clave: Confiamos en el total calculado/almacenado
             .toDouble()
       : (item.total - item.discounts).clamp(0, double.infinity).toDouble();
+
   if (item.taxMode == 'inclusive' &&
       item.total > 0 &&
       (storedTotal - netTotal).abs() > 0.01) {
@@ -310,7 +314,12 @@ double _catalogItemGrossAmount(OrderItem item) {
   );
 }
 
-double _uiItemDisplayAmount(OrderItem item) {
+double _uiItemDisplayAmount(WidgetRef ref, OrderItem item) {
+  final order = ref.read(currentOrderProvider).order;
+  if (order != null) {
+    return itemDisplayTotal(order, item);
+  }
+
   if (item.taxMode == 'inclusive') {
     return _effectiveItemTotal(item);
   } else {
@@ -1479,7 +1488,7 @@ class _CartView extends ConsumerWidget {
     for (final item in sentItems) {
       final name = item.productName;
       final qty = item.quantity.toDouble();
-      final totalItem = _uiItemDisplayAmount(item);
+      final totalItem = _uiItemDisplayAmount(ref, item);
       final groupKey = '${name.toLowerCase().trim()}|${item.isTakeout}';
       if (groupedSent.containsKey(groupKey)) {
         groupedSent[groupKey] = groupedSent[groupKey]!.copyWith(
@@ -3123,7 +3132,7 @@ class _SectionLabel extends StatelessWidget {
   }
 }
 
-class _CartLineItem extends StatelessWidget {
+class _CartLineItem extends ConsumerWidget {
   final OrderItem item;
   final bool isDraft;
   final VoidCallback? onDelete;
@@ -3137,10 +3146,10 @@ class _CartLineItem extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final name = item.productName;
     final qty = item.quantity.toStringAsFixed(1);
-    final totalItem = _uiItemDisplayAmount(item).toStringAsFixed(2);
+    final totalItem = _uiItemDisplayAmount(ref, item).toStringAsFixed(2);
     final modifiers = item.modifiers;
 
     return Material(
