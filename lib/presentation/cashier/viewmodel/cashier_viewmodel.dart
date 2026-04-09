@@ -47,10 +47,12 @@ class CashierViewModel extends ChangeNotifier {
   double _bestDayAmount = 0.0;
   String _bestDayName = '';
   DateTime? _lastCashOpenValidationAt;
+  String? _error;
 
   CashierViewModel(this._repository, this._salesRepository);
 
   bool get isLoading => _isLoading;
+  String? get error => _error;
   String get businessName => _businessName;
   Map<String, dynamic>? get lastSession => _lastSession;
   int get pendingTables => _pendingTables;
@@ -70,6 +72,7 @@ class CashierViewModel extends ChangeNotifier {
 
   Future<void> init() async {
     _isLoading = true;
+    _error = null;
     notifyListeners();
     try {
       final client = Supabase.instance.client;
@@ -122,43 +125,59 @@ class CashierViewModel extends ChangeNotifier {
               _lastSession = await _repository.getLastSession(_currentRegisterId!);
             }
           }
-          
+
           _lastCashOpenValidationAt = AppTime.nowAst();
           _pendingTables = await _salesRepository.getOpenTablesCount(
             _businessId!,
           );
 
-          // Load today's summary
-          await _loadTodaySummary();
-
-          // Load recent movements
-          await _loadRecentMovements();
-
-          // Load active sessions
-          await _loadActiveSessions();
-
-          // Load weekly sales
-          await _loadWeeklySales();
+          // Load all dashboard data in parallel to reduce wait time
+          await _loadDashboardData();
         }
       }
     } catch (e) {
       debugPrint('Error loading cashier data: $e');
+      _error = 'Error al cargar datos de caja.';
     } finally {
       _isLoading = false;
       notifyListeners();
     }
   }
 
-  Future<void> _loadTodaySummary() async {
+  /// Loads summary, movements, sessions and weekly sales in parallel.
+  /// Emits a single notifyListeners at the end to avoid multiple rebuilds.
+  Future<void> _loadDashboardData({bool silent = false}) async {
+    final results = await Future.wait([
+      _fetchTodaySummary(),
+      _fetchRecentMovements(),
+      _fetchActiveSessions(),
+      _fetchWeeklySales(),
+    ], eagerError: false);
+
+    final summary = results[0] as Map<String, dynamic>?;
+    final movements = results[1] as List<Map<String, dynamic>>?;
+    final sessionsData = results[2] as Map<String, dynamic>?;
+    final weeklyData = results[3] as Map<String, dynamic>?;
+
+    if (summary != null) _todaySummary = summary;
+    if (movements != null) _recentMovements = movements;
+    if (sessionsData != null) {
+      final sessionsList = sessionsData['sessions'] as List;
+      _activeSessions = sessionsList
+          .map((s) => TableSession.fromMap(s as Map<String, dynamic>))
+          .toList();
+      _sessionTotals = Map<String, double>.from(sessionsData['totals'] ?? {});
+    }
+    if (weeklyData != null) _applyWeeklyData(weeklyData);
+
+    if (!silent) notifyListeners();
+  }
+
+  /// Pure data fetcher — returns summary map without mutating state.
+  Future<Map<String, dynamic>?> _fetchTodaySummary() async {
     try {
       if (_businessId == null) {
-        debugPrint('Cannot load summary: business_id is null');
-        _todaySummary = {
-          'total_income': 0.0,
-          'total_expenses': 0.0,
-          'transaction_count': 0,
-        };
-        return;
+        return {'total_income': 0.0, 'total_expenses': 0.0, 'transaction_count': 0};
       }
 
       final client = Supabase.instance.client;
@@ -166,9 +185,6 @@ class CashierViewModel extends ChangeNotifier {
       final startOfDay = dayRange.fromUtc.toIso8601String();
       final endOfDay = dayRange.toUtc.toIso8601String();
 
-      debugPrint('Loading summary for business: $_businessId');
-
-      // Get payments for today
       final paymentsData = await client
           .from('payments')
           .select('amount, change_amount, created_at')
@@ -178,17 +194,11 @@ class CashierViewModel extends ChangeNotifier {
           .eq('business_id', _businessId!);
 
       double totalIncome = 0.0;
-      int transactionCount = 0;
-
-      transactionCount = paymentsData.length;
+      int transactionCount = paymentsData.length;
       for (var payment in paymentsData) {
-        totalIncome += netPaymentAmount(
-          payment['amount'],
-          payment['change_amount'],
-        );
+        totalIncome += netPaymentAmount(payment['amount'], payment['change_amount']);
       }
 
-      // Get expenses for today (cash movements)
       double totalExpenses = 0.0;
       if (_lastSession != null && _lastSession!['id'] != null) {
         try {
@@ -216,39 +226,30 @@ class CashierViewModel extends ChangeNotifier {
         }
       }
 
-      _todaySummary = {
+      return {
         'total_income': totalIncome,
         'total_expenses': totalExpenses,
         'transaction_count': transactionCount,
       };
     } catch (e) {
       debugPrint('Error loading today summary: $e');
-      _todaySummary = {
-        'total_income': 0.0,
-        'total_expenses': 0.0,
-        'transaction_count': 0,
-      };
+      return {'total_income': 0.0, 'total_expenses': 0.0, 'transaction_count': 0};
     }
   }
 
-  Future<void> _loadRecentMovements() async {
+  /// Pure data fetcher — returns movements list without mutating state.
+  Future<List<Map<String, dynamic>>?> _fetchRecentMovements() async {
     try {
-      if (_businessId == null) {
-        _recentMovements = [];
-        return;
-      }
+      if (_businessId == null) return [];
 
       final client = Supabase.instance.client;
       final dayRange = AppTime.todayRangeUtc();
       final startOfDay = dayRange.fromUtc.toIso8601String();
       final endOfDay = dayRange.toUtc.toIso8601String();
 
-      // Get recent payments (income) - simplified query
       final paymentsData = await client
           .from('payments')
-          .select(
-            'id, amount, change_amount, payment_method_id, created_at, order_id',
-          )
+          .select('id, amount, change_amount, payment_method_id, created_at, order_id')
           .gte('created_at', startOfDay)
           .lt('created_at', endOfDay)
           .eq('status', 'completed')
@@ -289,8 +290,7 @@ class CashierViewModel extends ChangeNotifier {
                       .maybeSingle();
 
                   if (tableData != null) {
-                    final code =
-                        tableData['code'] ?? tableData['label'] ?? '??';
+                    final code = tableData['code'] ?? tableData['label'] ?? '??';
                     description = 'Venta Mesa $code';
                   }
                 }
@@ -301,11 +301,7 @@ class CashierViewModel extends ChangeNotifier {
           }
         }
 
-        final amount = netPaymentAmount(
-          payment['amount'],
-          payment['change_amount'],
-        );
-
+        final amount = netPaymentAmount(payment['amount'], payment['change_amount']);
         movements.add({
           'type': 'income',
           'description': description,
@@ -363,42 +359,25 @@ class CashierViewModel extends ChangeNotifier {
         }
       });
 
-      _recentMovements = movements.take(10).toList();
+      return movements.take(10).toList();
     } catch (e) {
       debugPrint('Error loading recent movements: $e');
-      _recentMovements = [];
+      return [];
     }
   }
 
-  Future<void> _loadWeeklySales() async {
+  /// Pure data fetcher for weekly sales — returns data map without mutating state.
+  Future<Map<String, dynamic>?> _fetchWeeklySales() async {
     try {
-      if (_businessId == null) return;
+      if (_businessId == null) return null;
 
       final cacheKey = 'weekly_sales_v1_$_businessId';
 
-      // Función auxiliar para parsear y actualizar el estado
-      void updateStateFromData(Map<String, dynamic> data) {
-        _weeklySales = List<double>.from(
-          data['weekly_sales'] ?? List.filled(7, 0.0),
-        );
-        _totalWeeklySales =
-            (data['total_weekly_sales'] as num?)?.toDouble() ?? 0.0;
-        _weeklyAverage = (data['weekly_average'] as num?)?.toDouble() ?? 0.0;
-        _bestDayAmount = (data['best_day_amount'] as num?)?.toDouble() ?? 0.0;
-        _bestDayName = data['best_day_name'] ?? '-';
-        notifyListeners();
-      }
-
-      // Función para obtener desde API
       Future<Map<String, dynamic>> fetchFromApi() async {
         final client = Supabase.instance.client;
         final now = AppTime.nowAst();
         final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
-        final startOfWeekDate = DateTime(
-          startOfWeek.year,
-          startOfWeek.month,
-          startOfWeek.day,
-        );
+        final startOfWeekDate = DateTime(startOfWeek.year, startOfWeek.month, startOfWeek.day);
         final endOfWeekDate = startOfWeekDate.add(const Duration(days: 7));
 
         final payments = await client
@@ -410,12 +389,8 @@ class CashierViewModel extends ChangeNotifier {
             .eq('business_id', _businessId!);
 
         List<double> weeklySales = List.filled(7, 0.0);
-
         for (var payment in payments) {
-          final amount = netPaymentAmount(
-            payment['amount'],
-            payment['change_amount'],
-          );
+          final amount = netPaymentAmount(payment['amount'], payment['change_amount']);
           final dateStr = payment['created_at'] as String;
           final date = AppTime.tryParseServerToAst(dateStr);
           if (date == null) continue;
@@ -439,18 +414,9 @@ class CashierViewModel extends ChangeNotifier {
 
         String bestDayName = '-';
         double bestDayAmount = 0.0;
-
         if (maxIdx != -1) {
           bestDayAmount = maxVal;
-          const days = [
-            'Lunes',
-            'Martes',
-            'Miércoles',
-            'Jueves',
-            'Viernes',
-            'Sábado',
-            'Domingo',
-          ];
+          const days = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
           bestDayName = days[maxIdx];
         }
 
@@ -463,7 +429,7 @@ class CashierViewModel extends ChangeNotifier {
         };
       }
 
-      // 1. Carga RÁPIDA desde caché local
+      // Try cache first for fast initial display
       final cached = await CacheManager().get<Map<String, dynamic>>(
         key: cacheKey,
         strategy: CacheStrategy.cacheOnly,
@@ -471,11 +437,7 @@ class CashierViewModel extends ChangeNotifier {
         fetchFromApi: fetchFromApi,
       );
 
-      if (cached != null) {
-        updateStateFromData(cached);
-      }
-
-      // 2. Carga FRESCA desde red (siempre actualiza)
+      // Then always fetch fresh from network
       final fresh = await CacheManager().get<Map<String, dynamic>>(
         key: cacheKey,
         strategy: CacheStrategy.networkOnly,
@@ -484,35 +446,20 @@ class CashierViewModel extends ChangeNotifier {
         fetchFromApi: fetchFromApi,
       );
 
-      if (fresh != null) {
-        updateStateFromData(fresh);
-      }
+      return fresh ?? cached;
     } catch (e) {
       debugPrint('Error loading weekly sales: $e');
+      return null;
     }
   }
 
-  Future<void> _loadActiveSessions() async {
+  /// Pure data fetcher for active sessions — returns data map without mutating state.
+  Future<Map<String, dynamic>?> _fetchActiveSessions() async {
     try {
-      if (_businessId == null) {
-        _activeSessions = [];
-        return;
-      }
+      if (_businessId == null) return {'sessions': [], 'totals': <String, double>{}};
 
       final cacheKey = 'active_sessions_v1_$_businessId';
 
-      // Función auxiliar para parsear y actualizar el estado
-      void updateStateFromData(Map<String, dynamic> data) {
-        final sessionsList = data['sessions'] as List;
-        _activeSessions = sessionsList
-            .map((s) => TableSession.fromMap(s as Map<String, dynamic>))
-            .toList();
-
-        _sessionTotals = Map<String, double>.from(data['totals'] ?? {});
-        notifyListeners();
-      }
-
-      // Función para obtener desde API
       Future<Map<String, dynamic>> fetchFromApi() async {
         final sessions = await _salesRepository.getActiveSessions(_businessId!);
 
@@ -524,9 +471,7 @@ class CashierViewModel extends ChangeNotifier {
           final orderRows = List<Map<String, dynamic>>.from(
             await client
                 .from('orders')
-                .select(
-                  'id,session_id,status_ext,subtotal,tax,service_fee,discounts,total,created_at,closed_at',
-                )
+                .select('id,session_id,status_ext,subtotal,tax,service_fee,discounts,total,created_at,closed_at')
                 .inFilter('session_id', sessionIds)
                 .isFilter('closed_at', null)
                 .not('status_ext', 'in', '(paid,void)'),
@@ -556,9 +501,7 @@ class CashierViewModel extends ChangeNotifier {
             final itemRows = List<Map<String, dynamic>>.from(
               await client
                   .from('order_items')
-                  .select(
-                    'id,order_id,product_id,product_name,sku,qty,quantity,unit_price,subtotal,discounts,tax,total,check_id,is_takeout,status,notes,tax_mode,tax_rate,created_at',
-                  )
+                  .select('id,order_id,product_id,product_name,sku,qty,quantity,unit_price,subtotal,discounts,tax,total,check_id,is_takeout,status,notes,tax_mode,tax_rate,created_at')
                   .inFilter('order_id', orderIds)
                   .not('status', 'in', '(paid,void)'),
             );
@@ -592,36 +535,32 @@ class CashierViewModel extends ChangeNotifier {
             if (sessionId == null || sessionId.isEmpty) continue;
             final order = ordersById[orderId];
             if (order == null) continue;
-            final closedCheckIds =
-                closedCheckIdsByOrderId[orderId] ?? const <String>{};
+            final closedCheckIds = closedCheckIdsByOrderId[orderId] ?? const <String>{};
             final pendingItems = (itemsByOrderId[orderId] ?? const <OrderItem>[])
                 .where((item) => !closedCheckIds.contains(item.checkId))
                 .toList(growable: false);
             final pendingTotal = summarizeOrderPricing(order, pendingItems).total;
-            sessionTotals[sessionId] =
-                (sessionTotals[sessionId] ?? 0) + pendingTotal;
+            sessionTotals[sessionId] = (sessionTotals[sessionId] ?? 0) + pendingTotal;
           }
         }
 
         final serializedSessions = sessions
-            .map(
-              (s) => {
-                'id': s.id,
-                'business_id': s.businessId,
-                'opened_by': s.openedBy,
-                'opened_at': s.openedAt.toIso8601String(),
-                'people_count': s.peopleCount,
-                'origin': s.origin,
-                'table_name': s.tableName,
-                'zone_name': s.zoneName,
-              },
-            )
+            .map((s) => {
+                  'id': s.id,
+                  'business_id': s.businessId,
+                  'opened_by': s.openedBy,
+                  'opened_at': s.openedAt.toIso8601String(),
+                  'people_count': s.peopleCount,
+                  'origin': s.origin,
+                  'table_name': s.tableName,
+                  'zone_name': s.zoneName,
+                })
             .toList();
 
         return {'sessions': serializedSessions, 'totals': sessionTotals};
       }
 
-      // 1. Carga RÁPIDA desde caché local
+      // Try cache first for fast display
       final cached = await CacheManager().get<Map<String, dynamic>>(
         key: cacheKey,
         strategy: CacheStrategy.cacheOnly,
@@ -629,11 +568,7 @@ class CashierViewModel extends ChangeNotifier {
         fetchFromApi: fetchFromApi,
       );
 
-      if (cached != null) {
-        updateStateFromData(cached);
-      }
-
-      // 2. Carga FRESCA desde red (siempre)
+      // Then always fetch fresh from network
       final fresh = await CacheManager().get<Map<String, dynamic>>(
         key: cacheKey,
         strategy: CacheStrategy.networkOnly,
@@ -642,16 +577,19 @@ class CashierViewModel extends ChangeNotifier {
         fetchFromApi: fetchFromApi,
       );
 
-      if (fresh != null) {
-        updateStateFromData(fresh);
-      }
+      return fresh ?? cached;
     } catch (e) {
       debugPrint('Error loading active sessions: $e');
-      if (_activeSessions.isEmpty) {
-        _activeSessions = [];
-        notifyListeners();
-      }
+      return null;
     }
+  }
+
+  void _applyWeeklyData(Map<String, dynamic> data) {
+    _weeklySales = List<double>.from(data['weekly_sales'] ?? List.filled(7, 0.0));
+    _totalWeeklySales = (data['total_weekly_sales'] as num?)?.toDouble() ?? 0.0;
+    _weeklyAverage = (data['weekly_average'] as num?)?.toDouble() ?? 0.0;
+    _bestDayAmount = (data['best_day_amount'] as num?)?.toDouble() ?? 0.0;
+    _bestDayName = data['best_day_name'] ?? '-';
   }
 
   Future<void> openBox(double amount) async {
@@ -709,18 +647,15 @@ class CashierViewModel extends ChangeNotifier {
     }
   }
 
+  /// Silent background refresh — loads all data in parallel without showing
+  /// a loading spinner. Emits a single notifyListeners at the end.
   Future<void> refreshSilently() async {
     try {
       if (_currentRegisterId != null && _businessId != null) {
         _lastSession = await _repository.getLastSession(_currentRegisterId!);
         _lastCashOpenValidationAt = AppTime.nowAst();
-        _pendingTables = await _salesRepository.getOpenTablesCount(
-          _businessId!,
-        );
-        await _loadTodaySummary();
-        await _loadRecentMovements();
-        await _loadActiveSessions();
-        await _loadWeeklySales();
+        _pendingTables = await _salesRepository.getOpenTablesCount(_businessId!);
+        await _loadDashboardData(silent: true);
         notifyListeners();
       }
     } catch (e) {

@@ -32,6 +32,7 @@ class PaymentState extends Equatable {
   final String? customerName;
 
   // Estado del proceso
+  final bool processingPayment; // true while payment RPC is in flight
   final bool paymentProcessed;
   final Payment? processedPayment;
   final FiscalDocument? fiscalDocument;
@@ -52,6 +53,7 @@ class PaymentState extends Equatable {
     this.customerId,
     this.customerRnc,
     this.customerName,
+    this.processingPayment = false,
     this.paymentProcessed = false,
     this.processedPayment,
     this.fiscalDocument,
@@ -73,6 +75,7 @@ class PaymentState extends Equatable {
     String? customerId,
     String? customerRnc,
     String? customerName,
+    bool? processingPayment,
     bool? paymentProcessed,
     Payment? processedPayment,
     FiscalDocument? fiscalDocument,
@@ -93,6 +96,7 @@ class PaymentState extends Equatable {
       customerId: customerId ?? this.customerId,
       customerRnc: customerRnc ?? this.customerRnc,
       customerName: customerName ?? this.customerName,
+      processingPayment: processingPayment ?? this.processingPayment,
       paymentProcessed: paymentProcessed ?? this.paymentProcessed,
       processedPayment: processedPayment ?? this.processedPayment,
       fiscalDocument: fiscalDocument ?? this.fiscalDocument,
@@ -102,7 +106,7 @@ class PaymentState extends Equatable {
 
   bool get canProcessPayment {
     if (selectedMethod == null) return false;
-    if (loading) return false;
+    if (loading || processingPayment) return false;
     if (paymentProcessed) return false;
 
     // Si hay un error (ej: falta sesión de caja), no permitir pago
@@ -141,6 +145,7 @@ class PaymentState extends Equatable {
     customerId,
     customerRnc,
     customerName,
+    processingPayment,
     paymentProcessed,
     processedPayment,
     fiscalDocument,

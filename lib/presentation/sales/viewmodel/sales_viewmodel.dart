@@ -1163,6 +1163,46 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
     }
 
+    // Optimistic update: apply new quantity locally before server call
+    final previousItems = state.items;
+    final previousOrder = state.order;
+    if (targetItem != null) {
+      final taxRate = targetItem.subtotal > 0
+          ? (targetItem.tax / targetItem.subtotal)
+          : 0.0;
+      final serviceRate = targetItem.isTakeout || !_isServiceFeeActiveForOrigin()
+          ? 0.0
+          : (_cachedServiceFeeRatePct / 100.0);
+      final optimisticAmounts = _estimateOptimisticItemAmounts(
+        grossAmount: targetItem.unitPrice * quantity,
+        taxMode: targetItem.taxMode,
+        taxRate: taxRate,
+        serviceRate: serviceRate,
+        includeServiceInInclusivePrice: !targetItem.isTakeout,
+      );
+      final optimisticItems = state.items
+          .map((item) => item.id != itemId
+              ? item
+              : item.copyWith(
+                  quantity: quantity,
+                  subtotal: optimisticAmounts.subtotal,
+                  tax: optimisticAmounts.tax,
+                  total: optimisticAmounts.total,
+                ))
+          .toList(growable: false);
+      final updatedSummary = summarizeOrderPricing(state.order, optimisticItems);
+      state = state.copyWith(
+        items: optimisticItems,
+        order: state.order?.copyWith(
+          subtotal: updatedSummary.subtotal,
+          tax: updatedSummary.tax,
+          serviceFee: updatedSummary.serviceFee,
+          total: updatedSummary.total,
+        ),
+        error: null,
+      );
+    }
+
     try {
       await ref
           .read(salesRepositoryProvider)
@@ -1230,7 +1270,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         return;
       }
 
-      state = state.copyWith(error: 'Error al actualizar cantidad: $e');
+      // Rollback optimistic update on online error
+      state = state.copyWith(
+        items: previousItems,
+        order: previousOrder,
+        error: 'Error al actualizar cantidad: $e',
+      );
     }
   }
 

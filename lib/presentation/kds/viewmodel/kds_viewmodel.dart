@@ -128,9 +128,23 @@ class KdsViewModel extends StateNotifier<KdsState> {
     _refreshTimer?.cancel();
 
     _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      unawaited(loadOrders());
-      unawaited(loadStats());
+      if (!_isPaused) {
+        unawaited(loadOrders());
+        unawaited(loadStats());
+      }
     });
+  }
+
+  bool _isPaused = false;
+
+  /// Pause background refresh when KDS view is not visible.
+  void pauseRefresh() => _isPaused = true;
+
+  /// Resume background refresh when KDS view becomes visible again.
+  void resumeRefresh() {
+    _isPaused = false;
+    unawaited(loadOrders());
+    unawaited(loadStats());
   }
 
   // ============================================================

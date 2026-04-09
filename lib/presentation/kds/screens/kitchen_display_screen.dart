@@ -17,12 +17,13 @@ class KitchenDisplayScreen extends ConsumerStatefulWidget {
 }
 
 class _KitchenDisplayScreenState extends ConsumerState<KitchenDisplayScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late TabController _tabController;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _tabController = TabController(length: 3, vsync: this);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -33,7 +34,18 @@ class _KitchenDisplayScreenState extends ConsumerState<KitchenDisplayScreen>
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final vm = ref.read(kdsViewModelProvider.notifier);
+    if (state == AppLifecycleState.paused) {
+      vm.pauseRefresh();
+    } else if (state == AppLifecycleState.resumed) {
+      vm.resumeRefresh();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _tabController.dispose();
     super.dispose();
   }

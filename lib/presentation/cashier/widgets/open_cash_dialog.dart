@@ -113,6 +113,7 @@ class _OpenCashDialogState extends ConsumerState<OpenCashDialog> {
 
     try {
       await ref.read(cashierViewModelProvider).openBox(val);
+      HapticFeedback.mediumImpact();
       if (mounted) {
         Navigator.of(context).pop();
         ScaffoldMessenger.of(context).showSnackBar(

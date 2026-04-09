@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -17,12 +19,30 @@ final splitBillViewModelProvider =
 class SplitBillViewModel extends StateNotifier<SplitBillState> {
   final Ref _ref;
   Map<String, String?> _initialCheckIdByItemId = const {};
+  Timer? _errorDismissTimer;
 
   SplitBillViewModel(this._ref)
     : _salesRepo = _ref.read(salesRepositoryProvider),
       super(const SplitBillState());
 
   final SalesRepository _salesRepo;
+
+  @override
+  void dispose() {
+    _errorDismissTimer?.cancel();
+    super.dispose();
+  }
+
+  /// Sets error and auto-clears it after 5 seconds for non-critical errors.
+  void _setErrorWithAutoDismiss(String message) {
+    state = state.copyWith(error: message);
+    _errorDismissTimer?.cancel();
+    _errorDismissTimer = Timer(const Duration(seconds: 5), () {
+      if (mounted && state.error == message) {
+        state = state.copyWith(error: null);
+      }
+    });
+  }
 
   String? get _activeBusinessId => _ref.read(sessionProvider).activeBusinessId;
 
@@ -154,7 +174,7 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
           customerName: customerName,
         );
       } catch (e) {
-        state = state.copyWith(error: 'Error asignando cliente: $e');
+        _setErrorWithAutoDismiss('Error asignando cliente: $e');
       }
     }
   }
@@ -173,7 +193,7 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
       try {
         await _salesRepo.clearCustomerFromCheck(checkId);
       } catch (e) {
-        state = state.copyWith(error: 'Error limpiando cliente: $e');
+        _setErrorWithAutoDismiss('Error limpiando cliente: $e');
       }
     }
   }
@@ -309,7 +329,7 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
       ),
     );
     if (sourceCheck.position <= 0 || targetCheck.position <= 0) {
-      state = state.copyWith(error: 'No se pudo unir cuentas seleccionadas.');
+      _setErrorWithAutoDismiss('No se pudo unir cuentas seleccionadas.');
       return;
     }
 
@@ -603,7 +623,7 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
   /// Aplicar y confirmar la división
   Future<void> applySplit() async {
     if (!state.canApplySplit) {
-      state = state.copyWith(error: 'No hay cambios para aplicar.');
+      _setErrorWithAutoDismiss('No hay cambios para aplicar.');
       return;
     }
 

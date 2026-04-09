@@ -14,6 +14,7 @@ import 'package:mangopos/data/models/table_status.dart';
 import 'package:mangopos/domain/models/ventas_table.dart' as ventas;
 import 'package:mangopos/presentation/sales/view/theme/sales_theme.dart';
 import 'package:mangopos/presentation/sales/widgets/table_card.dart';
+import 'package:mangopos/app/widgets/skeleton_loading.dart';
 
 class SalesByZoneView extends ConsumerStatefulWidget {
   final String businessId;
@@ -30,7 +31,7 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
   Timer? _autoRefreshTimer;
 
   // Configuración de actualización automática
-  static const Duration _refreshInterval = Duration(seconds: 12);
+  static const Duration _refreshInterval = Duration(seconds: 30);
 
   @override
   void initState() {
@@ -119,10 +120,13 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
 
   @override
   Widget build(BuildContext context) {
-    final vm = ref.watch(byZoneVmProvider);
-    final cashierVm = ref.watch(cashierViewModelProvider);
-    final isCashOpen = cashierVm.lastSession?['status'] == 'open';
-    final zones = vm.zones;
+    // Use .select() to only rebuild when the specific data we need changes
+    final zones = ref.watch(byZoneVmProvider.select((s) => s.zones));
+    final isZoneLoading = ref.watch(byZoneVmProvider.select((s) => s.loading));
+    final zoneError = ref.watch(byZoneVmProvider.select((s) => s.error));
+    final isCashOpen = ref.watch(
+      cashierViewModelProvider.select((vm) => vm.isCashOpen),
+    );
     final hasZones = zones.isNotEmpty;
 
     _updateTabController(zones);
@@ -139,8 +143,9 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
         ? zones[_tabController!.index].id
         : null;
 
-    if (currentZoneId != null && vm.statusByZone.containsKey(currentZoneId)) {
-      final currentZoneTables = vm.statusByZone[currentZoneId]!;
+    final statusByZone = ref.watch(byZoneVmProvider.select((s) => s.statusByZone));
+    if (currentZoneId != null && statusByZone.containsKey(currentZoneId)) {
+      final currentZoneTables = statusByZone[currentZoneId]!;
       for (final table in currentZoneTables) {
         if (table.sessionId == null) {
           availableCount++;
@@ -154,12 +159,10 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
 
     Widget body;
     if (!hasZones) {
-      if (vm.loading) {
-        body = const Center(
-          child: CircularProgressIndicator(color: SalesTheme.primary),
-        );
-      } else if (vm.error != null) {
-        body = _buildErrorState(vm.error!);
+      if (isZoneLoading) {
+        body = const ZoneGridSkeleton();
+      } else if (zoneError != null) {
+        body = _buildErrorState(zoneError);
       } else {
         body = _buildEmptyState(
           'No hay zonas configuradas',
@@ -425,7 +428,7 @@ class _ZoneGrid extends ConsumerStatefulWidget {
 
 class _ZoneGridState extends ConsumerState<_ZoneGrid> {
   Timer? _zoneRefreshTimer;
-  static const Duration _zoneRefreshInterval = Duration(seconds: 3);
+  static const Duration _zoneRefreshInterval = Duration(seconds: 10);
 
   @override
   void initState() {
@@ -451,16 +454,18 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
 
   @override
   Widget build(BuildContext context) {
-    final vm = ref.watch(byZoneVmProvider);
-    final tables = vm.statusByZone[widget.zoneId];
+    // Only rebuild when this specific zone's tables change
+    final tables = ref.watch(
+      byZoneVmProvider.select((s) => s.statusByZone[widget.zoneId]),
+    );
+    final zoneLoading = ref.watch(byZoneVmProvider.select((s) => s.loading));
+    final zoneError = ref.watch(byZoneVmProvider.select((s) => s.error));
 
     if (tables == null) {
-      return const Center(
-        child: CircularProgressIndicator(color: SalesTheme.primary),
-      );
+      return const ZoneTablesSkeleton();
     }
 
-    if (vm.error != null && !vm.loading && tables.isEmpty) {
+    if (zoneError != null && !zoneLoading && tables.isEmpty) {
       return Center(
         child: TextButton.icon(
           onPressed: () =>
@@ -543,9 +548,9 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
                 itemBuilder: (context, index) {
                   final table = tables[index];
                   final opening = ref
-                      .watch(byZoneVmProvider)
-                      .openingTables
-                      .contains(table.tableId);
+                      .watch(byZoneVmProvider.select(
+                        (s) => s.openingTables.contains(table.tableId),
+                      ));
                   return TableCard(
                     table: _convertTableStatusToVentasTable(table),
                     isOpening: opening,

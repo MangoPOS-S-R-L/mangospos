@@ -43,8 +43,9 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
     }
     final selected = _selectedFromRoute(route);
     final orderState = ref.watch(currentOrderProvider);
-    final cashierVm = ref.watch(cashierViewModelProvider);
-    final isCashOpen = cashierVm.lastSession?['status'] == 'open';
+    final isCashOpen = ref.watch(
+      cashierViewModelProvider.select((vm) => vm.isCashOpen),
+    );
     final guardNavigation = _shouldGuardNavigation(route, orderState);
     final sessionCtrl = ref.read(sessionProvider.notifier);
 

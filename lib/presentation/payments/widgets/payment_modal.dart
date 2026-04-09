@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -73,6 +74,7 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
 
     if (state.paymentProcessed && !_handledPayment) {
       _handledPayment = true;
+      HapticFeedback.mediumImpact();
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         if (Navigator.of(context).canPop()) {
@@ -108,7 +110,9 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
         child: state.loading
             ? Center(
                 child: CircularProgressIndicator(color: AppColors.primary))
-            : Column(
+            : Stack(
+                children: [
+                  Column(
                 children: [
                   _buildHeader(context, totalToPay),
                   const Divider(height: 32),
@@ -287,6 +291,33 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
                       ),
                     ],
                   ),
+                ],
+              ),
+                  // Overlay while payment is processing
+                  if (state.processingPayment)
+                    Positioned.fill(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.85),
+                          borderRadius: BorderRadius.circular(AppRadius.lg),
+                        ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            CircularProgressIndicator(color: AppColors.primary),
+                            const SizedBox(height: 16),
+                            Text(
+                              'Procesando pago...',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.foreground,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                 ],
               ),
       ),

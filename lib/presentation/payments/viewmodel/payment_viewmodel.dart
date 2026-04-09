@@ -39,6 +39,12 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
     unawaited(_connectivity.initialize());
   }
 
+  @override
+  void dispose() {
+    _connectivity.dispose();
+    super.dispose();
+  }
+
   String _cleanError(Object e) {
     if (e is TimeoutException || e is SocketException) {
       return 'Error de conexion con el servidor.';
@@ -206,7 +212,7 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
       return;
     }
 
-    state = state.copyWith(loading: true, error: null);
+    state = state.copyWith(processingPayment: true, error: null);
 
     final orderId = state.order!.id;
     final checkId = state.check?.id;
@@ -237,7 +243,7 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
       } catch (_) {}
 
       state = state.copyWith(
-        loading: false,
+        processingPayment: false,
         paymentProcessed: true,
         processedPayment: payment,
         fiscalDocument: fiscalDoc,
@@ -250,7 +256,7 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
           e is SocketException;
       if (!shouldQueueOffline) {
         state = state.copyWith(
-          loading: false,
+          processingPayment: false,
           error: 'Error al procesar pago: ${_cleanError(e)}',
         );
         return;
@@ -304,7 +310,7 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         );
 
         state = state.copyWith(
-          loading: false,
+          processingPayment: false,
           paymentProcessed: true,
           processedPayment: localPayment,
           fiscalDocument: null,
@@ -313,7 +319,7 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         );
       } catch (offlineError) {
         state = state.copyWith(
-          loading: false,
+          processingPayment: false,
           error: 'Error al guardar pago offline: ${_cleanError(offlineError)}',
         );
       }

@@ -10,10 +10,12 @@ class QuickSaleView extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final s = ref.watch(currentOrderProvider);
-    final total = s.order?.total ?? 0.0;
-    final canPay =
-        s.order != null && s.items.isNotEmpty && !s.loading && total > 0;
+    // Use .select() to only rebuild when the specific fields we need change
+    final order = ref.watch(currentOrderProvider.select((s) => s.order));
+    final items = ref.watch(currentOrderProvider.select((s) => s.items));
+    final loading = ref.watch(currentOrderProvider.select((s) => s.loading));
+    final total = order?.total ?? 0.0;
+    final canPay = order != null && items.isNotEmpty && !loading && total > 0;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Venta Rápida'),
@@ -21,7 +23,7 @@ class QuickSaleView extends ConsumerWidget {
       ),
       body: Column(
         children: [
-          if (s.order == null)
+          if (order == null)
             Padding(
               padding: const EdgeInsets.all(20),
               child: ElevatedButton.icon(
@@ -31,12 +33,12 @@ class QuickSaleView extends ConsumerWidget {
                 label: const Text('Iniciar venta rápida'),
               ),
             ),
-          if (s.order != null)
+          if (order != null)
             Expanded(
               child: ListView.builder(
-                itemCount: s.items.length,
+                itemCount: items.length,
                 itemBuilder: (_, i) {
-                  final it = s.items[i];
+                  final it = items[i];
                   return ListTile(
                     title: Text(it.productName),
                     subtitle: Text('Cant: ${it.quantity}'),
@@ -47,7 +49,7 @@ class QuickSaleView extends ConsumerWidget {
             ),
         ],
       ),
-      bottomNavigationBar: s.order == null
+      bottomNavigationBar: order == null
           ? null
           : Padding(
               padding: const EdgeInsets.all(16),
@@ -64,7 +66,7 @@ class QuickSaleView extends ConsumerWidget {
                           showDialog(
                             context: context,
                             builder: (context) => PaymentModal(
-                              order: s.order!,
+                              order: order,
                               onPaymentSuccess: () {
                                 ref
                                     .read(currentOrderProvider.notifier)
@@ -83,7 +85,7 @@ class QuickSaleView extends ConsumerWidget {
                 ),
               ),
             ),
-      floatingActionButton: s.order == null
+      floatingActionButton: order == null
           ? null
           : FloatingActionButton(
               onPressed: () async {

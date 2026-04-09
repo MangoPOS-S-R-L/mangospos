@@ -16,6 +16,7 @@ import 'package:mangopos/data/utils/payment_amount_utils.dart';
 import 'package:mangopos/data/repositories/cashier_repository.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:async';
+import 'package:mangopos/app/widgets/skeleton_loading.dart';
 
 class CashierView extends ConsumerStatefulWidget {
   const CashierView({super.key});
@@ -24,28 +25,40 @@ class CashierView extends ConsumerStatefulWidget {
   ConsumerState<CashierView> createState() => _CashierViewState();
 }
 
-class _CashierViewState extends ConsumerState<CashierView> {
+class _CashierViewState extends ConsumerState<CashierView>
+    with WidgetsBindingObserver {
   Timer? _refreshTimer;
   String? _lastBusinessId;
+  bool _isVisible = true;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(cashierViewModelProvider).init();
     });
 
-    // Auto-refresh every 30 seconds
+    // Auto-refresh every 30 seconds using silent refresh (no loading spinner)
     _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      if (mounted) {
-        ref.read(cashierViewModelProvider).init();
+      if (mounted && _isVisible) {
+        ref.read(cashierViewModelProvider).refreshSilently();
       }
     });
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _isVisible = state == AppLifecycleState.resumed;
+    if (_isVisible) {
+      ref.read(cashierViewModelProvider).refreshSilently();
+    }
+  }
+
+  @override
   void dispose() {
     _refreshTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
@@ -56,6 +69,8 @@ class _CashierViewState extends ConsumerState<CashierView> {
   @override
   Widget build(BuildContext context) {
     final appSession = ref.watch(sessionProvider);
+    // Watch the full VM since CashierView is the main consumer and needs all data.
+    // Sub-widgets receive data via constructor, so they don't watch independently.
     final vm = ref.watch(cashierViewModelProvider);
     final isLoading = vm.isLoading;
     final session = vm.lastSession;
@@ -72,12 +87,7 @@ class _CashierViewState extends ConsumerState<CashierView> {
     }
 
     if (isLoading && session == null) {
-      return const Scaffold(
-        backgroundColor: Color(0xFFF2F2F2),
-        body: Center(
-          child: CircularProgressIndicator(color: MangoColors.primaryOrange),
-        ),
-      );
+      return const CashierSkeleton();
     }
 
     return Scaffold(
