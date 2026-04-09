@@ -102,15 +102,18 @@ begin
     into v_tax_mode, v_tax_rate
   from public.fn_resolve_order_item_tax_profile(p_menu_item_id, p_order_id) profile;
 
-  -- Tasa completa (todos los impuestos activos, sin filtrar por origin)
+  -- Tasa completa (todos los impuestos activos del negocio, sin filtrar por origin)
   select coalesce(sum(t.rate), 0)::numeric
     into v_full_tax_rate
-  from public.menu_item_taxes mit
-  join public.taxes t on t.id = mit.tax_id
-  where mit.item_id = p_menu_item_id
+  from public.taxes t
+  where t.business_id = (
+    select ts.business_id from public.orders o
+    join public.table_sessions ts on ts.id = o.session_id
+    where o.id = p_order_id limit 1
+  )
     and coalesce(t.is_active, true);
 
-  -- Si no hay impuestos vinculados, la tasa completa = la filtrada
+  -- Si no hay impuestos configurados, la tasa completa = la filtrada
   if v_full_tax_rate = 0 then
     v_full_tax_rate := v_tax_rate;
   end if;
@@ -135,6 +138,7 @@ end;
 $$;
 
 -- Actualizar la función para filtrar impuestos por origen al agregar items
+DROP FUNCTION IF EXISTS public.fn_resolve_order_item_tax_profile(uuid, uuid);
 CREATE OR REPLACE FUNCTION "public"."fn_resolve_order_item_tax_profile"("p_product_id" "uuid", "p_order_id" "uuid") 
 RETURNS TABLE("tax_mode" "text", "tax_rate" numeric) 
 LANGUAGE "plpgsql" STABLE 
@@ -155,11 +159,16 @@ BEGIN
   FROM public.menu_items mi
   WHERE mi.id = p_product_id;
 
-  -- 3. Sumar tasas de impuestos vinculados que apliquen al origen
+  -- 3. Sumar TODOS los impuestos activos del negocio que apliquen al origen.
+  --    Los impuestos son a nivel de negocio, no de producto.
   SELECT coalesce(sum(t.rate), 0)::numeric INTO v_tax_rate
-  FROM public.menu_item_taxes mit
-  JOIN public.taxes t ON t.id = mit.tax_id
-  WHERE mit.item_id = p_product_id
+  FROM public.taxes t
+  WHERE t.business_id = (
+    SELECT ts.business_id FROM public.orders o
+    JOIN public.table_sessions ts ON ts.id = o.session_id
+    WHERE o.id = p_order_id
+    LIMIT 1
+  )
     AND coalesce(t.is_active, true)
     AND (
       (v_origin IN ('dine_in', 'table', 'zone', 'table_order') AND t.apply_on_zone = true) OR
@@ -169,13 +178,14 @@ BEGIN
       (v_origin IS NULL OR v_origin NOT IN ('dine_in','table','zone','table_order','manual','manual_order','quick','quick_sale','delivery'))
     );
 
-  -- 4. Solo usar el default del negocio si el producto NO tiene impuestos vinculados.
-  --    Si tiene impuestos pero ninguno aplica al origin, el 0 es intencional.
+  -- 4. Si no hay impuestos configurados, usar el default del negocio.
   IF v_tax_rate = 0 AND NOT EXISTS (
-    SELECT 1 FROM public.menu_item_taxes mit
-    JOIN public.taxes t ON t.id = mit.tax_id
-    WHERE mit.item_id = p_product_id
-      AND coalesce(t.is_active, true)
+    SELECT 1 FROM public.taxes t2
+    WHERE t2.business_id = (
+      SELECT ts2.business_id FROM public.orders o2
+      JOIN public.table_sessions ts2 ON ts2.id = o2.session_id
+      WHERE o2.id = p_order_id LIMIT 1
+    ) AND coalesce(t2.is_active, true)
   ) THEN
     SELECT coalesce(bs.default_tax_rate, 0)::numeric INTO v_tax_rate
     FROM public.orders o

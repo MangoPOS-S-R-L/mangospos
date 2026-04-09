@@ -777,6 +777,7 @@ class SalesRepository {
       List<OrderCheck> checks,
       String? customerId,
       String? customerName,
+      String? note,
     })
   >
   getOrderBundle(String orderId, {String? businessId}) async {
@@ -795,6 +796,7 @@ class SalesRepository {
           checks: const <OrderCheck>[],
           customerId: null,
           customerName: null,
+          note: null,
         );
       }
 
@@ -861,6 +863,7 @@ class SalesRepository {
         checks: checks,
         customerId: payload['customer_id']?.toString(),
         customerName: payload['customer_name']?.toString(),
+        note: payload['note']?.toString(),
       );
     } catch (e) {
       throw Exception('Error al obtener bundle de orden: $e');

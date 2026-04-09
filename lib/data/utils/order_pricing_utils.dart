@@ -33,10 +33,14 @@ bool isServiceIncludedInItemTotal(Order? order, OrderItem item) {
     return false;
   }
   
-  // If the item has a specific tax rate (not just the order default), 
-  // check if that rate actually includes the service fee.
-  // Standard combined is 28%. If rate is < 28 or exactly 18, it probably doesn't have it.
+  // Si la tasa original (ej: 28%) ya cubre tanto el ITBIS (ej: 18%) 
+  // como el servicio (ej: 10%), entonces el servicio está incluido.
   final rate = _normalizeRate(item.taxRate);
+  final originalRate = _normalizeRate(item.originalTaxRate ?? item.taxRate);
+  if (originalRate >= (rate + serviceRate - 0.01)) {
+    return true;
+  }
+
   if ((rate - _defaultItbisRate).abs() < 0.01 && serviceRate > 0.05) {
     // Looks like ONLY ITBIS, no service fee in the rate.
     return false;
@@ -127,22 +131,38 @@ OrderItemPricingSummary summarizeItemPricing(Order? order, OrderItem item) {
   if (isInclusive) {
     final extractRate = (item.originalTaxRate ?? item.taxRate) / 100.0;
     final applyRate = taxRate; // already decimal from _resolveEffectiveTaxRate
-    final divisor = 1 + extractRate + (serviceIncluded ? serviceRate : 0);
+    
+    // Si la tasa de extracción original (ej: 28%) ya es mayor o igual a la suma 
+    // de impuestos (ej: 18%) + servicio (ej: 10%), no añadimos el servicio al divisor 
+    // porque ya está implícito en el extractRate.
+    final extraServiceForDivisor = (serviceIncluded && extractRate < (applyRate + serviceRate - 0.001))
+        ? serviceRate
+        : 0.0;
+    final divisor = 1 + extractRate + extraServiceForDivisor;
 
     // If it's inclusive, the discount also reduces tax and subtotal proportionally.
     final netGross = _positiveMoney(effectiveGrossAmount - item.discounts);
 
 
-    final finalSubtotal = netGross / divisor;
-    final finalTax = finalSubtotal * applyRate;
-    final finalService = serviceIncluded ? (finalSubtotal * serviceRate) : 0.0;
+    // 1. Desescalar para obtener el subtotal base 
+    // Usamos el divisor original (Catalog Rate) para encontrar la base "neta" del producto.
+    final finalSubtotal = _roundMoney(netGross / divisor);
+    
+    // 2. Calcular impuestos y servicios sobre esa base neta usando la tasa REAL (Apply Rate)
+    // Esto permite que si applyRate es 0 (impuesto desactivado para este área), 
+    // el impuesto sea 0 sin "absorber" ese ahorro en el subtotal.
+    final finalTax = _roundMoney(finalSubtotal * applyRate);
+    final finalService = serviceIncluded ? _roundMoney(finalSubtotal * serviceRate) : 0.0;
+    
+    // 3. El total es la suma de las partes reales. 
+    // Si applyRate < extractRate, el total será menor que el netGross original.
     final finalTotal = finalSubtotal + finalTax + finalService;
 
     return OrderItemPricingSummary(
-      subtotal: _roundMoney(finalSubtotal),
-      tax: _roundMoney(finalTax),
+      subtotal: finalSubtotal,
+      tax: finalTax,
       discounts: _roundMoney(item.discounts),
-      serviceFee: _roundMoney(finalService),
+      serviceFee: finalService,
       extraServiceFee: 0,
       total: _roundMoney(finalTotal),
     );
