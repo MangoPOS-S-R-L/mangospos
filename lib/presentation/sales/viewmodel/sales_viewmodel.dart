@@ -62,6 +62,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   bool _cachedServiceFeeOnZone = true;
   bool _cachedServiceFeeOnManual = true;
   bool _cachedServiceFeeOnQuick = false;
+  bool _cachedServiceFeeOnDelivery = false;
 
   double _roundMoney(double value) => double.parse(value.toStringAsFixed(2));
 
@@ -131,6 +132,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       _cachedServiceFeeOnZone = true;
       _cachedServiceFeeOnManual = true;
       _cachedServiceFeeOnQuick = false;
+      _cachedServiceFeeOnDelivery = false;
       return;
     }
 
@@ -141,7 +143,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           .from('business_settings')
           .select(
             'default_tax_rate,service_fee_enabled,service_fee_rate,'
-            'service_fee_on_zone,service_fee_on_manual,service_fee_on_quick',
+            'service_fee_on_zone,service_fee_on_manual,service_fee_on_quick,service_fee_on_delivery',
           )
           .eq('business_id', businessId)
           .maybeSingle();
@@ -157,6 +159,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           (row?['service_fee_on_manual'] as bool?) ?? true;
       _cachedServiceFeeOnQuick =
           (row?['service_fee_on_quick'] as bool?) ?? false;
+      _cachedServiceFeeOnDelivery =
+          (row?['service_fee_on_delivery'] as bool?) ?? false;
       _taxSettingsBusinessId = businessId;
     } catch (_) {
       _cachedTaxRatePct = _defaultTaxRatePct;
@@ -165,6 +169,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       _cachedServiceFeeOnZone = true;
       _cachedServiceFeeOnManual = true;
       _cachedServiceFeeOnQuick = false;
+      _cachedServiceFeeOnDelivery = false;
       _taxSettingsBusinessId = businessId;
     }
   }
@@ -173,16 +178,24 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   bool _isServiceFeeActiveForOrigin([String? originOverride]) {
     if (!_cachedServiceFeeEnabled) return false;
     final origin = originOverride ?? state.origin;
-    switch (origin) {
+    switch (origin?.toLowerCase().trim()) {
       case 'table':
-        return _cachedServiceFeeOnZone;
+      case 'dine_in':
+      case 'zone':
+        return _cachedServiceFeeEnabled && _cachedServiceFeeOnZone;
       case 'manual':
-        return _cachedServiceFeeOnManual;
+        return _cachedServiceFeeEnabled && _cachedServiceFeeOnManual;
       case 'quick':
-        return _cachedServiceFeeOnQuick;
+      case 'quick_sale':
+        return _cachedServiceFeeEnabled && _cachedServiceFeeOnQuick;
+      case 'delivery':
+        return _cachedServiceFeeEnabled && _cachedServiceFeeOnDelivery;
       default:
-        return _cachedServiceFeeEnabled;
+        // By default, if the order is inclusive, we might still want to descale.
+        // But if the origin is not set yet, return false to avoid incorrect descaling.
+        return false;
     }
+
   }
 
   /// Fuerza recarga de las configuraciones de impuestos/service fee.
@@ -432,6 +445,25 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     await openQuick(forceRestart: true);
   }
 
+  /// Abre una orden de delivery existente (ya creada por DeliveryViewModel).
+  Future<void> openDeliveryOrder({
+    required String tableId,
+    String? deliveryType,
+  }) async {
+    await _ensureBusinessTaxSettingsLoaded();
+    if (!await ensureCashSessionOpen()) return;
+    state = state.copyWith(loading: true, error: null);
+    try {
+      await openTable(tableId, peopleCount: 1);
+      state = state.copyWith(
+        origin: 'delivery',
+        deliveryType: deliveryType,
+      );
+    } catch (e) {
+      state = state.copyWith(loading: false, error: e.toString());
+    }
+  }
+
   Future<void> assignManualOrderToTable({
     required String orderId,
     required String tableId,
@@ -590,6 +622,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     double? productPrice,
     String productTaxMode = 'exclusive',
     double? productTaxRate,
+    double? productFullTaxRate,
     List<SelectedModifierInput> selectedModifiers = const [],
   }) async {
     final orderId = state.order?.id;
@@ -615,28 +648,30 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     final previousItems = state.items;
     final previousOrder = state.order;
 
+    await _ensureBusinessTaxSettingsLoaded();
+    final effectiveTaxRatePct = _sanitizeProductTaxRatePct(
+      rawTaxRatePct: productTaxRate,
+      taxMode: productTaxMode,
+      takeout: takeout,
+    );
+
     // Optimistic: solo si tenemos datos del producto y un order cargado
     OrderItem? optimisticItem;
     if (productName != null &&
         productPrice != null &&
         previousOrder != null &&
         qty > 0) {
-      await _ensureBusinessTaxSettingsLoaded();
       final tempId = 'tmp_${DateTime.now().microsecondsSinceEpoch}';
       final modifiersGross = selectedModifiers.fold<double>(
         0,
         (sum, modifier) => sum + (modifier.price * modifier.qty),
       );
       final grossAmount = (productPrice * qty) + modifiersGross;
-      // Si productTaxRate es null (desconocido), intentamos inferirlo de la orden.
-      // Si es 0 explícitamente, el producto NO tiene impuesto -> respetamos el 0.
-      final effectiveTaxRatePct = _sanitizeProductTaxRatePct(
-        rawTaxRatePct: productTaxRate,
-        taxMode: productTaxMode,
-        takeout: takeout,
-      );
+
       // El estimador recibe la tasa como fracción decimal (0.18 = 18%)
+
       final taxRateDecimal = effectiveTaxRatePct / 100.0;
+      final fullTaxRateDecimal = (productFullTaxRate ?? productTaxRate ?? 0) / 100.0;
       final optimisticServiceRate = takeout || !_isServiceFeeActiveForOrigin()
           ? 0.0
           : (_cachedServiceFeeRatePct / 100.0);
@@ -644,6 +679,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         grossAmount: grossAmount,
         taxMode: productTaxMode,
         taxRate: taxRateDecimal,
+        fullTaxRate: fullTaxRateDecimal,
         serviceRate: optimisticServiceRate,
         includeServiceInInclusivePrice: !takeout,
       );
@@ -669,6 +705,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         notes: notes,
         taxMode: productTaxMode,
         taxRate: effectiveTaxRatePct,
+        originalTaxRate: productFullTaxRate ?? productTaxRate,
         createdAt: DateTime.now(),
         modifiers: selectedModifiers
             .map(
@@ -729,7 +766,27 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
                   .toList(growable: false),
             );
       }
+      
+      // Corregir el tax_rate del item según el origin actual.
+      // Usamos un RPC con SECURITY DEFINER para bypasear RLS que
+      // bloquea updates directos en ventas rápidas/manuales.
+      if (productTaxRate != null) {
+        try {
+          await Supabase.instance.client.rpc(
+            'fn_update_item_tax_rate',
+            params: {
+              'p_item_id': itemId,
+              'p_tax_rate': effectiveTaxRatePct,
+              'p_original_tax_rate': productFullTaxRate ?? productTaxRate,
+            },
+          );
+        } catch (e) {
+          debugPrint('Error updating tax rates for item $itemId: $e');
+        }
+      }
+
       await refreshOrder();
+
     } catch (e) {
       final businessId = _activeBusinessId;
       final isOffline =
@@ -779,27 +836,35 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     required double grossAmount,
     required String taxMode,
     required double taxRate,
+    double? fullTaxRate, // Tasa usada para "desglosar" el precio inclusivo
     required double serviceRate,
     bool includeServiceInInclusivePrice = false,
   }) {
-    final normalizedTaxRate = taxRate.clamp(0, 1).toDouble();
-    final normalizedServiceRate = serviceRate.clamp(0, 1).toDouble();
-    if (taxMode == 'inclusive' && normalizedTaxRate > 0) {
+    final normalizedTaxRate = taxRate.clamp(0, 5).toDouble();
+    final normalizedFullTaxRate = (fullTaxRate ?? taxRate).clamp(0, 5).toDouble();
+    final normalizedServiceRate = serviceRate.clamp(0, 5).toDouble();
+
+    if (taxMode == 'inclusive' && normalizedFullTaxRate > 0) {
+      // El divisor usa la tasa FULL para extraer la base correcta
       final divisor =
           1 +
-          normalizedTaxRate +
+          normalizedFullTaxRate +
           (includeServiceInInclusivePrice ? normalizedServiceRate : 0);
+      
       final subtotal = grossAmount / divisor;
-      final tax =
-          grossAmount -
-          subtotal -
-          (includeServiceInInclusivePrice
-              ? (subtotal * normalizedServiceRate)
-              : 0);
+      
+      // El impuesto real se calcula sobre la base extraída, usando la tasa APLICABLE
+      final tax = subtotal * normalizedTaxRate;
+      
+      // El total es base + impuestos (si taxRate < fullRate, el total bajará de grossAmount)
+      final total = subtotal + 
+                   tax + 
+                   (includeServiceInInclusivePrice ? (subtotal * normalizedServiceRate) : 0);
+
       return (
         subtotal: double.parse(subtotal.toStringAsFixed(2)),
         tax: double.parse(tax.toStringAsFixed(2)),
-        total: double.parse(grossAmount.toStringAsFixed(2)),
+        total: double.parse(total.toStringAsFixed(2)),
       );
     }
 
@@ -811,6 +876,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       total: double.parse(total.toStringAsFixed(2)),
     );
   }
+
 
   Future<void> toggleTakeout(bool value) async {
     final orderId = state.order?.id;

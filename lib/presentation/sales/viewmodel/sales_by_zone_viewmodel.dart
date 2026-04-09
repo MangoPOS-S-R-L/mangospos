@@ -67,7 +67,7 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
 
       final zones = (await repo.fetchZones(bizId)).where((z) {
         final name = z.name.toLowerCase();
-        return name != 'ventas manuales' && name != 'ventas rápidas';
+        return name != 'ventas manuales' && name != 'ventas rápidas' && name != 'delivery';
       }).toList();
 
       zones.sort((a, b) {

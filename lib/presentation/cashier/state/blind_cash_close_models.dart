@@ -33,6 +33,7 @@ class CashCloseInput extends Equatable {
   final int transactionCount;
   final String cashierName;
   final String businessName;
+  final int startAmount;
 
   const CashCloseInput({
     required this.expectedCash,
@@ -42,6 +43,7 @@ class CashCloseInput extends Equatable {
     required this.transactionCount,
     this.cashierName = 'Admin',
     this.businessName = 'MangoPOS Restaurant',
+    this.startAmount = 0,
   });
 
   int get expectedTotal => expectedCash + expectedCard + expectedTransfer;
@@ -56,6 +58,7 @@ class CashCloseInput extends Equatable {
     transactionCount,
     cashierName,
     businessName,
+    startAmount,
   ];
 }
 

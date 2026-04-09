@@ -173,4 +173,9 @@ class SalesQueries {
 
   /// Crear documento fiscal
   static const String rpcCreateFiscalDocument = 'create_fiscal_document';
+
+  /// Delivery
+  static const String rpcOpenDeliveryOrder = 'fn_open_delivery_order';
+  static const String rpcListDeliveryOrders = 'fn_list_delivery_orders';
+  static const String rpcCloseDeliveryOrder = 'fn_close_delivery_order';
 }

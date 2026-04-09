@@ -86,9 +86,12 @@ class MenuProduct {
     } else {
       // Sum all active taxes if no effective rate is provided by the view
       for (final tx in taxList) {
+        final isActive = tx['is_active'] as bool? ?? true;
+        if (!isActive) continue;
         final rate = tx['rate'];
         if (rate is num) resolvedRate += rate.toDouble();
       }
+
     }
 
 
@@ -109,29 +112,47 @@ class MenuProduct {
   }
 
   double calculateTaxRate(String origin) {
-    // origin: 'table', 'manual', 'quick'
+    // origin: 'table', 'manual', 'quick', 'delivery'
     double total = 0;
     for (final tx in associatedTaxes) {
       final rate = tx['rate'] as num? ?? 0;
       final onZone = tx['apply_on_zone'] as bool? ?? true;
       final onManual = tx['apply_on_manual'] as bool? ?? true;
       final onQuick = tx['apply_on_quick'] as bool? ?? true;
+      final onDelivery = tx['apply_on_delivery'] as bool? ?? true;
 
-      bool applies = true;
-      if (origin == 'table' || origin == 'dine_in') {
+      final isActive = tx['is_active'] as bool? ?? true;
+      if (!isActive) continue;
+
+      bool applies = false;
+      if (origin == 'table' || origin == 'dine_in' || origin == 'zone' || origin == 'table_order') {
         applies = onZone;
-      } else if (origin == 'manual') {
+      } else if (origin == 'manual' || origin == 'manual_order') {
         applies = onManual;
-      } else if (origin == 'quick') {
+      } else if (origin == 'quick' || origin == 'quick_sale') {
         applies = onQuick;
+      } else if (origin == 'delivery') {
+        applies = onDelivery;
+      } else {
+        applies = true;
       }
 
       if (applies) {
         total += rate.toDouble();
       }
     }
-    return total > 0 ? total : taxRate; // Fallback to global total if list empty or sum 0
+    return total > 0 ? total : 0; // Return 0 if no applicable taxes
   }
+
+  double calculateFullTaxRate() {
+    double total = 0;
+    for (final tx in associatedTaxes) {
+      final rate = tx['rate'] as num? ?? 0;
+      total += rate.toDouble();
+    }
+    return total > 0 ? total : taxRate; // taxRate is the initial sum from DB
+  }
+
 }
 
 
@@ -223,9 +244,9 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
   final OfflineCatalogService _offlineCatalog = OfflineCatalogService();
 
   static const _menuItemsSelect =
-      'id,name,price,image_url,category_id,is_active,position,tax_mode,item_type,menu_item_taxes(tax_id,taxes(rate,apply_on_zone,apply_on_manual,apply_on_quick))';
+      'id,name,price,image_url,category_id,is_active,position,tax_mode,item_type,menu_item_taxes(tax_id,taxes(rate,is_active,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery))';
   static const _menuListSelect =
-      'id,name,price,image_url,category_id,menu_id,is_active,position,tax_mode,item_type,effective_tax_rate,menu_item_taxes(tax_id,taxes(rate,apply_on_zone,apply_on_manual,apply_on_quick))';
+      'id,name,price,image_url,category_id,menu_id,is_active,position,tax_mode,item_type,effective_tax_rate,menu_item_taxes(tax_id,taxes(rate,is_active,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery))';
 
 
   Future<String> _resolveBusinessId() async {

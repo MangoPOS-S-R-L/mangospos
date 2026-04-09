@@ -192,7 +192,7 @@ class _CashierViewState extends ConsumerState<CashierView> {
 
     CashCloseInput input;
     try {
-      input = await _buildCloseInput(session['id'].toString());
+      input = await _buildCloseInput(session);
     } catch (_) {
       input = _emptyCloseInput();
     } finally {
@@ -264,7 +264,9 @@ class _CashierViewState extends ConsumerState<CashierView> {
     );
   }
 
-  Future<CashCloseInput> _buildCloseInput(String sessionId) async {
+  Future<CashCloseInput> _buildCloseInput(Map<String, dynamic> session) async {
+    final sessionId = session['id'].toString();
+    final startAmount = (session['start_amount'] as num?)?.toInt() ?? 0;
     final repository = ref.read(cashierRepositoryProvider);
     final vm = ref.read(cashierViewModelProvider);
 
@@ -352,6 +354,7 @@ class _CashierViewState extends ConsumerState<CashierView> {
       businessName: vm.businessName.trim().isNotEmpty
           ? vm.businessName
           : emptyInput.businessName,
+      startAmount: startAmount,
     );
   }
 

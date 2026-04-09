@@ -277,7 +277,7 @@ class AppRouter {
                   final mode = state.uri.queryParameters['mode']
                       ?.toLowerCase()
                       .trim();
-                  if (mode == 'delivery' || mode == 'selfservice') {
+                  if (mode == 'selfservice') {
                     return AppRoutes.salesReact;
                   }
                   return null;
@@ -293,6 +293,14 @@ class AppRouter {
                       return const OrderScreen(origin: OrderOrigin.quick);
                     case 'delivery':
                       return const DeliveryExpressView();
+                    case 'delivery_order':
+                      final tableId = state.uri.queryParameters['tableId'];
+                      final deliveryType = state.uri.queryParameters['deliveryType'] ?? 'own';
+                      return OrderScreen(
+                        origin: OrderOrigin.delivery,
+                        tableId: tableId,
+                        deliveryType: deliveryType,
+                      );
                     case 'selfservice':
                       return const SelfServiceView();
                     default:

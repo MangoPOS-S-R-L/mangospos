@@ -159,7 +159,7 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
                         locked: !sessionCtrl.hasPermission(
                           'delivery.crear_orden',
                         ),
-                        disabled: true,
+                        disabled: !isCashOpen,
                         onTap: () => _handleNavTap(
                           context,
                           ref,
@@ -228,6 +228,7 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
         case 'rapida':
           return SalesTab.quick;
         case 'delivery':
+        case 'delivery_order':
           return SalesTab.delivery;
         case 'selfservice':
           return SalesTab.selfService;
@@ -265,7 +266,8 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
     final isQuick = route.contains(AppRoutes.salesQuick);
     final isManualByQuery = mode == 'manual';
     final isQuickByQuery = mode == 'rapida';
-    return isManual || isQuick || isManualByQuery || isQuickByQuery;
+    final isDeliveryOrder = mode == 'delivery_order';
+    return isManual || isQuick || isManualByQuery || isQuickByQuery || isDeliveryOrder;
   }
 
   Future<bool?> _showExitSaleDialog(BuildContext context) {

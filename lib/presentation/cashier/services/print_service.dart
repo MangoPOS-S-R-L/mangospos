@@ -85,6 +85,12 @@ class CashClosePrintService {
     gen.textRow('TOTAL ESPERADO', formatRD(input.expectedTotal));
     gen.textRow('TOTAL REPORTADO', formatRD(result.totalReported));
     gen.separator();
+    gen.textRow('MONTO INICIAL', formatRD(input.startAmount));
+    final toDeposit = result.totalCounted - input.startAmount;
+    gen.setBold(true);
+    gen.textRow('MONTO A DEPOSITAR', formatRD(toDeposit));
+    gen.setBold(false);
+    gen.separator();
 
     if (result.isBalanced) {
       gen.textCentered('CAJA CUADRADA');
@@ -105,6 +111,13 @@ class CashClosePrintService {
     gen.text(
       'Impreso: ${formatDateEsDo(printedAt)} ${formatTimeEsDo(printedAt)}',
     );
+    gen.lineFeed(3);
+    gen.textCentered('__________________________');
+    gen.textCentered('Firma Cajero');
+    gen.lineFeed(3);
+    gen.textCentered('__________________________');
+    gen.textCentered('Recibe Conforme');
+    gen.lineFeed(2);
     gen.textCentered('www.mangopos.do');
     gen.lineFeed(2);
     gen.cut();

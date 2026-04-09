@@ -533,6 +533,12 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
                 'Transacciones',
                 state.input.transactionCount.toString(),
               ),
+              _statCard('Monto Inicial', formatRD(state.input.startAmount)),
+              _statCard(
+                'Monto a Depositar',
+                formatRD(result.totalCounted - state.input.startAmount),
+                color: MangoColors.primaryOrange,
+              ),
             ],
           ),
           const SizedBox(height: 16),
@@ -595,26 +601,35 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
     );
   }
 
-  Widget _statCard(String title, String value) {
+  Widget _statCard(String title, String value, {Color? color}) {
     return Container(
       width: 220,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: MangoColors.bgLight,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: MangoColors.cardBorder),
+        border: Border.all(
+          color: color?.withValues(alpha: 0.3) ?? MangoColors.cardBorder,
+          width: color != null ? 1.5 : 1,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+          Text(
+            title,
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              color: color ?? MangoColors.darkGray,
+            ),
+          ),
           const SizedBox(height: 6),
           Text(
             value,
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.w800,
               fontSize: 20,
-              color: MangoColors.darkGray,
+              color: color ?? MangoColors.darkGray,
             ),
           ),
         ],

@@ -318,13 +318,14 @@ double _uiItemDisplayAmount(OrderItem item) {
   }
 }
 
-enum OrderOrigin { table, manual, quick }
+enum OrderOrigin { table, manual, quick, delivery }
 
 class OrderScreen extends ConsumerStatefulWidget {
   final OrderOrigin origin;
   final String? tableId;
   final String? tableCode;
   final String? zoneId;
+  final String? deliveryType;
   final int initialPeopleCount;
 
   const OrderScreen({
@@ -333,6 +334,7 @@ class OrderScreen extends ConsumerStatefulWidget {
     this.tableId,
     this.tableCode,
     this.zoneId,
+    this.deliveryType,
     this.initialPeopleCount = 1,
   });
 
@@ -369,7 +371,16 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       }
     }
     if (context.mounted) {
-      context.go(AppRoutes.salesByZone);
+      if (widget.origin == OrderOrigin.delivery) {
+        context.go(
+          Uri(
+            path: AppRoutes.salesReact,
+            queryParameters: const {'mode': 'delivery'},
+          ).toString(),
+        );
+      } else {
+        context.go(AppRoutes.salesByZone);
+      }
     }
   }
 
@@ -499,9 +510,11 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       productName: product.name,
       productPrice: product.price,
       productTaxMode: product.taxMode,
-      productTaxRate: product.taxRate,
+      productTaxRate: product.calculateTaxRate(ref.read(currentOrderProvider).origin ?? 'table'),
+      productFullTaxRate: product.calculateFullTaxRate(),
       selectedModifiers: selectedModifiers,
     );
+
   }
 
   Future<void> _handleAssignClient(BuildContext context) async {
@@ -646,6 +659,11 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       notifier.ensureManualOrder();
     } else if (widget.origin == OrderOrigin.quick) {
       notifier.ensureQuickOrder();
+    } else if (widget.origin == OrderOrigin.delivery && widget.tableId != null) {
+      notifier.openDeliveryOrder(
+        tableId: widget.tableId!,
+        deliveryType: widget.deliveryType,
+      );
     }
   }
 
@@ -1512,6 +1530,8 @@ class _CartView extends ConsumerWidget {
                                 ? (tableCode.toLowerCase().startsWith('mesa')
                                       ? tableCode
                                       : 'Mesa $tableCode')
+                                : origin == OrderOrigin.delivery
+                                ? 'Delivery ${tableCode.isNotEmpty ? " • $tableCode" : ""}'
                                 : origin == OrderOrigin.manual
                                 ? 'Venta Manual ${tableCode.isNotEmpty ? " • $tableCode" : ""}'
                                 : 'Venta Rápida',
@@ -2093,6 +2113,31 @@ class _CartView extends ConsumerWidget {
                                       content: Text('Orden enviada a cocina'),
                                     ),
                                   );
+
+                                  // Auto-close para delivery externo (ya pagado)
+                                  final dt = orderState.deliveryType;
+                                  if (origin == OrderOrigin.delivery &&
+                                      (dt == 'uber_eats' || dt == 'pedidos_ya')) {
+                                    final orderId = orderState.order?.id;
+                                    if (orderId != null) {
+                                      await ref
+                                          .read(salesRepositoryProvider)
+                                          .closeDeliveryOrder(orderId: orderId);
+                                      if (context.mounted) {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          const SnackBar(
+                                            content: Text('Orden cerrada automaticamente (pagada externamente)'),
+                                          ),
+                                        );
+                                        context.go(
+                                          Uri(
+                                            path: AppRoutes.salesReact,
+                                            queryParameters: const {'mode': 'delivery'},
+                                          ).toString(),
+                                        );
+                                      }
+                                    }
+                                  }
                                 } on NoAssignedKitchenPrinterException catch (
                                   e
                                 ) {

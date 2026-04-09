@@ -1584,4 +1584,46 @@ class SalesRepository {
       params: {'p_order_id': orderId, 'p_takeout': takeout},
     );
   }
+
+  // ============================================================
+  // 🚚 DELIVERY
+  // ============================================================
+
+  Future<Map<String, dynamic>> openDeliveryOrder({
+    required String deliveryType,
+    int peopleCount = 1,
+  }) async {
+    final response = await _client.rpc(
+      SalesQueries.rpcOpenDeliveryOrder,
+      params: {
+        'p_user_id': _client.auth.currentUser?.id,
+        'p_delivery_type': deliveryType,
+        'p_people_count': peopleCount,
+      },
+    );
+    if (response == null) {
+      throw Exception('No se pudo crear orden de delivery');
+    }
+    return Map<String, dynamic>.from(response as Map);
+  }
+
+  Future<List<Map<String, dynamic>>> listDeliveryOrders({
+    required String businessId,
+  }) async {
+    final response = await _client.rpc(
+      SalesQueries.rpcListDeliveryOrders,
+      params: {'p_business_id': businessId},
+    );
+    return List<Map<String, dynamic>>.from(response as List);
+  }
+
+  Future<void> closeDeliveryOrder({
+    required String orderId,
+    String status = 'paid',
+  }) async {
+    await _client.rpc(
+      SalesQueries.rpcCloseDeliveryOrder,
+      params: {'p_order_id': orderId, 'p_status': status},
+    );
+  }
 }

@@ -402,7 +402,8 @@ class _ProductCard extends ConsumerWidget {
                 productName: item.name,
                 productPrice: item.price,
                 productTaxMode: item.taxMode,
-                productTaxRate: item.calculateTaxRate(ref.read(currentOrderProvider).origin ?? 'dine_in'),
+                productTaxRate: item.calculateTaxRate(ref.read(currentOrderProvider).origin ?? 'table'),
+                productFullTaxRate: item.calculateFullTaxRate(),
               );
           onAddProduct();
           if (context.mounted) {

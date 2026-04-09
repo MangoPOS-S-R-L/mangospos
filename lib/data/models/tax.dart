@@ -8,6 +8,8 @@ class Tax {
   final bool applyOnZone;
   final bool applyOnManual;
   final bool applyOnQuick;
+  final bool applyOnDelivery;
+  final bool isServiceFee;
 
   const Tax({
     required this.id,
@@ -18,6 +20,8 @@ class Tax {
     this.applyOnZone = true,
     this.applyOnManual = true,
     this.applyOnQuick = true,
+    this.applyOnDelivery = true,
+    this.isServiceFee = false,
   });
 
   factory Tax.fromMap(Map<String, dynamic> m) => Tax(
@@ -29,6 +33,8 @@ class Tax {
         applyOnZone: (m['apply_on_zone'] as bool?) ?? true,
         applyOnManual: (m['apply_on_manual'] as bool?) ?? true,
         applyOnQuick: (m['apply_on_quick'] as bool?) ?? true,
+        applyOnDelivery: (m['apply_on_delivery'] as bool?) ?? true,
+        isServiceFee: (m['is_service_fee'] as bool?) ?? false,
       );
 }
 

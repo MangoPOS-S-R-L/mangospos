@@ -29,7 +29,20 @@ double resolveOrderServiceRate(Order? order) {
 
 bool isServiceIncludedInItemTotal(Order? order, OrderItem item) {
   final serviceRate = resolveOrderServiceRate(order);
-  return serviceRate > 0 && !item.isTakeout && item.taxMode == 'inclusive';
+  if (serviceRate <= 0 || item.isTakeout || item.taxMode != 'inclusive') {
+    return false;
+  }
+  
+  // If the item has a specific tax rate (not just the order default), 
+  // check if that rate actually includes the service fee.
+  // Standard combined is 28%. If rate is < 28 or exactly 18, it probably doesn't have it.
+  final rate = _normalizeRate(item.taxRate);
+  if ((rate - _defaultItbisRate).abs() < 0.01 && serviceRate > 0.05) {
+    // Looks like ONLY ITBIS, no service fee in the rate.
+    return false;
+  }
+  
+  return true;
 }
 
 bool _looksLikeCombinedServiceTax(
@@ -63,6 +76,10 @@ double _resolveExclusiveTaxAmount(
   if (subtotal <= 0 || item.isTakeout) {
     return _roundMoney(item.tax);
   }
+
+  // Si la tasa efectiva es 0 (impuesto desactivado para este origin),
+  // el tax debe ser 0 sin importar lo que tenga el DB.
+  if (taxRate <= 0) return 0;
 
   final rawTaxRate = _normalizeRate(item.taxRate);
   final expectedTax = _roundMoney(subtotal * taxRate);
@@ -107,28 +124,30 @@ OrderItemPricingSummary summarizeItemPricing(Order? order, OrderItem item) {
       ? (isFractionalQty ? catalogGrossAmount : (catalogGrossAmount > 0 ? catalogGrossAmount : storedGrossAmount))
       : (storedGrossAmount >= catalogGrossAmount ? storedGrossAmount : catalogGrossAmount);
 
-  if (serviceIncluded) {
-    final divisor = 1 + taxRate + serviceRate;
-    if (divisor > 1) {
-      final netGross = _positiveMoney(effectiveGrossAmount - item.discounts);
-      final subtotal = netGross / divisor;
-      final tax = subtotal * taxRate;
-      final serviceFee = subtotal * serviceRate;
-      final total = _roundMoney(
-        item.discounts > 0
-            ? _positiveMoney(effectiveGrossAmount - item.discounts)
-            : effectiveGrossAmount,
-      );
-      return OrderItemPricingSummary(
-        subtotal: _roundMoney(subtotal),
-        tax: _roundMoney(tax),
-        discounts: _roundMoney(item.discounts),
-        serviceFee: _roundMoney(serviceFee),
-        extraServiceFee: 0,
-        total: total,
-      );
-    }
+  if (isInclusive) {
+    final extractRate = (item.originalTaxRate ?? item.taxRate) / 100.0;
+    final applyRate = taxRate; // already decimal from _resolveEffectiveTaxRate
+    final divisor = 1 + extractRate + (serviceIncluded ? serviceRate : 0);
+
+    // If it's inclusive, the discount also reduces tax and subtotal proportionally.
+    final netGross = _positiveMoney(effectiveGrossAmount - item.discounts);
+
+
+    final finalSubtotal = netGross / divisor;
+    final finalTax = finalSubtotal * applyRate;
+    final finalService = serviceIncluded ? (finalSubtotal * serviceRate) : 0.0;
+    final finalTotal = finalSubtotal + finalTax + finalService;
+
+    return OrderItemPricingSummary(
+      subtotal: _roundMoney(finalSubtotal),
+      tax: _roundMoney(finalTax),
+      discounts: _roundMoney(item.discounts),
+      serviceFee: _roundMoney(finalService),
+      extraServiceFee: 0,
+      total: _roundMoney(finalTotal),
+    );
   }
+
 
   final expectedSubtotal = _roundMoney(catalogGrossAmount);
   final dbSubtotal = _roundMoney(item.subtotal);
