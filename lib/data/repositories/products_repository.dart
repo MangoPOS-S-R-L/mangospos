@@ -56,6 +56,7 @@ class ProductsRepository {
     bool hasVariants = false,
     bool isActive = true,
     String itemType = 'standard',
+    String printAreaCode = 'kitchen_hot',
     String? imagePath,
     String? imageUrl,
     List<String> taxIds = const [],
@@ -76,6 +77,7 @@ class ProductsRepository {
             'barcode': barcode,
             'has_variants': hasVariants,
             'item_type': itemType,
+            'print_area_code': printAreaCode,
             'image_path': imagePath,
             'image_url': imageUrl,
           }..removeWhere((key, value) => value == null),
@@ -117,6 +119,7 @@ class ProductsRepository {
     String? barcode,
     bool hasVariants = false,
     String itemType = 'standard',
+    String printAreaCode = 'kitchen_hot',
     String? imagePath,
     String? imageUrl,
     List<String> taxIds = const [],
@@ -133,6 +136,7 @@ class ProductsRepository {
       'barcode': barcode,
       'has_variants': hasVariants,
       'item_type': itemType,
+      'print_area_code': printAreaCode,
     };
 
     if (imagePath != null) {

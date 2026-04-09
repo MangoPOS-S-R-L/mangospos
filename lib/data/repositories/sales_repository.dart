@@ -14,7 +14,7 @@ class SalesRepository {
   SalesRepository(this._client);
 
   static const _itemFields =
-      'id,order_id,product_id,product_name,sku,quantity,qty,unit_price,subtotal,discounts,tax,total,check_id,is_takeout,status,notes,created_at';
+      'id,order_id,product_id,product_name,sku,quantity,qty,unit_price,subtotal,discounts,tax,total,check_id,is_takeout,status,notes,tax_mode,tax_rate,original_tax_rate,print_area_code,created_at';
 
   Future<void> _assertOrderInBusinessScope(
     String orderId, {

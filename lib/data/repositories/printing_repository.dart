@@ -1257,6 +1257,21 @@ finally {
     final bytes = utf8.encode(jsonEncode(payload));
     return bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
   }
+
+  /// Get a printer by its ID (used for register-specific printer lookup).
+  Future<PrinterConfig?> getPrinterById(String printerId) async {
+    try {
+      final data = await _client
+          .from('printers')
+          .select()
+          .eq('id', printerId)
+          .maybeSingle();
+      if (data == null) return null;
+      return PrinterConfig.fromMap(data);
+    } catch (e) {
+      return null;
+    }
+  }
 }
 
 class _CachedLookup<T> {

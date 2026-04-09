@@ -778,12 +778,3 @@ class PrintingService {
   }
 }
 
-/// Extensión para OrderItem con área de impresión
-extension OrderItemPrintArea on OrderItem {
-  String? get printAreaCode {
-    // Si el item tiene el campo directamente
-    // Esto requeriría agregar el campo a OrderItem
-    // Por ahora retornamos null y se obtiene del menu_item
-    return null;
-  }
-}

@@ -29,6 +29,7 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     bool hasVariants,
     bool isActive,
     String itemType,
+    String printAreaCode,
     File? imageFile,
     Uint8List? imageBytes,
     List<String> taxIds,
@@ -49,6 +50,7 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     String? barcode,
     bool hasVariants,
     String itemType,
+    String printAreaCode,
     File? imageFile,
     Uint8List? imageBytes,
     List<String> taxIds,
@@ -85,6 +87,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
   bool _isActive = true;
   bool _hasVariants = false;
   String _itemType = 'standard';
+  String _printAreaCode = 'kitchen_hot';
 
   File? _pickedImageFile;
   Uint8List? _pickedImageBytes;
@@ -125,6 +128,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     _isActive = p?['is_active'] ?? true;
     _hasVariants = p?['has_variants'] ?? false;
     _itemType = p?['item_type']?.toString() ?? 'standard';
+    _printAreaCode = p?['print_area_code']?.toString() ?? 'kitchen_hot';
 
     Future.microtask(() async {
       try {
@@ -491,6 +495,22 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
           onChanged: (value) {
             if (value == null) return;
             setState(() => _itemType = value);
+          },
+        ),
+        const SizedBox(height: AppSpacing.lg),
+        _fieldLabel('Área de impresión'),
+        _buildDropdown<String>(
+          value: _printAreaCode,
+          hint: 'Área de impresión',
+          items: const [
+            DropdownMenuItem(value: 'kitchen_hot', child: Text('Cocina Caliente')),
+            DropdownMenuItem(value: 'kitchen_cold', child: Text('Cocina Fría')),
+            DropdownMenuItem(value: 'bar', child: Text('Bar / Bebidas')),
+            DropdownMenuItem(value: 'cashier', child: Text('Caja (no imprime comanda)')),
+          ],
+          onChanged: (value) {
+            if (value == null) return;
+            setState(() => _printAreaCode = value);
           },
         ),
         const SizedBox(height: AppSpacing.lg),
@@ -902,6 +922,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         barcode: barcode,
         hasVariants: _hasVariants,
         itemType: _itemType,
+        printAreaCode: _printAreaCode,
         imageFile: _pickedImageFile,
         imageBytes: _pickedImageBytes,
         taxIds: _selectedTaxIds.toList(),
@@ -920,6 +941,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         hasVariants: _hasVariants,
         isActive: _isActive,
         itemType: _itemType,
+        printAreaCode: _printAreaCode,
         imageFile: _pickedImageFile,
         imageBytes: _pickedImageBytes,
         taxIds: _selectedTaxIds.toList(),
