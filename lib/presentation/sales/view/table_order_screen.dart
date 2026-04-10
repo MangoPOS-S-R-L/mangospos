@@ -297,12 +297,18 @@ double _catalogItemGrossAmount(OrderItem item) {
   final storedTotal = item.taxMode == 'inclusive'
       ? (useCatalogTotalForFractionalInclusive
                 ? catalogTotal
-                : item.total) // <--- Cambio clave: Confiamos en el total calculado/almacenado
+                : item.total)
             .toDouble()
       : (item.total - item.discounts).clamp(0, double.infinity).toDouble();
 
+  // Importante: para items inclusivos no debemos subir artificialmente el total
+  // al precio de catalogo/DB si en esta area algunos impuestos fueron apagados.
+  // Solo confiamos en el total almacenado cuando ayuda a BAJAR o mantener el monto,
+  // nunca para incrementarlo por encima del subtotal+impuesto efectivo calculado.
   if (item.taxMode == 'inclusive' &&
       item.total > 0 &&
+      storedTotal > 0 &&
+      storedTotal < netTotal &&
       (storedTotal - netTotal).abs() > 0.01) {
     netTotal = storedTotal;
   }
@@ -320,6 +326,27 @@ double _uiItemDisplayAmount(OrderItem item) {
   } else {
     return _effectiveItemSubtotal(item);
   }
+}
+
+({double subtotal, double tax, double total}) _effectiveSummaryForItems(
+  Iterable<OrderItem> items,
+) {
+  var subtotal = 0.0;
+  var tax = 0.0;
+  var total = 0.0;
+
+  for (final item in items) {
+    final amounts = _effectiveItemAmounts(item);
+    subtotal += amounts.subtotal;
+    tax += amounts.tax;
+    total += amounts.total;
+  }
+
+  return (
+    subtotal: double.parse(subtotal.toStringAsFixed(2)),
+    tax: double.parse(tax.toStringAsFixed(2)),
+    total: double.parse(total.toStringAsFixed(2)),
+  );
 }
 
 enum OrderOrigin { table, manual, quick, delivery }
@@ -1440,26 +1467,18 @@ class _CartView extends ConsumerWidget {
       }).toList();
     }
 
-    // Calculate Totals based on View
+    // Calculate totals from the effective item amounts already validated in the UI.
+    // This avoids reintroducing taxes/service fees that are disabled for the current area.
     final pricingSummary = summarizeOrderPricing(
       orderState.order,
       displayedItems,
     );
+    final effectiveSummary = _effectiveSummaryForItems(displayedItems);
     final displayDiscounts = pricingSummary.discounts;
-    // Show Gross Subtotal to justify the Discount line below it
-    final displaySubtotal = pricingSummary.subtotal;
-    final displayTax = pricingSummary.tax;
-    // Trust the DB service_fee (calculate_order_totals respects origin toggles).
-    // Only use local pricingSummary.serviceFee if the order already has service_fee > 0,
-    // meaning the DB confirmed this origin gets propina.
-    // Trust the DB service_fee (calculate_order_totals respects origin toggles).
-    final dbServiceFee = orderState.order?.serviceFee ?? 0.0;
-    final displayServiceFee = selectedCheck?.serviceFee ??
-        (dbServiceFee > 0 ? pricingSummary.serviceFee : 0.0);
-    // If DB says no service fee but local pricing included it, subtract the difference
-    final displayTotal = dbServiceFee <= 0 && pricingSummary.serviceFee > 0
-        ? pricingSummary.total - pricingSummary.serviceFee
-        : pricingSummary.total;
+    final displaySubtotal = effectiveSummary.subtotal;
+    final displayTax = effectiveSummary.tax;
+    final displayServiceFee = 0.0;
+    final displayTotal = effectiveSummary.total;
 
     final pendingOrderItems = openItems.where((i) {
       final checkIsClosed = allChecks.any(
@@ -1468,10 +1487,7 @@ class _CartView extends ConsumerWidget {
       return !checkIsClosed;
     }).toList();
 
-    final pendingOrderTotal = summarizeOrderPricing(
-      orderState.order,
-      pendingOrderItems,
-    ).total;
+    final pendingOrderTotal = _effectiveSummaryForItems(pendingOrderItems).total;
 
     final currency = NumberFormat('#,##0.00', 'en_US');
 
