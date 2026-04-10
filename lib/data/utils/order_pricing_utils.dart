@@ -15,6 +15,10 @@ double _catalogGrossAmount(OrderItem item) {
   return _roundMoney((item.unitPrice * qty) + modifiersTotal);
 }
 
+/// Resolves the service fee rate from the order's DB values.
+/// If the DB says service_fee == 0 (e.g. delivery, quick sale), returns 0.
+/// This ensures local calculations respect the origin-based toggle from
+/// calculate_order_totals in the database.
 double resolveOrderServiceRate(Order? order) {
   if (order == null) return 0;
 

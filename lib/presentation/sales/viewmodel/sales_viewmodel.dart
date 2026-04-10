@@ -288,16 +288,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }
 
   /// Calcula la tasa total de impuestos del negocio (todos activos, sin filtrar).
+  /// Full tax rate including ALL active taxes (ITBIS + propina/service).
+  /// Used to extract the base from inclusive prices. Must match the DB
+  /// `original_tax_rate` which also sums all active taxes.
   double _calculateFullBusinessTaxRate() {
     double total = 0;
     for (final tx in _cachedBusinessTaxes) {
-      final name = (tx['name'] as String?)?.toLowerCase() ?? '';
+      if (tx['is_active'] == false) continue;
       final rate = (tx['rate'] as num?)?.toDouble() ?? 0;
-      final isHeuristicService = (rate - 10).abs() < 0.001 && (name.contains('propina') || name.contains('servicio'));
-
-      if (tx['is_service_fee'] == true || isHeuristicService) continue;
-      if (tx['is_active'] == false) continue; // Por si acaso no se filtró en el fetch
-
       if (rate > 0) total += rate;
     }
     return total;
@@ -374,27 +372,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       );
     }
 
-    // 3. Normalizar tasas de impuestos para items borrador (si cambió la config)
-    final bizTaxRate = _calculateBusinessTaxRateForOrigin();
-    final bizFullRate = _calculateFullBusinessTaxRate();
-
-    final normalizedItems = activeItems.map((item) {
-      // Normalizar todos los items excepto los ya pagados o anulados.
-      // Esto asegura que si se cambia un impuesto en media venta, el subtotal se ajuste.
-      if (item.status != 'paid') {
-        // Solo actualizar si las tasas difieren significativamente (para no pisar custom taxes si hubiera)
-        // Pero en este POS solemos usar las del negocio para ventas rápidas/mesas.
-        if ((item.taxRate - bizTaxRate).abs() > 0.001 ||
-            (item.originalTaxRate != null &&
-                (item.originalTaxRate! - bizFullRate).abs() > 0.001)) {
-          return item.copyWith(
-            taxRate: bizTaxRate,
-            originalTaxRate: bizFullRate,
-          );
-        }
-      }
-      return item;
-    }).toList();
+    // 3. Respetar el snapshot fiscal persistido en cada item al rehidratar.
+    // Antes se reescribian taxRate/originalTaxRate con la configuracion actual
+    // del negocio, lo que hacia que productos con impuesto desactivado para
+    // un origin/area reaparecieran con el precio "normal" al salir y volver.
+    // La DB debe ser la fuente de verdad para items ya guardados.
+    final normalizedItems = activeItems;
 
     // 4. Calcular Pricing con contexto de Service Fee
     var pricingOrder = _pricingOrderContext(order, normalizedItems);
@@ -886,13 +869,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         previousOrder,
         optimisticItems,
       );
-      final resolvedServiceFee = updatedSummary.serviceFee > 0
-          ? updatedSummary.serviceFee
-          : addService;
-      final resolvedTotal = updatedSummary.serviceFee > 0
-          ? updatedSummary.total
-          : updatedSummary.total +
-                (productTaxMode == 'inclusive' ? 0 : addService);
+      // Respect origin-based service fee toggle for optimistic update
+      final sfActiveForOrigin = _isServiceFeeActiveForOrigin();
+      final resolvedServiceFee = sfActiveForOrigin
+          ? (updatedSummary.serviceFee > 0 ? updatedSummary.serviceFee : addService)
+          : 0.0;
+      final resolvedTotal = sfActiveForOrigin
+          ? (updatedSummary.serviceFee > 0
+              ? updatedSummary.total
+              : updatedSummary.total + (productTaxMode == 'inclusive' ? 0 : addService))
+          : updatedSummary.subtotal + updatedSummary.tax - updatedSummary.discounts;
       final updatedOrder = previousOrder.copyWith(
         subtotal: updatedSummary.subtotal,
         tax: updatedSummary.tax,

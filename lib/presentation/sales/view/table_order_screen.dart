@@ -314,12 +314,7 @@ double _catalogItemGrossAmount(OrderItem item) {
   );
 }
 
-double _uiItemDisplayAmount(WidgetRef ref, OrderItem item) {
-  final order = ref.read(currentOrderProvider).order;
-  if (order != null) {
-    return itemDisplayTotal(order, item);
-  }
-
+double _uiItemDisplayAmount(OrderItem item) {
   if (item.taxMode == 'inclusive') {
     return _effectiveItemTotal(item);
   } else {
@@ -1454,12 +1449,17 @@ class _CartView extends ConsumerWidget {
     // Show Gross Subtotal to justify the Discount line below it
     final displaySubtotal = pricingSummary.subtotal;
     final displayTax = pricingSummary.tax;
-    final displayServiceFee =
-        selectedCheck?.serviceFee ??
-        (pricingSummary.serviceFee > 0
-            ? pricingSummary.serviceFee
-            : (orderState.order?.serviceFee ?? 0.0));
-    final displayTotal = pricingSummary.total;
+    // Trust the DB service_fee (calculate_order_totals respects origin toggles).
+    // Only use local pricingSummary.serviceFee if the order already has service_fee > 0,
+    // meaning the DB confirmed this origin gets propina.
+    // Trust the DB service_fee (calculate_order_totals respects origin toggles).
+    final dbServiceFee = orderState.order?.serviceFee ?? 0.0;
+    final displayServiceFee = selectedCheck?.serviceFee ??
+        (dbServiceFee > 0 ? pricingSummary.serviceFee : 0.0);
+    // If DB says no service fee but local pricing included it, subtract the difference
+    final displayTotal = dbServiceFee <= 0 && pricingSummary.serviceFee > 0
+        ? pricingSummary.total - pricingSummary.serviceFee
+        : pricingSummary.total;
 
     final pendingOrderItems = openItems.where((i) {
       final checkIsClosed = allChecks.any(
@@ -1488,7 +1488,7 @@ class _CartView extends ConsumerWidget {
     for (final item in sentItems) {
       final name = item.productName;
       final qty = item.quantity.toDouble();
-      final totalItem = _uiItemDisplayAmount(ref, item);
+      final totalItem = _uiItemDisplayAmount(item);
       final groupKey = '${name.toLowerCase().trim()}|${item.isTakeout}';
       if (groupedSent.containsKey(groupKey)) {
         groupedSent[groupKey] = groupedSent[groupKey]!.copyWith(
@@ -3149,7 +3149,7 @@ class _CartLineItem extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final name = item.productName;
     final qty = item.quantity.toStringAsFixed(1);
-    final totalItem = _uiItemDisplayAmount(ref, item).toStringAsFixed(2);
+    final totalItem = _uiItemDisplayAmount(item).toStringAsFixed(2);
     final modifiers = item.modifiers;
 
     return Material(
