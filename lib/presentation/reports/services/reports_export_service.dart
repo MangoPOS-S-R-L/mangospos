@@ -124,8 +124,14 @@ class ReportsExportService {
           _metricsTable(viewModel.getFiscalMetricCards()),
           pw.SizedBox(height: 16),
           _breakdownTable(
-            'Comprobantes por tipo',
+            'Comprobantes por tipo de NCF',
             viewModel.getFiscalTypeRows(),
+          ),
+          pw.SizedBox(height: 12),
+          _breakdownTable(
+            'Desglose por tipo de impuesto',
+            viewModel.getFiscalTaxBreakdownRows(),
+            showQuantity: true,
           ),
           pw.SizedBox(height: 16),
           ..._fiscalDocumentsTable(viewModel.getFiscalDocuments()),
@@ -167,6 +173,53 @@ class ReportsExportService {
     }
   }
 
+  static List<String> _collectTaxLabels(
+      List<Map<String, dynamic>> documents) {
+    final labels = <String>{};
+    for (final doc in documents) {
+      final breakdown = doc['tax_breakdown'];
+      if (breakdown is List) {
+        for (final item in breakdown) {
+          final m = item is Map<String, dynamic>
+              ? item
+              : Map<String, dynamic>.from(item as Map);
+          final label = m['label']?.toString() ?? '';
+          final rate = (m['rate'] as num?)?.toDouble() ?? 0;
+          final display = rate > 0
+              ? '$label (${rate.toStringAsFixed(rate.truncateToDouble() == rate ? 0 : 2)}%)'
+              : label;
+          if (display.isNotEmpty) labels.add(display);
+        }
+      }
+      final sf = (doc['service_fee'] as num?)?.toDouble() ?? 0;
+      if (sf > 0) labels.add('Propina de ley');
+    }
+    return labels.toList(growable: false);
+  }
+
+  static double _taxAmountForLabel(
+      Map<String, dynamic> doc, String label) {
+    if (label == 'Propina de ley') {
+      return (doc['service_fee'] as num?)?.toDouble() ?? 0;
+    }
+    final breakdown = doc['tax_breakdown'];
+    if (breakdown is! List) return 0;
+    for (final item in breakdown) {
+      final m = item is Map<String, dynamic>
+          ? item
+          : Map<String, dynamic>.from(item as Map);
+      final itemLabel = m['label']?.toString() ?? '';
+      final rate = (m['rate'] as num?)?.toDouble() ?? 0;
+      final display = rate > 0
+          ? '$itemLabel (${rate.toStringAsFixed(rate.truncateToDouble() == rate ? 0 : 2)}%)'
+          : itemLabel;
+      if (display == label) {
+        return (m['tax_amount'] as num?)?.toDouble() ?? 0;
+      }
+    }
+    return 0;
+  }
+
   static List<pw.Widget> _fiscalDocumentsTable(
     List<Map<String, dynamic>> documents,
   ) {
@@ -178,6 +231,7 @@ class ReportsExportService {
 
     final dateFormat = DateFormat('dd/MM/yyyy');
     final numberFormat = NumberFormat('#,##0.00', 'es_DO');
+    final taxLabels = _collectTaxLabels(documents);
 
     return [
       pw.Text(
@@ -200,13 +254,13 @@ class ReportsExportService {
         headerDecoration: pw.BoxDecoration(
           color: PdfColor.fromHex('#E5E7EB'),
         ),
-        headers: const [
+        headers: [
           'NCF',
           'Tipo',
           'Cliente',
           'RNC/Cédula',
           'Subtotal',
-          'ITBIS',
+          ...taxLabels,
           'Total',
           'Estado',
           'Fecha',
@@ -218,7 +272,6 @@ class ReportsExportService {
               doc['customer_name']?.toString() ?? 'CONSUMIDOR FINAL';
           final customerRnc = doc['customer_rnc']?.toString() ?? '-';
           final subtotal = (doc['subtotal'] as num?)?.toDouble() ?? 0;
-          final itbis = (doc['itbis_amount'] as num?)?.toDouble() ?? 0;
           final total = (doc['total'] as num?)?.toDouble() ?? 0;
           final status = doc['status']?.toString() ?? 'active';
           final issuedAt =
@@ -233,7 +286,10 @@ class ReportsExportService {
                 : customerName,
             customerRnc.isEmpty ? '-' : customerRnc,
             numberFormat.format(subtotal),
-            numberFormat.format(itbis),
+            ...taxLabels.map((label) {
+              final amount = _taxAmountForLabel(doc, label);
+              return amount > 0 ? numberFormat.format(amount) : '-';
+            }),
             numberFormat.format(total),
             status == 'active' ? 'Activo' : 'Anulado',
             dateFormat.format(issuedAt.toLocal()),

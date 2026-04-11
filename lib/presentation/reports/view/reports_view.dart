@@ -1251,6 +1251,55 @@ class _FiscalReportSection extends StatelessWidget {
     }
   }
 
+  /// Collect the distinct tax column labels across all documents.
+  static List<String> _collectTaxLabels(
+      List<Map<String, dynamic>> documents) {
+    final labels = <String>{};
+    for (final doc in documents) {
+      final breakdown = doc['tax_breakdown'];
+      if (breakdown is List) {
+        for (final item in breakdown) {
+          final m = item is Map<String, dynamic>
+              ? item
+              : Map<String, dynamic>.from(item as Map);
+          final label = m['label']?.toString() ?? '';
+          final rate = (m['rate'] as num?)?.toDouble() ?? 0;
+          final display = rate > 0
+              ? '$label (${rate.toStringAsFixed(rate.truncateToDouble() == rate ? 0 : 2)}%)'
+              : label;
+          if (display.isNotEmpty) labels.add(display);
+        }
+      }
+      final sf = (doc['service_fee'] as num?)?.toDouble() ?? 0;
+      if (sf > 0) labels.add('Propina de ley');
+    }
+    return labels.toList(growable: false);
+  }
+
+  /// Get the tax amount for a specific label from a document.
+  static double _taxAmountForLabel(
+      Map<String, dynamic> doc, String label) {
+    if (label == 'Propina de ley') {
+      return (doc['service_fee'] as num?)?.toDouble() ?? 0;
+    }
+    final breakdown = doc['tax_breakdown'];
+    if (breakdown is! List) return 0;
+    for (final item in breakdown) {
+      final m = item is Map<String, dynamic>
+          ? item
+          : Map<String, dynamic>.from(item as Map);
+      final itemLabel = m['label']?.toString() ?? '';
+      final rate = (m['rate'] as num?)?.toDouble() ?? 0;
+      final display = rate > 0
+          ? '$itemLabel (${rate.toStringAsFixed(rate.truncateToDouble() == rate ? 0 : 2)}%)'
+          : itemLabel;
+      if (display == label) {
+        return (m['tax_amount'] as num?)?.toDouble() ?? 0;
+      }
+    }
+    return 0;
+  }
+
   @override
   Widget build(BuildContext context) {
     final currency =
@@ -1258,7 +1307,9 @@ class _FiscalReportSection extends StatelessWidget {
     final dateFormat = DateFormat('dd/MM/yyyy hh:mm a');
     final metrics = viewModel.getFiscalMetricCards();
     final typeRows = viewModel.getFiscalTypeRows();
+    final taxBreakdownRows = viewModel.getFiscalTaxBreakdownRows();
     final documents = viewModel.getFiscalDocuments();
+    final taxLabels = _collectTaxLabels(documents);
 
     return ListView(
       padding: _sectionPadding,
@@ -1282,21 +1333,65 @@ class _FiscalReportSection extends StatelessWidget {
           color: const Color(0xFF2563EB),
         ),
         const SizedBox(height: AppSpacing.itemGap),
-        _BreakdownCard(
-          title: 'Resumen por tipo de NCF',
-          emptyText:
-              'No hay comprobantes fiscales emitidos en el rango.',
-          emptyIcon: Icons.description_outlined,
-          children: typeRows
-              .map((row) => _AmountRow(
-                    label: row.label,
-                    trailing:
-                        '${currency.format(row.amount)} · ${row.count} docs',
-                  ))
-              .toList(),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final singleColumn =
+                constraints.maxWidth < AppBreakpoints.tablet;
+            final cards = [
+              _BreakdownCard(
+                title: 'Resumen por tipo de NCF',
+                emptyText:
+                    'No hay comprobantes fiscales emitidos en el rango.',
+                emptyIcon: Icons.description_outlined,
+                children: typeRows
+                    .map((row) => _AmountRow(
+                          label: row.label,
+                          trailing:
+                              '${currency.format(row.amount)} · ${row.count} docs',
+                        ))
+                    .toList(),
+              ),
+              _BreakdownCard(
+                title: 'Desglose por tipo de impuesto',
+                emptyText:
+                    'No hay impuestos generados en los comprobantes.',
+                emptyIcon: Icons.account_balance_outlined,
+                children: taxBreakdownRows
+                    .map((row) => _AmountRow(
+                          label: row.label,
+                          trailing:
+                              '${currency.format(row.amount)} · Base ${currency.format(row.quantity)} · ${row.count} docs',
+                        ))
+                    .toList(),
+              ),
+            ];
+
+            if (singleColumn) {
+              return Column(
+                children: [
+                  for (int i = 0; i < cards.length; i++) ...[
+                    if (i > 0)
+                      const SizedBox(height: AppSpacing.itemGap),
+                    cards[i],
+                  ],
+                ],
+              );
+            }
+
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (int i = 0; i < cards.length; i++) ...[
+                  if (i > 0)
+                    const SizedBox(width: AppSpacing.itemGap),
+                  Expanded(child: cards[i]),
+                ],
+              ],
+            );
+          },
         ),
         const SizedBox(height: AppSpacing.sectionGap),
-        // --- Documents table ---
+        // --- Documents table with per-tax columns ---
         Container(
           padding: const EdgeInsets.all(AppSpacing.cardPadding),
           decoration: BoxDecoration(
@@ -1362,51 +1457,53 @@ class _FiscalReportSection extends StatelessWidget {
                     dataRowMaxHeight: 56,
                     columnSpacing: 20,
                     horizontalMargin: 12,
-                    columns: const [
-                      DataColumn(
+                    columns: [
+                      const DataColumn(
                           label: Text('NCF',
                               style: TextStyle(
                                   fontWeight: FontWeight.w700,
                                   fontSize: 12))),
-                      DataColumn(
+                      const DataColumn(
                           label: Text('Tipo',
                               style: TextStyle(
                                   fontWeight: FontWeight.w700,
                                   fontSize: 12))),
-                      DataColumn(
+                      const DataColumn(
                           label: Text('Cliente',
                               style: TextStyle(
                                   fontWeight: FontWeight.w700,
                                   fontSize: 12))),
-                      DataColumn(
+                      const DataColumn(
                           label: Text('RNC/Cédula',
                               style: TextStyle(
                                   fontWeight: FontWeight.w700,
                                   fontSize: 12))),
-                      DataColumn(
+                      const DataColumn(
                           label: Text('Subtotal',
                               style: TextStyle(
                                   fontWeight: FontWeight.w700,
                                   fontSize: 12)),
                           numeric: true),
-                      DataColumn(
-                          label: Text('ITBIS',
-                              style: TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 12)),
-                          numeric: true),
-                      DataColumn(
+                      // Dynamic tax columns
+                      ...taxLabels.map((label) => DataColumn(
+                            label: Text(label,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 12)),
+                            numeric: true,
+                          )),
+                      const DataColumn(
                           label: Text('Total',
                               style: TextStyle(
                                   fontWeight: FontWeight.w700,
                                   fontSize: 12)),
                           numeric: true),
-                      DataColumn(
+                      const DataColumn(
                           label: Text('Estado',
                               style: TextStyle(
                                   fontWeight: FontWeight.w700,
                                   fontSize: 12))),
-                      DataColumn(
+                      const DataColumn(
                           label: Text('Fecha',
                               style: TextStyle(
                                   fontWeight: FontWeight.w700,
@@ -1424,9 +1521,6 @@ class _FiscalReportSection extends StatelessWidget {
                           doc['customer_rnc']?.toString() ?? '-';
                       final subtotal =
                           (doc['subtotal'] as num?)?.toDouble() ?? 0;
-                      final itbis =
-                          (doc['itbis_amount'] as num?)?.toDouble() ??
-                              0;
                       final total =
                           (doc['total'] as num?)?.toDouble() ?? 0;
                       final status =
@@ -1477,10 +1571,22 @@ class _FiscalReportSection extends StatelessWidget {
                             currency.format(subtotal),
                             style: const TextStyle(fontSize: 12),
                           )),
-                          DataCell(Text(
-                            currency.format(itbis),
-                            style: const TextStyle(fontSize: 12),
-                          )),
+                          // Dynamic tax cells
+                          ...taxLabels.map((label) {
+                            final amount =
+                                _taxAmountForLabel(doc, label);
+                            return DataCell(Text(
+                              amount > 0
+                                  ? currency.format(amount)
+                                  : '-',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: amount > 0
+                                    ? AppColors.foreground
+                                    : AppColors.mutedForeground,
+                              ),
+                            ));
+                          }),
                           DataCell(Text(
                             currency.format(total),
                             style: TextStyle(

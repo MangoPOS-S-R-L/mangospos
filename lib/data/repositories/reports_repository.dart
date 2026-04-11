@@ -821,6 +821,167 @@ class ReportsRepository {
           .order('issued_at', ascending: true),
     );
 
+    // --- Fetch configured taxes for label lookup ---
+    final taxConfigs = List<Map<String, dynamic>>.from(
+      await _client
+          .from(ReportsQueries.tableTaxes)
+          .select('id, name, rate, is_active')
+          .eq('business_id', businessId),
+    );
+    final taxNameByRate = <String, String>{};
+    for (final t in taxConfigs) {
+      final rate = _toDouble(t['rate']);
+      final name = t['name']?.toString().trim() ?? '';
+      if (name.isNotEmpty) {
+        taxNameByRate[rate.toStringAsFixed(4)] = name;
+      }
+    }
+
+    // --- Fetch service fee config ---
+    final businessSettings = await _client
+        .from('business_settings')
+        .select('service_fee_enabled, service_fee_rate')
+        .eq('business_id', businessId)
+        .maybeSingle();
+    final serviceFeeEnabled =
+        businessSettings?['service_fee_enabled'] == true;
+    final serviceFeeRate =
+        _toDouble(businessSettings?['service_fee_rate']).clamp(0, 100);
+
+    // --- Collect order IDs from active fiscal docs ---
+    final activeRows =
+        rows.where((d) => (d['status']?.toString() ?? 'active') == 'active');
+    final orderIds = activeRows
+        .map((d) => d['order_id']?.toString())
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+
+    // --- Fetch order items (tax_rate, tax, subtotal) for those orders ---
+    final orderItems = orderIds.isEmpty
+        ? <Map<String, dynamic>>[]
+        : await _selectInBatches(
+            table: ReportsQueries.tableOrderItems,
+            select:
+                'order_id, tax, tax_rate, subtotal, total, qty, quantity, status',
+            column: 'order_id',
+            values: orderIds,
+          );
+
+    // --- Fetch orders for service_fee ---
+    final orderRows = orderIds.isEmpty
+        ? <Map<String, dynamic>>[]
+        : await _selectInBatches(
+            table: ReportsQueries.tableOrders,
+            select: 'id, service_fee, status_ext',
+            column: 'id',
+            values: orderIds,
+          );
+    final serviceFeeByOrder = <String, double>{};
+    for (final o in orderRows) {
+      final oid = o['id']?.toString() ?? '';
+      final status = o['status_ext']?.toString().trim().toLowerCase() ?? '';
+      if (status == 'void' || status == 'cancelled') continue;
+      final fee = _toDouble(o['service_fee']);
+      if (fee > 0 && oid.isNotEmpty) {
+        serviceFeeByOrder[oid] = fee;
+      }
+    }
+
+    // --- Build per-order tax breakdown ---
+    // key: order_id -> list of { label, rate, taxAmount, base }
+    final taxBreakdownByOrder = <String, List<Map<String, dynamic>>>{};
+    for (final item in orderItems) {
+      final status = item['status']?.toString();
+      if (status == 'void') continue;
+      final oid = item['order_id']?.toString() ?? '';
+      if (oid.isEmpty) continue;
+
+      final taxAmount = _toDouble(item['tax']);
+      final taxRate = _toDouble(item['tax_rate']);
+      final subtotal = _toDouble(item['subtotal']);
+
+      if (taxRate <= 0 && taxAmount <= 0) continue;
+
+      final rateKey = taxRate.toStringAsFixed(4);
+      final label = taxNameByRate[rateKey] ??
+          'Impuesto ${taxRate.toStringAsFixed(2)}%';
+
+      final list = taxBreakdownByOrder.putIfAbsent(oid, () => []);
+      // Merge into existing bucket for same rate in same order
+      final existing = list
+          .where((b) => b['rate_key'] == rateKey)
+          .toList(growable: false);
+      if (existing.isNotEmpty) {
+        existing.first['tax_amount'] =
+            _toDouble(existing.first['tax_amount']) + taxAmount;
+        existing.first['base'] =
+            _toDouble(existing.first['base']) + subtotal;
+      } else {
+        list.add({
+          'rate_key': rateKey,
+          'label': label,
+          'rate': taxRate,
+          'tax_amount': taxAmount,
+          'base': subtotal,
+        });
+      }
+    }
+
+    // --- Global tax type aggregation ---
+    final globalTaxBreakdown = <String, Map<String, dynamic>>{};
+    double totalServiceFee = 0;
+
+    for (final oid in orderIds) {
+      // Tax items
+      final items = taxBreakdownByOrder[oid] ?? const [];
+      for (final item in items) {
+        final rateKey = item['rate_key'] as String;
+        final bucket = globalTaxBreakdown.putIfAbsent(
+          rateKey,
+          () => {
+            'label': item['label'],
+            'rate': item['rate'],
+            'tax_amount': 0.0,
+            'base': 0.0,
+            'count': 0,
+          },
+        );
+        bucket['tax_amount'] =
+            _toDouble(bucket['tax_amount']) + _toDouble(item['tax_amount']);
+        bucket['base'] = _toDouble(bucket['base']) + _toDouble(item['base']);
+        bucket['count'] = (bucket['count'] as int) + 1;
+      }
+
+      // Service fee
+      final fee = serviceFeeByOrder[oid] ?? 0;
+      if (fee > 0) {
+        totalServiceFee += fee;
+      }
+    }
+
+    // Add service fee as a tax type in the global breakdown
+    if (totalServiceFee > 0) {
+      final sfLabel = serviceFeeEnabled
+          ? 'Propina de ley (${serviceFeeRate.toStringAsFixed(0)}%)'
+          : 'Propina de ley';
+      globalTaxBreakdown['__service_fee__'] = {
+        'label': sfLabel,
+        'rate': serviceFeeRate,
+        'tax_amount': totalServiceFee,
+        'base': serviceFeeRate > 0
+            ? totalServiceFee / (serviceFeeRate / 100.0)
+            : 0.0,
+        'count': serviceFeeByOrder.length,
+      };
+    }
+
+    final taxBreakdownRows = globalTaxBreakdown.values.toList(growable: false)
+      ..sort((a, b) =>
+          _toDouble(b['tax_amount']).compareTo(_toDouble(a['tax_amount'])));
+
+    // --- Standard aggregations ---
     double totalSubtotal = 0;
     double totalItbis = 0;
     double totalAmount = 0;
@@ -828,12 +989,15 @@ class ReportsRepository {
     int voidCount = 0;
     final byType = <String, Map<String, dynamic>>{};
 
+    // Enrich each document with its per-order tax breakdown
+    final enrichedDocs = <Map<String, dynamic>>[];
     for (final doc in rows) {
       final status = doc['status']?.toString() ?? 'active';
       final subtotal = _toDouble(doc['subtotal']);
       final itbis = _toDouble(doc['itbis_amount']);
       final total = _toDouble(doc['total']);
       final ncfType = doc['ncf_type']?.toString() ?? 'B02';
+      final oid = doc['order_id']?.toString() ?? '';
 
       if (status == 'active') {
         activeCount += 1;
@@ -858,10 +1022,20 @@ class ReportsRepository {
         bucket['itbis'] = _toDouble(bucket['itbis']) + itbis;
         bucket['count'] = (bucket['count'] as int) + 1;
       }
+
+      // Attach per-doc tax breakdown + service fee
+      final docTaxes = taxBreakdownByOrder[oid] ?? const [];
+      final docServiceFee = serviceFeeByOrder[oid] ?? 0.0;
+      enrichedDocs.add({
+        ...doc,
+        'tax_breakdown': docTaxes,
+        'service_fee': docServiceFee,
+      });
     }
 
     final typeRows = byType.values.toList(growable: false)
-      ..sort((a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])));
+      ..sort(
+          (a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])));
 
     return {
       'from': fromIso,
@@ -872,8 +1046,10 @@ class ReportsRepository {
       'total_subtotal': totalSubtotal,
       'total_itbis': totalItbis,
       'total_amount': totalAmount,
+      'total_service_fee': totalServiceFee,
       'by_type': typeRows,
-      'documents': rows,
+      'tax_breakdown': taxBreakdownRows,
+      'documents': enrichedDocs,
     };
   }
 

@@ -942,6 +942,8 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         (summary['total_subtotal'] as num?)?.toDouble() ?? 0;
     final totalItbis = (summary['total_itbis'] as num?)?.toDouble() ?? 0;
     final totalAmount = (summary['total_amount'] as num?)?.toDouble() ?? 0;
+    final totalServiceFee =
+        (summary['total_service_fee'] as num?)?.toDouble() ?? 0;
 
     return [
       SalesMetricCardData(
@@ -954,7 +956,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
       SalesMetricCardData(
         title: 'Subtotal',
         value: 'RD\$${totalSubtotal.toStringAsFixed(2)}',
-        subtitle: 'Monto antes de ITBIS',
+        subtitle: 'Monto antes de impuestos',
         icon: Icons.attach_money_outlined,
         color: const Color(0xFFF97316),
       ),
@@ -965,6 +967,14 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         icon: Icons.account_balance_outlined,
         color: const Color(0xFF059669),
       ),
+      if (totalServiceFee > 0)
+        SalesMetricCardData(
+          title: 'Propina de ley',
+          value: 'RD\$${totalServiceFee.toStringAsFixed(2)}',
+          subtitle: 'Total propina de ley en el rango',
+          icon: Icons.room_service_outlined,
+          color: const Color(0xFFD97706),
+        ),
       SalesMetricCardData(
         title: 'Comprobantes activos',
         value: '$activeCount',
@@ -993,6 +1003,31 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
             amount: (row['amount'] as num?)?.toDouble() ?? 0,
             count: (row['count'] as num?)?.toInt() ?? 0,
           ),
+        )
+        .toList(growable: false);
+  }
+
+  /// Desglose de impuestos individuales en los comprobantes fiscales
+  /// (ITBIS, propina de ley, y cualquier otro impuesto configurado).
+  List<SalesBreakdownRow> getFiscalTaxBreakdownRows() {
+    final rows =
+        (state.fiscalSummary?['tax_breakdown'] as List?) ?? const [];
+    return rows
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .map(
+          (row) {
+            final label = row['label']?.toString() ?? 'Impuesto';
+            final rate = (row['rate'] as num?)?.toDouble() ?? 0;
+            final displayLabel = rate > 0
+                ? '$label (${rate.toStringAsFixed(rate.truncateToDouble() == rate ? 0 : 2)}%)'
+                : label;
+            return SalesBreakdownRow(
+              label: displayLabel,
+              amount: (row['tax_amount'] as num?)?.toDouble() ?? 0,
+              quantity: (row['base'] as num?)?.toDouble() ?? 0,
+              count: (row['count'] as num?)?.toInt() ?? 0,
+            );
+          },
         )
         .toList(growable: false);
   }
