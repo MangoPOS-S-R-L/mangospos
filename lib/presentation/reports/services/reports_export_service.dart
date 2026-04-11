@@ -48,12 +48,9 @@ class ReportsExportService {
         return [
           _metricsTable(viewModel.getSalesMetricCards()),
           pw.SizedBox(height: 16),
-          _breakdownTable('Métodos de pago', viewModel.getPaymentMethodRows()),
-          pw.SizedBox(height: 12),
           _breakdownTable(
-            'Top productos',
-            viewModel.getTopProductRows(),
-            showQuantity: true,
+            'Ventas por tipo de pago',
+            viewModel.getPaymentMethodRows(),
           ),
           pw.SizedBox(height: 12),
           _breakdownTable(
@@ -62,8 +59,32 @@ class ReportsExportService {
             showQuantity: true,
           ),
           pw.SizedBox(height: 12),
+          _breakdownTable('Ventas por empleado', viewModel.getEmployeeRows()),
+          pw.SizedBox(height: 12),
           _breakdownTable(
-              'Ventas por empleado', viewModel.getEmployeeRows()),
+            'Ventas por recibo / comprobante',
+            viewModel.getReceiptRows(),
+          ),
+          pw.SizedBox(height: 12),
+          _breakdownTable(
+            'Ventas por modificadores',
+            viewModel.getModifierRows(),
+            showQuantity: true,
+          ),
+          pw.SizedBox(height: 12),
+          _breakdownTable(
+            'Descuentos y cortesías',
+            viewModel.getDiscountRows(),
+            showQuantity: true,
+          ),
+          pw.SizedBox(height: 12),
+          _productSalesTable(viewModel.getFilteredProductSalesRows()),
+          pw.SizedBox(height: 12),
+          _breakdownTable(
+            'Top productos',
+            viewModel.getTopProductRows(),
+            showQuantity: true,
+          ),
           pw.SizedBox(height: 12),
           _breakdownTable('Ventas por zona', viewModel.getZoneRows()),
           pw.SizedBox(height: 12),
@@ -148,6 +169,49 @@ class ReportsExportService {
     );
   }
 
+  static pw.Widget _productSalesTable(List<ProductSalesReportRow> rows) {
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        pw.Text(
+          'Ventas por producto',
+          style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
+        ),
+        pw.SizedBox(height: 6),
+        pw.TableHelper.fromTextArray(
+          headerStyle: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
+          cellStyle: const pw.TextStyle(fontSize: 8),
+          headers: const [
+            'Producto',
+            'Categoría',
+            'Cant.',
+            'Brutas',
+            'Desc.',
+            'Cortesías',
+            'Netas',
+            'Costo',
+            'Gan. bruta',
+          ],
+          data: rows
+              .map(
+                (row) => [
+                  row.product,
+                  row.category,
+                  row.quantitySold.toStringAsFixed(2),
+                  row.grossSales.toStringAsFixed(2),
+                  row.discounts.toStringAsFixed(2),
+                  row.courtesies.toStringAsFixed(2),
+                  row.netSales.toStringAsFixed(2),
+                  row.cost.toStringAsFixed(2),
+                  row.grossProfit.toStringAsFixed(2),
+                ],
+              )
+              .toList(growable: false),
+        ),
+      ],
+    );
+  }
+
   static String _ncfTypeName(String type) {
     switch (type) {
       case 'B01':
@@ -173,8 +237,7 @@ class ReportsExportService {
     }
   }
 
-  static List<String> _collectTaxLabels(
-      List<Map<String, dynamic>> documents) {
+  static List<String> _collectTaxLabels(List<Map<String, dynamic>> documents) {
     final labels = <String>{};
     for (final doc in documents) {
       final breakdown = doc['tax_breakdown'];
@@ -197,8 +260,7 @@ class ReportsExportService {
     return labels.toList(growable: false);
   }
 
-  static double _taxAmountForLabel(
-      Map<String, dynamic> doc, String label) {
+  static double _taxAmountForLabel(Map<String, dynamic> doc, String label) {
     if (label == 'Propina de ley') {
       return (doc['service_fee'] as num?)?.toDouble() ?? 0;
     }
@@ -246,14 +308,9 @@ class ReportsExportService {
       pw.SizedBox(height: 8),
       pw.TableHelper.fromTextArray(
         cellAlignment: pw.Alignment.centerLeft,
-        headerStyle: pw.TextStyle(
-          fontWeight: pw.FontWeight.bold,
-          fontSize: 8,
-        ),
+        headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8),
         cellStyle: const pw.TextStyle(fontSize: 7),
-        headerDecoration: pw.BoxDecoration(
-          color: PdfColor.fromHex('#E5E7EB'),
-        ),
+        headerDecoration: pw.BoxDecoration(color: PdfColor.fromHex('#E5E7EB')),
         headers: [
           'NCF',
           'Tipo',
@@ -265,36 +322,38 @@ class ReportsExportService {
           'Estado',
           'Fecha',
         ],
-        data: documents.map((doc) {
-          final ncfNumber = doc['ncf_number']?.toString() ?? '';
-          final ncfType = doc['ncf_type']?.toString() ?? '';
-          final customerName =
-              doc['customer_name']?.toString() ?? 'CONSUMIDOR FINAL';
-          final customerRnc = doc['customer_rnc']?.toString() ?? '-';
-          final subtotal = (doc['subtotal'] as num?)?.toDouble() ?? 0;
-          final total = (doc['total'] as num?)?.toDouble() ?? 0;
-          final status = doc['status']?.toString() ?? 'active';
-          final issuedAt =
-              DateTime.tryParse(doc['issued_at']?.toString() ?? '') ??
+        data: documents
+            .map((doc) {
+              final ncfNumber = doc['ncf_number']?.toString() ?? '';
+              final ncfType = doc['ncf_type']?.toString() ?? '';
+              final customerName =
+                  doc['customer_name']?.toString() ?? 'CONSUMIDOR FINAL';
+              final customerRnc = doc['customer_rnc']?.toString() ?? '-';
+              final subtotal = (doc['subtotal'] as num?)?.toDouble() ?? 0;
+              final total = (doc['total'] as num?)?.toDouble() ?? 0;
+              final status = doc['status']?.toString() ?? 'active';
+              final issuedAt =
+                  DateTime.tryParse(doc['issued_at']?.toString() ?? '') ??
                   DateTime.now();
 
-          return [
-            ncfNumber,
-            _ncfTypeName(ncfType),
-            customerName.length > 25
-                ? '${customerName.substring(0, 25)}...'
-                : customerName,
-            customerRnc.isEmpty ? '-' : customerRnc,
-            numberFormat.format(subtotal),
-            ...taxLabels.map((label) {
-              final amount = _taxAmountForLabel(doc, label);
-              return amount > 0 ? numberFormat.format(amount) : '-';
-            }),
-            numberFormat.format(total),
-            status == 'active' ? 'Activo' : 'Anulado',
-            dateFormat.format(issuedAt.toLocal()),
-          ];
-        }).toList(growable: false),
+              return [
+                ncfNumber,
+                _ncfTypeName(ncfType),
+                customerName.length > 25
+                    ? '${customerName.substring(0, 25)}...'
+                    : customerName,
+                customerRnc.isEmpty ? '-' : customerRnc,
+                numberFormat.format(subtotal),
+                ...taxLabels.map((label) {
+                  final amount = _taxAmountForLabel(doc, label);
+                  return amount > 0 ? numberFormat.format(amount) : '-';
+                }),
+                numberFormat.format(total),
+                status == 'active' ? 'Activo' : 'Anulado',
+                dateFormat.format(issuedAt.toLocal()),
+              ];
+            })
+            .toList(growable: false),
       ),
     ];
   }

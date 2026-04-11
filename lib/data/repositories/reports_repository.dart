@@ -15,6 +15,18 @@ class ReportsRepository {
     return double.tryParse(value?.toString() ?? '') ?? 0;
   }
 
+  double _extractReportedAmount(String? notes, String label) {
+    final source = notes ?? '';
+    if (source.isEmpty) return 0;
+    final escapedLabel = RegExp.escape(label);
+    final match = RegExp(
+      '$escapedLabel\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)',
+      caseSensitive: false,
+    ).firstMatch(source);
+    if (match == null) return 0;
+    return double.tryParse(match.group(1) ?? '') ?? 0;
+  }
+
   Future<List<Map<String, dynamic>>> _selectInBatches({
     required String table,
     required String select,
@@ -107,7 +119,7 @@ class ReportsRepository {
       from: from,
       to: to,
       select:
-          'id, amount, change_amount, order_id, status, created_at, payment_method_id, payment_methods(name, code)',
+          'id, amount, change_amount, order_id, check_id, fiscal_document_id, status, created_at, payment_method_id, payment_methods(name, code)',
     );
     final completedPayments = paymentRows
         .where((row) => row['status'] == 'completed' || row['status'] == null)
@@ -140,10 +152,100 @@ class ReportsRepository {
 
     final items = await _selectInBatches(
       table: ReportsQueries.tableOrderItems,
-      select: 'order_id, product_name, quantity, qty, total, status, product_id',
+      select:
+          'id, order_id, check_id, product_name, quantity, qty, subtotal, discounts, tax, total, status, product_id, notes',
       column: 'order_id',
       values: orderIds,
     );
+
+    final itemById = <String, Map<String, dynamic>>{};
+    for (final item in items) {
+      final itemId = item['id']?.toString();
+      if (itemId != null && itemId.isNotEmpty) {
+        itemById[itemId] = item;
+      }
+    }
+
+    final itemIds = itemById.keys.toList(growable: false);
+    final modifierRows = await _selectInBatches(
+      table: 'order_item_modifiers',
+      select: 'item_id, name, qty, price',
+      column: 'item_id',
+      values: itemIds,
+    );
+
+    final checkIds = completedPayments
+        .map((row) => row['check_id']?.toString())
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    final checkRows = await _selectInBatches(
+      table: 'order_checks',
+      select: 'id, order_id, label, position',
+      column: 'id',
+      values: checkIds,
+    );
+    final checkById = <String, Map<String, dynamic>>{
+      for (final row in checkRows)
+        if ((row['id']?.toString() ?? '').isNotEmpty) row['id'].toString(): row,
+    };
+    final checksCountByOrder = <String, int>{};
+    for (final row in checkRows) {
+      final orderId = row['order_id']?.toString() ?? '';
+      if (orderId.isEmpty) continue;
+      checksCountByOrder[orderId] = (checksCountByOrder[orderId] ?? 0) + 1;
+    }
+
+    final fiscalDocumentIds = completedPayments
+        .map((row) => row['fiscal_document_id']?.toString())
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    final fiscalRows = await _selectInBatches(
+      table: 'fiscal_documents',
+      select: 'id, ncf_type, ncf_number, status',
+      column: 'id',
+      values: fiscalDocumentIds,
+    );
+    final fiscalById = <String, Map<String, dynamic>>{
+      for (final row in fiscalRows)
+        if ((row['id']?.toString() ?? '').isNotEmpty) row['id'].toString(): row,
+    };
+
+    String receiptLabelForPayment(Map<String, dynamic> payment) {
+      final fiscalId = payment['fiscal_document_id']?.toString() ?? '';
+      if (fiscalId.isNotEmpty) {
+        final doc = fiscalById[fiscalId];
+        final ncfType = doc?['ncf_type']?.toString() ?? 'Comprobante fiscal';
+        return _ncfTypeLabel(ncfType);
+      }
+
+      final checkId = payment['check_id']?.toString() ?? '';
+      if (checkId.isNotEmpty) {
+        final check = checkById[checkId];
+        final orderId = payment['order_id']?.toString() ?? '';
+        final hasSplit = (checksCountByOrder[orderId] ?? 0) > 1;
+        final baseLabel = hasSplit ? 'Recibo dividido' : 'Recibo de cuenta';
+        final checkLabel = check?['label']?.toString().trim() ?? '';
+        return checkLabel.isNotEmpty ? '$baseLabel · $checkLabel' : baseLabel;
+      }
+
+      return 'Recibo estándar';
+    }
+
+    String adjustmentLabelForItem(Map<String, dynamic> item) {
+      final notes = item['notes']?.toString() ?? '';
+      final lineGross = _toDouble(item['subtotal']) + _toDouble(item['tax']);
+      final discount = _toDouble(item['discounts']);
+      final isCourtesy =
+          notes.contains('[CORTESIA:') ||
+          (lineGross > 0 && discount >= lineGross - 0.01);
+      if (isCourtesy) return 'Cortesías';
+      if (notes.contains('[PROMO_AUTO:')) return 'Promociones automáticas';
+      return 'Descuentos manuales';
+    }
 
     // Collect unique product_ids to look up their categories
     final productIds = items
@@ -153,10 +255,11 @@ class ReportsRepository {
         .toSet()
         .toList(growable: false);
     final categoryByProductId = <String, String>{};
+    final productCostById = <String, double>{};
     if (productIds.isNotEmpty) {
       final menuItems = await _selectInBatches(
         table: 'menu_items',
-        select: 'id, category_id, categories(name)',
+        select: 'id, category_id, cost, categories(name)',
         column: 'id',
         values: productIds,
       );
@@ -169,6 +272,9 @@ class ReportsRepository {
                   ? Map<String, dynamic>.from(cat)
                   : <String, dynamic>{});
         final catName = catMap['name']?.toString().trim();
+        if (pid.isNotEmpty) {
+          productCostById[pid] = _toDouble(mi['cost']);
+        }
         if (pid.isNotEmpty && catName != null && catName.isNotEmpty) {
           categoryByProductId[pid] = catName;
         }
@@ -176,8 +282,18 @@ class ReportsRepository {
     }
 
     double totalItems = 0;
+    double modifiersSalesTotal = 0;
+    double discountsTotal = 0;
+    double courtesyTotal = 0;
+    int discountedLinesCount = 0;
+    int courtesyLinesCount = 0;
+
     final topProducts = <String, Map<String, dynamic>>{};
+    final productSales = <String, Map<String, dynamic>>{};
     final byCategory = <String, Map<String, dynamic>>{};
+    final byModifier = <String, Map<String, dynamic>>{};
+    final byAdjustment = <String, Map<String, dynamic>>{};
+
     for (final item in items) {
       final status = item['status']?.toString();
       if (status == 'void') continue;
@@ -196,10 +312,46 @@ class ReportsRepository {
       bucket['quantity'] = _toDouble(bucket['quantity']) + qty;
       bucket['count'] = (bucket['count'] as int) + 1;
 
-      // Aggregate by category
       final productId = item['product_id']?.toString() ?? '';
-      final categoryName =
-          categoryByProductId[productId] ?? 'Sin categoría';
+      final categoryName = categoryByProductId[productId] ?? 'Sin categoría';
+      final discount = _toDouble(item['discounts']);
+      final adjustmentLabel =
+          discount > 0.009 ? adjustmentLabelForItem(item) : null;
+      final courtesyAmount = adjustmentLabel == 'Cortesías' ? discount : 0.0;
+      final itemGrossSales = _toDouble(item['subtotal']) + _toDouble(item['tax']);
+      final itemNetSales = _toDouble(item['total']);
+      final itemCost = (productCostById[productId] ?? 0) * qty;
+      final productKey = productId.isNotEmpty ? productId : label;
+      final productBucket = productSales.putIfAbsent(
+        productKey,
+        () => {
+          'product': label,
+          'category': categoryName,
+          'quantity_sold': 0.0,
+          'gross_sales': 0.0,
+          'discounts': 0.0,
+          'courtesies': 0.0,
+          'net_sales': 0.0,
+          'cost': 0.0,
+          'gross_profit': 0.0,
+          'tickets': 0,
+        },
+      );
+      productBucket['quantity_sold'] =
+          _toDouble(productBucket['quantity_sold']) + qty;
+      productBucket['gross_sales'] =
+          _toDouble(productBucket['gross_sales']) + itemGrossSales;
+      productBucket['discounts'] =
+          _toDouble(productBucket['discounts']) + discount;
+      productBucket['courtesies'] =
+          _toDouble(productBucket['courtesies']) + courtesyAmount;
+      productBucket['net_sales'] =
+          _toDouble(productBucket['net_sales']) + itemNetSales;
+      productBucket['cost'] = _toDouble(productBucket['cost']) + itemCost;
+      productBucket['gross_profit'] =
+          _toDouble(productBucket['gross_profit']) + (itemNetSales - itemCost);
+      productBucket['tickets'] = (productBucket['tickets'] as int) + 1;
+
       final catBucket = byCategory.putIfAbsent(
         categoryName,
         () => {
@@ -213,10 +365,55 @@ class ReportsRepository {
           _toDouble(catBucket['amount']) + _toDouble(item['total']);
       catBucket['quantity'] = _toDouble(catBucket['quantity']) + qty;
       catBucket['count'] = (catBucket['count'] as int) + 1;
+
+      if (discount > 0.009) {
+        discountsTotal += discount;
+        discountedLinesCount += 1;
+        if (adjustmentLabel == 'Cortesías') {
+          courtesyTotal += discount;
+          courtesyLinesCount += 1;
+        }
+        final adjustmentBucket = byAdjustment.putIfAbsent(
+          adjustmentLabel ?? 'Ajuste',
+          () => {
+            'label': adjustmentLabel ?? 'Ajuste',
+            'amount': 0.0,
+            'quantity': 0.0,
+            'count': 0,
+          },
+        );
+        adjustmentBucket['amount'] =
+            _toDouble(adjustmentBucket['amount']) + discount;
+        adjustmentBucket['quantity'] =
+            _toDouble(adjustmentBucket['quantity']) + qty;
+        adjustmentBucket['count'] = (adjustmentBucket['count'] as int) + 1;
+      }
+    }
+
+    for (final modifier in modifierRows) {
+      final itemId = modifier['item_id']?.toString() ?? '';
+      final item = itemById[itemId];
+      if (item == null || item['status']?.toString() == 'void') continue;
+
+      final label = modifier['name']?.toString().trim().isNotEmpty == true
+          ? modifier['name'].toString().trim()
+          : 'Modificador';
+      final qty = _toDouble(modifier['qty']);
+      final amount = _toDouble(modifier['price']) * qty;
+      modifiersSalesTotal += amount;
+
+      final bucket = byModifier.putIfAbsent(
+        label,
+        () => {'label': label, 'amount': 0.0, 'quantity': 0.0, 'count': 0},
+      );
+      bucket['amount'] = _toDouble(bucket['amount']) + amount;
+      bucket['quantity'] = _toDouble(bucket['quantity']) + qty;
+      bucket['count'] = (bucket['count'] as int) + 1;
     }
 
     final byMethod = <String, Map<String, dynamic>>{};
     final byHour = <int, Map<String, dynamic>>{};
+    final byReceipt = <String, Map<String, dynamic>>{};
 
     for (final payment in completedPayments) {
       final method = payment['payment_methods'];
@@ -242,6 +439,14 @@ class ReportsRepository {
       methodBucket['amount'] = _toDouble(methodBucket['amount']) + amount;
       methodBucket['count'] = (methodBucket['count'] as int) + 1;
 
+      final receiptLabel = receiptLabelForPayment(payment);
+      final receiptBucket = byReceipt.putIfAbsent(
+        receiptLabel,
+        () => {'label': receiptLabel, 'amount': 0.0, 'count': 0},
+      );
+      receiptBucket['amount'] = _toDouble(receiptBucket['amount']) + amount;
+      receiptBucket['count'] = (receiptBucket['count'] as int) + 1;
+
       final createdAt = DateTime.tryParse(
         payment['created_at']?.toString() ?? '',
       );
@@ -261,17 +466,15 @@ class ReportsRepository {
       }
     }
 
-    // --- Sales by employee & zone ---
-    // Build a map: orderId -> payment amount for completed payments
     final amountByOrder = <String, double>{};
     for (final payment in completedPayments) {
       final oid = payment['order_id']?.toString() ?? '';
       if (oid.isEmpty) continue;
-      amountByOrder[oid] = (amountByOrder[oid] ?? 0.0) +
+      amountByOrder[oid] =
+          (amountByOrder[oid] ?? 0.0) +
           netPaymentAmount(payment['amount'], payment['change_amount']);
     }
 
-    // Fetch table_sessions with waiter and table→zone info
     final orderSessionRows = await _selectInBatches(
       table: ReportsQueries.tableOrders,
       select:
@@ -294,14 +497,14 @@ class ReportsRepository {
                 ? Map<String, dynamic>.from(session)
                 : <String, dynamic>{});
 
-      // Employee
       final profile = sessionMap['profiles'];
       final profileMap = profile is Map<String, dynamic>
           ? profile
           : (profile is Map
                 ? Map<String, dynamic>.from(profile)
                 : <String, dynamic>{});
-      final empName = profileMap['full_name']?.toString().trim().isNotEmpty == true
+      final empName =
+          profileMap['full_name']?.toString().trim().isNotEmpty == true
           ? profileMap['full_name'].toString().trim()
           : 'Sin empleado';
       final empBucket = byEmployee.putIfAbsent(
@@ -311,7 +514,6 @@ class ReportsRepository {
       empBucket['amount'] = _toDouble(empBucket['amount']) + amount;
       empBucket['count'] = (empBucket['count'] as int) + 1;
 
-      // Zone
       final table = sessionMap['dining_tables'];
       final tableMap = table is Map<String, dynamic>
           ? table
@@ -342,11 +544,24 @@ class ReportsRepository {
     final salesByMethod = byMethod.values.toList(
       growable: false,
     )..sort((a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])));
+    final salesByReceipt = byReceipt.values.toList(
+      growable: false,
+    )..sort((a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])));
     final salesByHour = byHour.values.toList(growable: false)
       ..sort((a, b) => (a['hour'] as int).compareTo(b['hour'] as int));
+    final salesByModifier = byModifier.values.toList(
+      growable: false,
+    )..sort((a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])));
+    final salesByAdjustment = byAdjustment.values.toList(
+      growable: false,
+    )..sort((a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])));
     final topProductsList = topProducts.values.toList(
       growable: false,
     )..sort((a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])));
+    final productSalesList = productSales.values.toList(growable: false)
+      ..sort(
+        (a, b) => _toDouble(b['net_sales']).compareTo(_toDouble(a['net_sales'])),
+      );
 
     return {
       'from': fromIso,
@@ -358,21 +573,30 @@ class ReportsRepository {
       'voided_payments_count': voidedPayments.length,
       'items_sold': totalItems.round(),
       'avg_ticket': avgTicket,
-      'sales_by_method': salesByMethod.take(6).toList(growable: false),
+      'modifier_sales_total': modifiersSalesTotal,
+      'discounts_total': discountsTotal,
+      'courtesy_total': courtesyTotal,
+      'discounted_lines_count': discountedLinesCount,
+      'courtesy_lines_count': courtesyLinesCount,
+      'sales_by_method': salesByMethod,
+      'sales_by_receipt': salesByReceipt,
       'sales_by_hour': salesByHour,
-      'top_products': topProductsList.take(8).toList(growable: false),
+      'sales_by_modifier': salesByModifier,
+      'sales_by_adjustment': salesByAdjustment,
+      'top_products': topProductsList,
+      'product_sales': productSalesList,
       'sales_by_category': byCategory.values.toList(growable: false)
         ..sort(
-            (a, b) =>
-                _toDouble(b['amount']).compareTo(_toDouble(a['amount']))),
+          (a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])),
+        ),
       'sales_by_employee': byEmployee.values.toList(growable: false)
         ..sort(
-            (a, b) =>
-                _toDouble(b['amount']).compareTo(_toDouble(a['amount']))),
+          (a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])),
+        ),
       'sales_by_zone': byZone.values.toList(growable: false)
         ..sort(
-            (a, b) =>
-                _toDouble(b['amount']).compareTo(_toDouble(a['amount']))),
+          (a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])),
+        ),
     };
   }
 
@@ -387,11 +611,12 @@ class ReportsRepository {
     final sessions = await _client
         .from(ReportsQueries.tableCashSessions)
         .select(
-          'id, start_amount, end_amount, difference, status, opened_at, closed_at, cash_registers!inner(business_id)',
+          'id, cash_register_id, user_id, start_amount, end_amount, difference, status, opened_at, closed_at, notes, cash_registers!inner(business_id, name)',
         )
         .eq('cash_registers.business_id', businessId)
         .gte('opened_at', fromIso)
-        .lt('opened_at', toIso);
+        .lt('opened_at', toIso)
+        .order('opened_at', ascending: false);
 
     final sessionRows = List<Map<String, dynamic>>.from(sessions);
 
@@ -425,7 +650,7 @@ class ReportsRepository {
 
     final transactions = await _selectInBatches(
       table: ReportsQueries.tableCashTransactions,
-      select: 'amount, type, created_at',
+      select: 'session_id, amount, type, created_at',
       column: 'session_id',
       values: sessionIds,
       transform: (query) =>
@@ -467,6 +692,134 @@ class ReportsRepository {
       }
     }
 
+    final profileIds = sessionRows
+        .map((row) => row['user_id']?.toString().trim())
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    final profileRows = profileIds.isEmpty
+        ? const <Map<String, dynamic>>[]
+        : List<Map<String, dynamic>>.from(
+            await _client
+                .from('profiles')
+                .select('id, full_name')
+                .inFilter('id', profileIds),
+          );
+    final profileNamesById = <String, String>{
+      for (final profile in profileRows)
+        if ((profile['id']?.toString() ?? '').isNotEmpty)
+          profile['id'].toString():
+              profile['full_name']?.toString().trim().isNotEmpty == true
+              ? profile['full_name'].toString().trim()
+              : 'Cajero',
+    };
+
+    final closureDetails = await Future.wait(
+      sessionRows.map((session) async {
+        final sessionId = session['id']?.toString() ?? '';
+        Map<String, dynamic> summary = const <String, dynamic>{};
+        if (sessionId.isNotEmpty) {
+          try {
+            final rpcResult = Map<String, dynamic>.from(
+              await _client.rpc(
+                'fn_get_cash_session_summary',
+                params: {'p_session_id': sessionId},
+              ),
+            );
+            final success = rpcResult['success'] as bool? ?? true;
+            if (success) {
+              summary = rpcResult;
+            }
+          } catch (_) {
+            summary = const <String, dynamic>{};
+          }
+        }
+
+        final notes = session['notes']?.toString();
+        final status = session['status']?.toString() ?? 'open';
+        final startAmount = _toDouble(session['start_amount']);
+        final endAmount = _toDouble(session['end_amount']);
+        final difference = _toDouble(session['difference']);
+        final expectedCash = _toDouble(summary['expected_cash']);
+        final expectedCard = _toDouble(summary['expected_card']);
+        final expectedTransfer = _toDouble(summary['expected_transfer']);
+        final expectedTotal = _toDouble(summary['expected_total']) > 0
+            ? _toDouble(summary['expected_total'])
+            : expectedCash + expectedCard + expectedTransfer;
+        final reportedCash = _extractReportedAmount(notes, 'Efectivo');
+        final reportedCard = _extractReportedAmount(notes, 'Tarjetas');
+        final reportedTransfer = _extractReportedAmount(
+          notes,
+          'Transferencias',
+        );
+        final extractedReportedTotal = _extractReportedAmount(
+          notes,
+          'Total reportado',
+        );
+        final reportedTotal = extractedReportedTotal > 0
+            ? extractedReportedTotal
+            : (endAmount > 0
+                  ? endAmount
+                  : reportedCash + reportedCard + reportedTransfer);
+        final totalSalesAllMethods = _toDouble(
+          summary['total_sales_all_methods'],
+        );
+        final register = session['cash_registers'];
+        final registerMap = register is Map<String, dynamic>
+            ? register
+            : (register is Map
+                  ? Map<String, dynamic>.from(register)
+                  : const <String, dynamic>{});
+        final userId = session['user_id']?.toString() ?? '';
+        final cashierName =
+            profileNamesById[userId] ??
+            (userId.isEmpty
+                ? 'No identificado'
+                : 'Usuario ${userId.substring(0, userId.length >= 8 ? 8 : userId.length).toUpperCase()}');
+
+        return <String, dynamic>{
+          'id': sessionId,
+          'status': status,
+          'cashier_name': cashierName,
+          'cash_register_name': registerMap['name']?.toString() ?? 'Caja',
+          'opened_at': session['opened_at'],
+          'closed_at': session['closed_at'],
+          'start_amount': startAmount,
+          'end_amount': endAmount,
+          'difference': difference,
+          'expected_cash': expectedCash,
+          'expected_card': expectedCard,
+          'expected_transfer': expectedTransfer,
+          'expected_total': expectedTotal,
+          'reported_cash': reportedCash,
+          'reported_card': reportedCard,
+          'reported_transfer': reportedTransfer,
+          'reported_total': reportedTotal,
+          'sales_total_all_methods': totalSalesAllMethods,
+          'sales_cash': _toDouble(summary['cash_sales_net']),
+          'sales_card': _toDouble(summary['expected_card']),
+          'sales_transfer': _toDouble(summary['expected_transfer']),
+          'deposits_total': _toDouble(summary['total_deposits']),
+          'withdrawals_total': _toDouble(summary['total_withdrawals']),
+          'expenses_total': _toDouble(summary['total_expenses']),
+          'transaction_count':
+              (summary['transaction_count'] as num?)?.toInt() ?? 0,
+          'notes': notes,
+          'is_balanced': difference.abs() < 0.009,
+        };
+      }),
+    );
+
+    closureDetails.sort((a, b) {
+      final aDate = DateTime.tryParse(a['opened_at']?.toString() ?? '');
+      final bDate = DateTime.tryParse(b['opened_at']?.toString() ?? '');
+      if (aDate == null && bDate == null) return 0;
+      if (aDate == null) return 1;
+      if (bDate == null) return -1;
+      return bDate.compareTo(aDate);
+    });
+
     final typeRows = byType.values.toList(
       growable: false,
     )..sort((a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])));
@@ -492,6 +845,7 @@ class ReportsRepository {
       'manual_out_total': manualOut,
       'net_cash_flow': salesTotal + manualIn - manualOut,
       'transactions_by_type': typeRows,
+      'cash_closures': closureDetails,
     };
   }
 
@@ -843,14 +1197,15 @@ class ReportsRepository {
         .select('service_fee_enabled, service_fee_rate')
         .eq('business_id', businessId)
         .maybeSingle();
-    final serviceFeeEnabled =
-        businessSettings?['service_fee_enabled'] == true;
-    final serviceFeeRate =
-        _toDouble(businessSettings?['service_fee_rate']).clamp(0, 100);
+    final serviceFeeEnabled = businessSettings?['service_fee_enabled'] == true;
+    final serviceFeeRate = _toDouble(
+      businessSettings?['service_fee_rate'],
+    ).clamp(0, 100);
 
     // --- Collect order IDs from active fiscal docs ---
-    final activeRows =
-        rows.where((d) => (d['status']?.toString() ?? 'active') == 'active');
+    final activeRows = rows.where(
+      (d) => (d['status']?.toString() ?? 'active') == 'active',
+    );
     final orderIds = activeRows
         .map((d) => d['order_id']?.toString())
         .whereType<String>()
@@ -905,8 +1260,8 @@ class ReportsRepository {
       if (taxRate <= 0 && taxAmount <= 0) continue;
 
       final rateKey = taxRate.toStringAsFixed(4);
-      final label = taxNameByRate[rateKey] ??
-          'Impuesto ${taxRate.toStringAsFixed(2)}%';
+      final label =
+          taxNameByRate[rateKey] ?? 'Impuesto ${taxRate.toStringAsFixed(2)}%';
 
       final list = taxBreakdownByOrder.putIfAbsent(oid, () => []);
       // Merge into existing bucket for same rate in same order
@@ -916,8 +1271,7 @@ class ReportsRepository {
       if (existing.isNotEmpty) {
         existing.first['tax_amount'] =
             _toDouble(existing.first['tax_amount']) + taxAmount;
-        existing.first['base'] =
-            _toDouble(existing.first['base']) + subtotal;
+        existing.first['base'] = _toDouble(existing.first['base']) + subtotal;
       } else {
         list.add({
           'rate_key': rateKey,
@@ -978,8 +1332,10 @@ class ReportsRepository {
     }
 
     final taxBreakdownRows = globalTaxBreakdown.values.toList(growable: false)
-      ..sort((a, b) =>
-          _toDouble(b['tax_amount']).compareTo(_toDouble(a['tax_amount'])));
+      ..sort(
+        (a, b) =>
+            _toDouble(b['tax_amount']).compareTo(_toDouble(a['tax_amount'])),
+      );
 
     // --- Standard aggregations ---
     double totalSubtotal = 0;
@@ -1033,9 +1389,9 @@ class ReportsRepository {
       });
     }
 
-    final typeRows = byType.values.toList(growable: false)
-      ..sort(
-          (a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])));
+    final typeRows = byType.values.toList(
+      growable: false,
+    )..sort((a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])));
 
     return {
       'from': fromIso,

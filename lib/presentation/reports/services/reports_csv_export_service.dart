@@ -58,22 +58,63 @@ class ReportsCsvExportService {
       rows.add([]);
     }
 
+    void addProductSalesSection(List<ProductSalesReportRow> productRows) {
+      rows.add(['Ventas por producto']);
+      rows.add([
+        'Producto',
+        'Categoría',
+        'Cantidad vendida',
+        'Ventas brutas',
+        'Descuentos',
+        'Cortesías',
+        'Ventas netas',
+        'Costo',
+        'Ganancia bruta',
+        'Tickets',
+      ]);
+      for (final row in productRows) {
+        rows.add([
+          row.product,
+          row.category,
+          row.quantitySold.toStringAsFixed(2),
+          row.grossSales.toStringAsFixed(2),
+          row.discounts.toStringAsFixed(2),
+          row.courtesies.toStringAsFixed(2),
+          row.netSales.toStringAsFixed(2),
+          row.cost.toStringAsFixed(2),
+          row.grossProfit.toStringAsFixed(2),
+          row.tickets.toString(),
+        ]);
+      }
+      rows.add([]);
+    }
+
     switch (category) {
       case ReportCategory.sales:
         addMetricSection(viewModel.getSalesMetricCards());
         addBreakdownSection(
-          'Métodos de pago',
+          'Ventas por tipo de pago',
           viewModel.getPaymentMethodRows(),
         );
-        addBreakdownSection('Top productos', viewModel.getTopProductRows());
         addBreakdownSection(
           'Ventas por categoría',
           viewModel.getCategoryRows(),
         );
+        addBreakdownSection('Ventas por empleado', viewModel.getEmployeeRows());
         addBreakdownSection(
-          'Ventas por empleado',
-          viewModel.getEmployeeRows(),
+          'Ventas por recibo / comprobante',
+          viewModel.getReceiptRows(),
         );
+        addBreakdownSection(
+          'Ventas por modificadores',
+          viewModel.getModifierRows(),
+        );
+        addBreakdownSection(
+          'Descuentos y cortesías',
+          viewModel.getDiscountRows(),
+        );
+        addProductSalesSection(viewModel.getFilteredProductSalesRows());
+        addBreakdownSection('Top productos', viewModel.getTopProductRows());
         addBreakdownSection('Ventas por zona', viewModel.getZoneRows());
         addBreakdownSection('Ventas por hora', viewModel.getHourlyRows());
         break;
@@ -133,7 +174,7 @@ class ReportsCsvExportService {
         for (final doc in fiscalDocs) {
           final issuedAt =
               DateTime.tryParse(doc['issued_at']?.toString() ?? '') ??
-                  DateTime.now();
+              DateTime.now();
           rows.add([
             doc['ncf_number']?.toString() ?? '',
             doc['ncf_type']?.toString() ?? '',
@@ -162,8 +203,7 @@ class ReportsCsvExportService {
     return cells.map((cell) => '"${cell.replaceAll('"', '""')}"').join(',');
   }
 
-  static List<String> _collectTaxLabels(
-      List<Map<String, dynamic>> documents) {
+  static List<String> _collectTaxLabels(List<Map<String, dynamic>> documents) {
     final labels = <String>{};
     for (final doc in documents) {
       final breakdown = doc['tax_breakdown'];
@@ -186,8 +226,7 @@ class ReportsCsvExportService {
     return labels.toList(growable: false);
   }
 
-  static double _taxAmountForLabel(
-      Map<String, dynamic> doc, String label) {
+  static double _taxAmountForLabel(Map<String, dynamic> doc, String label) {
     if (label == 'Propina de ley') {
       return (doc['service_fee'] as num?)?.toDouble() ?? 0;
     }

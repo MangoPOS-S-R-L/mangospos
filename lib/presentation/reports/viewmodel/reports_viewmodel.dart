@@ -61,6 +61,32 @@ class SalesBreakdownRow {
   });
 }
 
+class ProductSalesReportRow {
+  final String product;
+  final String category;
+  final double quantitySold;
+  final double grossSales;
+  final double discounts;
+  final double courtesies;
+  final double netSales;
+  final double cost;
+  final double grossProfit;
+  final int tickets;
+
+  const ProductSalesReportRow({
+    required this.product,
+    required this.category,
+    required this.quantitySold,
+    required this.grossSales,
+    required this.discounts,
+    required this.courtesies,
+    required this.netSales,
+    required this.cost,
+    required this.grossProfit,
+    required this.tickets,
+  });
+}
+
 class ReportsState {
   final ReportCategory? selectedCategory;
   final bool loading;
@@ -75,6 +101,9 @@ class ReportsState {
   final SalesBreakdownFilter salesBreakdownFilter;
   final DateTime salesFrom;
   final DateTime salesTo;
+  final String? fiscalTypeFilter;
+  final String productSalesQuery;
+  final String? productSalesCategoryFilter;
 
   const ReportsState({
     this.selectedCategory,
@@ -90,6 +119,9 @@ class ReportsState {
     this.salesBreakdownFilter = SalesBreakdownFilter.paymentMethod,
     required this.salesFrom,
     required this.salesTo,
+    this.fiscalTypeFilter,
+    this.productSalesQuery = '',
+    this.productSalesCategoryFilter,
   });
 
   factory ReportsState.initial() {
@@ -117,6 +149,11 @@ class ReportsState {
     SalesBreakdownFilter? salesBreakdownFilter,
     DateTime? salesFrom,
     DateTime? salesTo,
+    String? fiscalTypeFilter,
+    String? productSalesQuery,
+    String? productSalesCategoryFilter,
+    bool clearFiscalTypeFilter = false,
+    bool clearProductSalesCategoryFilter = false,
     bool clearError = false,
     bool clearCategory = false,
   }) {
@@ -133,10 +170,16 @@ class ReportsState {
       taxSummary: taxSummary ?? this.taxSummary,
       fiscalSummary: fiscalSummary ?? this.fiscalSummary,
       salesRangePreset: salesRangePreset ?? this.salesRangePreset,
-      salesBreakdownFilter:
-          salesBreakdownFilter ?? this.salesBreakdownFilter,
+      salesBreakdownFilter: salesBreakdownFilter ?? this.salesBreakdownFilter,
       salesFrom: salesFrom ?? this.salesFrom,
       salesTo: salesTo ?? this.salesTo,
+      fiscalTypeFilter: clearFiscalTypeFilter
+          ? null
+          : (fiscalTypeFilter ?? this.fiscalTypeFilter),
+      productSalesQuery: productSalesQuery ?? this.productSalesQuery,
+      productSalesCategoryFilter: clearProductSalesCategoryFilter
+          ? null
+          : (productSalesCategoryFilter ?? this.productSalesCategoryFilter),
     );
   }
 }
@@ -276,6 +319,31 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
 
   void setSalesBreakdownFilter(SalesBreakdownFilter filter) {
     state = state.copyWith(salesBreakdownFilter: filter);
+  }
+
+  void setFiscalTypeFilter(String? type) {
+    state = state.copyWith(
+      fiscalTypeFilter: type,
+      clearFiscalTypeFilter: type == null,
+    );
+  }
+
+  void setProductSalesQuery(String value) {
+    state = state.copyWith(productSalesQuery: value);
+  }
+
+  void setProductSalesCategoryFilter(String? category) {
+    state = state.copyWith(
+      productSalesCategoryFilter: category,
+      clearProductSalesCategoryFilter: category == null,
+    );
+  }
+
+  void clearProductSalesFilters() {
+    state = state.copyWith(
+      productSalesQuery: '',
+      clearProductSalesCategoryFilter: true,
+    );
   }
 
   void selectCategory(ReportCategory? category) {
@@ -504,6 +572,52 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         .toList(growable: false);
   }
 
+  List<ProductSalesReportRow> getProductSalesRows() {
+    final rows = (state.salesSummary?['product_sales'] as List?) ?? const [];
+    return rows
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .map(
+          (row) => ProductSalesReportRow(
+            product: row['product']?.toString() ?? 'Producto',
+            category: row['category']?.toString() ?? 'Sin categoría',
+            quantitySold: (row['quantity_sold'] as num?)?.toDouble() ?? 0,
+            grossSales: (row['gross_sales'] as num?)?.toDouble() ?? 0,
+            discounts: (row['discounts'] as num?)?.toDouble() ?? 0,
+            courtesies: (row['courtesies'] as num?)?.toDouble() ?? 0,
+            netSales: (row['net_sales'] as num?)?.toDouble() ?? 0,
+            cost: (row['cost'] as num?)?.toDouble() ?? 0,
+            grossProfit: (row['gross_profit'] as num?)?.toDouble() ?? 0,
+            tickets: (row['tickets'] as num?)?.toInt() ?? 0,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  List<String> getAvailableProductSalesCategories() {
+    final categories = <String>{};
+    for (final row in getProductSalesRows()) {
+      final category = row.category.trim();
+      if (category.isNotEmpty) {
+        categories.add(category);
+      }
+    }
+    final ordered = categories.toList(growable: false)..sort();
+    return ordered;
+  }
+
+  List<ProductSalesReportRow> getFilteredProductSalesRows() {
+    final query = state.productSalesQuery.trim().toLowerCase();
+    final selectedCategory = state.productSalesCategoryFilter;
+    return getProductSalesRows().where((row) {
+      final matchesCategory =
+          selectedCategory == null || row.category == selectedCategory;
+      if (!matchesCategory) return false;
+      if (query.isEmpty) return true;
+      return row.product.toLowerCase().contains(query) ||
+          row.category.toLowerCase().contains(query);
+    }).toList(growable: false);
+  }
+
   List<SalesBreakdownRow> getCategoryRows() {
     final rows =
         (state.salesSummary?['sales_by_category'] as List?) ?? const [];
@@ -536,14 +650,59 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
   }
 
   List<SalesBreakdownRow> getZoneRows() {
-    final rows =
-        (state.salesSummary?['sales_by_zone'] as List?) ?? const [];
+    final rows = (state.salesSummary?['sales_by_zone'] as List?) ?? const [];
     return rows
         .map((row) => Map<String, dynamic>.from(row as Map))
         .map(
           (row) => SalesBreakdownRow(
             label: row['label']?.toString() ?? 'Sin zona',
             amount: (row['amount'] as num?)?.toDouble() ?? 0,
+            count: (row['count'] as num?)?.toInt() ?? 0,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  List<SalesBreakdownRow> getReceiptRows() {
+    final rows = (state.salesSummary?['sales_by_receipt'] as List?) ?? const [];
+    return rows
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .map(
+          (row) => SalesBreakdownRow(
+            label: row['label']?.toString() ?? 'Recibo',
+            amount: (row['amount'] as num?)?.toDouble() ?? 0,
+            count: (row['count'] as num?)?.toInt() ?? 0,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  List<SalesBreakdownRow> getModifierRows() {
+    final rows =
+        (state.salesSummary?['sales_by_modifier'] as List?) ?? const [];
+    return rows
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .map(
+          (row) => SalesBreakdownRow(
+            label: row['label']?.toString() ?? 'Modificador',
+            amount: (row['amount'] as num?)?.toDouble() ?? 0,
+            quantity: (row['quantity'] as num?)?.toDouble() ?? 0,
+            count: (row['count'] as num?)?.toInt() ?? 0,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  List<SalesBreakdownRow> getDiscountRows() {
+    final rows =
+        (state.salesSummary?['sales_by_adjustment'] as List?) ?? const [];
+    return rows
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .map(
+          (row) => SalesBreakdownRow(
+            label: row['label']?.toString() ?? 'Ajuste',
+            amount: (row['amount'] as num?)?.toDouble() ?? 0,
+            quantity: (row['quantity'] as num?)?.toDouble() ?? 0,
             count: (row['count'] as num?)?.toInt() ?? 0,
           ),
         )
@@ -833,8 +992,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
 
   List<SalesMetricCardData> getTaxMetricCards() {
     final summary = state.taxSummary ?? const <String, dynamic>{};
-    final totalTax =
-        (summary['total_tax_collected'] as num?)?.toDouble() ?? 0;
+    final totalTax = (summary['total_tax_collected'] as num?)?.toDouble() ?? 0;
     final totalServiceFee =
         (summary['total_service_fee'] as num?)?.toDouble() ?? 0;
     final totalCharges =
@@ -844,7 +1002,8 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
     final exemptSales = (summary['exempt_sales'] as num?)?.toDouble() ?? 0;
     final effectiveRate =
         (summary['effective_tax_rate'] as num?)?.toDouble() ?? 0;
-    final configured = (summary['configured_taxes_count'] as num?)?.toInt() ?? 0;
+    final configured =
+        (summary['configured_taxes_count'] as num?)?.toInt() ?? 0;
     final active = (summary['active_taxes_count'] as num?)?.toInt() ?? 0;
     final serviceFeeOrders =
         (summary['service_fee_orders_count'] as num?)?.toInt() ?? 0;
@@ -926,9 +1085,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
     final label = row['label']?.toString().trim();
     final safeLabel = (label?.isNotEmpty ?? false) ? label! : 'Impuesto';
     final rate = (row['rate'] as num?)?.toDouble() ?? 0;
-    return rate > 0
-        ? '$safeLabel (${rate.toStringAsFixed(2)}%)'
-        : safeLabel;
+    return rate > 0 ? '$safeLabel (${rate.toStringAsFixed(2)}%)' : safeLabel;
   }
 
   // --- Fiscal (comprobantes) helpers ---
@@ -938,8 +1095,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
     final docsCount = (summary['documents_count'] as num?)?.toInt() ?? 0;
     final activeCount = (summary['active_count'] as num?)?.toInt() ?? 0;
     final voidCount = (summary['void_count'] as num?)?.toInt() ?? 0;
-    final totalSubtotal =
-        (summary['total_subtotal'] as num?)?.toDouble() ?? 0;
+    final totalSubtotal = (summary['total_subtotal'] as num?)?.toDouble() ?? 0;
     final totalItbis = (summary['total_itbis'] as num?)?.toDouble() ?? 0;
     final totalAmount = (summary['total_amount'] as num?)?.toDouble() ?? 0;
     final totalServiceFee =
@@ -993,8 +1149,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
   }
 
   List<SalesBreakdownRow> getFiscalTypeRows() {
-    final rows =
-        (state.fiscalSummary?['by_type'] as List?) ?? const [];
+    final rows = (state.fiscalSummary?['by_type'] as List?) ?? const [];
     return rows
         .map((row) => Map<String, dynamic>.from(row as Map))
         .map(
@@ -1010,33 +1165,56 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
   /// Desglose de impuestos individuales en los comprobantes fiscales
   /// (ITBIS, propina de ley, y cualquier otro impuesto configurado).
   List<SalesBreakdownRow> getFiscalTaxBreakdownRows() {
-    final rows =
-        (state.fiscalSummary?['tax_breakdown'] as List?) ?? const [];
+    final rows = (state.fiscalSummary?['tax_breakdown'] as List?) ?? const [];
     return rows
         .map((row) => Map<String, dynamic>.from(row as Map))
-        .map(
-          (row) {
-            final label = row['label']?.toString() ?? 'Impuesto';
-            final rate = (row['rate'] as num?)?.toDouble() ?? 0;
-            final displayLabel = rate > 0
-                ? '$label (${rate.toStringAsFixed(rate.truncateToDouble() == rate ? 0 : 2)}%)'
-                : label;
-            return SalesBreakdownRow(
-              label: displayLabel,
-              amount: (row['tax_amount'] as num?)?.toDouble() ?? 0,
-              quantity: (row['base'] as num?)?.toDouble() ?? 0,
-              count: (row['count'] as num?)?.toInt() ?? 0,
-            );
-          },
-        )
+        .map((row) {
+          final label = row['label']?.toString() ?? 'Impuesto';
+          final rate = (row['rate'] as num?)?.toDouble() ?? 0;
+          final displayLabel = rate > 0
+              ? '$label (${rate.toStringAsFixed(rate.truncateToDouble() == rate ? 0 : 2)}%)'
+              : label;
+          return SalesBreakdownRow(
+            label: displayLabel,
+            amount: (row['tax_amount'] as num?)?.toDouble() ?? 0,
+            quantity: (row['base'] as num?)?.toDouble() ?? 0,
+            count: (row['count'] as num?)?.toInt() ?? 0,
+          );
+        })
         .toList(growable: false);
   }
 
   List<Map<String, dynamic>> getFiscalDocuments() {
-    final docs =
-        (state.fiscalSummary?['documents'] as List?) ?? const [];
+    final docs = (state.fiscalSummary?['documents'] as List?) ?? const [];
     return docs
         .map((d) => Map<String, dynamic>.from(d as Map))
+        .toList(growable: false);
+  }
+
+  List<Map<String, dynamic>> getFilteredFiscalDocuments() {
+    final selectedType = state.fiscalTypeFilter;
+    final documents = getFiscalDocuments();
+    if (selectedType == null || selectedType.isEmpty) return documents;
+    return documents
+        .where((doc) => doc['ncf_type']?.toString() == selectedType)
+        .toList(growable: false);
+  }
+
+  List<String> getAvailableFiscalTypes() {
+    final seen = <String>{};
+    final ordered = <String>[];
+    for (final doc in getFiscalDocuments()) {
+      final type = doc['ncf_type']?.toString().trim();
+      if (type == null || type.isEmpty || !seen.add(type)) continue;
+      ordered.add(type);
+    }
+    return ordered;
+  }
+
+  List<Map<String, dynamic>> getCashClosureDetails() {
+    final rows = (state.cashSummary?['cash_closures'] as List?) ?? const [];
+    return rows
+        .map((row) => Map<String, dynamic>.from(row as Map))
         .toList(growable: false);
   }
 
