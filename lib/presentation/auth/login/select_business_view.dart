@@ -130,7 +130,8 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
 
       await Future.delayed(const Duration(milliseconds: 450));
       if (!mounted) return;
-      context.go('/dashboard');
+      final home = ref.read(sessionProvider.notifier).homeRoute;
+      context.go(home);
     } catch (e) {
       if (mounted) {
         setState(() {

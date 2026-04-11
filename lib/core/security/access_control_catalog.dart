@@ -49,6 +49,14 @@ const accessCategories = <AccessCategory>[
 
 const accessPermissions = <AccessPermission>[
   AccessPermission(
+    code: 'dashboard.acceso',
+    label: 'Acceso al dashboard',
+    categoryId: 'reports',
+    categoryLabel: 'Reportes',
+    description:
+        'Abre el dashboard general con métricas, gráficos y resumen del negocio.',
+  ),
+  AccessPermission(
     code: 'ventas.mesas.acceso',
     label: 'Acceso a salon y mesas',
     categoryId: 'restaurant',
@@ -336,6 +344,69 @@ const accessPermissions = <AccessPermission>[
     description: 'Completa el ciclo de entrega de un pedido.',
   ),
   AccessPermission(
+    code: 'productos.acceso',
+    label: 'Acceso a gestión de productos',
+    categoryId: 'products',
+    categoryLabel: 'Gestion de Productos',
+    description: 'Abre el catálogo y mantenimiento de productos.',
+  ),
+  AccessPermission(
+    code: 'productos.ver',
+    label: 'Ver productos',
+    categoryId: 'products',
+    categoryLabel: 'Gestion de Productos',
+    description: 'Consulta el listado, filtros y detalle de productos.',
+  ),
+  AccessPermission(
+    code: 'productos.crear',
+    label: 'Crear productos',
+    categoryId: 'products',
+    categoryLabel: 'Gestion de Productos',
+    description: 'Permite crear nuevos productos del menú.',
+  ),
+  AccessPermission(
+    code: 'productos.editar',
+    label: 'Editar productos',
+    categoryId: 'products',
+    categoryLabel: 'Gestion de Productos',
+    description: 'Permite modificar precio, datos y disponibilidad de productos.',
+  ),
+  AccessPermission(
+    code: 'productos.eliminar',
+    label: 'Eliminar productos',
+    categoryId: 'products',
+    categoryLabel: 'Gestion de Productos',
+    description: 'Permite eliminar productos del catálogo.',
+  ),
+  AccessPermission(
+    code: 'categorias.ver',
+    label: 'Ver categorías',
+    categoryId: 'products',
+    categoryLabel: 'Gestion de Productos',
+    description: 'Consulta el listado de categorías del menú.',
+  ),
+  AccessPermission(
+    code: 'categorias.crear',
+    label: 'Crear categorías',
+    categoryId: 'products',
+    categoryLabel: 'Gestion de Productos',
+    description: 'Permite crear nuevas categorías.',
+  ),
+  AccessPermission(
+    code: 'categorias.editar',
+    label: 'Editar categorías',
+    categoryId: 'products',
+    categoryLabel: 'Gestion de Productos',
+    description: 'Permite renombrar o cambiar el estado de categorías.',
+  ),
+  AccessPermission(
+    code: 'categorias.eliminar',
+    label: 'Eliminar categorías',
+    categoryId: 'products',
+    categoryLabel: 'Gestion de Productos',
+    description: 'Permite eliminar categorías que ya no se usan.',
+  ),
+  AccessPermission(
     code: 'inventario.acceso',
     label: 'Acceso a inventario',
     categoryId: 'inventory',
@@ -549,6 +620,7 @@ final rolePresets = <String, RolePresetDefinition>{
     description:
         'Coordina operacion diaria con acceso amplio, sin control total del sistema.',
     permissionCodes: {
+      'dashboard.acceso',
       'ventas.mesas.acceso',
       'ventas.mesas.ver_estado',
       'ventas.mesas.abrir',
@@ -590,6 +662,15 @@ final rolePresets = <String, RolePresetDefinition>{
       'delivery.crear_orden',
       'delivery.asignar_repartidor',
       'delivery.marcar_entregado',
+      'productos.acceso',
+      'productos.ver',
+      'productos.crear',
+      'productos.editar',
+      'productos.eliminar',
+      'categorias.ver',
+      'categorias.crear',
+      'categorias.editar',
+      'categorias.eliminar',
       'inventario.acceso',
       'inventario.productos.crear_editar',
       'inventario.ajustes.crear',

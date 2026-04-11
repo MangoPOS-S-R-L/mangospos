@@ -89,6 +89,13 @@ class _SettingsRolesViewState extends ConsumerState<SettingsRolesView> {
       ],
     ),
     _PermissionGroup(
+      title: 'Gestión de productos',
+      permissions: [
+        _PermissionRow('productos', 'Productos (Menú)'),
+        _PermissionRow('categorias', 'Categorías de menú'),
+      ],
+    ),
+    _PermissionGroup(
       title: 'Reportes',
       permissions: [
         _PermissionRow('reportes.ventas', 'Ventas'),
@@ -629,6 +636,18 @@ const Map<String, Map<String, List<String>>> _codeMap = {
       'delivery.asignar_repartidor',
       'delivery.marcar_entregado'
     ],
+  },
+  'productos': {
+    'acceso': ['productos.acceso'],
+    'ver': ['productos.ver'],
+    'graba/mod': ['productos.crear', 'productos.editar'],
+    'anula': ['productos.eliminar'],
+  },
+  'categorias': {
+    'acceso': ['categorias.acceso'],
+    'ver': ['categorias.ver'],
+    'graba/mod': ['categorias.crear', 'categorias.editar'],
+    'anula': ['categorias.eliminar'],
   },
   'inventario': {
     'acceso': ['inventario.acceso'],

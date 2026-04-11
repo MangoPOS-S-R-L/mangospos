@@ -501,117 +501,17 @@ class _SalesReportSection extends StatelessWidget {
   final ReportsState state;
   final ReportsViewModel viewModel;
 
-  static IconData _filterIcon(SalesBreakdownFilter filter) {
-    switch (filter) {
-      case SalesBreakdownFilter.paymentMethod:
-        return Icons.payment_outlined;
-      case SalesBreakdownFilter.product:
-        return Icons.inventory_2_outlined;
-      case SalesBreakdownFilter.category:
-        return Icons.category_outlined;
-      case SalesBreakdownFilter.employee:
-        return Icons.person_outlined;
-      case SalesBreakdownFilter.zone:
-        return Icons.place_outlined;
-      case SalesBreakdownFilter.hourly:
-        return Icons.schedule_outlined;
-    }
-  }
-
-  ({
-    String title,
-    String emptyText,
-    IconData emptyIcon,
-    List<SalesBreakdownRow> rows,
-  })
-  _breakdownData(SalesBreakdownFilter filter) {
-    switch (filter) {
-      case SalesBreakdownFilter.paymentMethod:
-        return (
-          title: 'Ventas por tipo de pago',
-          emptyText: 'No hay pagos en el rango seleccionado.',
-          emptyIcon: Icons.payment_outlined,
-          rows: viewModel.getPaymentMethodRows(),
-        );
-      case SalesBreakdownFilter.product:
-        return (
-          title: 'Top productos vendidos',
-          emptyText: 'No hay productos cobrados en el rango.',
-          emptyIcon: Icons.inventory_2_outlined,
-          rows: viewModel.getTopProductRows(),
-        );
-      case SalesBreakdownFilter.category:
-        return (
-          title: 'Ventas por categoría',
-          emptyText: 'No hay ventas por categoría en el rango.',
-          emptyIcon: Icons.category_outlined,
-          rows: viewModel.getCategoryRows(),
-        );
-      case SalesBreakdownFilter.employee:
-        return (
-          title: 'Ventas por empleado',
-          emptyText: 'No hay ventas por empleado en el rango.',
-          emptyIcon: Icons.person_outlined,
-          rows: viewModel.getEmployeeRows(),
-        );
-      case SalesBreakdownFilter.zone:
-        return (
-          title: 'Ventas por zona',
-          emptyText: 'No hay ventas por zona en el rango.',
-          emptyIcon: Icons.place_outlined,
-          rows: viewModel.getZoneRows(),
-        );
-      case SalesBreakdownFilter.hourly:
-        return (
-          title: 'Ventas por hora',
-          emptyText: 'No hay actividad en el rango.',
-          emptyIcon: Icons.schedule_outlined,
-          rows: viewModel.getHourlyRows(),
-        );
-    }
-  }
-
-  bool _showQuantity(SalesBreakdownFilter filter) =>
-      filter == SalesBreakdownFilter.product ||
-      filter == SalesBreakdownFilter.category;
-
   @override
   Widget build(BuildContext context) {
     final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
     final summary = state.salesSummary ?? const <String, dynamic>{};
     final metrics = viewModel.getSalesMetricCards();
-    final methodRows = viewModel.getPaymentMethodRows();
-    final selectedFilter = state.salesBreakdownFilter;
-    final data = _breakdownData(selectedFilter);
+    final selectedSub = state.salesSubReport;
     final displayTo = state.salesTo.subtract(const Duration(days: 1));
     final totalAdjustments =
         (summary['discounts_total'] as num?)?.toDouble() ?? 0;
     final totalModifiers =
         (summary['modifier_sales_total'] as num?)?.toDouble() ?? 0;
-    final productSalesRows = viewModel.getFilteredProductSalesRows();
-    final productCategories = viewModel.getAvailableProductSalesCategories();
-    final productTotals = productSalesRows.fold<Map<String, double>>(
-      <String, double>{
-        'quantity': 0,
-        'grossSales': 0,
-        'discounts': 0,
-        'courtesies': 0,
-        'netSales': 0,
-        'cost': 0,
-        'grossProfit': 0,
-      },
-      (totals, row) {
-        totals['quantity'] = (totals['quantity'] ?? 0) + row.quantitySold;
-        totals['grossSales'] = (totals['grossSales'] ?? 0) + row.grossSales;
-        totals['discounts'] = (totals['discounts'] ?? 0) + row.discounts;
-        totals['courtesies'] = (totals['courtesies'] ?? 0) + row.courtesies;
-        totals['netSales'] = (totals['netSales'] ?? 0) + row.netSales;
-        totals['cost'] = (totals['cost'] ?? 0) + row.cost;
-        totals['grossProfit'] =
-            (totals['grossProfit'] ?? 0) + row.grossProfit;
-        return totals;
-      },
-    );
 
     return ListView(
       padding: _sectionPadding,
@@ -624,6 +524,7 @@ class _SalesReportSection extends StatelessWidget {
           ),
         ],
         const SizedBox(height: AppSpacing.xl),
+        // --- Sub-report selector ---
         Container(
           padding: const EdgeInsets.all(AppSpacing.cardPadding),
           decoration: BoxDecoration(
@@ -654,7 +555,7 @@ class _SalesReportSection extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text(
-                          'Resumen comercial de ventas',
+                          'Informe de ventas',
                           style: TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.w800,
@@ -663,7 +564,7 @@ class _SalesReportSection extends StatelessWidget {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          'Período ${DateFormat('dd MMM yyyy').format(state.salesFrom)} – ${DateFormat('dd MMM yyyy').format(displayTo)} · Vista ejecutiva para categorías, empleados, pagos, comprobantes y ajustes.',
+                          'Período ${DateFormat('dd MMM yyyy').format(state.salesFrom)} – ${DateFormat('dd MMM yyyy').format(displayTo)}',
                           style: const TextStyle(
                             color: AppColors.mutedForeground,
                             fontSize: 13,
@@ -671,6 +572,69 @@ class _SalesReportSection extends StatelessWidget {
                           ),
                         ),
                       ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              Row(
+                children: [
+                  const Icon(Icons.filter_list_outlined,
+                      size: 18, color: AppColors.mutedForeground),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'Tipo de reporte:',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                      color: AppColors.foreground,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: DropdownButtonFormField<SalesSubReport>(
+                      initialValue: selectedSub,
+                      isExpanded: true,
+                      decoration: InputDecoration(
+                        filled: true,
+                        fillColor: AppColors.background,
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 12),
+                        border: OutlineInputBorder(
+                          borderRadius:
+                              BorderRadius.circular(_reportRadius),
+                          borderSide:
+                              const BorderSide(color: AppColors.border),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius:
+                              BorderRadius.circular(_reportRadius),
+                          borderSide:
+                              const BorderSide(color: AppColors.border),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius:
+                              BorderRadius.circular(_reportRadius),
+                          borderSide:
+                              const BorderSide(color: AppColors.primary),
+                        ),
+                      ),
+                      items: SalesSubReport.values.map((sub) {
+                        return DropdownMenuItem<SalesSubReport>(
+                          value: sub,
+                          child: Text(
+                            viewModel.salesSubReportLabel(sub),
+                            style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600),
+                          ),
+                        );
+                      }).toList(),
+                      onChanged: (value) {
+                        if (value != null) {
+                          viewModel.setSalesSubReport(value);
+                        }
+                      },
                     ),
                   ),
                 ],
@@ -726,246 +690,258 @@ class _SalesReportSection extends StatelessWidget {
           ),
         ),
         const SizedBox(height: AppSpacing.sectionGap),
+        // --- Metrics always visible ---
         _buildMetricsWrap(metrics),
         const SizedBox(height: AppSpacing.sectionGap),
-        _ChartCard(
-          title: 'Distribución de ventas por pago',
-          rows: methodRows,
-          color: AppColors.primary,
-        ),
-        const SizedBox(height: AppSpacing.sectionGap),
-        Container(
-          padding: const EdgeInsets.all(AppSpacing.cardPadding),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(_reportRadius),
-            border: Border.all(color: AppColors.border),
-            boxShadow: AppShadows.soft,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: AppColors.primary.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(_reportRadius),
-                    ),
-                    child: Icon(
-                      _filterIcon(selectedFilter),
-                      size: 18,
-                      color: AppColors.primary,
-                    ),
-                  ),
-                  const SizedBox(width: AppSpacing.tightGap),
-                  Expanded(
-                    child: Text(
-                      data.title,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.foreground,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: AppSpacing.xs),
-              const Text(
-                'Cambia la vista rápida para revisar el desglose principal sin salir del informe.',
-                style: TextStyle(
-                  color: AppColors.mutedForeground,
-                  fontSize: 13,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: SalesBreakdownFilter.values.map((filter) {
-                  final selected = filter == selectedFilter;
-                  return Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(_reportRadius),
-                      onTap: () => viewModel.setSalesBreakdownFilter(filter),
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 180),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 10,
-                        ),
-                        decoration: BoxDecoration(
-                          color: selected ? AppColors.primary : Colors.white,
-                          borderRadius: BorderRadius.circular(_reportRadius),
-                          border: Border.all(
-                            color: selected
-                                ? AppColors.primary
-                                : AppColors.border,
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              _filterIcon(filter),
-                              size: 15,
-                              color: selected
-                                  ? Colors.white
-                                  : AppColors.mutedForeground,
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              viewModel.breakdownFilterLabel(filter),
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
-                                color: selected
-                                    ? Colors.white
-                                    : AppColors.foreground,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  );
-                }).toList(),
-              ),
-              const Divider(height: AppSpacing.sectionGap),
-              if (data.rows.isEmpty)
-                _EmptyPlaceholder(icon: data.emptyIcon, message: data.emptyText)
-              else
-                _SalesCommercialTable(
-                  rows: data.rows.take(8).toList(growable: false),
-                  showQuantity: _showQuantity(selectedFilter),
-                  amountLabel: 'Monto',
-                  countLabel: 'Operaciones',
-                ),
-            ],
-          ),
-        ),
-        const SizedBox(height: AppSpacing.sectionGap),
-        const Text(
-          'Reportes comerciales',
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.w800,
-            color: AppColors.foreground,
-          ),
-        ),
-        const SizedBox(height: 4),
-        const Text(
-          'Seis vistas limpias y operativas para lectura diaria del negocio.',
-          style: TextStyle(color: AppColors.mutedForeground, fontSize: 13),
-        ),
-        const SizedBox(height: AppSpacing.itemGap),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final cards = [
-              _SalesCommercialReportCard(
-                title: 'Ventas por categoría',
-                subtitle:
-                    'Qué familias del menú están empujando la facturación.',
-                icon: Icons.category_outlined,
-                color: const Color(0xFF2563EB),
-                rows: viewModel.getCategoryRows(),
-                emptyText: 'No hay ventas por categoría en el rango.',
-                showQuantity: true,
-                amountLabel: 'Ventas',
-                countLabel: 'Tickets',
-              ),
-              _SalesCommercialReportCard(
-                title: 'Ventas por empleado',
-                subtitle: 'Rendimiento comercial por colaborador asignado.',
-                icon: Icons.person_outline,
-                color: const Color(0xFF7C3AED),
-                rows: viewModel.getEmployeeRows(),
-                emptyText: 'No hay ventas por empleado en el rango.',
-                amountLabel: 'Ventas',
-                countLabel: 'Órdenes',
-              ),
-              _SalesCommercialReportCard(
-                title: 'Ventas por tipo de pago',
-                subtitle: 'Composición de ingresos por método de cobro.',
-                icon: Icons.payments_outlined,
-                color: const Color(0xFF059669),
-                rows: viewModel.getPaymentMethodRows(),
-                emptyText: 'No hay pagos en el rango seleccionado.',
-                amountLabel: 'Cobrado',
-                countLabel: 'Pagos',
-              ),
-              _SalesCommercialReportCard(
-                title: 'Ventas por recibo / comprobante',
-                subtitle:
-                    'Balance entre recibos estándar, divididos y comprobantes fiscales.',
-                icon: Icons.receipt_long_outlined,
-                color: const Color(0xFFF97316),
-                rows: viewModel.getReceiptRows(),
-                emptyText: 'No hay recibos o comprobantes en el rango.',
-                amountLabel: 'Facturado',
-                countLabel: 'Documentos',
-              ),
-              _SalesCommercialReportCard(
-                title: 'Ventas por modificadores',
-                subtitle: 'Adicionales que empujan el ticket promedio.',
-                icon: Icons.tune_outlined,
-                color: const Color(0xFF0891B2),
-                rows: viewModel.getModifierRows(),
-                emptyText: 'No hay modificadores cobrados en el rango.',
-                showQuantity: true,
-                amountLabel: 'Ingreso',
-                countLabel: 'Aplicaciones',
-              ),
-              _SalesCommercialReportCard(
-                title: 'Descuentos y cortesías',
-                subtitle:
-                    'Controla el impacto comercial de ajustes y concesiones.',
-                icon: Icons.local_offer_outlined,
-                color: const Color(0xFFDC2626),
-                rows: viewModel.getDiscountRows(),
-                emptyText: 'No hay descuentos ni cortesías aplicados.',
-                showQuantity: true,
-                amountLabel: 'Impacto',
-                countLabel: 'Líneas',
-              ),
-            ];
-
-            final singleColumn = constraints.maxWidth < AppBreakpoints.desktop;
-            if (singleColumn) {
-              return Column(
-                children: [
-                  for (var i = 0; i < cards.length; i++) ...[
-                    if (i > 0) const SizedBox(height: AppSpacing.itemGap),
-                    cards[i],
-                  ],
-                ],
-              );
-            }
-
-            final cardWidth = (constraints.maxWidth - AppSpacing.itemGap) / 2;
-            return Wrap(
-              spacing: AppSpacing.itemGap,
-              runSpacing: AppSpacing.itemGap,
-              children: cards
-                  .map((card) => SizedBox(width: cardWidth, child: card))
-                  .toList(growable: false),
-            );
-          },
-        ),
-        const SizedBox(height: AppSpacing.sectionGap),
-        _ProductSalesReportSection(
-          state: state,
-          viewModel: viewModel,
-          rows: productSalesRows,
-          categories: productCategories,
-          totals: productTotals,
-          currency: currency,
+        // --- Conditional sub-report content ---
+        ..._buildSubReportContent(
+          context, selectedSub, currency,
         ),
       ],
     );
+  }
+
+  List<Widget> _buildSubReportContent(
+    BuildContext context,
+    SalesSubReport sub,
+    NumberFormat currency,
+  ) {
+    switch (sub) {
+      case SalesSubReport.overview:
+        final methodRows = viewModel.getPaymentMethodRows();
+        return [
+          _ChartCard(
+            title: 'Distribución de ventas por pago',
+            rows: methodRows,
+            color: AppColors.primary,
+          ),
+          const SizedBox(height: AppSpacing.sectionGap),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final singleColumn =
+                  constraints.maxWidth < AppBreakpoints.desktop;
+              final cards = [
+                _SalesCommercialReportCard(
+                  title: 'Ventas por categoría',
+                  subtitle:
+                      'Qué familias del menú están empujando la facturación.',
+                  icon: Icons.category_outlined,
+                  color: const Color(0xFF2563EB),
+                  rows: viewModel.getCategoryRows(),
+                  emptyText: 'No hay ventas por categoría en el rango.',
+                  showQuantity: true,
+                  amountLabel: 'Ventas',
+                  countLabel: 'Tickets',
+                ),
+                _SalesCommercialReportCard(
+                  title: 'Ventas por empleado',
+                  subtitle:
+                      'Rendimiento comercial por colaborador asignado.',
+                  icon: Icons.person_outline,
+                  color: const Color(0xFF7C3AED),
+                  rows: viewModel.getEmployeeRows(),
+                  emptyText: 'No hay ventas por empleado en el rango.',
+                  amountLabel: 'Ventas',
+                  countLabel: 'Órdenes',
+                ),
+                _SalesCommercialReportCard(
+                  title: 'Ventas por tipo de pago',
+                  subtitle:
+                      'Composición de ingresos por método de cobro.',
+                  icon: Icons.payments_outlined,
+                  color: const Color(0xFF059669),
+                  rows: viewModel.getPaymentMethodRows(),
+                  emptyText: 'No hay pagos en el rango seleccionado.',
+                  amountLabel: 'Cobrado',
+                  countLabel: 'Pagos',
+                ),
+              ];
+              if (singleColumn) {
+                return Column(
+                  children: [
+                    for (var i = 0; i < cards.length; i++) ...[
+                      if (i > 0) const SizedBox(height: AppSpacing.itemGap),
+                      cards[i],
+                    ],
+                  ],
+                );
+              }
+              final cardWidth =
+                  (constraints.maxWidth - AppSpacing.itemGap * 2) / 3;
+              return Wrap(
+                spacing: AppSpacing.itemGap,
+                runSpacing: AppSpacing.itemGap,
+                children: cards
+                    .map((c) => SizedBox(width: cardWidth, child: c))
+                    .toList(growable: false),
+              );
+            },
+          ),
+        ];
+      case SalesSubReport.byCategory:
+        return [
+          _SalesCommercialReportCard(
+            title: 'Ventas por categoría',
+            subtitle:
+                'Qué familias del menú están empujando la facturación.',
+            icon: Icons.category_outlined,
+            color: const Color(0xFF2563EB),
+            rows: viewModel.getCategoryRows(),
+            emptyText: 'No hay ventas por categoría en el rango.',
+            showQuantity: true,
+            amountLabel: 'Ventas',
+            countLabel: 'Tickets',
+          ),
+        ];
+      case SalesSubReport.byEmployee:
+        return [
+          _SalesCommercialReportCard(
+            title: 'Ventas por empleado',
+            subtitle: 'Rendimiento comercial por colaborador asignado.',
+            icon: Icons.person_outline,
+            color: const Color(0xFF7C3AED),
+            rows: viewModel.getEmployeeRows(),
+            emptyText: 'No hay ventas por empleado en el rango.',
+            amountLabel: 'Ventas',
+            countLabel: 'Órdenes',
+          ),
+        ];
+      case SalesSubReport.byPayment:
+        return [
+          _ChartCard(
+            title: 'Distribución de ventas por pago',
+            rows: viewModel.getPaymentMethodRows(),
+            color: AppColors.primary,
+          ),
+          const SizedBox(height: AppSpacing.itemGap),
+          _SalesCommercialReportCard(
+            title: 'Ventas por tipo de pago',
+            subtitle: 'Composición de ingresos por método de cobro.',
+            icon: Icons.payments_outlined,
+            color: const Color(0xFF059669),
+            rows: viewModel.getPaymentMethodRows(),
+            emptyText: 'No hay pagos en el rango seleccionado.',
+            amountLabel: 'Cobrado',
+            countLabel: 'Pagos',
+          ),
+        ];
+      case SalesSubReport.byReceipt:
+        return [
+          _SalesCommercialReportCard(
+            title: 'Ventas por recibo / comprobante',
+            subtitle:
+                'Balance entre recibos estándar, divididos y comprobantes fiscales.',
+            icon: Icons.receipt_long_outlined,
+            color: const Color(0xFFF97316),
+            rows: viewModel.getReceiptRows(),
+            emptyText: 'No hay recibos o comprobantes en el rango.',
+            amountLabel: 'Facturado',
+            countLabel: 'Documentos',
+          ),
+        ];
+      case SalesSubReport.byModifiers:
+        return [
+          _SalesCommercialReportCard(
+            title: 'Ventas por modificadores',
+            subtitle: 'Adicionales que empujan el ticket promedio.',
+            icon: Icons.tune_outlined,
+            color: const Color(0xFF0891B2),
+            rows: viewModel.getModifierRows(),
+            emptyText: 'No hay modificadores cobrados en el rango.',
+            showQuantity: true,
+            amountLabel: 'Ingreso',
+            countLabel: 'Aplicaciones',
+          ),
+        ];
+      case SalesSubReport.byDiscounts:
+        return [
+          _SalesCommercialReportCard(
+            title: 'Descuentos y cortesías',
+            subtitle:
+                'Controla el impacto comercial de ajustes y concesiones.',
+            icon: Icons.local_offer_outlined,
+            color: const Color(0xFFDC2626),
+            rows: viewModel.getDiscountRows(),
+            emptyText: 'No hay descuentos ni cortesías aplicados.',
+            showQuantity: true,
+            amountLabel: 'Impacto',
+            countLabel: 'Líneas',
+          ),
+        ];
+      case SalesSubReport.byProduct:
+        final productSalesRows = viewModel.getFilteredProductSalesRows();
+        final productCategories =
+            viewModel.getAvailableProductSalesCategories();
+        final productTotals = productSalesRows.fold<Map<String, double>>(
+          <String, double>{
+            'quantity': 0,
+            'grossSales': 0,
+            'discounts': 0,
+            'courtesies': 0,
+            'netSales': 0,
+            'cost': 0,
+            'grossProfit': 0,
+          },
+          (totals, row) {
+            totals['quantity'] =
+                (totals['quantity'] ?? 0) + row.quantitySold;
+            totals['grossSales'] =
+                (totals['grossSales'] ?? 0) + row.grossSales;
+            totals['discounts'] =
+                (totals['discounts'] ?? 0) + row.discounts;
+            totals['courtesies'] =
+                (totals['courtesies'] ?? 0) + row.courtesies;
+            totals['netSales'] =
+                (totals['netSales'] ?? 0) + row.netSales;
+            totals['cost'] = (totals['cost'] ?? 0) + row.cost;
+            totals['grossProfit'] =
+                (totals['grossProfit'] ?? 0) + row.grossProfit;
+            return totals;
+          },
+        );
+        return [
+          _ProductSalesReportSection(
+            state: state,
+            viewModel: viewModel,
+            rows: productSalesRows,
+            categories: productCategories,
+            totals: productTotals,
+            currency: currency,
+          ),
+        ];
+      case SalesSubReport.byZone:
+        return [
+          _SalesCommercialReportCard(
+            title: 'Ventas por zona',
+            subtitle: 'Distribución de ingresos por zona del local.',
+            icon: Icons.place_outlined,
+            color: const Color(0xFF0891B2),
+            rows: viewModel.getZoneRows(),
+            emptyText: 'No hay ventas por zona en el rango.',
+            amountLabel: 'Ventas',
+            countLabel: 'Órdenes',
+          ),
+        ];
+      case SalesSubReport.byHour:
+        return [
+          _ChartCard(
+            title: 'Ventas por hora',
+            rows: viewModel.getHourlyRows(),
+            color: const Color(0xFF7C3AED),
+          ),
+          const SizedBox(height: AppSpacing.itemGap),
+          _SalesCommercialReportCard(
+            title: 'Ventas por hora',
+            subtitle: 'Actividad de ventas por franja horaria.',
+            icon: Icons.schedule_outlined,
+            color: const Color(0xFF7C3AED),
+            rows: viewModel.getHourlyRows(),
+            emptyText: 'No hay actividad en el rango.',
+            amountLabel: 'Ventas',
+            countLabel: 'Transacciones',
+          ),
+        ];
+    }
   }
 }
 

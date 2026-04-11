@@ -10,6 +10,19 @@ enum ReportCategory { sales, purchases, finances, inventory, taxes, fiscal }
 
 enum SalesReportRangePreset { today, yesterday, thisWeek, thisMonth, custom }
 
+enum SalesSubReport {
+  overview,
+  byCategory,
+  byEmployee,
+  byPayment,
+  byReceipt,
+  byModifiers,
+  byDiscounts,
+  byProduct,
+  byZone,
+  byHour,
+}
+
 enum SalesBreakdownFilter {
   paymentMethod,
   product,
@@ -99,6 +112,7 @@ class ReportsState {
   final Map<String, dynamic>? fiscalSummary;
   final SalesReportRangePreset salesRangePreset;
   final SalesBreakdownFilter salesBreakdownFilter;
+  final SalesSubReport salesSubReport;
   final DateTime salesFrom;
   final DateTime salesTo;
   final String? fiscalTypeFilter;
@@ -117,6 +131,7 @@ class ReportsState {
     this.fiscalSummary,
     this.salesRangePreset = SalesReportRangePreset.thisWeek,
     this.salesBreakdownFilter = SalesBreakdownFilter.paymentMethod,
+    this.salesSubReport = SalesSubReport.overview,
     required this.salesFrom,
     required this.salesTo,
     this.fiscalTypeFilter,
@@ -147,6 +162,7 @@ class ReportsState {
     Map<String, dynamic>? fiscalSummary,
     SalesReportRangePreset? salesRangePreset,
     SalesBreakdownFilter? salesBreakdownFilter,
+    SalesSubReport? salesSubReport,
     DateTime? salesFrom,
     DateTime? salesTo,
     String? fiscalTypeFilter,
@@ -171,6 +187,7 @@ class ReportsState {
       fiscalSummary: fiscalSummary ?? this.fiscalSummary,
       salesRangePreset: salesRangePreset ?? this.salesRangePreset,
       salesBreakdownFilter: salesBreakdownFilter ?? this.salesBreakdownFilter,
+      salesSubReport: salesSubReport ?? this.salesSubReport,
       salesFrom: salesFrom ?? this.salesFrom,
       salesTo: salesTo ?? this.salesTo,
       fiscalTypeFilter: clearFiscalTypeFilter
@@ -319,6 +336,35 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
 
   void setSalesBreakdownFilter(SalesBreakdownFilter filter) {
     state = state.copyWith(salesBreakdownFilter: filter);
+  }
+
+  void setSalesSubReport(SalesSubReport subReport) {
+    state = state.copyWith(salesSubReport: subReport);
+  }
+
+  String salesSubReportLabel(SalesSubReport sub) {
+    switch (sub) {
+      case SalesSubReport.overview:
+        return 'Vista general';
+      case SalesSubReport.byCategory:
+        return 'Por categoría';
+      case SalesSubReport.byEmployee:
+        return 'Por empleado';
+      case SalesSubReport.byPayment:
+        return 'Por tipo de pago';
+      case SalesSubReport.byReceipt:
+        return 'Por comprobante';
+      case SalesSubReport.byModifiers:
+        return 'Modificadores';
+      case SalesSubReport.byDiscounts:
+        return 'Descuentos y cortesías';
+      case SalesSubReport.byProduct:
+        return 'Ventas por producto';
+      case SalesSubReport.byZone:
+        return 'Por zona';
+      case SalesSubReport.byHour:
+        return 'Por hora';
+    }
   }
 
   void setFiscalTypeFilter(String? type) {

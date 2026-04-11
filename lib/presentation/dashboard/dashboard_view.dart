@@ -25,18 +25,44 @@ class DashboardView extends ConsumerStatefulWidget {
 class _DashboardViewState extends ConsumerState<DashboardView> {
   String? _lastBusinessId;
 
+  bool _redirected = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _guardDashboardAccess();
       ref.read(cashierViewModelProvider).init();
     });
+  }
+
+  void _guardDashboardAccess() {
+    if (_redirected) return;
+    final ctrl = ref.read(sessionProvider.notifier);
+    if (!ctrl.canAccessDashboard) {
+      _redirected = true;
+      context.go(ctrl.homeRoute);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final vm = ref.watch(cashierViewModelProvider);
     final session = ref.watch(sessionProvider);
+
+    // Redirect non-admin/supervisor users to their home screen
+    if (session.isAuthenticated && !_redirected) {
+      final ctrl = ref.read(sessionProvider.notifier);
+      if (!ctrl.canAccessDashboard) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && !_redirected) {
+            _redirected = true;
+            context.go(ctrl.homeRoute);
+          }
+        });
+        return const SizedBox.shrink();
+      }
+    }
 
     if (session.activeBusinessId != null &&
         session.activeBusinessId != _lastBusinessId) {

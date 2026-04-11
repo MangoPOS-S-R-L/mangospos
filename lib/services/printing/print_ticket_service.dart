@@ -500,24 +500,54 @@ class PrintTicketService {
     // Totals
     final printableSummary = summarizeOrderPricing(order, consolidatedItems);
 
-    gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(printableSummary.subtotal)}');
-    if (printableSummary.discounts > 0) {
+    // If the item-level tax calculation returns 0 but the order's DB-level
+    // tax is > 0, trust the order's values.  This happens when order_items
+    // store tax=0 / tax_rate=0 while the DB trigger (calculate_order_totals)
+    // already computed the correct tax on the order row.
+    final effectiveTax = printableSummary.tax > 0
+        ? printableSummary.tax
+        : order.tax;
+    final effectiveSubtotal = (printableSummary.tax <= 0 && order.tax > 0)
+        ? order.subtotal
+        : printableSummary.subtotal;
+    final effectiveServiceFee = (printableSummary.tax <= 0 && order.tax > 0)
+        ? order.serviceFee
+        : printableSummary.serviceFee;
+    final effectiveTotal = (printableSummary.tax <= 0 && order.tax > 0)
+        ? order.total
+        : printableSummary.total;
+    final effectiveDiscounts = (printableSummary.tax <= 0 && order.tax > 0)
+        ? order.discounts
+        : printableSummary.discounts;
+
+    gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(effectiveSubtotal)}');
+    if (effectiveDiscounts > 0) {
       gen.textRow(
         'DESCUENTO:',
-        '-RD\$ ${_formatMoney(printableSummary.discounts)}',
+        '-RD\$ ${_formatMoney(effectiveDiscounts)}',
       );
     }
-    if (printableSummary.serviceFee > 0) {
-      final servicePct = printableSummary.subtotal > 0
-          ? ((printableSummary.serviceFee / printableSummary.subtotal) * 100)
+    if (effectiveServiceFee > 0) {
+      final servicePct = effectiveSubtotal > 0
+          ? ((effectiveServiceFee / effectiveSubtotal) * 100)
                 .toStringAsFixed(0)
           : '0';
       gen.textRow(
         'SERVICIO ($servicePct%):',
-        'RD\$ ${_formatMoney(printableSummary.serviceFee)}',
+        'RD\$ ${_formatMoney(effectiveServiceFee)}',
       );
     }
-    gen.textRow('ITBIS (18%):', 'RD\$ ${_formatMoney(printableSummary.tax)}');
+    if (effectiveTax > 0) {
+      final taxPct = effectiveSubtotal > 0
+          ? ((effectiveTax / effectiveSubtotal) * 100).toStringAsFixed(0)
+          : '18';
+      gen.textRow(
+        'ITBIS ($taxPct%):',
+        'RD\$ ${_formatMoney(effectiveTax)}',
+      );
+    } else {
+      gen.textRow('ITBIS:', 'RD\$ ${_formatMoney(0)}');
+    }
 
     gen.lineFeed();
     _thickSeparator(gen);
@@ -525,7 +555,7 @@ class PrintTicketService {
 
     gen.setBold(true);
     gen.setTextSize(width: 2, height: 2);
-    gen.textRow('TOTAL:', 'RD\$ ${_formatMoney(printableSummary.total)}');
+    gen.textRow('TOTAL:', 'RD\$ ${_formatMoney(effectiveTotal)}');
     gen.setTextSize();
     gen.setBold(false);
 

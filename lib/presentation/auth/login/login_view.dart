@@ -34,7 +34,8 @@ class _LoginViewState extends ConsumerState<LoginView> {
 
     ref.listen<SessionState>(sessionProvider, (prev, next) {
       if (next.status == AuthStatus.authenticated && context.mounted) {
-        context.go(AppRoutes.dashboard);
+        final home = ref.read(sessionProvider.notifier).homeRoute;
+        context.go(home);
       }
     });
 

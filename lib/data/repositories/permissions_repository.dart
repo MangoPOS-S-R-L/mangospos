@@ -34,11 +34,12 @@ class PermissionsRepository {
       await _client.from('permissions').upsert(toUpsert, onConflict: 'code');
     }
 
-    // Limpiar overrides previos del empleado para este negocio
+    // Limpiar overrides previos del usuario para este negocio
     await _client
         .from('user_permission_overrides')
         .delete()
-        .eq('employee_id', employeeId);
+        .eq('user_id', userId)
+        .eq('business_id', businessId);
 
     if (codes.isEmpty) return;
 
@@ -46,14 +47,12 @@ class PermissionsRepository {
     final perms = await _client
         .from('permissions')
         .select('id, code')
-        // in_ no está disponible en algunas versiones; inFilter funciona igual
         .inFilter('code', codes.toList());
 
     final rows = (perms as List)
         .map(
           (p) => {
             'user_id': userId,
-            'employee_id': employeeId,
             'permission_id': p['id'],
             'business_id': businessId,
             'allow': true,
