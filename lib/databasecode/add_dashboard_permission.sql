@@ -1,9 +1,15 @@
 -- =============================================================================
--- Agregar permiso dashboard.acceso al catálogo y asignarlo a los roles
--- correspondientes (owner, admin, manager).
+-- Migración: dashboard.acceso + ajuste de permisos de cajero
 --
--- Ejecutar en Supabase SQL Editor o como migración.
+-- Ejecutar en Supabase SQL Editor.
 -- Seguro para re-ejecución (idempotente).
+--
+-- Cambios:
+--   1. Agrega permiso 'dashboard.acceso' al catálogo
+--   2. Actualiza fn_seed_business_rbac_defaults con la nueva matriz
+--      - Cajero pierde: caja.arqueo_ver, reportes.caja, reportes.ventas
+--      - Owner/Admin/Manager ganan: dashboard.acceso
+--   3. Re-seedea TODOS los negocios existentes para aplicar los cambios
 -- =============================================================================
 
 -- 1. Insertar el permiso en el catálogo
@@ -19,21 +25,7 @@ SET name        = excluded.name,
     module      = excluded.module,
     description = excluded.description;
 
--- 2. Asignar a los roles owner, admin y manager de TODOS los negocios existentes
-INSERT INTO public.role_permissions (role_id, permission_id, allow)
-SELECT r.id, p.id, true
-FROM public.roles r
-JOIN public.permissions p ON p.code = 'dashboard.acceso'
-WHERE r.is_system = true
-  AND lower(r.name) IN ('owner', 'admin', 'manager')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
--- 3. Actualizar fn_seed_business_rbac_defaults para que negocios nuevos
---    incluyan dashboard.acceso en owner, admin y manager.
---
---    NOTA: Este bloque reemplaza la función completa. Si has modificado
---    la función por otro motivo, revisa antes de ejecutar.
-
+-- 2. Actualizar la función de seed con la nueva matriz de permisos
 CREATE OR REPLACE FUNCTION public.fn_seed_business_rbac_defaults(p_business_id uuid)
 RETURNS void
 LANGUAGE plpgsql
@@ -45,13 +37,8 @@ BEGIN
     RETURN;
   END IF;
 
-  -- Crear roles de sistema si no existen
   INSERT INTO public.roles (business_id, name, description, is_system)
-  SELECT
-    p_business_id,
-    seed.name,
-    seed.description,
-    true
+  SELECT p_business_id, seed.name, seed.description, true
   FROM (
     VALUES
       ('owner', 'Propietario del negocio'),
@@ -63,10 +50,8 @@ BEGIN
       ('delivery', 'Delivery')
   ) AS seed(name, description)
   WHERE NOT EXISTS (
-    SELECT 1
-    FROM public.roles r
-    WHERE r.business_id = p_business_id
-      AND lower(r.name) = seed.name
+    SELECT 1 FROM public.roles r
+    WHERE r.business_id = p_business_id AND lower(r.name) = seed.name
   );
 
   -- Limpiar permisos de roles de sistema para re-seedear
@@ -75,9 +60,8 @@ BEGIN
   WHERE r.id = rp.role_id
     AND r.business_id = p_business_id
     AND r.is_system = true
-    AND lower(r.name) IN ('owner', 'admin', 'manager', 'cashier', 'waiter', 'cook', 'delivery');
+    AND lower(r.name) IN ('owner','admin','manager','cashier','waiter','cook','delivery');
 
-  -- Insertar la matriz completa de permisos por rol
   INSERT INTO public.role_permissions (role_id, permission_id, allow)
   SELECT r.id, p.id, true
   FROM public.roles r
@@ -287,6 +271,10 @@ BEGIN
       ('manager','settings.kds.gestionar'),
 
       -- ===== CASHIER =====
+      -- Solo: abrir/cerrar caja, cobrar, registrar movimientos.
+      -- SIN caja.arqueo_ver -> no ve totales, historial ni cierres.
+      -- SIN reportes.* -> no accede a reportes.
+      -- Cierre siempre "a ciegas" (blind close).
       ('cashier','ventas.mesas.acceso'),
       ('cashier','ventas.mesas.ver_estado'),
       ('cashier','ventas.orden.ver_total'),
@@ -302,10 +290,7 @@ BEGIN
       ('cashier','caja.apertura'),
       ('cashier','caja.cierre'),
       ('cashier','caja.movimientos_ver'),
-      ('cashier','caja.arqueo_ver'),
       ('cashier','clientes.ver'),
-      ('cashier','reportes.caja'),
-      ('cashier','reportes.ventas'),
 
       -- ===== WAITER =====
       ('waiter','ventas.mesas.acceso'),
@@ -342,13 +327,8 @@ BEGIN
   WHERE r.business_id = p_business_id
     AND r.is_system = true;
 
-  -- Asignar usuario a su rol según user_businesses
   INSERT INTO public.user_roles (user_id, role_id, business_id, created_by)
-  SELECT
-    ub.user_id,
-    r.id,
-    ub.business_id,
-    auth.uid()
+  SELECT ub.user_id, r.id, ub.business_id, auth.uid()
   FROM public.user_businesses ub
   JOIN public.roles r
     ON r.business_id = ub.business_id
@@ -362,5 +342,18 @@ BEGIN
    )
   WHERE ub.business_id = p_business_id
   ON CONFLICT DO NOTHING;
+END;
+$$;
+
+-- 3. RE-SEEDEAR todos los negocios existentes para aplicar los cambios
+--    Esto borra los role_permissions de sistema y los recrea con la nueva matriz.
+--    Los user_permission_overrides NO se tocan (personalizaciones se preservan).
+DO $$
+DECLARE
+  biz RECORD;
+BEGIN
+  FOR biz IN SELECT id FROM public.businesses LOOP
+    PERFORM public.fn_seed_business_rbac_defaults(biz.id);
+  END LOOP;
 END;
 $$;

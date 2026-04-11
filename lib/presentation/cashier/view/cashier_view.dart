@@ -90,6 +90,10 @@ class _CashierViewState extends ConsumerState<CashierView>
       return const CashierSkeleton();
     }
 
+    final sessionCtrl = ref.read(sessionProvider.notifier);
+    final canViewSummary = sessionCtrl.hasPermission('caja.arqueo_ver');
+    final canViewMovements = sessionCtrl.hasPermission('caja.movimientos_ver');
+
     return Scaffold(
       backgroundColor: const Color(0xFFF2F2F2),
       body: RefreshIndicator(
@@ -105,20 +109,30 @@ class _CashierViewState extends ConsumerState<CashierView>
               _HeaderSection(viewModel: vm, isOpen: isOpen),
               SizedBox(height: context.hp(2.5)),
 
-              // Stats Cards
-              _StatsCardsSection(viewModel: vm),
-              SizedBox(height: context.hp(2.5)),
+              // Stats Cards - only for users with arqueo permission
+              if (canViewSummary) ...[
+                _StatsCardsSection(viewModel: vm),
+                SizedBox(height: context.hp(2.5)),
+              ],
 
-              // Action Cards (2x2 grid)
+              // Blind close info banner for cashiers without summary access
+              if (!canViewSummary)
+                _BlindCloseInfoBanner(isOpen: isOpen),
+
+              // Action Cards
               _ActionCardsSection(
                 isOpen: isOpen,
                 onOpenCash: () => _showOpenCashDialog(context),
                 onCloseCash: _showCloseCashDialog,
+                canViewHistory: canViewSummary,
+                canViewClosures: canViewSummary,
+                canViewMovements: canViewMovements,
               ),
               SizedBox(height: context.hp(2.5)),
 
-              // Recent Movements
-              _RecentMovementsSection(viewModel: vm),
+              // Recent Movements - only for users with summary access
+              if (canViewSummary)
+                _RecentMovementsSection(viewModel: vm),
             ],
           ),
         ),
@@ -447,7 +461,13 @@ class _HeaderSection extends StatelessWidget {
           Row(
             children: [
               IconButton(
-                onPressed: () => context.go(AppRoutes.dashboard),
+                onPressed: () {
+                  if (context.canPop()) {
+                    context.pop();
+                  } else {
+                    context.go(AppRoutes.dashboard);
+                  }
+                },
                 tooltip: 'Volver',
                 icon: const Icon(Icons.arrow_back),
                 style: IconButton.styleFrom(
@@ -745,167 +765,145 @@ class _ActionCardsSection extends StatelessWidget {
   final bool isOpen;
   final VoidCallback onOpenCash;
   final VoidCallback onCloseCash;
+  final bool canViewHistory;
+  final bool canViewClosures;
+  final bool canViewMovements;
 
   const _ActionCardsSection({
     required this.isOpen,
     required this.onOpenCash,
     required this.onCloseCash,
+    this.canViewHistory = true,
+    this.canViewClosures = true,
+    this.canViewMovements = true,
   });
 
   @override
   Widget build(BuildContext context) {
+    // Core actions always visible
+    final coreCards = <Widget>[
+      _ActionCard(
+        icon: Icons.lock_open_rounded,
+        iconColor: MangoColors.successGreen,
+        iconBgColor: const Color(0xFFE8F5E9),
+        title: 'Apertura de Caja',
+        subtitle: 'Iniciar turno con monto inicial',
+        buttonText: 'Aperturar',
+        buttonColor: MangoColors.successGreen,
+        enabled: !isOpen,
+        onPressed: onOpenCash,
+      ),
+      _ActionCard(
+        icon: Icons.lock_rounded,
+        iconColor: Colors.red[600]!,
+        iconBgColor: const Color(0xFFFFEBEE),
+        title: 'Cierre de Caja',
+        subtitle: 'Finalizar turno y cuadrar',
+        buttonText: 'Cerrar',
+        buttonColor: Colors.red[600]!,
+        enabled: isOpen,
+        onPressed: onCloseCash,
+      ),
+    ];
+
+    // Conditional cards based on permissions
+    if (canViewMovements) {
+      coreCards.add(
+        _ActionCard(
+          icon: Icons.sync_alt_rounded,
+          iconColor: const Color(0xFF7C3AED),
+          iconBgColor: const Color(0xFFF3E8FF),
+          title: 'Ingresos y Egresos',
+          subtitle: 'Registrar depósitos, retiros y gastos',
+          buttonText: 'Registrar',
+          buttonColor: const Color(0xFF7C3AED),
+          enabled: isOpen,
+          onPressed: () => context.go(AppRoutes.cashierIncomeExpense),
+        ),
+      );
+    }
+    if (canViewHistory) {
+      coreCards.add(
+        _ActionCard(
+          icon: Icons.history_rounded,
+          iconColor: Colors.blue[600]!,
+          iconBgColor: const Color(0xFFE3F2FD),
+          title: 'Historial de Caja',
+          subtitle: 'Ver movimientos anteriores',
+          buttonText: 'Ver',
+          buttonColor: Colors.blue[600]!,
+          enabled: true,
+          onPressed: () => context.go(AppRoutes.cashierHistory),
+        ),
+      );
+    }
+    if (canViewClosures) {
+      coreCards.add(
+        _ActionCard(
+          icon: Icons.settings_rounded,
+          iconColor: MangoColors.primaryOrange,
+          iconBgColor: const Color(0xFFFFF3E0),
+          title: 'Gestión de Cierres',
+          subtitle: 'Revisar y anotar cierres',
+          buttonText: 'Gestionar',
+          buttonColor: MangoColors.primaryOrange,
+          enabled: true,
+          onPressed: () => context.go(AppRoutes.cashierClosures),
+        ),
+      );
+    }
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final isWide = constraints.maxWidth > 800;
+        final gap = SizedBox(
+          width: isWide ? context.wp(2) : 0,
+          height: isWide ? 0 : context.hp(2),
+        );
 
         if (isWide) {
-          return Column(
-            children: [
+          // Lay out in rows of 2-3
+          final rows = <Widget>[];
+          for (var i = 0; i < coreCards.length; i += 3) {
+            final end =
+                (i + 3 > coreCards.length) ? coreCards.length : i + 3;
+            final rowCards = coreCards.sublist(i, end);
+            rows.add(
               Row(
                 children: [
-                  Expanded(
-                    child: _ActionCard(
-                      icon: Icons.lock_open_rounded,
-                      iconColor: MangoColors.successGreen,
-                      iconBgColor: const Color(0xFFE8F5E9),
-                      title: 'Apertura de Caja',
-                      subtitle: 'Iniciar turno con monto inicial',
-                      buttonText: 'Aperturar',
-                      buttonColor: MangoColors.successGreen,
-                      enabled: !isOpen,
-                      onPressed: onOpenCash,
-                    ),
-                  ),
-                  SizedBox(width: context.wp(2)),
-                  Expanded(
-                    child: _ActionCard(
-                      icon: Icons.lock_rounded,
-                      iconColor: Colors.red[600]!,
-                      iconBgColor: const Color(0xFFFFEBEE),
-                      title: 'Cierre de Caja',
-                      subtitle: 'Finalizar turno y cuadrar',
-                      buttonText: 'Cerrar',
-                      buttonColor: Colors.red[600]!,
-                      enabled: isOpen,
-                      onPressed: onCloseCash,
-                    ),
-                  ),
+                  for (var j = 0; j < rowCards.length; j++) ...[
+                    if (j > 0) SizedBox(width: context.wp(2)),
+                    Expanded(child: rowCards[j]),
+                  ],
+                  // Fill remaining space if row has < 3 cards
+                  if (rowCards.length < 3)
+                    for (var k = 0; k < 3 - rowCards.length; k++) ...[
+                      SizedBox(width: context.wp(2)),
+                      const Expanded(child: SizedBox.shrink()),
+                    ],
                 ],
               ),
-              SizedBox(height: context.hp(2)),
-              Row(
-                children: [
-                  Expanded(
-                    child: _ActionCard(
-                      icon: Icons.sync_alt_rounded,
-                      iconColor: const Color(0xFF7C3AED),
-                      iconBgColor: const Color(0xFFF3E8FF),
-                      title: 'Ingresos y Egresos',
-                      subtitle: 'Registrar depósitos, retiros y gastos',
-                      buttonText: 'Registrar',
-                      buttonColor: const Color(0xFF7C3AED),
-                      enabled: isOpen,
-                      onPressed: () =>
-                          context.go(AppRoutes.cashierIncomeExpense),
-                    ),
-                  ),
-                  SizedBox(width: context.wp(2)),
-                  Expanded(
-                    child: _ActionCard(
-                      icon: Icons.history_rounded,
-                      iconColor: Colors.blue[600]!,
-                      iconBgColor: const Color(0xFFE3F2FD),
-                      title: 'Historial de Caja',
-                      subtitle: 'Ver movimientos anteriores',
-                      buttonText: 'Ver',
-                      buttonColor: Colors.blue[600]!,
-                      enabled: true,
-                      onPressed: () => context.go(AppRoutes.cashierHistory),
-                    ),
-                  ),
-                  SizedBox(width: context.wp(2)),
-                  Expanded(
-                    child: _ActionCard(
-                      icon: Icons.settings_rounded,
-                      iconColor: MangoColors.primaryOrange,
-                      iconBgColor: const Color(0xFFFFF3E0),
-                      title: 'Gestión de Cierres',
-                      subtitle: 'Revisar y anotar cierres',
-                      buttonText: 'Gestionar',
-                      buttonColor: MangoColors.primaryOrange,
-                      enabled: true,
-                      onPressed: () => context.go(AppRoutes.cashierClosures),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          );
-        } else {
+            );
+          }
           return Column(
             children: [
-              _ActionCard(
-                icon: Icons.lock_open_rounded,
-                iconColor: MangoColors.successGreen,
-                iconBgColor: const Color(0xFFE8F5E9),
-                title: 'Apertura de Caja',
-                subtitle: 'Iniciar turno con monto inicial',
-                buttonText: 'Aperturar',
-                buttonColor: MangoColors.successGreen,
-                enabled: !isOpen,
-                onPressed: onOpenCash,
-              ),
-              SizedBox(height: context.hp(2)),
-              _ActionCard(
-                icon: Icons.lock_rounded,
-                iconColor: Colors.red[600]!,
-                iconBgColor: const Color(0xFFFFEBEE),
-                title: 'Cierre de Caja',
-                subtitle: 'Finalizar turno y cuadrar',
-                buttonText: 'Cerrar',
-                buttonColor: Colors.red[600]!,
-                enabled: isOpen,
-                onPressed: onCloseCash,
-              ),
-              SizedBox(height: context.hp(2)),
-              _ActionCard(
-                icon: Icons.sync_alt_rounded,
-                iconColor: const Color(0xFF7C3AED),
-                iconBgColor: const Color(0xFFF3E8FF),
-                title: 'Ingresos y Egresos',
-                subtitle: 'Registrar depósitos, retiros y gastos',
-                buttonText: 'Registrar',
-                buttonColor: const Color(0xFF7C3AED),
-                enabled: isOpen,
-                onPressed: () => context.go(AppRoutes.cashierIncomeExpense),
-              ),
-              SizedBox(height: context.hp(2)),
-              _ActionCard(
-                icon: Icons.history_rounded,
-                iconColor: Colors.blue[600]!,
-                iconBgColor: const Color(0xFFE3F2FD),
-                title: 'Historial de Caja',
-                subtitle: 'Ver movimientos anteriores',
-                buttonText: 'Ver',
-                buttonColor: Colors.blue[600]!,
-                enabled: true,
-                onPressed: () => context.go(AppRoutes.cashierHistory),
-              ),
-              SizedBox(height: context.hp(2)),
-              _ActionCard(
-                icon: Icons.settings_rounded,
-                iconColor: MangoColors.primaryOrange,
-                iconBgColor: const Color(0xFFFFF3E0),
-                title: 'Gestión de Cierres',
-                subtitle: 'Revisar y anotar cierres',
-                buttonText: 'Gestionar',
-                buttonColor: MangoColors.primaryOrange,
-                enabled: true,
-                onPressed: () => context.go(AppRoutes.cashierClosures),
-              ),
+              for (var i = 0; i < rows.length; i++) ...[
+                if (i > 0) SizedBox(height: context.hp(2)),
+                rows[i],
+              ],
             ],
           );
         }
+
+        // Narrow: stack vertically
+        return Column(
+          children: [
+            for (var i = 0; i < coreCards.length; i++) ...[
+              if (i > 0) gap,
+              coreCards[i],
+            ],
+          ],
+        );
       },
     );
   }
@@ -1025,6 +1023,101 @@ class _ActionCard extends StatelessWidget {
                   letterSpacing: 0.3,
                 ),
               ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ===== BLIND CLOSE INFO BANNER =====
+class _BlindCloseInfoBanner extends StatelessWidget {
+  final bool isOpen;
+  const _BlindCloseInfoBanner({required this.isOpen});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: EdgeInsets.only(bottom: context.hp(2.5)),
+      padding: EdgeInsets.all(context.wp(2.5)),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: const Color(0xFF2563EB).withValues(alpha: 0.15),
+          width: 1.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: EdgeInsets.all(context.wp(1.5)),
+            decoration: BoxDecoration(
+              color: const Color(0xFF2563EB).withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(
+              Icons.visibility_off_rounded,
+              color: const Color(0xFF2563EB),
+              size: context.iconSizeOf(28),
+            ),
+          ),
+          SizedBox(width: context.wp(2)),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Cierre de caja a ciegas',
+                  style: TextStyle(
+                    fontSize: context.sp(15),
+                    fontWeight: FontWeight.w800,
+                    color: MangoColors.darkGray,
+                  ),
+                ),
+                SizedBox(height: context.hp(0.5)),
+                Text(
+                  isOpen
+                      ? 'Tu caja esta abierta. Al cerrar, contaras el efectivo, tarjetas y transferencias sin ver los montos esperados. Esto asegura un arqueo limpio y transparente.'
+                      : 'Tu caja esta cerrada. Abre la caja para iniciar tu turno. Al cierre, realizaras un conteo a ciegas para garantizar la transparencia del arqueo.',
+                  style: TextStyle(
+                    fontSize: context.sp(12),
+                    color: Colors.grey[600],
+                    fontWeight: FontWeight.w500,
+                    height: 1.5,
+                  ),
+                ),
+                SizedBox(height: context.hp(1)),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.info_outline_rounded,
+                      size: context.iconSizeOf(14),
+                      color: Colors.grey[500],
+                    ),
+                    SizedBox(width: context.wp(0.5)),
+                    Expanded(
+                      child: Text(
+                        'Los totales de ventas solo son visibles para administradores y supervisores.',
+                        style: TextStyle(
+                          fontSize: context.sp(11),
+                          color: Colors.grey[500],
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
         ],

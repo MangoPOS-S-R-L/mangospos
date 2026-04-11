@@ -794,8 +794,15 @@ class SessionController extends Notifier<SessionState> {
             .toSet();
 
         if (granted.isNotEmpty) {
-          if (normalizeBusinessRole(roleStr) == 'owner' ||
-              normalizeBusinessRole(roleStr) == 'admin') {
+          // Add wildcard only if the DB-returned permissions confirm
+          // this is truly an admin-level user (has dashboard.acceso
+          // and settings access).  This prevents user_businesses.role
+          // from granting '*' when the effective role is restricted
+          // (e.g. user_businesses says 'owner' but user_roles assigns
+          // them to 'cashier').
+          final looksLikeAdmin = granted.contains('dashboard.acceso') &&
+              granted.contains('settings.usuarios.acceso');
+          if (looksLikeAdmin) {
             return {'*', ...granted};
           }
           return granted;

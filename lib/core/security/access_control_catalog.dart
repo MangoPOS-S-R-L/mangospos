@@ -693,7 +693,7 @@ final rolePresets = <String, RolePresetDefinition>{
   'cashier': RolePresetDefinition(
     key: 'cashier',
     label: 'Cajero',
-    description: 'Cobra, opera caja y consulta ventas necesarias para cierre.',
+    description: 'Cobra, opera caja y registra movimientos. Cierre a ciegas sin ver totales.',
     permissionCodes: {
       'ventas.mesas.acceso',
       'ventas.mesas.ver_estado',
@@ -714,10 +714,7 @@ final rolePresets = <String, RolePresetDefinition>{
       'caja.apertura',
       'caja.cierre',
       'caja.movimientos_ver',
-      'caja.arqueo_ver',
       'clientes.ver',
-      'reportes.caja',
-      'reportes.ventas',
     },
   ),
   'waiter': RolePresetDefinition(
