@@ -801,6 +801,116 @@ class ReportsRepository {
     };
   }
 
+  Future<Map<String, dynamic>> getFiscalDocumentsSummary({
+    required String businessId,
+    required DateTime from,
+    required DateTime to,
+  }) async {
+    final fromIso = AppTime.astToUtcIso(from);
+    final toIso = AppTime.astToUtcIso(to);
+
+    final rows = List<Map<String, dynamic>>.from(
+      await _client
+          .from('fiscal_documents')
+          .select(
+            'id, order_id, payment_id, customer_id, ncf_type, ncf_number, customer_rnc, customer_name, subtotal, taxable_amount, itbis_amount, total, status, issued_at',
+          )
+          .eq('business_id', businessId)
+          .gte('issued_at', fromIso)
+          .lt('issued_at', toIso)
+          .order('issued_at', ascending: true),
+    );
+
+    double totalSubtotal = 0;
+    double totalItbis = 0;
+    double totalAmount = 0;
+    int activeCount = 0;
+    int voidCount = 0;
+    final byType = <String, Map<String, dynamic>>{};
+
+    for (final doc in rows) {
+      final status = doc['status']?.toString() ?? 'active';
+      final subtotal = _toDouble(doc['subtotal']);
+      final itbis = _toDouble(doc['itbis_amount']);
+      final total = _toDouble(doc['total']);
+      final ncfType = doc['ncf_type']?.toString() ?? 'B02';
+
+      if (status == 'active') {
+        activeCount += 1;
+        totalSubtotal += subtotal;
+        totalItbis += itbis;
+        totalAmount += total;
+      } else {
+        voidCount += 1;
+      }
+
+      final bucket = byType.putIfAbsent(
+        ncfType,
+        () => {
+          'label': _ncfTypeLabel(ncfType),
+          'amount': 0.0,
+          'itbis': 0.0,
+          'count': 0,
+        },
+      );
+      if (status == 'active') {
+        bucket['amount'] = _toDouble(bucket['amount']) + total;
+        bucket['itbis'] = _toDouble(bucket['itbis']) + itbis;
+        bucket['count'] = (bucket['count'] as int) + 1;
+      }
+    }
+
+    final typeRows = byType.values.toList(growable: false)
+      ..sort((a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])));
+
+    return {
+      'from': fromIso,
+      'to': toIso,
+      'documents_count': rows.length,
+      'active_count': activeCount,
+      'void_count': voidCount,
+      'total_subtotal': totalSubtotal,
+      'total_itbis': totalItbis,
+      'total_amount': totalAmount,
+      'by_type': typeRows,
+      'documents': rows,
+    };
+  }
+
+  String _ncfTypeLabel(String type) {
+    switch (type) {
+      case 'B01':
+      case 'E31':
+        return 'Crédito Fiscal';
+      case 'B02':
+      case 'E32':
+        return 'Consumo';
+      case 'B03':
+      case 'E33':
+        return 'Nota de Débito';
+      case 'B04':
+      case 'E34':
+        return 'Nota de Crédito';
+      case 'B11':
+      case 'E41':
+        return 'Compras';
+      case 'B13':
+      case 'E43':
+        return 'Gastos Menores';
+      case 'B14':
+      case 'E44':
+        return 'Regímenes Especiales';
+      case 'B15':
+      case 'E45':
+        return 'Gubernamental';
+      case 'B16':
+      case 'E46':
+        return 'Exportaciones';
+      default:
+        return type;
+    }
+  }
+
   String _purchaseStatusLabel(String status) {
     switch (status) {
       case 'received':

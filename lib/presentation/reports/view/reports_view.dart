@@ -269,6 +269,9 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
     if (state.selectedCategory == ReportCategory.taxes) {
       return _TaxReportSection(state: state, viewModel: viewModel);
     }
+    if (state.selectedCategory == ReportCategory.fiscal) {
+      return _FiscalReportSection(state: state, viewModel: viewModel);
+    }
 
     return state.selectedCategory == null
         ? _buildGrid(context, viewModel)
@@ -1210,6 +1213,320 @@ class _TaxReportSection extends StatelessWidget {
                         '${currency.format(row.amount)} · Base ${currency.format(row.quantity)} · ${row.count} items',
                   ))
               .toList(),
+        ),
+      ],
+    );
+  }
+}
+
+class _FiscalReportSection extends StatelessWidget {
+  const _FiscalReportSection(
+      {required this.state, required this.viewModel});
+
+  final ReportsState state;
+  final ReportsViewModel viewModel;
+
+  static String _ncfTypeName(String type) {
+    switch (type) {
+      case 'B01':
+      case 'E31':
+        return 'Crédito Fiscal';
+      case 'B02':
+      case 'E32':
+        return 'Consumo';
+      case 'B03':
+      case 'E33':
+        return 'Nota de Débito';
+      case 'B04':
+      case 'E34':
+        return 'Nota de Crédito';
+      case 'B14':
+      case 'E44':
+        return 'Reg. Especiales';
+      case 'B15':
+      case 'E45':
+        return 'Gubernamental';
+      default:
+        return type;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final currency =
+        NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
+    final dateFormat = DateFormat('dd/MM/yyyy hh:mm a');
+    final metrics = viewModel.getFiscalMetricCards();
+    final typeRows = viewModel.getFiscalTypeRows();
+    final documents = viewModel.getFiscalDocuments();
+
+    return ListView(
+      padding: _sectionPadding,
+      children: [
+        const Text(
+          'Ventas con comprobante fiscal (NCF) en el rango seleccionado. Exporta a PDF para tu reporte DGII.',
+          style:
+              TextStyle(color: AppColors.mutedForeground, fontSize: 15),
+        ),
+        if (state.error != null) ...[
+          const SizedBox(height: AppSpacing.itemGap),
+          Text(state.error!,
+              style: const TextStyle(color: AppColors.destructive)),
+        ],
+        const SizedBox(height: AppSpacing.xl),
+        _buildMetricsWrap(metrics),
+        const SizedBox(height: AppSpacing.sectionGap),
+        _ChartCard(
+          title: 'Comprobantes por tipo',
+          rows: typeRows,
+          color: const Color(0xFF2563EB),
+        ),
+        const SizedBox(height: AppSpacing.itemGap),
+        _BreakdownCard(
+          title: 'Resumen por tipo de NCF',
+          emptyText:
+              'No hay comprobantes fiscales emitidos en el rango.',
+          emptyIcon: Icons.description_outlined,
+          children: typeRows
+              .map((row) => _AmountRow(
+                    label: row.label,
+                    trailing:
+                        '${currency.format(row.amount)} · ${row.count} docs',
+                  ))
+              .toList(),
+        ),
+        const SizedBox(height: AppSpacing.sectionGap),
+        // --- Documents table ---
+        Container(
+          padding: const EdgeInsets.all(AppSpacing.cardPadding),
+          decoration: BoxDecoration(
+            color: AppColors.card,
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            border: Border.all(color: AppColors.border),
+            boxShadow: AppShadows.soft,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2563EB)
+                          .withValues(alpha: 0.1),
+                      borderRadius:
+                          BorderRadius.circular(AppRadius.sm),
+                    ),
+                    child: const Icon(
+                      Icons.table_chart_outlined,
+                      size: 18,
+                      color: Color(0xFF2563EB),
+                    ),
+                  ),
+                  const SizedBox(width: AppSpacing.tightGap),
+                  const Expanded(
+                    child: Text(
+                      'Detalle de comprobantes fiscales',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.foreground,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    '${documents.length} registros',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: AppColors.mutedForeground,
+                    ),
+                  ),
+                ],
+              ),
+              const Divider(height: AppSpacing.sectionGap),
+              if (documents.isEmpty)
+                const _EmptyPlaceholder(
+                  icon: Icons.description_outlined,
+                  message:
+                      'No hay comprobantes fiscales en el rango seleccionado.',
+                )
+              else
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: DataTable(
+                    headingRowColor: WidgetStateProperty.all(
+                      AppColors.secondary,
+                    ),
+                    dataRowMinHeight: 40,
+                    dataRowMaxHeight: 56,
+                    columnSpacing: 20,
+                    horizontalMargin: 12,
+                    columns: const [
+                      DataColumn(
+                          label: Text('NCF',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 12))),
+                      DataColumn(
+                          label: Text('Tipo',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 12))),
+                      DataColumn(
+                          label: Text('Cliente',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 12))),
+                      DataColumn(
+                          label: Text('RNC/Cédula',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 12))),
+                      DataColumn(
+                          label: Text('Subtotal',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 12)),
+                          numeric: true),
+                      DataColumn(
+                          label: Text('ITBIS',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 12)),
+                          numeric: true),
+                      DataColumn(
+                          label: Text('Total',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 12)),
+                          numeric: true),
+                      DataColumn(
+                          label: Text('Estado',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 12))),
+                      DataColumn(
+                          label: Text('Fecha',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 12))),
+                    ],
+                    rows: documents.map((doc) {
+                      final ncfNumber =
+                          doc['ncf_number']?.toString() ?? '';
+                      final ncfType =
+                          doc['ncf_type']?.toString() ?? '';
+                      final customerName =
+                          doc['customer_name']?.toString() ??
+                              'CONSUMIDOR FINAL';
+                      final customerRnc =
+                          doc['customer_rnc']?.toString() ?? '-';
+                      final subtotal =
+                          (doc['subtotal'] as num?)?.toDouble() ?? 0;
+                      final itbis =
+                          (doc['itbis_amount'] as num?)?.toDouble() ??
+                              0;
+                      final total =
+                          (doc['total'] as num?)?.toDouble() ?? 0;
+                      final status =
+                          doc['status']?.toString() ?? 'active';
+                      final issuedAt = DateTime.tryParse(
+                              doc['issued_at']?.toString() ?? '') ??
+                          DateTime.now();
+                      final isVoid = status != 'active';
+
+                      return DataRow(
+                        color: isVoid
+                            ? WidgetStateProperty.all(
+                                AppColors.destructive
+                                    .withValues(alpha: 0.05))
+                            : null,
+                        cells: [
+                          DataCell(Text(
+                            ncfNumber,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 12,
+                              color: isVoid
+                                  ? AppColors.mutedForeground
+                                  : AppColors.foreground,
+                            ),
+                          )),
+                          DataCell(Text(
+                            _ncfTypeName(ncfType),
+                            style: const TextStyle(fontSize: 12),
+                          )),
+                          DataCell(
+                            ConstrainedBox(
+                              constraints: const BoxConstraints(
+                                  maxWidth: 160),
+                              child: Text(
+                                customerName,
+                                style:
+                                    const TextStyle(fontSize: 12),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ),
+                          DataCell(Text(
+                            customerRnc.isEmpty ? '-' : customerRnc,
+                            style: const TextStyle(fontSize: 12),
+                          )),
+                          DataCell(Text(
+                            currency.format(subtotal),
+                            style: const TextStyle(fontSize: 12),
+                          )),
+                          DataCell(Text(
+                            currency.format(itbis),
+                            style: const TextStyle(fontSize: 12),
+                          )),
+                          DataCell(Text(
+                            currency.format(total),
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 12,
+                              color: isVoid
+                                  ? AppColors.mutedForeground
+                                  : AppColors.foreground,
+                            ),
+                          )),
+                          DataCell(
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: isVoid
+                                    ? AppColors.destructive
+                                        .withValues(alpha: 0.1)
+                                    : const Color(0xFF059669)
+                                        .withValues(alpha: 0.1),
+                                borderRadius:
+                                    BorderRadius.circular(12),
+                              ),
+                              child: Text(
+                                isVoid ? 'Anulado' : 'Activo',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: isVoid
+                                      ? AppColors.destructive
+                                      : const Color(0xFF059669),
+                                ),
+                              ),
+                            ),
+                          ),
+                          DataCell(Text(
+                            dateFormat.format(issuedAt.toLocal()),
+                            style: const TextStyle(fontSize: 12),
+                          )),
+                        ],
+                      );
+                    }).toList(),
+                  ),
+                ),
+            ],
+          ),
         ),
       ],
     );

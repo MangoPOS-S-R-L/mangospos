@@ -106,6 +106,44 @@ class ReportsCsvExportService {
         addMetricSection(viewModel.getTaxMetricCards());
         addBreakdownSection('Impuestos por tipo', viewModel.getTaxTypeRows());
         break;
+      case ReportCategory.fiscal:
+        addMetricSection(viewModel.getFiscalMetricCards());
+        addBreakdownSection(
+          'Comprobantes por tipo',
+          viewModel.getFiscalTypeRows(),
+        );
+        rows.add(['Detalle de comprobantes fiscales (DGII)']);
+        rows.add([
+          'NCF',
+          'Tipo',
+          'Cliente',
+          'RNC/Cédula',
+          'Subtotal',
+          'ITBIS',
+          'Total',
+          'Estado',
+          'Fecha',
+        ]);
+        for (final doc in viewModel.getFiscalDocuments()) {
+          final issuedAt =
+              DateTime.tryParse(doc['issued_at']?.toString() ?? '') ??
+                  DateTime.now();
+          rows.add([
+            doc['ncf_number']?.toString() ?? '',
+            doc['ncf_type']?.toString() ?? '',
+            doc['customer_name']?.toString() ?? 'CONSUMIDOR FINAL',
+            doc['customer_rnc']?.toString() ?? '-',
+            ((doc['subtotal'] as num?)?.toDouble() ?? 0).toStringAsFixed(2),
+            ((doc['itbis_amount'] as num?)?.toDouble() ?? 0).toStringAsFixed(2),
+            ((doc['total'] as num?)?.toDouble() ?? 0).toStringAsFixed(2),
+            (doc['status']?.toString() ?? 'active') == 'active'
+                ? 'Activo'
+                : 'Anulado',
+            issuedAt.toLocal().toIso8601String(),
+          ]);
+        }
+        rows.add([]);
+        break;
     }
 
     return rows.map(_toCsvLine).join('\n');

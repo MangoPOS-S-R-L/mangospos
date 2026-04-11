@@ -663,6 +663,8 @@ ReportCategory? _reportCategoryFromQuery(String? value) {
       return ReportCategory.inventory;
     case 'taxes':
       return ReportCategory.taxes;
+    case 'fiscal':
+      return ReportCategory.fiscal;
     default:
       return null;
   }

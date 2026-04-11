@@ -1,4 +1,5 @@
 import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
@@ -118,6 +119,17 @@ class ReportsExportService {
             showQuantity: true,
           ),
         ];
+      case ReportCategory.fiscal:
+        return [
+          _metricsTable(viewModel.getFiscalMetricCards()),
+          pw.SizedBox(height: 16),
+          _breakdownTable(
+            'Comprobantes por tipo',
+            viewModel.getFiscalTypeRows(),
+          ),
+          pw.SizedBox(height: 16),
+          ..._fiscalDocumentsTable(viewModel.getFiscalDocuments()),
+        ];
     }
   }
 
@@ -128,6 +140,107 @@ class ReportsExportService {
           .map((m) => [m.title, m.value, m.subtitle])
           .toList(growable: false),
     );
+  }
+
+  static String _ncfTypeName(String type) {
+    switch (type) {
+      case 'B01':
+      case 'E31':
+        return 'Crédito Fiscal';
+      case 'B02':
+      case 'E32':
+        return 'Consumo';
+      case 'B03':
+      case 'E33':
+        return 'Nota de Débito';
+      case 'B04':
+      case 'E34':
+        return 'Nota de Crédito';
+      case 'B14':
+      case 'E44':
+        return 'Reg. Especiales';
+      case 'B15':
+      case 'E45':
+        return 'Gubernamental';
+      default:
+        return type;
+    }
+  }
+
+  static List<pw.Widget> _fiscalDocumentsTable(
+    List<Map<String, dynamic>> documents,
+  ) {
+    if (documents.isEmpty) {
+      return [
+        pw.Text('No hay comprobantes fiscales en el rango seleccionado.'),
+      ];
+    }
+
+    final dateFormat = DateFormat('dd/MM/yyyy');
+    final numberFormat = NumberFormat('#,##0.00', 'es_DO');
+
+    return [
+      pw.Text(
+        'Detalle de comprobantes fiscales (DGII)',
+        style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 14),
+      ),
+      pw.SizedBox(height: 8),
+      pw.Text(
+        'Total: ${documents.length} comprobantes',
+        style: const pw.TextStyle(fontSize: 10),
+      ),
+      pw.SizedBox(height: 8),
+      pw.TableHelper.fromTextArray(
+        cellAlignment: pw.Alignment.centerLeft,
+        headerStyle: pw.TextStyle(
+          fontWeight: pw.FontWeight.bold,
+          fontSize: 8,
+        ),
+        cellStyle: const pw.TextStyle(fontSize: 7),
+        headerDecoration: pw.BoxDecoration(
+          color: PdfColor.fromHex('#E5E7EB'),
+        ),
+        headers: const [
+          'NCF',
+          'Tipo',
+          'Cliente',
+          'RNC/Cédula',
+          'Subtotal',
+          'ITBIS',
+          'Total',
+          'Estado',
+          'Fecha',
+        ],
+        data: documents.map((doc) {
+          final ncfNumber = doc['ncf_number']?.toString() ?? '';
+          final ncfType = doc['ncf_type']?.toString() ?? '';
+          final customerName =
+              doc['customer_name']?.toString() ?? 'CONSUMIDOR FINAL';
+          final customerRnc = doc['customer_rnc']?.toString() ?? '-';
+          final subtotal = (doc['subtotal'] as num?)?.toDouble() ?? 0;
+          final itbis = (doc['itbis_amount'] as num?)?.toDouble() ?? 0;
+          final total = (doc['total'] as num?)?.toDouble() ?? 0;
+          final status = doc['status']?.toString() ?? 'active';
+          final issuedAt =
+              DateTime.tryParse(doc['issued_at']?.toString() ?? '') ??
+                  DateTime.now();
+
+          return [
+            ncfNumber,
+            _ncfTypeName(ncfType),
+            customerName.length > 25
+                ? '${customerName.substring(0, 25)}...'
+                : customerName,
+            customerRnc.isEmpty ? '-' : customerRnc,
+            numberFormat.format(subtotal),
+            numberFormat.format(itbis),
+            numberFormat.format(total),
+            status == 'active' ? 'Activo' : 'Anulado',
+            dateFormat.format(issuedAt.toLocal()),
+          ];
+        }).toList(growable: false),
+      ),
+    ];
   }
 
   static pw.Widget _breakdownTable(
