@@ -28,6 +28,12 @@ class AppRoutes {
   static const customers = '/customers';
   static const products = '/products';
   static const reports = '/reports';
+  static const reportsSales = '$reports/sales';
+  static const reportsFinances = '$reports/finances';
+  static const reportsInventory = '$reports/inventory';
+  static const reportsPurchases = '$reports/purchases';
+  static const reportsTaxes = '$reports/taxes';
+  static const reportsFiscal = '$reports/fiscal';
   static const settings = '/settings';
   static const settingsPlan = '$settings/plan';
   static const purchasesList = '$settings/purchases';

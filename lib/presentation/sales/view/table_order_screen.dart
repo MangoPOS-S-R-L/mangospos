@@ -322,31 +322,14 @@ double _catalogItemGrossAmount(OrderItem item) {
 
 double _uiItemDisplayAmount(OrderItem item) {
   if (item.taxMode == 'inclusive') {
-    return _effectiveItemTotal(item);
+    // For inclusive items, the menu/catalog price IS the display price.
+    // Recomposing base+tax introduces rounding drift (e.g. 500 → 500.01).
+    final gross = _catalogItemGrossAmount(item);
+    final disc = item.discounts.clamp(0, double.infinity);
+    return double.parse((gross - disc).clamp(0, double.infinity).toStringAsFixed(2));
   } else {
     return _effectiveItemSubtotal(item);
   }
-}
-
-({double subtotal, double tax, double total}) _effectiveSummaryForItems(
-  Iterable<OrderItem> items,
-) {
-  var subtotal = 0.0;
-  var tax = 0.0;
-  var total = 0.0;
-
-  for (final item in items) {
-    final amounts = _effectiveItemAmounts(item);
-    subtotal += amounts.subtotal;
-    tax += amounts.tax;
-    total += amounts.total;
-  }
-
-  return (
-    subtotal: double.parse(subtotal.toStringAsFixed(2)),
-    tax: double.parse(tax.toStringAsFixed(2)),
-    total: double.parse(total.toStringAsFixed(2)),
-  );
 }
 
 enum OrderOrigin { table, manual, quick, delivery }
@@ -1473,12 +1456,13 @@ class _CartView extends ConsumerWidget {
       orderState.order,
       displayedItems,
     );
-    final effectiveSummary = _effectiveSummaryForItems(displayedItems);
     final displayDiscounts = pricingSummary.discounts;
-    final displaySubtotal = effectiveSummary.subtotal;
-    final displayTax = effectiveSummary.tax;
-    final displayServiceFee = 0.0;
-    final displayTotal = effectiveSummary.total;
+    final displaySubtotal = pricingSummary.subtotal;
+    final taxBreakdown = ref.read(currentOrderProvider.notifier)
+        .getTaxBreakdown(displaySubtotal);
+    final displayTaxTotal = taxBreakdown.fold<double>(
+        0, (sum, e) => sum + e.amount);
+    final displayTotal = displaySubtotal + displayTaxTotal - displayDiscounts;
 
     final pendingOrderItems = openItems.where((i) {
       final checkIsClosed = allChecks.any(
@@ -1487,7 +1471,9 @@ class _CartView extends ConsumerWidget {
       return !checkIsClosed;
     }).toList();
 
-    final pendingOrderTotal = _effectiveSummaryForItems(pendingOrderItems).total;
+    final pendingOrderTotal = summarizeOrderPricing(
+      orderState.order, pendingOrderItems,
+    ).total;
 
     final currency = NumberFormat('#,##0.00', 'en_US');
 
@@ -2069,16 +2055,11 @@ class _CartView extends ConsumerWidget {
                 label: 'Subtotal',
                 value: 'RD\$ ${currency.format(displaySubtotal)}',
               ),
-              const SizedBox(height: 8),
-              _SummaryRow(
-                label: 'ITBIS',
-                value: 'RD\$ ${currency.format(displayTax)}',
-              ),
-              if (displayServiceFee > 0) ...[
+              for (final entry in taxBreakdown) ...[
                 const SizedBox(height: 8),
                 _SummaryRow(
-                  label: 'Propina Ley (10%)',
-                  value: 'RD\$ ${currency.format(displayServiceFee)}',
+                  label: entry.label,
+                  value: 'RD\$ ${currency.format(entry.amount)}',
                 ),
               ],
               if (displayDiscounts > 0) ...[
@@ -2321,7 +2302,7 @@ class _CartView extends ConsumerWidget {
                                               )
                                               .toList(),
                                           'subtotal': displaySubtotal,
-                                          'tax': displayTax,
+                                          'tax': displayTaxTotal,
                                           'total': displayTotal,
                                         };
 
@@ -2515,6 +2496,12 @@ class _CartView extends ConsumerWidget {
             data['title'] as String? ??
             (type == 'invoice' ? 'FACTURA' : 'PRECUENTA');
 
+        // Compute per-tax breakdown for the printed receipt
+        final printSubtotal = summarizeOrderPricing(orderObj, orderItems).subtotal;
+        final printTaxBreakdown = ref
+            .read(currentOrderProvider.notifier)
+            .getTaxBreakdown(printSubtotal);
+
         ticket = type == 'invoice'
             ? PrintTicketService.generateInvoice(
                 order: orderObj,
@@ -2537,6 +2524,7 @@ class _CartView extends ConsumerWidget {
                     : DateTime.tryParse(data['issuedAt'].toString()),
                 title: title,
                 receiptItemDisplayMode: receiptItemDisplayMode,
+                taxBreakdown: printTaxBreakdown,
               )
             : PrintTicketService.generatePrecheck(
                 order: orderObj,
@@ -2552,6 +2540,7 @@ class _CartView extends ConsumerWidget {
                 businessRnc: data['rnc'] as String?,
                 title: title,
                 receiptItemDisplayMode: receiptItemDisplayMode,
+                taxBreakdown: printTaxBreakdown,
               );
       }
 

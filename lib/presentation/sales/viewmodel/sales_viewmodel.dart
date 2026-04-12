@@ -7,6 +7,7 @@ import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/data/repositories/sales_repository.dart';
+import 'package:mangopos/core/tax/tax_engine.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -60,11 +61,17 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   double _cachedTaxRatePct = _defaultTaxRatePct;
   double _cachedServiceFeeRatePct = _defaultServiceFeeRatePct;
   bool _cachedServiceFeeEnabled = false;
-  bool _cachedServiceFeeOnZone = true;
-  bool _cachedServiceFeeOnManual = true;
-  bool _cachedServiceFeeOnQuick = false;
-  bool _cachedServiceFeeOnDelivery = false;
   List<Map<String, dynamic>> _cachedBusinessTaxes = const [];
+
+  /// Parsed tax definitions from [_cachedBusinessTaxes].
+  List<TaxDef> get _taxDefs =>
+      _cachedBusinessTaxes.map(TaxDef.fromMap).toList(growable: false);
+
+  /// Resolve rates for the current (or overridden) origin using the tax engine.
+  ResolvedTaxRates _resolveRatesForOrigin([String? originOverride]) {
+    final origin = parseSaleOrigin(originOverride ?? state.origin);
+    return resolveTaxRates(_taxDefs, origin);
+  }
 
   double _roundMoney(double value) => double.parse(value.toStringAsFixed(2));
 
@@ -131,10 +138,6 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       _cachedTaxRatePct = _defaultTaxRatePct;
       _cachedServiceFeeRatePct = _defaultServiceFeeRatePct;
       _cachedServiceFeeEnabled = false;
-      _cachedServiceFeeOnZone = true;
-      _cachedServiceFeeOnManual = true;
-      _cachedServiceFeeOnQuick = false;
-      _cachedServiceFeeOnDelivery = false;
       return;
     }
 
@@ -160,19 +163,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       _cachedServiceFeeRatePct =
           (row?['service_fee_rate'] as num?)?.toDouble() ??
           _defaultServiceFeeRatePct;
-      _cachedServiceFeeOnZone = (row?['service_fee_on_zone'] as bool?) ?? true;
-      _cachedServiceFeeOnManual =
-          (row?['service_fee_on_manual'] as bool?) ?? true;
-      _cachedServiceFeeOnQuick =
-          (row?['service_fee_on_quick'] as bool?) ?? false;
-      _cachedServiceFeeOnDelivery =
-          (row?['service_fee_on_delivery'] as bool?) ?? false;
 
-      // Resetear settings de propina antes de cargar desde tabla para asegurar que si se borra en tabla, se use el flag de business_settings o false
-      _cachedServiceFeeEnabled = row?['service_fee_enabled'] == true;
-      _cachedServiceFeeRatePct = (row?['service_fee_rate'] as num?)?.toDouble() ?? 10.0;
-
-      // Cargar TODOS los impuestos activos del negocio
+      // Cargar TODOS los impuestos activos del negocio.
+      // The per-origin flags (apply_on_zone, etc.) are now resolved by the
+      // tax engine from _cachedBusinessTaxes via TaxDef, so we don't cache
+      // them as separate fields.
       try {
         final taxRows = await Supabase.instance.client
             .from('taxes')
@@ -181,27 +176,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             .eq('is_active', true);
         _cachedBusinessTaxes = List<Map<String, dynamic>>.from(taxRows);
 
-        // Si hay un impuesto marcado como service fee, o que parezca serlo (10% y nombre Propina), usar su tasa
+        // Si hay un impuesto marcado como service fee, usar su tasa
         final serviceTax = _cachedBusinessTaxes.cast<Map<String, dynamic>?>().firstWhere(
-          (tx) {
-            if (tx?['is_service_fee'] == true) return true;
-            // Heurística para negocios que no han migrado el flag pero tienen el impuesto
-            final name = (tx?['name'] as String?)?.toLowerCase() ?? '';
-            final rate = (tx?['rate'] as num?)?.toDouble() ?? 0;
-            return (rate - 10).abs() < 0.001 && (name.contains('propina') || name.contains('servicio'));
-          },
+          (tx) => TaxDef.fromMap(tx ?? const {}).effectiveIsServiceFee,
           orElse: () => null,
         );
         if (serviceTax != null) {
-          _cachedServiceFeeEnabled = true; // Si existe el impuesto activo, habilitamos la propina
+          _cachedServiceFeeEnabled = true;
           _cachedServiceFeeRatePct = (serviceTax['rate'] as num).toDouble();
-          _cachedServiceFeeOnZone = serviceTax['apply_on_zone'] as bool? ?? true;
-          _cachedServiceFeeOnManual =
-              serviceTax['apply_on_manual'] as bool? ?? true;
-          _cachedServiceFeeOnQuick =
-              serviceTax['apply_on_quick'] as bool? ?? true;
-          _cachedServiceFeeOnDelivery =
-              serviceTax['apply_on_delivery'] as bool? ?? true;
         }
       } catch (_) {
         _cachedBusinessTaxes = const [];
@@ -213,10 +195,6 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       _cachedTaxRatePct = _defaultTaxRatePct;
       _cachedServiceFeeRatePct = _defaultServiceFeeRatePct;
       _cachedServiceFeeEnabled = false;
-      _cachedServiceFeeOnZone = true;
-      _cachedServiceFeeOnManual = true;
-      _cachedServiceFeeOnQuick = false;
-      _cachedServiceFeeOnDelivery = false;
       _cachedBusinessTaxes = const [];
       _taxSettingsBusinessId = businessId;
     }
@@ -225,85 +203,57 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   /// Determina si el service fee (propina de ley) aplica para el origin actual.
   bool _isServiceFeeActiveForOrigin([String? originOverride]) {
     if (!_cachedServiceFeeEnabled) return false;
-    final origin = originOverride ?? state.origin;
-    switch (origin?.toLowerCase().trim()) {
-      case 'table':
-      case 'dine_in':
-      case 'zone':
-        return _cachedServiceFeeEnabled && _cachedServiceFeeOnZone;
-      case 'manual':
-        return _cachedServiceFeeEnabled && _cachedServiceFeeOnManual;
-      case 'quick':
-      case 'quick_sale':
-      case 'quick-sale':
-        return _cachedServiceFeeEnabled && _cachedServiceFeeOnQuick;
-      case 'delivery':
-        return _cachedServiceFeeEnabled && _cachedServiceFeeOnDelivery;
-      default:
-        // Si no se reconoce el origin, pero es inclusive, descender si el flag global está on
-        return _cachedServiceFeeEnabled;
-    }
-
+    return _resolveRatesForOrigin(originOverride).serviceFeeActive;
   }
 
-  /// Calcula la tasa total de impuestos del negocio para un origin dado.
-  /// Usa TODOS los impuestos activos del negocio, filtrados por área de venta.
+  /// Tax rate (pct) for the given origin, excluding service fee.
+  /// Delegates to the tax engine for consistent origin matching.
   double _calculateBusinessTaxRateForOrigin([String? originOverride]) {
-    final origin = originOverride ?? state.origin;
-    double total = 0;
-    for (final tx in _cachedBusinessTaxes) {
-      // No sumar propina al ITBIS si está marcada o si es el 10% con nombre de propina
-      final name = (tx['name'] as String?)?.toLowerCase() ?? '';
-      final rate = (tx['rate'] as num?)?.toDouble() ?? 0;
-      final isHeuristicService = (rate - 10).abs() < 0.001 && (name.contains('propina') || name.contains('servicio'));
-
-      if (tx['is_service_fee'] == true || isHeuristicService) continue;
-
-      if (rate <= 0) continue;
-
-      final onZone = tx['apply_on_zone'] as bool? ?? true;
-      final onManual = tx['apply_on_manual'] as bool? ?? true;
-      final onQuick = tx['apply_on_quick'] as bool? ?? true;
-      final onDelivery = tx['apply_on_delivery'] as bool? ?? true;
-
-      bool applies;
-      switch (origin?.toLowerCase().trim()) {
-        case 'table':
-        case 'dine_in':
-        case 'zone':
-          applies = onZone;
-        case 'manual':
-          applies = onManual;
-        case 'quick':
-        case 'quick_sale':
-          applies = onQuick;
-        case 'delivery':
-          applies = onDelivery;
-        default:
-          applies = true;
-      }
-      if (applies) total += rate;
-    }
-    return total;
+    return _resolveRatesForOrigin(originOverride).effectiveTaxPct;
   }
 
-  /// Calcula la tasa total de impuestos del negocio (todos activos, sin filtrar).
-  /// Full tax rate including ALL active taxes (ITBIS + propina/service).
-  /// Used to extract the base from inclusive prices. Must match the DB
-  /// `original_tax_rate` which also sums all active taxes.
+  /// Full tax rate (pct) including ALL active taxes (ITBIS + service fee).
+  /// Used to extract the base from inclusive prices.
   double _calculateFullBusinessTaxRate() {
-    double total = 0;
-    for (final tx in _cachedBusinessTaxes) {
-      if (tx['is_active'] == false) continue;
-      final rate = (tx['rate'] as num?)?.toDouble() ?? 0;
-      if (rate > 0) total += rate;
-    }
-    return total;
+    return _resolveRatesForOrigin().fullTaxPct;
   }
 
   /// Fuerza recarga de las configuraciones de impuestos/service fee.
   void invalidateTaxSettings() {
     _taxSettingsBusinessId = null;
+  }
+
+  /// Returns a per-tax breakdown for display in the order summary.
+  /// Each entry has a label (e.g. "ITBIS (18%)") and the computed amount.
+  /// Service fee is returned as a separate entry.
+  /// [subtotal] is the base amount to apply rates against.
+  List<({String label, double amount})> getTaxBreakdown(double subtotal) {
+    final origin = parseSaleOrigin(state.origin);
+    final result = <({String label, double amount})>[];
+
+    for (final tx in _taxDefs) {
+      if (!tx.isActive || tx.rate <= 0) continue;
+      if (tx.effectiveIsServiceFee) continue; // handled separately
+      if (!tx.appliesTo(origin)) continue;
+
+      final pctLabel = tx.rate.truncateToDouble() == tx.rate
+          ? '${tx.rate.toInt()}%'
+          : '${tx.rate}%';
+      final amount = _roundMoney(subtotal * tx.rateDecimal);
+      result.add((label: '${tx.name} ($pctLabel)', amount: amount));
+    }
+
+    // Service fee
+    if (_isServiceFeeActiveForOrigin()) {
+      final sfRate = _cachedServiceFeeRatePct;
+      final pctLabel = sfRate.truncateToDouble() == sfRate
+          ? '${sfRate.toInt()}%'
+          : '${sfRate}%';
+      final amount = _roundMoney(subtotal * (sfRate / 100.0));
+      result.add((label: 'Propina Ley ($pctLabel)', amount: amount));
+    }
+
+    return result;
   }
 
   double _sanitizeProductTaxRatePct({
@@ -865,8 +815,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       );
 
       final optimisticItems = [...state.items, optimisticItem];
+      // Use _pricingOrderContext so summarizeItemPricing sees the correct
+      // service fee rate even when the DB hasn't recalculated yet.
+      final pricingOrder = _pricingOrderContext(previousOrder, optimisticItems);
       final updatedSummary = summarizeOrderPricing(
-        previousOrder,
+        pricingOrder,
         optimisticItems,
       );
       // Respect origin-based service fee toggle for optimistic update

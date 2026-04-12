@@ -11,6 +11,8 @@ import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
+import 'package:mangopos/core/tax/tax_engine.dart';
+import 'package:mangopos/data/utils/order_pricing_utils.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
@@ -580,6 +582,31 @@ class _PaymentTableRow extends ConsumerWidget {
           .read(posSettingsRepositoryProvider)
           .getReceiptItemDisplayMode(businessId);
 
+      // Build per-tax breakdown for the reprint receipt
+      final reprintTaxBreakdown = <({String label, double amount})>[];
+      try {
+        final taxRows = await Supabase.instance.client
+            .from('taxes')
+            .select('name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery')
+            .eq('business_id', businessId)
+            .eq('is_active', true);
+        final taxes = (taxRows as List).map((r) => TaxDef.fromMap(r as Map<String, dynamic>)).toList();
+        final origin = parseSaleOrigin(payment['origin']?.toString());
+        final printSummary = summarizeOrderPricing(printOrder, printItems);
+        final base = printSummary.subtotal;
+        for (final tx in taxes) {
+          if (!tx.isActive || tx.rate <= 0) continue;
+          if (!tx.appliesTo(origin)) continue;
+          final pctLabel = tx.rate.truncateToDouble() == tx.rate
+              ? '${tx.rate.toInt()}%'
+              : '${tx.rate}%';
+          final amount = double.parse((base * tx.rateDecimal).toStringAsFixed(2));
+          reprintTaxBreakdown.add((label: '${tx.name} ($pctLabel)', amount: amount));
+        }
+      } catch (_) {
+        // Fallback: the ticket will use the summary-level ITBIS/SERVICIO lines
+      }
+
       final ticket = PrintTicketService.generateInvoice(
         order: printOrder,
         items: printItems,
@@ -597,6 +624,7 @@ class _PaymentTableRow extends ConsumerWidget {
         customerTaxId: payment['customer_tax_id']?.toString(),
         title: '*** REIMPRESION ***',
         receiptItemDisplayMode: receiptItemDisplayMode,
+        taxBreakdown: reprintTaxBreakdown,
       );
 
       await printRepo.printEscPos(
