@@ -270,7 +270,6 @@ class PrintTicketService {
     final printableSummary = summarizeOrderPricing(order, consolidatedItems);
     final printableSubtotal = printableSummary.subtotal;
     final printableDiscounts = printableSummary.discounts;
-    final printableGrandTotal = printableSummary.total;
 
     // Subtotal
     gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(printableSubtotal)}');
@@ -281,13 +280,19 @@ class PrintTicketService {
     }
 
     // Tax breakdown — each tax on its own line
+    double printableGrandTotal;
     if (taxBreakdown.isNotEmpty) {
+      double taxSum = 0;
       for (final entry in taxBreakdown) {
         gen.textRow(
           '${entry.label}:',
           'RD\$ ${_formatMoney(entry.amount)}',
         );
+        taxSum += entry.amount;
       }
+      printableGrandTotal = double.parse(
+        (printableSubtotal + taxSum - printableDiscounts).toStringAsFixed(2),
+      );
     } else {
       // Fallback: single ITBIS line from calculated summary
       final printableTax = printableSummary.tax;
@@ -302,6 +307,7 @@ class PrintTicketService {
         );
       }
       gen.textRow('ITBIS:', 'RD\$ ${_formatMoney(printableTax)}');
+      printableGrandTotal = printableSummary.total;
     }
 
     gen.lineFeed();
@@ -514,7 +520,6 @@ class PrintTicketService {
     // tax is > 0, trust the order's values.
     final useFallback = printableSummary.tax <= 0 && order.tax > 0;
     final effectiveSubtotal = useFallback ? order.subtotal : printableSummary.subtotal;
-    final effectiveTotal = useFallback ? order.total : printableSummary.total;
     final effectiveDiscounts = useFallback ? order.discounts : printableSummary.discounts;
 
     gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(effectiveSubtotal)}');
@@ -526,13 +531,20 @@ class PrintTicketService {
     }
 
     // Tax breakdown — each tax on its own line
+    double effectiveTotal;
     if (taxBreakdown.isNotEmpty) {
+      double taxSum = 0;
       for (final entry in taxBreakdown) {
         gen.textRow(
           '${entry.label}:',
           'RD\$ ${_formatMoney(entry.amount)}',
         );
+        taxSum += entry.amount;
       }
+      // Total = subtotal + all taxes - discounts (authoritative from breakdown)
+      effectiveTotal = double.parse(
+        (effectiveSubtotal + taxSum - effectiveDiscounts).toStringAsFixed(2),
+      );
     } else {
       // Fallback: derive from summary
       final effectiveTax = useFallback ? order.tax : printableSummary.tax;
@@ -557,6 +569,7 @@ class PrintTicketService {
       } else {
         gen.textRow('ITBIS:', 'RD\$ ${_formatMoney(0)}');
       }
+      effectiveTotal = useFallback ? order.total : printableSummary.total;
     }
 
     gen.lineFeed();
