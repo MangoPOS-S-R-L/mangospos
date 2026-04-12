@@ -104,6 +104,12 @@ double itemServiceFee(Order? order, OrderItem item) {
 }
 
 double itemDisplayTotal(Order? order, OrderItem item) {
+  if (item.taxMode == 'inclusive') {
+    // For inclusive items, the catalog/menu price IS the display price.
+    // Recomposing base+tax causes drift when order.serviceFee is stale.
+    final gross = _itemGross(item);
+    return _r((gross - item.discounts).clamp(0, double.infinity));
+  }
   return summarizeItemPricing(order, item).total;
 }
 
