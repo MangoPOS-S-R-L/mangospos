@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:mangopos/data/models/printing.dart' show PrinterConfig;
 import 'package:mangopos/data/repositories/printing_repository.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
 import 'package:mangopos/presentation/cashier/state/blind_cash_close_models.dart';
@@ -19,6 +20,7 @@ class CashClosePrintService {
     required CashCloseResult result,
     required List<DenominationCount> denominations,
     required DateTime printedAt,
+    String? cashRegisterId,
   }) async {
     final bytes = _buildEscPos(
       input: input,
@@ -27,7 +29,7 @@ class CashClosePrintService {
       printedAt: printedAt,
     );
 
-    await _printThermalOrThrow(bytes);
+    await _printThermalOrThrow(bytes, cashRegisterId: cashRegisterId);
   }
 
   List<int> _buildEscPos({
@@ -124,7 +126,10 @@ class CashClosePrintService {
     return gen.getCommands();
   }
 
-  Future<void> _printThermalOrThrow(List<int> bytes) async {
+  Future<void> _printThermalOrThrow(
+    List<int> bytes, {
+    String? cashRegisterId,
+  }) async {
     final businessId = await resolveBusinessIdOrNull(_client, 'auto');
     if (businessId == null) {
       throw Exception(
@@ -132,8 +137,23 @@ class CashClosePrintService {
       );
     }
 
-    final preferredPrinter = await _printingRepository
-        .getAssignedPrinterForType(
+    // 1. Try register-specific printer first
+    PrinterConfig? registerPrinter;
+    if (cashRegisterId != null) {
+      final data = await _client
+          .from('cash_registers')
+          .select('receipt_printer_id')
+          .eq('id', cashRegisterId)
+          .maybeSingle();
+      final printerId = data?['receipt_printer_id'] as String?;
+      if (printerId != null) {
+        registerPrinter = await _printingRepository.getPrinterById(printerId);
+      }
+    }
+
+    // 2. Fall back to area-based lookup
+    final preferredPrinter = registerPrinter ??
+        await _printingRepository.getAssignedPrinterForType(
           businessId: businessId,
           preferredAreaCodes: const [
             'cashier',

@@ -61,9 +61,10 @@ class MainShell extends ConsumerWidget {
                         child: Row(
                           children: [
                             const _TopNavItem(
-                              label: 'Home',
+                              label: 'Dashboard',
                               route: AppRoutes.dashboard,
                               asset: 'assets/icons/dashboard.svg',
+                              permissionCode: 'dashboard.acceso',
                             ),
                             const SizedBox(width: navGap),
                             const _TopNavItem(

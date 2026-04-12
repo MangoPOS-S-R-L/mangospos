@@ -54,6 +54,9 @@ class MenuItem {
 
   final bool hasPrep;
 
+  /// Print area code: 'kitchen_hot', 'kitchen_cold', 'bar', 'cashier', etc.
+  final String printAreaCode;
+
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
@@ -79,6 +82,7 @@ class MenuItem {
     this.imagePath,
     this.imageUrl,
     required this.hasPrep,
+    this.printAreaCode = 'kitchen_hot',
     this.createdAt,
     this.updatedAt,
     this.categoryName,
@@ -134,6 +138,7 @@ class MenuItem {
       imagePath: m['image_path'] as String?,
       imageUrl: m['image_url'] as String?,
       hasPrep: toBool(m['has_prep']),
+      printAreaCode: m['print_area_code'] as String? ?? 'kitchen_hot',
       createdAt: toDate(m['created_at']),
       updatedAt: toDate(m['updated_at']),
       categoryName: m['category_name'] as String?,
@@ -159,6 +164,7 @@ class MenuItem {
     String? imagePath,
     String? imageUrl,
     bool? hasPrep,
+    String? printAreaCode,
     DateTime? createdAt,
     DateTime? updatedAt,
     String? categoryName,
@@ -182,6 +188,7 @@ class MenuItem {
       imagePath: imagePath ?? this.imagePath,
       imageUrl: imageUrl ?? this.imageUrl,
       hasPrep: hasPrep ?? this.hasPrep,
+      printAreaCode: printAreaCode ?? this.printAreaCode,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       categoryName: categoryName ?? this.categoryName,
@@ -206,5 +213,6 @@ class MenuItem {
     'image_path': imagePath,
     'image_url': imageUrl,
     'has_prep': hasPrep,
+    'print_area_code': printAreaCode,
   }..removeWhere((k, v) => v == null);
 }

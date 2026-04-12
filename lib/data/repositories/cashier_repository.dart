@@ -449,4 +449,35 @@ class CashierRepository {
 
     return CashTransaction.fromMap(data);
   }
+
+  /// Get the receipt printer ID assigned to a cash register.
+  Future<String?> getRegisterPrinterId(String cashRegisterId) async {
+    final data = await _client
+        .from('cash_registers')
+        .select('receipt_printer_id')
+        .eq('id', cashRegisterId)
+        .maybeSingle();
+    return data?['receipt_printer_id'] as String?;
+  }
+
+  /// Assign a receipt printer to a cash register (admin only).
+  Future<void> updateRegisterPrinter({
+    required String cashRegisterId,
+    required String? printerId,
+  }) async {
+    await _client
+        .from('cash_registers')
+        .update({'receipt_printer_id': printerId})
+        .eq('id', cashRegisterId);
+  }
+
+  /// Get all cash registers for a business with their printer info.
+  Future<List<Map<String, dynamic>>> getCashRegistersWithPrinter(String businessId) async {
+    final data = await _client
+        .from('cash_registers')
+        .select('id, name, is_active, receipt_printer_id')
+        .eq('business_id', businessId)
+        .order('created_at');
+    return List<Map<String, dynamic>>.from(data);
+  }
 }

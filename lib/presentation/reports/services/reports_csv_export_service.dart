@@ -58,22 +58,63 @@ class ReportsCsvExportService {
       rows.add([]);
     }
 
+    void addProductSalesSection(List<ProductSalesReportRow> productRows) {
+      rows.add(['Ventas por producto']);
+      rows.add([
+        'Producto',
+        'Categoría',
+        'Cantidad vendida',
+        'Ventas brutas',
+        'Descuentos',
+        'Cortesías',
+        'Ventas netas',
+        'Costo',
+        'Ganancia bruta',
+        'Tickets',
+      ]);
+      for (final row in productRows) {
+        rows.add([
+          row.product,
+          row.category,
+          row.quantitySold.toStringAsFixed(2),
+          row.grossSales.toStringAsFixed(2),
+          row.discounts.toStringAsFixed(2),
+          row.courtesies.toStringAsFixed(2),
+          row.netSales.toStringAsFixed(2),
+          row.cost.toStringAsFixed(2),
+          row.grossProfit.toStringAsFixed(2),
+          row.tickets.toString(),
+        ]);
+      }
+      rows.add([]);
+    }
+
     switch (category) {
       case ReportCategory.sales:
         addMetricSection(viewModel.getSalesMetricCards());
         addBreakdownSection(
-          'Métodos de pago',
+          'Ventas por tipo de pago',
           viewModel.getPaymentMethodRows(),
         );
-        addBreakdownSection('Top productos', viewModel.getTopProductRows());
         addBreakdownSection(
           'Ventas por categoría',
           viewModel.getCategoryRows(),
         );
+        addBreakdownSection('Ventas por empleado', viewModel.getEmployeeRows());
         addBreakdownSection(
-          'Ventas por empleado',
-          viewModel.getEmployeeRows(),
+          'Ventas por recibo / comprobante',
+          viewModel.getReceiptRows(),
         );
+        addBreakdownSection(
+          'Ventas por modificadores',
+          viewModel.getModifierRows(),
+        );
+        addBreakdownSection(
+          'Descuentos y cortesías',
+          viewModel.getDiscountRows(),
+        );
+        addProductSalesSection(viewModel.getFilteredProductSalesRows());
+        addBreakdownSection('Top productos', viewModel.getTopProductRows());
         addBreakdownSection('Ventas por zona', viewModel.getZoneRows());
         addBreakdownSection('Ventas por hora', viewModel.getHourlyRows());
         break;
@@ -106,6 +147,53 @@ class ReportsCsvExportService {
         addMetricSection(viewModel.getTaxMetricCards());
         addBreakdownSection('Impuestos por tipo', viewModel.getTaxTypeRows());
         break;
+      case ReportCategory.fiscal:
+        addMetricSection(viewModel.getFiscalMetricCards());
+        addBreakdownSection(
+          'Comprobantes por tipo de NCF',
+          viewModel.getFiscalTypeRows(),
+        );
+        addBreakdownSection(
+          'Desglose por tipo de impuesto',
+          viewModel.getFiscalTaxBreakdownRows(),
+        );
+        final fiscalDocs = viewModel.getFiscalDocuments();
+        final taxLabels = _collectTaxLabels(fiscalDocs);
+        rows.add(['Detalle de comprobantes fiscales (DGII)']);
+        rows.add([
+          'NCF',
+          'Tipo',
+          'Cliente',
+          'RNC/Cédula',
+          'Subtotal',
+          ...taxLabels,
+          'Total',
+          'Estado',
+          'Fecha',
+        ]);
+        for (final doc in fiscalDocs) {
+          final issuedAt =
+              DateTime.tryParse(doc['issued_at']?.toString() ?? '') ??
+              DateTime.now();
+          rows.add([
+            doc['ncf_number']?.toString() ?? '',
+            doc['ncf_type']?.toString() ?? '',
+            doc['customer_name']?.toString() ?? 'CONSUMIDOR FINAL',
+            doc['customer_rnc']?.toString() ?? '-',
+            ((doc['subtotal'] as num?)?.toDouble() ?? 0).toStringAsFixed(2),
+            ...taxLabels.map((label) {
+              final amount = _taxAmountForLabel(doc, label);
+              return amount > 0 ? amount.toStringAsFixed(2) : '0.00';
+            }),
+            ((doc['total'] as num?)?.toDouble() ?? 0).toStringAsFixed(2),
+            (doc['status']?.toString() ?? 'active') == 'active'
+                ? 'Activo'
+                : 'Anulado',
+            issuedAt.toLocal().toIso8601String(),
+          ]);
+        }
+        rows.add([]);
+        break;
     }
 
     return rows.map(_toCsvLine).join('\n');
@@ -113,5 +201,50 @@ class ReportsCsvExportService {
 
   static String _toCsvLine(List<String> cells) {
     return cells.map((cell) => '"${cell.replaceAll('"', '""')}"').join(',');
+  }
+
+  static List<String> _collectTaxLabels(List<Map<String, dynamic>> documents) {
+    final labels = <String>{};
+    for (final doc in documents) {
+      final breakdown = doc['tax_breakdown'];
+      if (breakdown is List) {
+        for (final item in breakdown) {
+          final m = item is Map<String, dynamic>
+              ? item
+              : Map<String, dynamic>.from(item as Map);
+          final label = m['label']?.toString() ?? '';
+          final rate = (m['rate'] as num?)?.toDouble() ?? 0;
+          final display = rate > 0
+              ? '$label (${rate.toStringAsFixed(rate.truncateToDouble() == rate ? 0 : 2)}%)'
+              : label;
+          if (display.isNotEmpty) labels.add(display);
+        }
+      }
+      final sf = (doc['service_fee'] as num?)?.toDouble() ?? 0;
+      if (sf > 0) labels.add('Propina de ley');
+    }
+    return labels.toList(growable: false);
+  }
+
+  static double _taxAmountForLabel(Map<String, dynamic> doc, String label) {
+    if (label == 'Propina de ley') {
+      return (doc['service_fee'] as num?)?.toDouble() ?? 0;
+    }
+    final breakdown = doc['tax_breakdown'];
+    if (breakdown is! List) return 0;
+    for (final item in breakdown) {
+      final m = item is Map<String, dynamic>
+          ? item
+          : Map<String, dynamic>.from(item as Map);
+      final itemLabel = m['label']?.toString() ?? '';
+      final rate = (m['rate'] as num?)?.toDouble() ?? 0;
+      final display = rate > 0
+          ? '$itemLabel (${rate.toStringAsFixed(rate.truncateToDouble() == rate ? 0 : 2)}%)'
+          : itemLabel;
+      if (display == label) {
+        return (m['tax_amount'] as num?)?.toDouble() ?? 0;
+      }
+    }
+    return 0;
   }
 }

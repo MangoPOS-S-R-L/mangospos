@@ -281,24 +281,34 @@ double _catalogItemGrossAmount(OrderItem item) {
   final netTax = (baseTax - discountOnTax).clamp(0, double.infinity).toDouble();
   var netTotal = (netSubtotal + netTax).clamp(0, double.infinity).toDouble();
 
-  // En productos inclusivos el total almacenado puede traer propina incluida.
+  // En productos inclusivos con impuestos extraídos (ej: Delivery),
+  // el total real es menor al precio del menú. No debemos "forzar" el precio original.
   final catalogTotal = (_catalogItemGrossAmount(item) - item.discounts).clamp(
     0,
     double.infinity,
   );
+  
   final useCatalogTotalForFractionalInclusive =
       item.taxMode == 'inclusive' &&
       isFractionalQty &&
       item.total > 0 &&
       (item.total - catalogTotal).abs() > 0.01;
+
   final storedTotal = item.taxMode == 'inclusive'
       ? (useCatalogTotalForFractionalInclusive
                 ? catalogTotal
-                : (item.total >= catalogTotal ? item.total : catalogTotal))
+                : item.total)
             .toDouble()
       : (item.total - item.discounts).clamp(0, double.infinity).toDouble();
+
+  // Importante: para items inclusivos no debemos subir artificialmente el total
+  // al precio de catalogo/DB si en esta area algunos impuestos fueron apagados.
+  // Solo confiamos en el total almacenado cuando ayuda a BAJAR o mantener el monto,
+  // nunca para incrementarlo por encima del subtotal+impuesto efectivo calculado.
   if (item.taxMode == 'inclusive' &&
       item.total > 0 &&
+      storedTotal > 0 &&
+      storedTotal < netTotal &&
       (storedTotal - netTotal).abs() > 0.01) {
     netTotal = storedTotal;
   }
@@ -312,7 +322,11 @@ double _catalogItemGrossAmount(OrderItem item) {
 
 double _uiItemDisplayAmount(OrderItem item) {
   if (item.taxMode == 'inclusive') {
-    return _effectiveItemTotal(item);
+    // For inclusive items, the menu/catalog price IS the display price.
+    // Recomposing base+tax introduces rounding drift (e.g. 500 → 500.01).
+    final gross = _catalogItemGrossAmount(item);
+    final disc = item.discounts.clamp(0, double.infinity);
+    return double.parse((gross - disc).clamp(0, double.infinity).toStringAsFixed(2));
   } else {
     return _effectiveItemSubtotal(item);
   }
@@ -1443,21 +1457,19 @@ class _CartView extends ConsumerWidget {
       }).toList();
     }
 
-    // Calculate Totals based on View
+    // Calculate totals from the effective item amounts already validated in the UI.
+    // This avoids reintroducing taxes/service fees that are disabled for the current area.
     final pricingSummary = summarizeOrderPricing(
       orderState.order,
       displayedItems,
     );
     final displayDiscounts = pricingSummary.discounts;
-    // Show Gross Subtotal to justify the Discount line below it
     final displaySubtotal = pricingSummary.subtotal;
-    final displayTax = pricingSummary.tax;
-    final displayServiceFee =
-        selectedCheck?.serviceFee ??
-        (pricingSummary.serviceFee > 0
-            ? pricingSummary.serviceFee
-            : (orderState.order?.serviceFee ?? 0.0));
-    final displayTotal = pricingSummary.total;
+    final taxBreakdown = ref.read(currentOrderProvider.notifier)
+        .getTaxBreakdown(displaySubtotal);
+    final displayTaxTotal = taxBreakdown.fold<double>(
+        0, (sum, e) => sum + e.amount);
+    final displayTotal = displaySubtotal + displayTaxTotal - displayDiscounts;
 
     final pendingOrderItems = openItems.where((i) {
       final checkIsClosed = allChecks.any(
@@ -1467,8 +1479,7 @@ class _CartView extends ConsumerWidget {
     }).toList();
 
     final pendingOrderTotal = summarizeOrderPricing(
-      orderState.order,
-      pendingOrderItems,
+      orderState.order, pendingOrderItems,
     ).total;
 
     final currency = NumberFormat('#,##0.00', 'en_US');
@@ -2051,16 +2062,11 @@ class _CartView extends ConsumerWidget {
                 label: 'Subtotal',
                 value: 'RD\$ ${currency.format(displaySubtotal)}',
               ),
-              const SizedBox(height: 8),
-              _SummaryRow(
-                label: 'ITBIS',
-                value: 'RD\$ ${currency.format(displayTax)}',
-              ),
-              if (displayServiceFee > 0) ...[
+              for (final entry in taxBreakdown) ...[
                 const SizedBox(height: 8),
                 _SummaryRow(
-                  label: 'Propina Ley (10%)',
-                  value: 'RD\$ ${currency.format(displayServiceFee)}',
+                  label: entry.label,
+                  value: 'RD\$ ${currency.format(entry.amount)}',
                 ),
               ],
               if (displayDiscounts > 0) ...[
@@ -2303,7 +2309,7 @@ class _CartView extends ConsumerWidget {
                                               )
                                               .toList(),
                                           'subtotal': displaySubtotal,
-                                          'tax': displayTax,
+                                          'tax': displayTaxTotal,
                                           'total': displayTotal,
                                         };
 
@@ -2497,6 +2503,12 @@ class _CartView extends ConsumerWidget {
             data['title'] as String? ??
             (type == 'invoice' ? 'FACTURA' : 'PRECUENTA');
 
+        // Compute per-tax breakdown for the printed receipt
+        final printSubtotal = summarizeOrderPricing(orderObj, orderItems).subtotal;
+        final printTaxBreakdown = ref
+            .read(currentOrderProvider.notifier)
+            .getTaxBreakdown(printSubtotal);
+
         ticket = type == 'invoice'
             ? PrintTicketService.generateInvoice(
                 order: orderObj,
@@ -2519,6 +2531,7 @@ class _CartView extends ConsumerWidget {
                     : DateTime.tryParse(data['issuedAt'].toString()),
                 title: title,
                 receiptItemDisplayMode: receiptItemDisplayMode,
+                taxBreakdown: printTaxBreakdown,
               )
             : PrintTicketService.generatePrecheck(
                 order: orderObj,
@@ -2534,6 +2547,7 @@ class _CartView extends ConsumerWidget {
                 businessRnc: data['rnc'] as String?,
                 title: title,
                 receiptItemDisplayMode: receiptItemDisplayMode,
+                taxBreakdown: printTaxBreakdown,
               );
       }
 
@@ -3130,7 +3144,7 @@ class _SectionLabel extends StatelessWidget {
   }
 }
 
-class _CartLineItem extends StatelessWidget {
+class _CartLineItem extends ConsumerWidget {
   final OrderItem item;
   final bool isDraft;
   final VoidCallback? onDelete;
@@ -3144,7 +3158,7 @@ class _CartLineItem extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final name = item.productName;
     final qty = item.quantity.toStringAsFixed(1);
     final totalItem = _uiItemDisplayAmount(item).toStringAsFixed(2);

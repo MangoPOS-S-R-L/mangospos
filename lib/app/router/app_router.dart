@@ -59,6 +59,12 @@ import '../../presentation/sales/view/delivery_express_view.dart';
 import '../../presentation/sales/view/self_service_view.dart';
 import '../../presentation/sales/view/table_order_screen.dart';
 import '../../presentation/reports/view/reports_view.dart';
+import '../../presentation/reports/view/sales_report_view.dart';
+import '../../presentation/reports/view/finance_report_view.dart';
+import '../../presentation/reports/view/inventory_report_view.dart';
+import '../../presentation/reports/view/purchases_report_view.dart';
+import '../../presentation/reports/view/tax_report_view.dart';
+import '../../presentation/reports/view/fiscal_report_view.dart';
 import '../../presentation/reports/viewmodel/reports_viewmodel.dart';
 
 // More Settings module
@@ -416,6 +422,30 @@ class AppRouter {
               ),
             ),
           ),
+          GoRoute(
+            path: AppRoutes.reportsSales,
+            builder: (context, state) => const SalesReportView(),
+          ),
+          GoRoute(
+            path: AppRoutes.reportsFinances,
+            builder: (context, state) => const FinanceReportView(),
+          ),
+          GoRoute(
+            path: AppRoutes.reportsInventory,
+            builder: (context, state) => const InventoryReportView(),
+          ),
+          GoRoute(
+            path: AppRoutes.reportsPurchases,
+            builder: (context, state) => const PurchasesReportView(),
+          ),
+          GoRoute(
+            path: AppRoutes.reportsTaxes,
+            builder: (context, state) => const TaxReportView(),
+          ),
+          GoRoute(
+            path: AppRoutes.reportsFiscal,
+            builder: (context, state) => const FiscalReportView(),
+          ),
 
           // ✅ Ajustes (vista principal)
           GoRoute(
@@ -663,6 +693,8 @@ ReportCategory? _reportCategoryFromQuery(String? value) {
       return ReportCategory.inventory;
     case 'taxes':
       return ReportCategory.taxes;
+    case 'fiscal':
+      return ReportCategory.fiscal;
     default:
       return null;
   }

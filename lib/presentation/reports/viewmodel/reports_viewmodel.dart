@@ -6,9 +6,22 @@ import '../../../core/utils/app_time.dart';
 import '../../../data/repositories/reports_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 
-enum ReportCategory { sales, purchases, finances, inventory, taxes }
+enum ReportCategory { sales, purchases, finances, inventory, taxes, fiscal }
 
 enum SalesReportRangePreset { today, yesterday, thisWeek, thisMonth, custom }
+
+enum SalesSubReport {
+  overview,
+  byCategory,
+  byEmployee,
+  byPayment,
+  byReceipt,
+  byModifiers,
+  byDiscounts,
+  byProduct,
+  byZone,
+  byHour,
+}
 
 enum SalesBreakdownFilter {
   paymentMethod,
@@ -61,6 +74,32 @@ class SalesBreakdownRow {
   });
 }
 
+class ProductSalesReportRow {
+  final String product;
+  final String category;
+  final double quantitySold;
+  final double grossSales;
+  final double discounts;
+  final double courtesies;
+  final double netSales;
+  final double cost;
+  final double grossProfit;
+  final int tickets;
+
+  const ProductSalesReportRow({
+    required this.product,
+    required this.category,
+    required this.quantitySold,
+    required this.grossSales,
+    required this.discounts,
+    required this.courtesies,
+    required this.netSales,
+    required this.cost,
+    required this.grossProfit,
+    required this.tickets,
+  });
+}
+
 class ReportsState {
   final ReportCategory? selectedCategory;
   final bool loading;
@@ -70,10 +109,15 @@ class ReportsState {
   final Map<String, dynamic>? purchasesSummary;
   final Map<String, dynamic>? inventorySummary;
   final Map<String, dynamic>? taxSummary;
+  final Map<String, dynamic>? fiscalSummary;
   final SalesReportRangePreset salesRangePreset;
   final SalesBreakdownFilter salesBreakdownFilter;
+  final SalesSubReport salesSubReport;
   final DateTime salesFrom;
   final DateTime salesTo;
+  final String? fiscalTypeFilter;
+  final String productSalesQuery;
+  final String? productSalesCategoryFilter;
 
   const ReportsState({
     this.selectedCategory,
@@ -84,10 +128,15 @@ class ReportsState {
     this.purchasesSummary,
     this.inventorySummary,
     this.taxSummary,
+    this.fiscalSummary,
     this.salesRangePreset = SalesReportRangePreset.thisWeek,
     this.salesBreakdownFilter = SalesBreakdownFilter.paymentMethod,
+    this.salesSubReport = SalesSubReport.overview,
     required this.salesFrom,
     required this.salesTo,
+    this.fiscalTypeFilter,
+    this.productSalesQuery = '',
+    this.productSalesCategoryFilter,
   });
 
   factory ReportsState.initial() {
@@ -110,10 +159,17 @@ class ReportsState {
     Map<String, dynamic>? purchasesSummary,
     Map<String, dynamic>? inventorySummary,
     Map<String, dynamic>? taxSummary,
+    Map<String, dynamic>? fiscalSummary,
     SalesReportRangePreset? salesRangePreset,
     SalesBreakdownFilter? salesBreakdownFilter,
+    SalesSubReport? salesSubReport,
     DateTime? salesFrom,
     DateTime? salesTo,
+    String? fiscalTypeFilter,
+    String? productSalesQuery,
+    String? productSalesCategoryFilter,
+    bool clearFiscalTypeFilter = false,
+    bool clearProductSalesCategoryFilter = false,
     bool clearError = false,
     bool clearCategory = false,
   }) {
@@ -128,11 +184,19 @@ class ReportsState {
       purchasesSummary: purchasesSummary ?? this.purchasesSummary,
       inventorySummary: inventorySummary ?? this.inventorySummary,
       taxSummary: taxSummary ?? this.taxSummary,
+      fiscalSummary: fiscalSummary ?? this.fiscalSummary,
       salesRangePreset: salesRangePreset ?? this.salesRangePreset,
-      salesBreakdownFilter:
-          salesBreakdownFilter ?? this.salesBreakdownFilter,
+      salesBreakdownFilter: salesBreakdownFilter ?? this.salesBreakdownFilter,
+      salesSubReport: salesSubReport ?? this.salesSubReport,
       salesFrom: salesFrom ?? this.salesFrom,
       salesTo: salesTo ?? this.salesTo,
+      fiscalTypeFilter: clearFiscalTypeFilter
+          ? null
+          : (fiscalTypeFilter ?? this.fiscalTypeFilter),
+      productSalesQuery: productSalesQuery ?? this.productSalesQuery,
+      productSalesCategoryFilter: clearProductSalesCategoryFilter
+          ? null
+          : (productSalesCategoryFilter ?? this.productSalesCategoryFilter),
     );
   }
 }
@@ -220,6 +284,11 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
           from: state.salesFrom,
           to: state.salesTo,
         ),
+        _repository.getFiscalDocumentsSummary(
+          businessId: businessId,
+          from: state.salesFrom,
+          to: state.salesTo,
+        ),
       ]);
 
       state = state.copyWith(
@@ -229,6 +298,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         purchasesSummary: results[2],
         inventorySummary: results[3],
         taxSummary: results[4],
+        fiscalSummary: results[5],
         clearError: true,
       );
     } catch (e) {
@@ -266,6 +336,60 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
 
   void setSalesBreakdownFilter(SalesBreakdownFilter filter) {
     state = state.copyWith(salesBreakdownFilter: filter);
+  }
+
+  void setSalesSubReport(SalesSubReport subReport) {
+    state = state.copyWith(salesSubReport: subReport);
+  }
+
+  String salesSubReportLabel(SalesSubReport sub) {
+    switch (sub) {
+      case SalesSubReport.overview:
+        return 'Vista general';
+      case SalesSubReport.byCategory:
+        return 'Por categoría';
+      case SalesSubReport.byEmployee:
+        return 'Por empleado';
+      case SalesSubReport.byPayment:
+        return 'Por tipo de pago';
+      case SalesSubReport.byReceipt:
+        return 'Por comprobante';
+      case SalesSubReport.byModifiers:
+        return 'Modificadores';
+      case SalesSubReport.byDiscounts:
+        return 'Descuentos y cortesías';
+      case SalesSubReport.byProduct:
+        return 'Ventas por producto';
+      case SalesSubReport.byZone:
+        return 'Por zona';
+      case SalesSubReport.byHour:
+        return 'Por hora';
+    }
+  }
+
+  void setFiscalTypeFilter(String? type) {
+    state = state.copyWith(
+      fiscalTypeFilter: type,
+      clearFiscalTypeFilter: type == null,
+    );
+  }
+
+  void setProductSalesQuery(String value) {
+    state = state.copyWith(productSalesQuery: value);
+  }
+
+  void setProductSalesCategoryFilter(String? category) {
+    state = state.copyWith(
+      productSalesCategoryFilter: category,
+      clearProductSalesCategoryFilter: category == null,
+    );
+  }
+
+  void clearProductSalesFilters() {
+    state = state.copyWith(
+      productSalesQuery: '',
+      clearProductSalesCategoryFilter: true,
+    );
   }
 
   void selectCategory(ReportCategory? category) {
@@ -380,6 +504,26 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
                 'Tipos configurados: $configured | Activos: $active | Base gravable: RD\$${taxableSales.toStringAsFixed(2)}',
           ),
         ];
+      case ReportCategory.fiscal:
+        final docsCount = state.fiscalSummary?['documents_count'] ?? 0;
+        final activeCount = state.fiscalSummary?['active_count'] ?? 0;
+        final voidCount = state.fiscalSummary?['void_count'] ?? 0;
+        final totalAmount =
+            (state.fiscalSummary?['total_amount'] as num?)?.toDouble() ?? 0;
+        final totalItbis =
+            (state.fiscalSummary?['total_itbis'] as num?)?.toDouble() ?? 0;
+        return [
+          ReportItem(
+            title: 'Comprobantes fiscales',
+            description:
+                'Documentos: $docsCount | Activos: $activeCount | Anulados: $voidCount',
+          ),
+          ReportItem(
+            title: 'Totales facturados',
+            description:
+                'Total: RD\$${totalAmount.toStringAsFixed(2)} | ITBIS: RD\$${totalItbis.toStringAsFixed(2)}',
+          ),
+        ];
     }
   }
 
@@ -474,6 +618,52 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         .toList(growable: false);
   }
 
+  List<ProductSalesReportRow> getProductSalesRows() {
+    final rows = (state.salesSummary?['product_sales'] as List?) ?? const [];
+    return rows
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .map(
+          (row) => ProductSalesReportRow(
+            product: row['product']?.toString() ?? 'Producto',
+            category: row['category']?.toString() ?? 'Sin categoría',
+            quantitySold: (row['quantity_sold'] as num?)?.toDouble() ?? 0,
+            grossSales: (row['gross_sales'] as num?)?.toDouble() ?? 0,
+            discounts: (row['discounts'] as num?)?.toDouble() ?? 0,
+            courtesies: (row['courtesies'] as num?)?.toDouble() ?? 0,
+            netSales: (row['net_sales'] as num?)?.toDouble() ?? 0,
+            cost: (row['cost'] as num?)?.toDouble() ?? 0,
+            grossProfit: (row['gross_profit'] as num?)?.toDouble() ?? 0,
+            tickets: (row['tickets'] as num?)?.toInt() ?? 0,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  List<String> getAvailableProductSalesCategories() {
+    final categories = <String>{};
+    for (final row in getProductSalesRows()) {
+      final category = row.category.trim();
+      if (category.isNotEmpty) {
+        categories.add(category);
+      }
+    }
+    final ordered = categories.toList(growable: false)..sort();
+    return ordered;
+  }
+
+  List<ProductSalesReportRow> getFilteredProductSalesRows() {
+    final query = state.productSalesQuery.trim().toLowerCase();
+    final selectedCategory = state.productSalesCategoryFilter;
+    return getProductSalesRows().where((row) {
+      final matchesCategory =
+          selectedCategory == null || row.category == selectedCategory;
+      if (!matchesCategory) return false;
+      if (query.isEmpty) return true;
+      return row.product.toLowerCase().contains(query) ||
+          row.category.toLowerCase().contains(query);
+    }).toList(growable: false);
+  }
+
   List<SalesBreakdownRow> getCategoryRows() {
     final rows =
         (state.salesSummary?['sales_by_category'] as List?) ?? const [];
@@ -506,14 +696,59 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
   }
 
   List<SalesBreakdownRow> getZoneRows() {
-    final rows =
-        (state.salesSummary?['sales_by_zone'] as List?) ?? const [];
+    final rows = (state.salesSummary?['sales_by_zone'] as List?) ?? const [];
     return rows
         .map((row) => Map<String, dynamic>.from(row as Map))
         .map(
           (row) => SalesBreakdownRow(
             label: row['label']?.toString() ?? 'Sin zona',
             amount: (row['amount'] as num?)?.toDouble() ?? 0,
+            count: (row['count'] as num?)?.toInt() ?? 0,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  List<SalesBreakdownRow> getReceiptRows() {
+    final rows = (state.salesSummary?['sales_by_receipt'] as List?) ?? const [];
+    return rows
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .map(
+          (row) => SalesBreakdownRow(
+            label: row['label']?.toString() ?? 'Recibo',
+            amount: (row['amount'] as num?)?.toDouble() ?? 0,
+            count: (row['count'] as num?)?.toInt() ?? 0,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  List<SalesBreakdownRow> getModifierRows() {
+    final rows =
+        (state.salesSummary?['sales_by_modifier'] as List?) ?? const [];
+    return rows
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .map(
+          (row) => SalesBreakdownRow(
+            label: row['label']?.toString() ?? 'Modificador',
+            amount: (row['amount'] as num?)?.toDouble() ?? 0,
+            quantity: (row['quantity'] as num?)?.toDouble() ?? 0,
+            count: (row['count'] as num?)?.toInt() ?? 0,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  List<SalesBreakdownRow> getDiscountRows() {
+    final rows =
+        (state.salesSummary?['sales_by_adjustment'] as List?) ?? const [];
+    return rows
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .map(
+          (row) => SalesBreakdownRow(
+            label: row['label']?.toString() ?? 'Ajuste',
+            amount: (row['amount'] as num?)?.toDouble() ?? 0,
+            quantity: (row['quantity'] as num?)?.toDouble() ?? 0,
             count: (row['count'] as num?)?.toInt() ?? 0,
           ),
         )
@@ -803,8 +1038,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
 
   List<SalesMetricCardData> getTaxMetricCards() {
     final summary = state.taxSummary ?? const <String, dynamic>{};
-    final totalTax =
-        (summary['total_tax_collected'] as num?)?.toDouble() ?? 0;
+    final totalTax = (summary['total_tax_collected'] as num?)?.toDouble() ?? 0;
     final totalServiceFee =
         (summary['total_service_fee'] as num?)?.toDouble() ?? 0;
     final totalCharges =
@@ -814,7 +1048,8 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
     final exemptSales = (summary['exempt_sales'] as num?)?.toDouble() ?? 0;
     final effectiveRate =
         (summary['effective_tax_rate'] as num?)?.toDouble() ?? 0;
-    final configured = (summary['configured_taxes_count'] as num?)?.toInt() ?? 0;
+    final configured =
+        (summary['configured_taxes_count'] as num?)?.toInt() ?? 0;
     final active = (summary['active_taxes_count'] as num?)?.toInt() ?? 0;
     final serviceFeeOrders =
         (summary['service_fee_orders_count'] as num?)?.toInt() ?? 0;
@@ -896,9 +1131,137 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
     final label = row['label']?.toString().trim();
     final safeLabel = (label?.isNotEmpty ?? false) ? label! : 'Impuesto';
     final rate = (row['rate'] as num?)?.toDouble() ?? 0;
-    return rate > 0
-        ? '$safeLabel (${rate.toStringAsFixed(2)}%)'
-        : safeLabel;
+    return rate > 0 ? '$safeLabel (${rate.toStringAsFixed(2)}%)' : safeLabel;
+  }
+
+  // --- Fiscal (comprobantes) helpers ---
+
+  List<SalesMetricCardData> getFiscalMetricCards() {
+    final summary = state.fiscalSummary ?? const <String, dynamic>{};
+    final docsCount = (summary['documents_count'] as num?)?.toInt() ?? 0;
+    final activeCount = (summary['active_count'] as num?)?.toInt() ?? 0;
+    final voidCount = (summary['void_count'] as num?)?.toInt() ?? 0;
+    final totalSubtotal = (summary['total_subtotal'] as num?)?.toDouble() ?? 0;
+    final totalItbis = (summary['total_itbis'] as num?)?.toDouble() ?? 0;
+    final totalAmount = (summary['total_amount'] as num?)?.toDouble() ?? 0;
+    final totalServiceFee =
+        (summary['total_service_fee'] as num?)?.toDouble() ?? 0;
+
+    return [
+      SalesMetricCardData(
+        title: 'Total facturado',
+        value: 'RD\$${totalAmount.toStringAsFixed(2)}',
+        subtitle: '$docsCount comprobantes emitidos',
+        icon: Icons.receipt_long_outlined,
+        color: const Color(0xFF2563EB),
+      ),
+      SalesMetricCardData(
+        title: 'Subtotal',
+        value: 'RD\$${totalSubtotal.toStringAsFixed(2)}',
+        subtitle: 'Monto antes de impuestos',
+        icon: Icons.attach_money_outlined,
+        color: const Color(0xFFF97316),
+      ),
+      SalesMetricCardData(
+        title: 'ITBIS cobrado',
+        value: 'RD\$${totalItbis.toStringAsFixed(2)}',
+        subtitle: 'Total ITBIS en comprobantes activos',
+        icon: Icons.account_balance_outlined,
+        color: const Color(0xFF059669),
+      ),
+      if (totalServiceFee > 0)
+        SalesMetricCardData(
+          title: 'Propina de ley',
+          value: 'RD\$${totalServiceFee.toStringAsFixed(2)}',
+          subtitle: 'Total propina de ley en el rango',
+          icon: Icons.room_service_outlined,
+          color: const Color(0xFFD97706),
+        ),
+      SalesMetricCardData(
+        title: 'Comprobantes activos',
+        value: '$activeCount',
+        subtitle: 'Documentos válidos en el rango',
+        icon: Icons.check_circle_outline,
+        color: const Color(0xFF7C3AED),
+      ),
+      SalesMetricCardData(
+        title: 'Comprobantes anulados',
+        value: '$voidCount',
+        subtitle: 'Documentos anulados en el rango',
+        icon: Icons.cancel_outlined,
+        color: const Color(0xFFDC2626),
+      ),
+    ];
+  }
+
+  List<SalesBreakdownRow> getFiscalTypeRows() {
+    final rows = (state.fiscalSummary?['by_type'] as List?) ?? const [];
+    return rows
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .map(
+          (row) => SalesBreakdownRow(
+            label: row['label']?.toString() ?? 'Tipo',
+            amount: (row['amount'] as num?)?.toDouble() ?? 0,
+            count: (row['count'] as num?)?.toInt() ?? 0,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  /// Desglose de impuestos individuales en los comprobantes fiscales
+  /// (ITBIS, propina de ley, y cualquier otro impuesto configurado).
+  List<SalesBreakdownRow> getFiscalTaxBreakdownRows() {
+    final rows = (state.fiscalSummary?['tax_breakdown'] as List?) ?? const [];
+    return rows
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .map((row) {
+          final label = row['label']?.toString() ?? 'Impuesto';
+          final rate = (row['rate'] as num?)?.toDouble() ?? 0;
+          final displayLabel = rate > 0
+              ? '$label (${rate.toStringAsFixed(rate.truncateToDouble() == rate ? 0 : 2)}%)'
+              : label;
+          return SalesBreakdownRow(
+            label: displayLabel,
+            amount: (row['tax_amount'] as num?)?.toDouble() ?? 0,
+            quantity: (row['base'] as num?)?.toDouble() ?? 0,
+            count: (row['count'] as num?)?.toInt() ?? 0,
+          );
+        })
+        .toList(growable: false);
+  }
+
+  List<Map<String, dynamic>> getFiscalDocuments() {
+    final docs = (state.fiscalSummary?['documents'] as List?) ?? const [];
+    return docs
+        .map((d) => Map<String, dynamic>.from(d as Map))
+        .toList(growable: false);
+  }
+
+  List<Map<String, dynamic>> getFilteredFiscalDocuments() {
+    final selectedType = state.fiscalTypeFilter;
+    final documents = getFiscalDocuments();
+    if (selectedType == null || selectedType.isEmpty) return documents;
+    return documents
+        .where((doc) => doc['ncf_type']?.toString() == selectedType)
+        .toList(growable: false);
+  }
+
+  List<String> getAvailableFiscalTypes() {
+    final seen = <String>{};
+    final ordered = <String>[];
+    for (final doc in getFiscalDocuments()) {
+      final type = doc['ncf_type']?.toString().trim();
+      if (type == null || type.isEmpty || !seen.add(type)) continue;
+      ordered.add(type);
+    }
+    return ordered;
+  }
+
+  List<Map<String, dynamic>> getCashClosureDetails() {
+    final rows = (state.cashSummary?['cash_closures'] as List?) ?? const [];
+    return rows
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .toList(growable: false);
   }
 
   String getCategoryTitle(ReportCategory category) {
@@ -913,6 +1276,8 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         return 'Informe de inventario';
       case ReportCategory.taxes:
         return 'Reporte de impuestos';
+      case ReportCategory.fiscal:
+        return 'Comprobantes fiscales';
     }
   }
 
@@ -928,6 +1293,8 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         return Icons.inventory_2;
       case ReportCategory.taxes:
         return Icons.receipt_long;
+      case ReportCategory.fiscal:
+        return Icons.description_outlined;
     }
   }
 }

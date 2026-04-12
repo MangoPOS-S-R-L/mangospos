@@ -609,6 +609,35 @@ class SessionController extends Notifier<SessionState> {
     return completer.future;
   }
 
+  /// Returns the appropriate home route for the current user's role.
+  /// - Owner/Admin/Supervisor → dashboard (full analytics)
+  /// - Cashier → cashier (caja)
+  /// - Waiter → sales (ventas/mesas)
+  /// - Cook → kitchen (KDS)
+  /// - Delivery → sales/delivery
+  String get homeRoute {
+    switch (state.activeRole) {
+      case PosRole.administrador:
+      case PosRole.supervisor:
+        return '/dashboard';
+      case PosRole.cajero:
+        return '/cashier';
+      case PosRole.mesero:
+        return '/sales';
+      case PosRole.cocina:
+        return '/kitchen';
+      case PosRole.delivery:
+        return '/sales/delivery';
+      case null:
+        return '/dashboard';
+    }
+  }
+
+  /// Whether the current user can access the full dashboard.
+  /// Controlled by the `dashboard.acceso` permission in the database.
+  bool get canAccessDashboard =>
+      hasPermission('dashboard.acceso');
+
   bool hasPermission(String permission) =>
       _hasPermission(state.permissions, permission);
 
@@ -765,8 +794,15 @@ class SessionController extends Notifier<SessionState> {
             .toSet();
 
         if (granted.isNotEmpty) {
-          if (normalizeBusinessRole(roleStr) == 'owner' ||
-              normalizeBusinessRole(roleStr) == 'admin') {
+          // Add wildcard only if the DB-returned permissions confirm
+          // this is truly an admin-level user (has dashboard.acceso
+          // and settings access).  This prevents user_businesses.role
+          // from granting '*' when the effective role is restricted
+          // (e.g. user_businesses says 'owner' but user_roles assigns
+          // them to 'cashier').
+          final looksLikeAdmin = granted.contains('dashboard.acceso') &&
+              granted.contains('settings.usuarios.acceso');
+          if (looksLikeAdmin) {
             return {'*', ...granted};
           }
           return granted;

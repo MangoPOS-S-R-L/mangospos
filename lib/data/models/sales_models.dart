@@ -200,6 +200,7 @@ class OrderItem extends Equatable {
   final String taxMode;
   final double taxRate;
   final double? originalTaxRate;
+  final String? printAreaCode;
   final DateTime createdAt;
   final List<OrderItemModifier> modifiers;
 
@@ -222,6 +223,7 @@ class OrderItem extends Equatable {
     this.taxMode = 'exclusive',
     this.taxRate = 0.0,
     this.originalTaxRate,
+    this.printAreaCode,
     required this.createdAt,
     this.modifiers = const [],
   });
@@ -279,6 +281,7 @@ class OrderItem extends Equatable {
       taxMode: taxMode,
       taxRate: (map['tax_rate'] ?? 0).toDouble(),
       originalTaxRate: (map['original_tax_rate'] ?? map['tax_rate'] ?? 0).toDouble(),
+      printAreaCode: map['print_area_code'] as String?,
       createdAt: DateTime.tryParse(map['created_at'] ?? '') ?? DateTime.now(),
       modifiers: [], // Se cargan aparte
     );
@@ -304,6 +307,7 @@ class OrderItem extends Equatable {
     String? taxMode,
     double? taxRate,
     double? originalTaxRate,
+    String? printAreaCode,
     DateTime? createdAt,
     List<OrderItemModifier>? modifiers,
   }) {
@@ -327,6 +331,7 @@ class OrderItem extends Equatable {
       taxMode: taxMode ?? this.taxMode,
       taxRate: taxRate ?? this.taxRate,
       originalTaxRate: originalTaxRate ?? this.originalTaxRate,
+      printAreaCode: printAreaCode ?? this.printAreaCode,
       createdAt: createdAt ?? this.createdAt,
       modifiers: modifiers ?? this.modifiers,
     );
@@ -352,6 +357,7 @@ class OrderItem extends Equatable {
     taxMode,
     taxRate,
     originalTaxRate,
+    printAreaCode,
     createdAt,
     modifiers,
   ];

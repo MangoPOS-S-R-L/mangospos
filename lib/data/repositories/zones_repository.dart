@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:mangopos/core/tax/tax_engine.dart';
 import 'package:mangopos/core/utils/display_name_utils.dart';
 
 import '../models/sales_models.dart';
@@ -248,7 +249,7 @@ class ZonesRepository {
           await sb
               .from('order_items')
               .select(
-                'id,order_id,product_id,product_name,sku,qty,quantity,unit_price,subtotal,discounts,tax,total,check_id,is_takeout,status,notes,tax_mode,tax_rate,created_at',
+                'id,order_id,product_id,product_name,sku,qty,quantity,unit_price,subtotal,discounts,tax,total,check_id,is_takeout,status,notes,tax_mode,tax_rate,original_tax_rate,created_at',
               )
               .inFilter('order_id', orderIds)
               .not('status', 'in', '(paid,void)'),

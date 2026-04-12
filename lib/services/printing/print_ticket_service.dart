@@ -136,6 +136,7 @@ class PrintTicketService {
     String? businessRnc,
     String title = 'PRECUENTA',
     String receiptItemDisplayMode = 'grouped',
+    List<({String label, double amount})> taxBreakdown = const [],
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
     final consolidatedItems = _buildPrintableItems(
@@ -269,8 +270,6 @@ class PrintTicketService {
     final printableSummary = summarizeOrderPricing(order, consolidatedItems);
     final printableSubtotal = printableSummary.subtotal;
     final printableDiscounts = printableSummary.discounts;
-    final printableTax = printableSummary.tax;
-    final printableServiceFee = printableSummary.serviceFee;
     final printableGrandTotal = printableSummary.total;
 
     // Subtotal
@@ -281,19 +280,29 @@ class PrintTicketService {
       gen.textRow('DESCUENTO:', '-RD\$ ${_formatMoney(printableDiscounts)}');
     }
 
-    // Cargo por servicio
-    if (printableServiceFee > 0) {
-      final servicePct = printableSubtotal > 0
-          ? ((printableServiceFee / printableSubtotal) * 100).toStringAsFixed(0)
-          : '0';
-      gen.textRow(
-        'SERVICIO ($servicePct%):',
-        'RD\$ ${_formatMoney(printableServiceFee)}',
-      );
+    // Tax breakdown — each tax on its own line
+    if (taxBreakdown.isNotEmpty) {
+      for (final entry in taxBreakdown) {
+        gen.textRow(
+          '${entry.label}:',
+          'RD\$ ${_formatMoney(entry.amount)}',
+        );
+      }
+    } else {
+      // Fallback: single ITBIS line from calculated summary
+      final printableTax = printableSummary.tax;
+      final printableServiceFee = printableSummary.serviceFee;
+      if (printableServiceFee > 0) {
+        final servicePct = printableSubtotal > 0
+            ? ((printableServiceFee / printableSubtotal) * 100).toStringAsFixed(0)
+            : '0';
+        gen.textRow(
+          'SERVICIO ($servicePct%):',
+          'RD\$ ${_formatMoney(printableServiceFee)}',
+        );
+      }
+      gen.textRow('ITBIS:', 'RD\$ ${_formatMoney(printableTax)}');
     }
-
-    // ITBIS
-    gen.textRow('ITBIS (18%):', 'RD\$ ${_formatMoney(printableTax)}');
 
     gen.lineFeed();
     _thickSeparator(gen);
@@ -367,6 +376,7 @@ class PrintTicketService {
     DateTime? issuedAt,
     String title = 'FACTURA',
     String receiptItemDisplayMode = 'grouped',
+    List<({String label, double amount})> taxBreakdown = const [],
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
 
@@ -500,24 +510,54 @@ class PrintTicketService {
     // Totals
     final printableSummary = summarizeOrderPricing(order, consolidatedItems);
 
-    gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(printableSummary.subtotal)}');
-    if (printableSummary.discounts > 0) {
+    // If the item-level tax calculation returns 0 but the order's DB-level
+    // tax is > 0, trust the order's values.
+    final useFallback = printableSummary.tax <= 0 && order.tax > 0;
+    final effectiveSubtotal = useFallback ? order.subtotal : printableSummary.subtotal;
+    final effectiveTotal = useFallback ? order.total : printableSummary.total;
+    final effectiveDiscounts = useFallback ? order.discounts : printableSummary.discounts;
+
+    gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(effectiveSubtotal)}');
+    if (effectiveDiscounts > 0) {
       gen.textRow(
         'DESCUENTO:',
-        '-RD\$ ${_formatMoney(printableSummary.discounts)}',
+        '-RD\$ ${_formatMoney(effectiveDiscounts)}',
       );
     }
-    if (printableSummary.serviceFee > 0) {
-      final servicePct = printableSummary.subtotal > 0
-          ? ((printableSummary.serviceFee / printableSummary.subtotal) * 100)
-                .toStringAsFixed(0)
-          : '0';
-      gen.textRow(
-        'SERVICIO ($servicePct%):',
-        'RD\$ ${_formatMoney(printableSummary.serviceFee)}',
-      );
+
+    // Tax breakdown — each tax on its own line
+    if (taxBreakdown.isNotEmpty) {
+      for (final entry in taxBreakdown) {
+        gen.textRow(
+          '${entry.label}:',
+          'RD\$ ${_formatMoney(entry.amount)}',
+        );
+      }
+    } else {
+      // Fallback: derive from summary
+      final effectiveTax = useFallback ? order.tax : printableSummary.tax;
+      final effectiveServiceFee = useFallback ? order.serviceFee : printableSummary.serviceFee;
+      if (effectiveServiceFee > 0) {
+        final servicePct = effectiveSubtotal > 0
+            ? ((effectiveServiceFee / effectiveSubtotal) * 100).toStringAsFixed(0)
+            : '0';
+        gen.textRow(
+          'SERVICIO ($servicePct%):',
+          'RD\$ ${_formatMoney(effectiveServiceFee)}',
+        );
+      }
+      if (effectiveTax > 0) {
+        final taxPct = effectiveSubtotal > 0
+            ? ((effectiveTax / effectiveSubtotal) * 100).toStringAsFixed(0)
+            : '18';
+        gen.textRow(
+          'ITBIS ($taxPct%):',
+          'RD\$ ${_formatMoney(effectiveTax)}',
+        );
+      } else {
+        gen.textRow('ITBIS:', 'RD\$ ${_formatMoney(0)}');
+      }
     }
-    gen.textRow('ITBIS (18%):', 'RD\$ ${_formatMoney(printableSummary.tax)}');
 
     gen.lineFeed();
     _thickSeparator(gen);
@@ -525,7 +565,7 @@ class PrintTicketService {
 
     gen.setBold(true);
     gen.setTextSize(width: 2, height: 2);
-    gen.textRow('TOTAL:', 'RD\$ ${_formatMoney(printableSummary.total)}');
+    gen.textRow('TOTAL:', 'RD\$ ${_formatMoney(effectiveTotal)}');
     gen.setTextSize();
     gen.setBold(false);
 
