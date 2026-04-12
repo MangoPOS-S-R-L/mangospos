@@ -243,6 +243,9 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
   final ConnectivityService _connectivity = ConnectivityService();
   final OfflineCatalogService _offlineCatalog = OfflineCatalogService();
 
+  /// Whether a background sync is already running (prevents duplicate syncs).
+  bool _backgroundSyncRunning = false;
+
   static const _menuItemsSelect =
       'id,name,price,image_url,category_id,is_active,position,tax_mode,item_type,menu_item_taxes(tax_id,taxes(rate,is_active,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery))';
   static const _menuListSelect =
@@ -290,6 +293,79 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
     }
   }
 
+  /// Lightweight query: checks max(updated_at) and count from menu_items
+  /// to determine if the local cache is still valid.
+  Future<bool> _hasCatalogChanges({
+    required String businessId,
+    required OfflineCatalogSnapshot localSnapshot,
+  }) async {
+    try {
+      // Single lightweight query: count + max updated_at
+      final row = await _client
+          .from('menu_items')
+          .select('updated_at')
+          .eq('business_id', businessId)
+          .eq('is_active', true)
+          .order('updated_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+
+      // Also get count
+      final countResult = await _client
+          .from('menu_items')
+          .select('id')
+          .eq('business_id', businessId)
+          .eq('is_active', true)
+          .count();
+
+      final remoteCount = countResult.count;
+      final remoteUpdatedAt = row != null
+          ? DateTime.tryParse(row['updated_at']?.toString() ?? '')
+          : null;
+
+      final localUpdatedAt = localSnapshot.lastProductUpdatedAt;
+      final localCount = localSnapshot.productCount;
+
+      // Changed if count differs or there's a newer updated_at
+      if (remoteCount != localCount) {
+        debugPrint(
+          'Catalog changed: count $localCount → $remoteCount',
+        );
+        return true;
+      }
+
+      if (remoteUpdatedAt != null &&
+          (localUpdatedAt == null ||
+              remoteUpdatedAt.isAfter(localUpdatedAt))) {
+        debugPrint(
+          'Catalog changed: updated_at $localUpdatedAt → $remoteUpdatedAt',
+        );
+        return true;
+      }
+
+      debugPrint('Catalog up-to-date (count=$remoteCount)');
+      return false;
+    } catch (e) {
+      debugPrint('Error checking catalog changes: $e');
+      // On error, assume changes to be safe
+      return true;
+    }
+  }
+
+  /// Extracts the max updated_at from a list of product maps.
+  DateTime? _extractMaxUpdatedAt(List<Map<String, dynamic>> products) {
+    DateTime? max;
+    for (final p in products) {
+      final raw = p['updated_at']?.toString();
+      if (raw == null) continue;
+      final dt = DateTime.tryParse(raw);
+      if (dt != null && (max == null || dt.isAfter(max))) {
+        max = dt;
+      }
+    }
+    return max;
+  }
+
   Future<OfflineCatalogSnapshot> _refreshCatalogSnapshot(
     String businessId,
   ) async {
@@ -309,7 +385,7 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
           .order('created_at', ascending: true),
       _client
           .from('menu_items')
-          .select(_menuItemsSelect)
+          .select('$_menuItemsSelect,updated_at')
           .eq('business_id', businessId)
           .eq('is_active', true)
           .order('position', ascending: true)
@@ -321,6 +397,7 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
     final products = _rowsToMaps(results[2]);
     final menuProducts = existing?.menuProducts ?? const <Map<String, dynamic>>[];
     final favoriteIds = existing?.favoriteProductIds ?? const <String>[];
+    final maxUpdatedAt = _extractMaxUpdatedAt(products);
 
     await _offlineCatalog.saveSnapshot(
       businessId: businessId,
@@ -329,6 +406,8 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
       products: products,
       menuProducts: menuProducts,
       favoriteProductIds: favoriteIds,
+      lastProductUpdatedAt: maxUpdatedAt,
+      productCount: products.length,
     );
 
     return OfflineCatalogSnapshot(
@@ -338,7 +417,78 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
       products: products,
       menuProducts: menuProducts,
       favoriteProductIds: favoriteIds,
+      lastProductUpdatedAt: maxUpdatedAt,
+      productCount: products.length,
     );
+  }
+
+  /// Triggers a background sync: checks for changes and refreshes state
+  /// only if the catalog has actually changed in the database.
+  void _syncCatalogInBackground(String businessId) {
+    if (_backgroundSyncRunning) return;
+    _backgroundSyncRunning = true;
+
+    Future.microtask(() async {
+      try {
+        final localSnapshot = await _offlineCatalog.loadSnapshot(businessId);
+        if (localSnapshot == null || !localSnapshot.hasData) {
+          // No local data — full refresh already happened via loadAll
+          return;
+        }
+
+        await _connectivity.initialize();
+        if (!_connectivity.isConnected) return;
+
+        final hasChanges = await _hasCatalogChanges(
+          businessId: businessId,
+          localSnapshot: localSnapshot,
+        );
+
+        if (!hasChanges) return;
+
+        // Changes detected — do a full refresh
+        final freshSnapshot = await _refreshCatalogSnapshot(businessId);
+
+        // Update state only if still mounted
+        if (!mounted) return;
+
+        final categories = _parseCategories(freshSnapshot.categories);
+        final menus = _parseMenus(freshSnapshot.menus);
+
+        // Re-apply current view context with fresh data
+        final currentMode = state.productsMode;
+        final currentCategoryId = state.loadedCategoryId;
+
+        List<MenuProduct> updatedProducts;
+        if (currentMode == MenuProductsMode.category &&
+            currentCategoryId != null) {
+          updatedProducts = _parseProducts(
+            freshSnapshot.productsByCategory(currentCategoryId),
+          );
+        } else if (currentMode == MenuProductsMode.all) {
+          updatedProducts = _parseProducts(freshSnapshot.allProducts());
+        } else if (currentMode == MenuProductsMode.search &&
+            state.search.isNotEmpty) {
+          updatedProducts = _parseProducts(
+            freshSnapshot.searchProducts(state.search),
+          );
+        } else {
+          updatedProducts = state.products;
+        }
+
+        state = state.copyWith(
+          categories: categories,
+          menus: menus,
+          products: updatedProducts,
+        );
+
+        debugPrint('Background catalog sync completed');
+      } catch (e) {
+        debugPrint('Background catalog sync failed: $e');
+      } finally {
+        _backgroundSyncRunning = false;
+      }
+    });
   }
 
   Future<List<MenuProduct>> _loadMenuProductsSnapshot({
@@ -347,7 +497,13 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
   }) async {
     final snapshot = await _offlineCatalog.loadSnapshot(businessId);
     final cachedRows = snapshot?.productsByMenu(menuId) ?? const [];
+
     if (cachedRows.isNotEmpty) {
+      // Return cached immediately, refresh in background
+      _refreshMenuProductsInBackground(
+        businessId: businessId,
+        menuId: menuId,
+      );
       return _parseProducts(cachedRows);
     }
 
@@ -356,6 +512,16 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
       return const [];
     }
 
+    return await _fetchAndCacheMenuProducts(
+      businessId: businessId,
+      menuId: menuId,
+    );
+  }
+
+  Future<List<MenuProduct>> _fetchAndCacheMenuProducts({
+    required String businessId,
+    required String menuId,
+  }) async {
     final rows = await _client
         .from('v_menu_items_list')
         .select(_menuListSelect)
@@ -370,6 +536,7 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
       return const [];
     }
 
+    final snapshot = await _offlineCatalog.loadSnapshot(businessId);
     final preserved = snapshot?.menuProducts ?? const <Map<String, dynamic>>[];
     final mergedRows = [
       ...preserved.where((item) => item['menu_id']?.toString() != menuId),
@@ -382,6 +549,33 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
     );
 
     return _parseProducts(freshRows);
+  }
+
+  void _refreshMenuProductsInBackground({
+    required String businessId,
+    required String menuId,
+  }) {
+    Future.microtask(() async {
+      try {
+        await _connectivity.initialize();
+        if (!_connectivity.isConnected) return;
+
+        final freshProducts = await _fetchAndCacheMenuProducts(
+          businessId: businessId,
+          menuId: menuId,
+        );
+
+        if (!mounted) return;
+
+        // Update state only if we're still viewing this menu
+        if (state.productsMode == MenuProductsMode.menu &&
+            state.loadedMenuId == menuId) {
+          state = state.copyWith(products: freshProducts);
+        }
+      } catch (e) {
+        debugPrint('Background menu products refresh failed: $e');
+      }
+    });
   }
 
   List<Map<String, dynamic>> _rowsToMaps(dynamic rows) {
@@ -428,45 +622,73 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
     String? preselectMenuId,
   }) async {
     try {
-      state = state.copyWith(loading: true, error: null);
       final businessId = await _resolveBusinessId();
-      final snapshot = await _ensureCatalogSnapshot(
-        businessId: businessId,
-        refresh: true,
-      );
 
-      final categories = _parseCategories(snapshot.categories);
-      final menus = _parseMenus(snapshot.menus);
-      final selectedCategory =
-          preselectCategoryId ??
-          (categories.isNotEmpty ? categories.first.id : null);
-      final selectedMenu =
-          preselectMenuId ?? (menus.isNotEmpty ? menus.first.id : null);
-      final initialProducts = selectedCategory == null
-          ? const <MenuProduct>[]
-          : _parseProducts(snapshot.productsByCategory(selectedCategory));
+      // 1. Try to show cached data immediately (no loading spinner)
+      final localSnapshot = await _offlineCatalog.loadSnapshot(businessId);
+      final hasLocalData = localSnapshot?.hasData == true;
 
-      state = state.copyWith(
-        loading: false,
-        error: null,
-        categories: categories,
-        menus: menus,
-        selectedCategoryId: selectedCategory,
-        selectedMenuId: selectedMenu,
-        products: initialProducts,
-        productsMode: selectedCategory == null
-            ? MenuProductsMode.none
-            : MenuProductsMode.category,
-        loadedCategoryId: selectedCategory,
-        clearLoadedMenuId: true,
-        selectedProduct: null,
-      );
+      if (hasLocalData) {
+        _applyCatalogSnapshot(
+          localSnapshot!,
+          preselectCategoryId: preselectCategoryId,
+          preselectMenuId: preselectMenuId,
+        );
+        // 2. Check for changes in background — UI already responsive
+        _syncCatalogInBackground(businessId);
+      } else {
+        // No cache — must fetch from network (show loading)
+        state = state.copyWith(loading: true, error: null);
+        final snapshot = await _ensureCatalogSnapshot(
+          businessId: businessId,
+          refresh: true,
+        );
+        _applyCatalogSnapshot(
+          snapshot,
+          preselectCategoryId: preselectCategoryId,
+          preselectMenuId: preselectMenuId,
+        );
+      }
     } catch (e) {
       state = state.copyWith(
         loading: false,
         error: 'No se pudieron cargar categorias: $e',
       );
     }
+  }
+
+  /// Applies a catalog snapshot to state without network calls.
+  void _applyCatalogSnapshot(
+    OfflineCatalogSnapshot snapshot, {
+    String? preselectCategoryId,
+    String? preselectMenuId,
+  }) {
+    final categories = _parseCategories(snapshot.categories);
+    final menus = _parseMenus(snapshot.menus);
+    final selectedCategory =
+        preselectCategoryId ??
+        (categories.isNotEmpty ? categories.first.id : null);
+    final selectedMenu =
+        preselectMenuId ?? (menus.isNotEmpty ? menus.first.id : null);
+    final initialProducts = selectedCategory == null
+        ? const <MenuProduct>[]
+        : _parseProducts(snapshot.productsByCategory(selectedCategory));
+
+    state = state.copyWith(
+      loading: false,
+      error: null,
+      categories: categories,
+      menus: menus,
+      selectedCategoryId: selectedCategory,
+      selectedMenuId: selectedMenu,
+      products: initialProducts,
+      productsMode: selectedCategory == null
+          ? MenuProductsMode.none
+          : MenuProductsMode.category,
+      loadedCategoryId: selectedCategory,
+      clearLoadedMenuId: true,
+      selectedProduct: null,
+    );
   }
 
   Future<void> loadAllProducts() async {

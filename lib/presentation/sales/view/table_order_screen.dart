@@ -364,29 +364,17 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   }
 
   Future<void> _handleBack(BuildContext context) async {
+    // Capture state needed for background cleanup before navigating.
     final orderState = ref.read(currentOrderProvider);
     final order = orderState.order;
-    if (order != null && orderState.items.isEmpty) {
-      final salesRepo = ref.read(salesRepositoryProvider);
-      final businessId = ref.read(sessionProvider).activeBusinessId;
-      try {
-        await salesRepo.releaseEmptyTableIfNeeded(
-          order.id,
-          businessId: businessId,
-        );
-      } catch (_) {
-        if (!mounted) return;
-        await ref.read(currentOrderProvider.notifier).cancelCurrentOrder();
-      }
-      if (!mounted) return;
-      final zoneVm = ref.read(byZoneVmProvider.notifier);
-      if (widget.zoneId != null && widget.zoneId!.isNotEmpty) {
-        await zoneVm.loadZoneStatus(widget.zoneId!, emitError: false);
-      } else if (businessId != null && businessId.isNotEmpty) {
-        await zoneVm.load(businessId);
-      }
-    }
-    if (!mounted) return;
+    final hasEmptyOrder = order != null && orderState.items.isEmpty;
+    final businessId = ref.read(sessionProvider).activeBusinessId;
+    final zoneId = widget.zoneId;
+    final salesRepo = ref.read(salesRepositoryProvider);
+    final zoneVm = ref.read(byZoneVmProvider.notifier);
+    final orderNotifier = ref.read(currentOrderProvider.notifier);
+
+    // 1. Navigate IMMEDIATELY — user sees instant response.
     if (context.mounted) {
       if (widget.origin == OrderOrigin.delivery) {
         context.go(
@@ -398,6 +386,30 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       } else {
         context.go(AppRoutes.salesByZone);
       }
+    }
+
+    // 2. Cleanup in background — release empty table + refresh zone.
+    if (hasEmptyOrder) {
+      unawaited(Future.microtask(() async {
+        try {
+          await salesRepo.releaseEmptyTableIfNeeded(
+            order.id,
+            businessId: businessId,
+          );
+        } catch (_) {
+          try {
+            await orderNotifier.cancelCurrentOrder();
+          } catch (_) {}
+        }
+        // Refresh zone status so tables update via realtime fallback.
+        try {
+          if (zoneId != null && zoneId.isNotEmpty) {
+            await zoneVm.loadZoneStatus(zoneId, emitError: false);
+          } else if (businessId != null && businessId.isNotEmpty) {
+            await zoneVm.load(businessId);
+          }
+        } catch (_) {}
+      }));
     }
   }
 

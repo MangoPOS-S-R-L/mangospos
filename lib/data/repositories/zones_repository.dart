@@ -311,6 +311,66 @@ class ZonesRepository {
     return rows.map(TableStatus.fromMap).toList();
   }
 
+  /// Detects and releases stale tables: sessions with no open orders that
+  /// were left occupied (e.g. due to partial cleanup failures).
+  /// Returns the number of tables released.
+  Future<int> releaseStaleTablesInZone(
+    String zoneId, {
+    String? businessId,
+  }) async {
+    try {
+      // Find open sessions in this zone that have 0 open orders.
+      var query = sb
+          .from('v_zone_table_status')
+          .select('table_id, session_id, orders_count')
+          .eq('zone_id', zoneId)
+          .not('session_id', 'is', null);
+
+      final scopedBusinessId = businessId?.trim();
+      if (scopedBusinessId != null && scopedBusinessId.isNotEmpty) {
+        query = query.eq('business_id', scopedBusinessId);
+      }
+
+      final rows = List<Map<String, dynamic>>.from(await query);
+
+      // Filter: session exists but 0 open orders = stale
+      final staleRows = rows.where((r) {
+        final count = r['orders_count'];
+        return count == null || count == 0;
+      }).toList(growable: false);
+
+      if (staleRows.isEmpty) return 0;
+
+      int released = 0;
+      for (final row in staleRows) {
+        final sessionId = row['session_id']?.toString();
+        final tableId = row['table_id']?.toString();
+        if (sessionId == null || sessionId.isEmpty) continue;
+
+        // Close the orphan session
+        await sb
+            .from('table_sessions')
+            .update({'closed_at': DateTime.now().toIso8601String()})
+            .eq('id', sessionId)
+            .isFilter('closed_at', null);
+
+        // Mark table as available
+        if (tableId != null && tableId.isNotEmpty) {
+          await sb
+              .from('dining_tables')
+              .update({'state': 'available'})
+              .eq('id', tableId);
+        }
+
+        released++;
+      }
+
+      return released;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   // ---- MESAS POR ZONA (para Ajustes → Salones y mesas) ----
   Future<List<DiningTable>> fetchTablesByZone(String zoneId) async {
     final rows = await sb

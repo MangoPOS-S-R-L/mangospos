@@ -13,6 +13,8 @@ class OfflineCatalogSnapshot {
     required this.products,
     required this.menuProducts,
     required this.favoriteProductIds,
+    this.lastProductUpdatedAt,
+    this.productCount = 0,
   });
 
   final DateTime savedAt;
@@ -21,6 +23,12 @@ class OfflineCatalogSnapshot {
   final List<Map<String, dynamic>> products;
   final List<Map<String, dynamic>> menuProducts;
   final List<String> favoriteProductIds;
+
+  /// Tracks the most recent updated_at from menu_items for delta detection.
+  final DateTime? lastProductUpdatedAt;
+
+  /// Tracks the number of active products for quick change detection.
+  final int productCount;
 
   bool get hasData =>
       categories.isNotEmpty ||
@@ -91,6 +99,9 @@ class OfflineCatalogSnapshot {
       products: _toMapList(json['products']),
       menuProducts: _toMapList(json['menu_products']),
       favoriteProductIds: _toStringList(json['favorite_product_ids']),
+      lastProductUpdatedAt:
+          DateTime.tryParse(json['last_product_updated_at']?.toString() ?? ''),
+      productCount: json['product_count'] as int? ?? 0,
     );
   }
 
@@ -102,6 +113,9 @@ class OfflineCatalogSnapshot {
       'products': products.map(_copyMap).toList(growable: false),
       'menu_products': menuProducts.map(_copyMap).toList(growable: false),
       'favorite_product_ids': favoriteProductIds,
+      if (lastProductUpdatedAt != null)
+        'last_product_updated_at': lastProductUpdatedAt!.toIso8601String(),
+      'product_count': productCount,
     };
   }
 
@@ -170,6 +184,8 @@ class OfflineCatalogService {
     List<Map<String, dynamic>>? products,
     List<Map<String, dynamic>>? menuProducts,
     List<String>? favoriteProductIds,
+    DateTime? lastProductUpdatedAt,
+    int? productCount,
   }) async {
     final storage = await _storage;
     final existing = await loadSnapshot(businessId);
@@ -181,6 +197,9 @@ class OfflineCatalogService {
       menuProducts: menuProducts ?? existing?.menuProducts ?? const [],
       favoriteProductIds:
           favoriteProductIds ?? existing?.favoriteProductIds ?? const [],
+      lastProductUpdatedAt:
+          lastProductUpdatedAt ?? existing?.lastProductUpdatedAt,
+      productCount: productCount ?? existing?.productCount ?? 0,
     );
     await storage.write(_snapshotKey(businessId), jsonEncode(snapshot.toJson()));
   }

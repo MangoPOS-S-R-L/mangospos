@@ -400,17 +400,26 @@ class _ProductsGridTab extends ConsumerWidget {
     if (w >= 1500) cross = 7;
     if (w >= 1800) cross = 8;
 
-    return Padding(
-      padding: const EdgeInsets.all(12),
-      child: GridView.builder(
-        itemCount: vm.products.length,
-        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: cross,
-          mainAxisSpacing: 12,
-          crossAxisSpacing: 12,
-          childAspectRatio: 1.15,
+    // Key changes when product list changes -> triggers quick fade
+    final gridKey = ValueKey(vm.products.map((p) => p.id).join(','));
+
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 180),
+      switchInCurve: Curves.easeOut,
+      switchOutCurve: Curves.easeIn,
+      child: Padding(
+        key: gridKey,
+        padding: const EdgeInsets.all(12),
+        child: GridView.builder(
+          itemCount: vm.products.length,
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: cross,
+            mainAxisSpacing: 12,
+            crossAxisSpacing: 12,
+            childAspectRatio: 1.15,
+          ),
+          itemBuilder: (_, i) => _ProductCard(item: vm.products[i]),
         ),
-        itemBuilder: (_, i) => _ProductCard(item: vm.products[i]),
       ),
     );
   }

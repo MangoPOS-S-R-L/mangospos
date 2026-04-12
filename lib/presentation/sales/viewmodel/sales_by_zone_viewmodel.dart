@@ -100,8 +100,16 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
     final repo = ref.read(zonesRepoProvider);
     try {
       final rows = await repo.fetchByZone(zoneId, businessId: state.businessId);
-      // 🔥 Natural Sort (Mesa 1, Mesa 2, ..., Mesa 10)
+      // Natural Sort (Mesa 1, Mesa 2, ..., Mesa 10)
       rows.sort((a, b) => SortingUtils.naturalCompare(a.code, b.code));
+
+      // Detect stale tables (session open but 0 orders) and clean up in background.
+      final hasStale = rows.any(
+        (t) => t.sessionId != null && t.ordersCount == 0 && t.itemsCount == 0,
+      );
+      if (hasStale) {
+        unawaited(_releaseStaleAndReload(zoneId));
+      }
 
       state = state.copyWith(
         statusByZone: {...state.statusByZone, zoneId: rows},
@@ -123,6 +131,39 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
           statusByZone: {...state.statusByZone, zoneId: const <TableStatus>[]},
         );
       }
+    }
+  }
+
+  /// Releases stale sessions in a zone and reloads status to reflect changes.
+  Future<void> _releaseStaleAndReload(String zoneId) async {
+    final repo = ref.read(zonesRepoProvider);
+    try {
+      final released = await repo.releaseStaleTablesInZone(
+        zoneId,
+        businessId: state.businessId,
+      );
+      if (released > 0) {
+        developer.log(
+          'Released $released stale table(s) in zone $zoneId',
+          name: 'ByZoneViewModel',
+        );
+        // Reload to reflect the cleaned-up state.
+        final rows = await repo.fetchByZone(
+          zoneId,
+          businessId: state.businessId,
+        );
+        rows.sort((a, b) => SortingUtils.naturalCompare(a.code, b.code));
+        state = state.copyWith(
+          statusByZone: {...state.statusByZone, zoneId: rows},
+        );
+        _indexZone(zoneId, rows);
+      }
+    } catch (e) {
+      developer.log(
+        'Error releasing stale tables',
+        name: 'ByZoneViewModel',
+        error: e,
+      );
     }
   }
 
