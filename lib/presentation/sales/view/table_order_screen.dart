@@ -361,8 +361,10 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
           businessId: businessId,
         );
       } catch (_) {
+        if (!mounted) return;
         await ref.read(currentOrderProvider.notifier).cancelCurrentOrder();
       }
+      if (!mounted) return;
       final zoneVm = ref.read(byZoneVmProvider.notifier);
       if (widget.zoneId != null && widget.zoneId!.isNotEmpty) {
         await zoneVm.loadZoneStatus(widget.zoneId!, emitError: false);
@@ -370,6 +372,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         await zoneVm.load(businessId);
       }
     }
+    if (!mounted) return;
     if (context.mounted) {
       if (widget.origin == OrderOrigin.delivery) {
         context.go(
@@ -441,6 +444,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     );
 
     if (dialogResult == null) return;
+    if (!mounted) return;
 
     await ref
         .read(currentOrderProvider.notifier)
@@ -533,6 +537,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
 
     if (customerId == null || customerId.isEmpty) return;
     if (customerName == null || customerName.isEmpty) return;
+    if (!mounted) return;
 
     await ref
         .read(currentOrderProvider.notifier)
@@ -581,6 +586,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     }
 
     try {
+      if (!mounted) return;
       await ref
           .read(currentOrderProvider.notifier)
           .applyDiscountPercentToItems(
@@ -624,6 +630,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     if (result == null || result.selectedItemIds.isEmpty) return;
 
     try {
+      if (!mounted) return;
       await ref
           .read(currentOrderProvider.notifier)
           .applyCourtesyToItems(
