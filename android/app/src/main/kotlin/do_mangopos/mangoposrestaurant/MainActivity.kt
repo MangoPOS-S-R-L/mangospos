@@ -1,4 +1,4 @@
-package com.example.mangopos
+package do_mangopos.mangoposrestaurant
 
 import io.flutter.embedding.android.FlutterActivity
 
