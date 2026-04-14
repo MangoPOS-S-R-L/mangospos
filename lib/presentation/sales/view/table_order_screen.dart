@@ -232,104 +232,12 @@ Future<void> _showMissingKitchenPrinterDialog(
   );
 }
 
-double _effectiveItemTotal(OrderItem item) {
-  return _effectiveItemAmounts(item).total;
+double _effectiveItemTotal(Order? order, OrderItem item) {
+  return itemDisplayTotal(order, item);
 }
 
-double _effectiveItemSubtotal(OrderItem item) {
-  return _effectiveItemAmounts(item).subtotal;
-}
-
-double _catalogItemGrossAmount(OrderItem item) {
-  final modifiersTotal = item.modifiers.fold<double>(
-    0.0,
-    (sum, modifier) => sum + (modifier.price * modifier.qty),
-  );
-  return double.parse(
-    ((item.unitPrice * item.quantity) + modifiersTotal).toStringAsFixed(2),
-  );
-}
-
-({double subtotal, double tax, double total}) _effectiveItemAmounts(
-  OrderItem item,
-) {
-  final expectedSubtotal = item.unitPrice * item.quantity;
-  final dbSubtotal = item.subtotal;
-  final isFractionalQty =
-      (item.quantity - item.quantity.roundToDouble()).abs() > 0.001;
-  final useExpectedSubtotal =
-      isFractionalQty &&
-      dbSubtotal > 0 &&
-      (dbSubtotal - expectedSubtotal).abs() > 0.01;
-
-  final baseSubtotal = useExpectedSubtotal
-      ? expectedSubtotal
-      : (dbSubtotal > 0 ? dbSubtotal : expectedSubtotal);
-
-  final dbTax = item.tax;
-  final baseTax = (useExpectedSubtotal && dbSubtotal > 0)
-      ? (dbTax * (baseSubtotal / dbSubtotal))
-      : dbTax;
-
-  final discount = item.discounts.clamp(0, double.infinity).toDouble();
-  final discountOnSubtotal = discount > baseSubtotal ? baseSubtotal : discount;
-  final discountOnTax = discount - discountOnSubtotal;
-
-  final netSubtotal = (baseSubtotal - discountOnSubtotal)
-      .clamp(0, double.infinity)
-      .toDouble();
-  final netTax = (baseTax - discountOnTax).clamp(0, double.infinity).toDouble();
-  var netTotal = (netSubtotal + netTax).clamp(0, double.infinity).toDouble();
-
-  // En productos inclusivos con impuestos extraídos (ej: Delivery),
-  // el total real es menor al precio del menú. No debemos "forzar" el precio original.
-  final catalogTotal = (_catalogItemGrossAmount(item) - item.discounts).clamp(
-    0,
-    double.infinity,
-  );
-  
-  final useCatalogTotalForFractionalInclusive =
-      item.taxMode == 'inclusive' &&
-      isFractionalQty &&
-      item.total > 0 &&
-      (item.total - catalogTotal).abs() > 0.01;
-
-  final storedTotal = item.taxMode == 'inclusive'
-      ? (useCatalogTotalForFractionalInclusive
-                ? catalogTotal
-                : item.total)
-            .toDouble()
-      : (item.total - item.discounts).clamp(0, double.infinity).toDouble();
-
-  // Importante: para items inclusivos no debemos subir artificialmente el total
-  // al precio de catalogo/DB si en esta area algunos impuestos fueron apagados.
-  // Solo confiamos en el total almacenado cuando ayuda a BAJAR o mantener el monto,
-  // nunca para incrementarlo por encima del subtotal+impuesto efectivo calculado.
-  if (item.taxMode == 'inclusive' &&
-      item.total > 0 &&
-      storedTotal > 0 &&
-      storedTotal < netTotal &&
-      (storedTotal - netTotal).abs() > 0.01) {
-    netTotal = storedTotal;
-  }
-
-  return (
-    subtotal: double.parse(netSubtotal.toStringAsFixed(2)),
-    tax: double.parse(netTax.toStringAsFixed(2)),
-    total: double.parse(netTotal.toStringAsFixed(2)),
-  );
-}
-
-double _uiItemDisplayAmount(OrderItem item) {
-  if (item.taxMode == 'inclusive') {
-    // For inclusive items, the menu/catalog price IS the display price.
-    // Recomposing base+tax introduces rounding drift (e.g. 500 → 500.01).
-    final gross = _catalogItemGrossAmount(item);
-    final disc = item.discounts.clamp(0, double.infinity);
-    return double.parse((gross - disc).clamp(0, double.infinity).toStringAsFixed(2));
-  } else {
-    return _effectiveItemSubtotal(item);
-  }
+double _uiItemDisplayAmount(Order? order, OrderItem item) {
+  return itemDisplayTotal(order, item);
 }
 
 enum OrderOrigin { table, manual, quick, delivery }
@@ -390,26 +298,28 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
 
     // 2. Cleanup in background — release empty table + refresh zone.
     if (hasEmptyOrder) {
-      unawaited(Future.microtask(() async {
-        try {
-          await salesRepo.releaseEmptyTableIfNeeded(
-            order.id,
-            businessId: businessId,
-          );
-        } catch (_) {
+      unawaited(
+        Future.microtask(() async {
           try {
-            await orderNotifier.cancelCurrentOrder();
-          } catch (_) {}
-        }
-        // Refresh zone status so tables update via realtime fallback.
-        try {
-          if (zoneId != null && zoneId.isNotEmpty) {
-            await zoneVm.loadZoneStatus(zoneId, emitError: false);
-          } else if (businessId != null && businessId.isNotEmpty) {
-            await zoneVm.load(businessId);
+            await salesRepo.releaseEmptyTableIfNeeded(
+              order.id,
+              businessId: businessId,
+            );
+          } catch (_) {
+            try {
+              await orderNotifier.cancelCurrentOrder();
+            } catch (_) {}
           }
-        } catch (_) {}
-      }));
+          // Refresh zone status so tables update via realtime fallback.
+          try {
+            if (zoneId != null && zoneId.isNotEmpty) {
+              await zoneVm.loadZoneStatus(zoneId, emitError: false);
+            } else if (businessId != null && businessId.isNotEmpty) {
+              await zoneVm.load(businessId);
+            }
+          } catch (_) {}
+        }),
+      );
     }
   }
 
@@ -465,7 +375,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
           0,
           (sum, item) => sum + item.quantity,
         ),
-        totalAmount: openItems.fold<double>(0, (sum, item) => sum + item.total),
+        totalAmount: summarizeOrderPricing(orderState.order, openItems).total,
       ),
     );
 
@@ -540,11 +450,12 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       productName: product.name,
       productPrice: product.price,
       productTaxMode: product.taxMode,
-      productTaxRate: product.calculateTaxRate(ref.read(currentOrderProvider).origin ?? 'table'),
+      productTaxRate: product.calculateTaxRate(
+        ref.read(currentOrderProvider).origin ?? 'table',
+      ),
       productFullTaxRate: product.calculateFullTaxRate(),
       selectedModifiers: selectedModifiers,
     );
-
   }
 
   Future<void> _handleAssignClient(BuildContext context) async {
@@ -596,7 +507,8 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
 
     final result = await showDialog<_DiscountDialogResult>(
       context: context,
-      builder: (_) => _DiscountDialog(items: openItems),
+      builder: (_) =>
+          _DiscountDialog(items: openItems, order: orderState.order),
     );
     if (result == null) return;
 
@@ -651,7 +563,8 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
 
     final result = await showDialog<_CourtesyDialogResult>(
       context: context,
-      builder: (_) => _CourtesyDialog(items: openItems),
+      builder: (_) =>
+          _CourtesyDialog(items: openItems, order: orderState.order),
     );
     if (result == null || result.selectedItemIds.isEmpty) return;
 
@@ -692,7 +605,8 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       notifier.ensureManualOrder();
     } else if (widget.origin == OrderOrigin.quick) {
       notifier.ensureQuickOrder();
-    } else if (widget.origin == OrderOrigin.delivery && widget.tableId != null) {
+    } else if (widget.origin == OrderOrigin.delivery &&
+        widget.tableId != null) {
       notifier.openDeliveryOrder(
         tableId: widget.tableId!,
         deliveryType: widget.deliveryType,
@@ -1477,11 +1391,18 @@ class _CartView extends ConsumerWidget {
     );
     final displayDiscounts = pricingSummary.discounts;
     final displaySubtotal = pricingSummary.subtotal;
-    final taxBreakdown = ref.read(currentOrderProvider.notifier)
-        .getTaxBreakdown(displaySubtotal);
+    final taxBreakdown = buildOrderTaxBreakdown(
+      orderState.order,
+      displayedItems,
+      configuredBreakdown: ref
+          .read(currentOrderProvider.notifier)
+          .getTaxBreakdown(displaySubtotal),
+    );
     final displayTaxTotal = taxBreakdown.fold<double>(
-        0, (sum, e) => sum + e.amount);
-    final displayTotal = displaySubtotal + displayTaxTotal - displayDiscounts;
+      0,
+      (sum, entry) => sum + entry.amount,
+    );
+    final displayTotal = pricingSummary.total;
 
     final pendingOrderItems = openItems.where((i) {
       final checkIsClosed = allChecks.any(
@@ -1491,7 +1412,8 @@ class _CartView extends ConsumerWidget {
     }).toList();
 
     final pendingOrderTotal = summarizeOrderPricing(
-      orderState.order, pendingOrderItems,
+      orderState.order,
+      pendingOrderItems,
     ).total;
 
     final currency = NumberFormat('#,##0.00', 'en_US');
@@ -1509,7 +1431,7 @@ class _CartView extends ConsumerWidget {
     for (final item in sentItems) {
       final name = item.productName;
       final qty = item.quantity.toDouble();
-      final totalItem = _uiItemDisplayAmount(item);
+      final totalItem = _uiItemDisplayAmount(orderState.order, item);
       final groupKey = '${name.toLowerCase().trim()}|${item.isTakeout}';
       if (groupedSent.containsKey(groupKey)) {
         groupedSent[groupKey] = groupedSent[groupKey]!.copyWith(
@@ -2142,22 +2064,29 @@ class _CartView extends ConsumerWidget {
                                   // Auto-close para delivery externo (ya pagado)
                                   final dt = orderState.deliveryType;
                                   if (origin == OrderOrigin.delivery &&
-                                      (dt == 'uber_eats' || dt == 'pedidos_ya')) {
+                                      (dt == 'uber_eats' ||
+                                          dt == 'pedidos_ya')) {
                                     final orderId = orderState.order?.id;
                                     if (orderId != null) {
                                       await ref
                                           .read(salesRepositoryProvider)
                                           .closeDeliveryOrder(orderId: orderId);
                                       if (context.mounted) {
-                                        ScaffoldMessenger.of(context).showSnackBar(
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
                                           const SnackBar(
-                                            content: Text('Orden cerrada automaticamente (pagada externamente)'),
+                                            content: Text(
+                                              'Orden cerrada automaticamente (pagada externamente)',
+                                            ),
                                           ),
                                         );
                                         context.go(
                                           Uri(
                                             path: AppRoutes.salesReact,
-                                            queryParameters: const {'mode': 'delivery'},
+                                            queryParameters: const {
+                                              'mode': 'delivery',
+                                            },
                                           ).toString(),
                                         );
                                       }
@@ -2314,7 +2243,8 @@ class _CartView extends ConsumerWidget {
                                                 (i) => {
                                                   'quantity': i.quantity,
                                                   'name': i.productName,
-                                                  'price': _effectiveItemTotal(
+                                                  'price': itemDisplayTotal(
+                                                    orderState.order,
                                                     i,
                                                   ),
                                                 },
@@ -2516,10 +2446,17 @@ class _CartView extends ConsumerWidget {
             (type == 'invoice' ? 'FACTURA' : 'PRECUENTA');
 
         // Compute per-tax breakdown for the printed receipt
-        final printSubtotal = summarizeOrderPricing(orderObj, orderItems).subtotal;
-        final printTaxBreakdown = ref
-            .read(currentOrderProvider.notifier)
-            .getTaxBreakdown(printSubtotal);
+        final printSubtotal = summarizeOrderPricing(
+          orderObj,
+          orderItems,
+        ).subtotal;
+        final printTaxBreakdown = buildOrderTaxBreakdown(
+          orderObj,
+          orderItems,
+          configuredBreakdown: ref
+              .read(currentOrderProvider.notifier)
+              .getTaxBreakdown(printSubtotal),
+        );
 
         ticket = type == 'invoice'
             ? PrintTicketService.generateInvoice(
@@ -3173,7 +3110,11 @@ class _CartLineItem extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final name = item.productName;
     final qty = item.quantity.toStringAsFixed(1);
-    final totalItem = _uiItemDisplayAmount(item).toStringAsFixed(2);
+    final currentOrder = ref.watch(currentOrderProvider.select((s) => s.order));
+    final totalItem = _uiItemDisplayAmount(
+      currentOrder,
+      item,
+    ).toStringAsFixed(2);
     final modifiers = item.modifiers;
 
     return Material(
@@ -6056,8 +5997,9 @@ class _DiscountDialogResult {
 
 class _DiscountDialog extends StatefulWidget {
   final List<OrderItem> items;
+  final Order? order;
 
-  const _DiscountDialog({required this.items});
+  const _DiscountDialog({required this.items, this.order});
 
   @override
   State<_DiscountDialog> createState() => _DiscountDialogState();
@@ -6156,7 +6098,7 @@ class _DiscountDialogState extends State<_DiscountDialog> {
                         value: checked,
                         title: Text(item.productName),
                         subtitle: Text(
-                          'Cant: ${_formatQty(item.quantity)} • RD\$${_effectiveItemTotal(item).toStringAsFixed(2)}',
+                          'Cant: ${_formatQty(item.quantity)} • RD\$${_effectiveItemTotal(widget.order, item).toStringAsFixed(2)}',
                         ),
                         onChanged: (_) {
                           setState(() {
@@ -6252,8 +6194,9 @@ class _CourtesyDialogResult {
 
 class _CourtesyDialog extends StatefulWidget {
   final List<OrderItem> items;
+  final Order? order;
 
-  const _CourtesyDialog({required this.items});
+  const _CourtesyDialog({required this.items, this.order});
 
   @override
   State<_CourtesyDialog> createState() => _CourtesyDialogState();
@@ -6334,7 +6277,7 @@ class _CourtesyDialogState extends State<_CourtesyDialog> {
                       value: checked,
                       title: Text(item.productName),
                       subtitle: Text(
-                        'Cant: ${_formatQty(item.quantity)} • RD\$${_effectiveItemTotal(item).toStringAsFixed(2)}',
+                        'Cant: ${_formatQty(item.quantity)} • RD\$${_effectiveItemTotal(widget.order, item).toStringAsFixed(2)}',
                       ),
                       onChanged: (_) {
                         setState(() {

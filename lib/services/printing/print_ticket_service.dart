@@ -7,6 +7,77 @@ import 'esc_pos_generator.dart';
 
 /// 🖨️ Servicio de generación de tickets
 class PrintTicketService {
+  static double _resolvePrintableItemTotal(
+    Order? order,
+    OrderItem item, {
+    bool preferStoredItemTotals = false,
+  }) {
+    if (preferStoredItemTotals && item.total > 0) {
+      return double.parse(item.total.toStringAsFixed(2));
+    }
+    return itemDisplayTotal(order, item);
+  }
+
+  static double _resolvePrintableItemUnitPrice(
+    Order? order,
+    OrderItem item, {
+    bool preferStoredItemTotals = false,
+  }) {
+    final qty = item.quantity <= 0 ? 1.0 : item.quantity;
+    return double.parse(
+      (_resolvePrintableItemTotal(
+                order,
+                item,
+                preferStoredItemTotals: preferStoredItemTotals,
+              ) /
+              qty)
+          .toStringAsFixed(2),
+    );
+  }
+
+  static _PrintableReceiptTotals _resolvePrintableTotals({
+    required Order order,
+    required Iterable<OrderItem> items,
+    bool preferStoredOrderTotals = false,
+  }) {
+    final summary = summarizeOrderPricing(order, items);
+    final hasStoredTotals =
+        order.subtotal > 0 ||
+        order.tax > 0 ||
+        order.serviceFee > 0 ||
+        order.total > 0 ||
+        order.discounts > 0;
+    final summaryDriftsFromStored =
+        (summary.subtotal - order.subtotal).abs() > 0.01 ||
+        (summary.tax - order.tax).abs() > 0.01 ||
+        (summary.serviceFee - order.serviceFee).abs() > 0.01 ||
+        (summary.discounts - order.discounts).abs() > 0.01 ||
+        (summary.total - order.total).abs() > 0.01;
+
+    final useStoredTotals =
+        hasStoredTotals &&
+        ((summary.tax <= 0 && order.tax > 0) ||
+            (preferStoredOrderTotals && summaryDriftsFromStored));
+
+    if (!useStoredTotals) {
+      return _PrintableReceiptTotals(
+        subtotal: summary.subtotal,
+        discounts: summary.discounts,
+        serviceFee: summary.serviceFee,
+        tax: summary.tax,
+        total: summary.total,
+      );
+    }
+
+    return _PrintableReceiptTotals(
+      subtotal: order.subtotal,
+      discounts: order.discounts,
+      serviceFee: order.serviceFee,
+      tax: order.tax,
+      total: order.total,
+    );
+  }
+
   /// ============================================================
   /// COMANDA DE COCINA
   /// ============================================================
@@ -284,10 +355,7 @@ class PrintTicketService {
     if (taxBreakdown.isNotEmpty) {
       double taxSum = 0;
       for (final entry in taxBreakdown) {
-        gen.textRow(
-          '${entry.label}:',
-          'RD\$ ${_formatMoney(entry.amount)}',
-        );
+        gen.textRow('${entry.label}:', 'RD\$ ${_formatMoney(entry.amount)}');
         taxSum += entry.amount;
       }
       printableGrandTotal = double.parse(
@@ -299,7 +367,9 @@ class PrintTicketService {
       final printableServiceFee = printableSummary.serviceFee;
       if (printableServiceFee > 0) {
         final servicePct = printableSubtotal > 0
-            ? ((printableServiceFee / printableSubtotal) * 100).toStringAsFixed(0)
+            ? ((printableServiceFee / printableSubtotal) * 100).toStringAsFixed(
+                0,
+              )
             : '0';
         gen.textRow(
           'SERVICIO ($servicePct%):',
@@ -383,6 +453,8 @@ class PrintTicketService {
     String title = 'FACTURA',
     String receiptItemDisplayMode = 'grouped',
     List<({String label, double amount})> taxBreakdown = const [],
+    bool preferStoredOrderTotals = false,
+    bool preferStoredItemTotals = false,
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
 
@@ -481,16 +553,25 @@ class PrintTicketService {
 
     for (int i = 0; i < consolidatedItems.length; i++) {
       final item = consolidatedItems[i];
-      final unitPrice = itemDisplayUnitPrice(order, item);
+      final unitPrice = _resolvePrintableItemUnitPrice(
+        order,
+        item,
+        preferStoredItemTotals: preferStoredItemTotals,
+      );
 
       gen.setBold(true);
       gen.text(item.productName);
       gen.setBold(false);
 
       final displayQty = _formatQty(item.quantity);
+      final lineTotal = _resolvePrintableItemTotal(
+        order,
+        item,
+        preferStoredItemTotals: preferStoredItemTotals,
+      );
 
       final leftPart = '$displayQty x RD\$ ${_formatMoney(unitPrice)}';
-      final rightPart = 'RD\$ ${_formatMoney(itemDisplayTotal(order, item))}';
+      final rightPart = 'RD\$ ${_formatMoney(lineTotal)}';
       gen.dotRow(leftPart, rightPart);
 
       if (item.modifiers.isNotEmpty) {
@@ -514,20 +595,17 @@ class PrintTicketService {
     gen.lineFeed();
 
     // Totals
-    final printableSummary = summarizeOrderPricing(order, consolidatedItems);
-
-    // If the item-level tax calculation returns 0 but the order's DB-level
-    // tax is > 0, trust the order's values.
-    final useFallback = printableSummary.tax <= 0 && order.tax > 0;
-    final effectiveSubtotal = useFallback ? order.subtotal : printableSummary.subtotal;
-    final effectiveDiscounts = useFallback ? order.discounts : printableSummary.discounts;
+    final effectiveTotals = _resolvePrintableTotals(
+      order: order,
+      items: consolidatedItems,
+      preferStoredOrderTotals: preferStoredOrderTotals,
+    );
+    final effectiveSubtotal = effectiveTotals.subtotal;
+    final effectiveDiscounts = effectiveTotals.discounts;
 
     gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(effectiveSubtotal)}');
     if (effectiveDiscounts > 0) {
-      gen.textRow(
-        'DESCUENTO:',
-        '-RD\$ ${_formatMoney(effectiveDiscounts)}',
-      );
+      gen.textRow('DESCUENTO:', '-RD\$ ${_formatMoney(effectiveDiscounts)}');
     }
 
     // Tax breakdown — each tax on its own line
@@ -535,10 +613,7 @@ class PrintTicketService {
     if (taxBreakdown.isNotEmpty) {
       double taxSum = 0;
       for (final entry in taxBreakdown) {
-        gen.textRow(
-          '${entry.label}:',
-          'RD\$ ${_formatMoney(entry.amount)}',
-        );
+        gen.textRow('${entry.label}:', 'RD\$ ${_formatMoney(entry.amount)}');
         taxSum += entry.amount;
       }
       // Total = subtotal + all taxes - discounts (authoritative from breakdown)
@@ -546,12 +621,14 @@ class PrintTicketService {
         (effectiveSubtotal + taxSum - effectiveDiscounts).toStringAsFixed(2),
       );
     } else {
-      // Fallback: derive from summary
-      final effectiveTax = useFallback ? order.tax : printableSummary.tax;
-      final effectiveServiceFee = useFallback ? order.serviceFee : printableSummary.serviceFee;
+      // Fallback: derive from resolved printable totals
+      final effectiveTax = effectiveTotals.tax;
+      final effectiveServiceFee = effectiveTotals.serviceFee;
       if (effectiveServiceFee > 0) {
         final servicePct = effectiveSubtotal > 0
-            ? ((effectiveServiceFee / effectiveSubtotal) * 100).toStringAsFixed(0)
+            ? ((effectiveServiceFee / effectiveSubtotal) * 100).toStringAsFixed(
+                0,
+              )
             : '0';
         gen.textRow(
           'SERVICIO ($servicePct%):',
@@ -562,14 +639,11 @@ class PrintTicketService {
         final taxPct = effectiveSubtotal > 0
             ? ((effectiveTax / effectiveSubtotal) * 100).toStringAsFixed(0)
             : '18';
-        gen.textRow(
-          'ITBIS ($taxPct%):',
-          'RD\$ ${_formatMoney(effectiveTax)}',
-        );
+        gen.textRow('ITBIS ($taxPct%):', 'RD\$ ${_formatMoney(effectiveTax)}');
       } else {
         gen.textRow('ITBIS:', 'RD\$ ${_formatMoney(0)}');
       }
-      effectiveTotal = useFallback ? order.total : printableSummary.total;
+      effectiveTotal = effectiveTotals.total;
     }
 
     gen.lineFeed();
@@ -808,6 +882,10 @@ class PrintTicketService {
     String? businessAddress,
     String? businessPhone,
     required String businessRnc,
+    String receiptItemDisplayMode = 'grouped',
+    List<({String label, double amount})> taxBreakdown = const [],
+    bool preferStoredOrderTotals = false,
+    bool preferStoredItemTotals = false,
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
 
@@ -839,11 +917,25 @@ class PrintTicketService {
       waiterName: waiterName,
     );
 
-    for (final item in items) {
+    final printableItems = _buildPrintableItems(
+      items,
+      receiptItemDisplayMode: receiptItemDisplayMode,
+    );
+    final effectiveTotals = _resolvePrintableTotals(
+      order: order,
+      items: printableItems,
+      preferStoredOrderTotals: preferStoredOrderTotals,
+    );
+
+    for (final item in printableItems) {
       gen.orderItem(
         name: item.productName,
         quantity: item.quantity,
-        price: item.total,
+        price: _resolvePrintableItemTotal(
+          order,
+          item,
+          preferStoredItemTotals: preferStoredItemTotals,
+        ),
         modifiers: item.modifiers
             .map(
               (m) => m.price > 0
@@ -854,13 +946,46 @@ class PrintTicketService {
       );
     }
 
-    gen.totals(
-      subtotal: order.subtotal,
-      discounts: order.discounts > 0 ? order.discounts : null,
-      serviceFee: order.serviceFee > 0 ? order.serviceFee : null,
-      tax: order.tax,
-      total: order.total,
-    );
+    gen.separator();
+    gen.textRow('Subtotal:', 'RD\$ ${_formatMoney(effectiveTotals.subtotal)}');
+    if (effectiveTotals.discounts > 0) {
+      gen.textRow(
+        'Descuentos:',
+        '-RD\$ ${_formatMoney(effectiveTotals.discounts)}',
+      );
+    }
+
+    if (taxBreakdown.isNotEmpty) {
+      for (final entry in taxBreakdown) {
+        gen.textRow(entry.label, 'RD\$ ${_formatMoney(entry.amount)}');
+      }
+    } else {
+      if (effectiveTotals.serviceFee > 0) {
+        final servicePct = effectiveTotals.subtotal > 0
+            ? ((effectiveTotals.serviceFee / effectiveTotals.subtotal) * 100)
+                  .toStringAsFixed(0)
+            : '0';
+        gen.textRow(
+          'Servicio ($servicePct%):',
+          'RD\$ ${_formatMoney(effectiveTotals.serviceFee)}',
+        );
+      }
+      final taxPct = effectiveTotals.subtotal > 0
+          ? ((effectiveTotals.tax / effectiveTotals.subtotal) * 100)
+                .toStringAsFixed(0)
+          : '18';
+      gen.textRow(
+        'ITBIS ($taxPct%):',
+        'RD\$ ${_formatMoney(effectiveTotals.tax)}',
+      );
+    }
+
+    gen.doubleSeparator();
+    gen.setBold(true);
+    gen.setTextSize(width: 2, height: 2);
+    gen.textRow('TOTAL:', 'RD\$ ${_formatMoney(effectiveTotals.total)}');
+    gen.setTextSize();
+    gen.setBold(false);
 
     gen.paymentInfo(
       method: paymentMethod.name,
@@ -1035,4 +1160,20 @@ class PrintTicketService {
   static void _thickSeparator(EscPosGenerator gen) {
     gen.textCentered('=' * 48);
   }
+}
+
+class _PrintableReceiptTotals {
+  final double subtotal;
+  final double discounts;
+  final double serviceFee;
+  final double tax;
+  final double total;
+
+  const _PrintableReceiptTotals({
+    required this.subtotal,
+    required this.discounts,
+    required this.serviceFee,
+    required this.tax,
+    required this.total,
+  });
 }

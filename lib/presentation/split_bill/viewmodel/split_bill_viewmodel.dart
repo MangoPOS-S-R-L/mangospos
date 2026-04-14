@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../data/models/sales_models.dart';
 import '../../../data/repositories/sales_repository.dart';
+import '../../../data/utils/order_pricing_utils.dart';
 import '../../../services/session/session_controller.dart';
 import '../../sales/viewmodel/sales_viewmodel.dart';
 import '../state/split_bill_state.dart';
@@ -458,19 +459,17 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
     List<OrderItem> items,
   ) {
     final itemsByCheckId = <String, List<OrderItem>>{};
-    final totalsByCheckId = <String, double>{};
 
     for (final item in items) {
       final checkId = item.checkId;
       if (checkId == null) continue;
       itemsByCheckId.putIfAbsent(checkId, () => <OrderItem>[]).add(item);
-      totalsByCheckId[checkId] = (totalsByCheckId[checkId] ?? 0) + item.total;
     }
 
     return checks
         .map((c) {
           final checkItems = itemsByCheckId[c.id] ?? const <OrderItem>[];
-          final total = totalsByCheckId[c.id] ?? 0.0;
+          final summary = summarizeOrderPricing(state.order, checkItems);
 
           return OrderCheck(
             id: c.id,
@@ -478,11 +477,11 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
             label: c.label,
             position: c.position,
             isClosed: c.isClosed,
-            subtotal: total / 1.18, // Rough est
-            discounts: 0,
-            serviceFee: 0,
-            tax: total - (total / 1.18),
-            total: total,
+            subtotal: summary.subtotal,
+            discounts: summary.discounts,
+            serviceFee: summary.serviceFee,
+            tax: summary.tax,
+            total: summary.total,
             items: checkItems,
           );
         })
@@ -502,9 +501,12 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
         continue;
       }
 
+      final modifiersKey = item.modifiers
+          .map((m) => '${m.name}|${m.qty}|${m.price}')
+          .join('~');
       final key =
           '${item.productId ?? ''}|${item.productName}|${item.sku ?? ''}|'
-          '${item.unitPrice}|${item.isTakeout}|${item.status}|${item.notes ?? ''}';
+          '${item.unitPrice}|${item.isTakeout}|${item.status}|${item.notes ?? ''}|$modifiersKey';
 
       final existing = consolidatedByKey[key];
       if (existing == null) {
@@ -533,9 +535,12 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
         continue;
       }
 
+      final modifiersKey = item.modifiers
+          .map((m) => '${m.name}|${m.qty}|${m.price}')
+          .join('~');
       final key =
           '${item.productId ?? ''}|${item.productName}|${item.sku ?? ''}|'
-          '${item.unitPrice}|${item.isTakeout}|${item.status}|${item.notes ?? ''}';
+          '${item.unitPrice}|${item.isTakeout}|${item.status}|${item.notes ?? ''}|$modifiersKey';
 
       final existing = consolidatedByKey[key];
       if (existing == null) {

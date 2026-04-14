@@ -1002,7 +1002,9 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
   double _estimatedSubtotal() {
     final rawAmount = _baseSubtotalForQuantity(_quantity);
     if (widget.item.taxMode == 'inclusive') {
-      return rawAmount / (1 + _taxRateDecimal());
+      final divisor = 1 + _fullTaxRateDecimal();
+      if (divisor <= 0) return rawAmount;
+      return rawAmount / divisor;
     }
     return rawAmount;
   }
@@ -1013,10 +1015,16 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     return widget.item.tax / widget.item.subtotal;
   }
 
+  double _fullTaxRateDecimal() {
+    final rawFullRate = widget.item.originalTaxRate ?? widget.item.taxRate;
+    if (rawFullRate > 0) return rawFullRate / 100.0;
+    return _taxRateDecimal();
+  }
+
   double _estimatedTax() {
     final rawAmount = _baseSubtotalForQuantity(_quantity);
     if (widget.item.taxMode == 'inclusive') {
-      return rawAmount - _estimatedSubtotal();
+      return _estimatedSubtotal() * _taxRateDecimal();
     }
     return rawAmount * _taxRateDecimal();
   }
@@ -1190,10 +1198,7 @@ class _SalesModifierDialogHeader extends StatelessWidget {
             color: const Color(0xFFF97316).withValues(alpha: 0.12),
             borderRadius: BorderRadius.circular(16),
           ),
-          child: const Icon(
-            Icons.tune_rounded,
-            color: Color(0xFFF97316),
-          ),
+          child: const Icon(Icons.tune_rounded, color: Color(0xFFF97316)),
         ),
         const SizedBox(width: 14),
         Expanded(
@@ -1281,7 +1286,8 @@ class _ItemModifiersEditorDialogState
             children: [
               _SalesModifierDialogHeader(
                 title: 'Editar modificadores · ${widget.product.name}',
-                subtitle: 'Actualiza la selección de opciones del artículo actual.',
+                subtitle:
+                    'Actualiza la selección de opciones del artículo actual.',
               ),
               const SizedBox(height: 18),
               Expanded(
@@ -1346,7 +1352,9 @@ class _ItemModifiersEditorDialogState
                                       ),
                                       decoration: BoxDecoration(
                                         color: const Color(0xFFF3F4F6),
-                                        borderRadius: BorderRadius.circular(999),
+                                        borderRadius: BorderRadius.circular(
+                                          999,
+                                        ),
                                       ),
                                       child: Text(
                                         displayType == 'single'
@@ -1379,8 +1387,12 @@ class _ItemModifiersEditorDialogState
                                         return FilterChip(
                                           selected: isSelected,
                                           showCheckmark: false,
-                                          selectedColor: const Color(0xFFFFEDD5),
-                                          backgroundColor: const Color(0xFFF8FAFC),
+                                          selectedColor: const Color(
+                                            0xFFFFEDD5,
+                                          ),
+                                          backgroundColor: const Color(
+                                            0xFFF8FAFC,
+                                          ),
                                           side: BorderSide(
                                             color: isSelected
                                                 ? const Color(0xFFF97316)
@@ -1388,12 +1400,15 @@ class _ItemModifiersEditorDialogState
                                             width: isSelected ? 1.5 : 1,
                                           ),
                                           shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(14),
+                                            borderRadius: BorderRadius.circular(
+                                              14,
+                                            ),
                                           ),
                                           avatar: Icon(
                                             isSelected
                                                 ? Icons.check_circle_rounded
-                                                : Icons.add_circle_outline_rounded,
+                                                : Icons
+                                                      .add_circle_outline_rounded,
                                             size: 18,
                                             color: isSelected
                                                 ? const Color(0xFFF97316)

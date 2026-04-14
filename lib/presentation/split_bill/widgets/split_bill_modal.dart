@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/presentation/customers/viewmodel/customers_viewmodel.dart';
 
 import '../../../data/models/sales_models.dart';
+import '../../../data/utils/order_pricing_utils.dart';
 import '../viewmodel/split_bill_viewmodel.dart';
 import '../state/split_bill_state.dart';
 
@@ -43,22 +44,8 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
     return normalized.toStringAsFixed(2);
   }
 
-  double _linePrice(OrderItem item) {
-    final expectedSubtotal = item.unitPrice * item.quantity;
-    final dbSubtotal = item.subtotal;
-    final isFractionalQty =
-        (item.quantity - item.quantity.roundToDouble()).abs() > 0.001;
-    final preferExpectedSubtotal =
-        isFractionalQty &&
-        dbSubtotal > 0 &&
-        (dbSubtotal - expectedSubtotal).abs() > 0.01;
-
-    final baseSubtotal = preferExpectedSubtotal
-        ? expectedSubtotal
-        : (dbSubtotal > 0 ? dbSubtotal : expectedSubtotal);
-
-    final net = baseSubtotal - item.discounts;
-    return net < 0 ? 0 : net;
+  double _linePrice(Order? order, OrderItem item) {
+    return itemDisplayTotal(order, item);
   }
 
   @override
@@ -482,7 +469,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                               ),
                             ),
                             Text(
-                              'RD\$${_linePrice(item).toStringAsFixed(2)}',
+                              'RD\$${_linePrice(state.order, item).toStringAsFixed(2)}',
                               style: const TextStyle(
                                 color: _primary,
                                 fontWeight: FontWeight.bold,
@@ -786,6 +773,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                           final items =
                               itemsByCheckId[check.id] ?? const <OrderItem>[];
                           return _CheckCard(
+                            order: state.order,
                             check: check,
                             items: items,
                             selectedItemIds:
@@ -1349,6 +1337,7 @@ class _AssignCheckCustomerDialogState
 }
 
 class _CheckCard extends StatelessWidget {
+  final Order? order;
   final OrderCheck check;
   final List<OrderItem> items;
   final Set<String> selectedItemIds; // New prop
@@ -1360,6 +1349,7 @@ class _CheckCard extends StatelessWidget {
   final Color primaryColor;
 
   const _CheckCard({
+    required this.order,
     required this.check,
     required this.items,
     required this.selectedItemIds,
@@ -1380,21 +1370,7 @@ class _CheckCard extends StatelessWidget {
   }
 
   double _linePrice(OrderItem item) {
-    final expectedSubtotal = item.unitPrice * item.quantity;
-    final dbSubtotal = item.subtotal;
-    final isFractionalQty =
-        (item.quantity - item.quantity.roundToDouble()).abs() > 0.001;
-    final preferExpectedSubtotal =
-        isFractionalQty &&
-        dbSubtotal > 0 &&
-        (dbSubtotal - expectedSubtotal).abs() > 0.01;
-
-    final baseSubtotal = preferExpectedSubtotal
-        ? expectedSubtotal
-        : (dbSubtotal > 0 ? dbSubtotal : expectedSubtotal);
-
-    final net = baseSubtotal - item.discounts;
-    return net < 0 ? 0 : net;
+    return itemDisplayTotal(order, item);
   }
 
   @override

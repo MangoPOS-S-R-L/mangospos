@@ -587,22 +587,39 @@ class _PaymentTableRow extends ConsumerWidget {
       try {
         final taxRows = await Supabase.instance.client
             .from('taxes')
-            .select('name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery')
+            .select(
+              'name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery',
+            )
             .eq('business_id', businessId)
             .eq('is_active', true);
-        final taxes = (taxRows as List).map((r) => TaxDef.fromMap(r as Map<String, dynamic>)).toList();
+        final taxes = (taxRows as List)
+            .map((r) => TaxDef.fromMap(r as Map<String, dynamic>))
+            .toList();
         final origin = parseSaleOrigin(payment['origin']?.toString());
         final printSummary = summarizeOrderPricing(printOrder, printItems);
         final base = printSummary.subtotal;
+        final configuredBreakdown = <({String label, double amount})>[];
         for (final tx in taxes) {
           if (!tx.isActive || tx.rate <= 0) continue;
           if (!tx.appliesTo(origin)) continue;
           final pctLabel = tx.rate.truncateToDouble() == tx.rate
               ? '${tx.rate.toInt()}%'
               : '${tx.rate}%';
-          final amount = double.parse((base * tx.rateDecimal).toStringAsFixed(2));
-          reprintTaxBreakdown.add((label: '${tx.name} ($pctLabel)', amount: amount));
+          final amount = double.parse(
+            (base * tx.rateDecimal).toStringAsFixed(2),
+          );
+          configuredBreakdown.add((
+            label: '${tx.name} ($pctLabel)',
+            amount: amount,
+          ));
         }
+        reprintTaxBreakdown.addAll(
+          buildOrderTaxBreakdown(
+            printOrder,
+            printItems,
+            configuredBreakdown: configuredBreakdown,
+          ),
+        );
       } catch (_) {
         // Fallback: the ticket will use the summary-level ITBIS/SERVICIO lines
       }
@@ -625,6 +642,8 @@ class _PaymentTableRow extends ConsumerWidget {
         title: '*** REIMPRESION ***',
         receiptItemDisplayMode: receiptItemDisplayMode,
         taxBreakdown: reprintTaxBreakdown,
+        preferStoredOrderTotals: true,
+        preferStoredItemTotals: true,
       );
 
       await printRepo.printEscPos(

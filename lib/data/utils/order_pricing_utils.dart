@@ -82,8 +82,7 @@ OrderItemPricingSummary summarizeItemPricing(Order? order, OrderItem item) {
 
   // For exclusive items, service fee is an "extra" line (not in the item total
   // from DB). For inclusive items, it's already extracted from the gross.
-  final isExtraService =
-      item.taxMode != 'inclusive' && result.serviceFee > 0;
+  final isExtraService = item.taxMode != 'inclusive' && result.serviceFee > 0;
 
   return OrderItemPricingSummary(
     subtotal: result.baseAmount,
@@ -138,6 +137,60 @@ class OrderPricingSummary {
     required this.extraServiceFee,
     required this.total,
   });
+}
+
+List<({String label, double amount})> buildOrderTaxBreakdown(
+  Order? order,
+  Iterable<OrderItem> items, {
+  Iterable<({String label, double amount})> configuredBreakdown = const [],
+}) {
+  final summary = summarizeOrderPricing(order, items);
+  final targetTaxTotal = _r(summary.tax + summary.serviceFee);
+
+  final normalizedConfigured = configuredBreakdown
+      .map((entry) => (label: entry.label, amount: _r(entry.amount)))
+      .where((entry) => entry.amount > 0.004)
+      .toList(growable: false);
+
+  if (normalizedConfigured.isNotEmpty) {
+    final configuredSum = _r(
+      normalizedConfigured.fold<double>(0, (sum, entry) => sum + entry.amount),
+    );
+    final diff = _r(targetTaxTotal - configuredSum);
+
+    if (diff.abs() <= 0.01) {
+      final reconciled = normalizedConfigured.toList(growable: true);
+      if (diff.abs() > 0.0001) {
+        final last = reconciled.removeLast();
+        reconciled.add((label: last.label, amount: _r(last.amount + diff)));
+      }
+      return reconciled;
+    }
+  }
+
+  final fallback = <({String label, double amount})>[];
+  if (summary.tax > 0.004) {
+    final taxPct = summary.subtotal > 0
+        ? ((summary.tax / summary.subtotal) * 100)
+        : 0.0;
+    final taxPctLabel = taxPct > 0
+        ? ' (${taxPct.toStringAsFixed(taxPct % 1 == 0 ? 0 : 2)}%)'
+        : '';
+    fallback.add((label: 'ITBIS$taxPctLabel', amount: _r(summary.tax)));
+  }
+  if (summary.serviceFee > 0.004) {
+    final servicePct = summary.subtotal > 0
+        ? ((summary.serviceFee / summary.subtotal) * 100)
+        : 0.0;
+    final servicePctLabel = servicePct > 0
+        ? ' (${servicePct.toStringAsFixed(servicePct % 1 == 0 ? 0 : 2)}%)'
+        : '';
+    fallback.add((
+      label: 'Propina Ley$servicePctLabel',
+      amount: _r(summary.serviceFee),
+    ));
+  }
+  return fallback;
 }
 
 OrderPricingSummary summarizeOrderPricing(

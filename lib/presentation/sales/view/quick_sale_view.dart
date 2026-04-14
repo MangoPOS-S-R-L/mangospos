@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/data/utils/order_pricing_utils.dart';
 import 'package:mangopos/presentation/payments/widgets/payment_modal.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../viewmodel/sales_viewmodel.dart';
@@ -14,7 +15,10 @@ class QuickSaleView extends ConsumerWidget {
     final order = ref.watch(currentOrderProvider.select((s) => s.order));
     final items = ref.watch(currentOrderProvider.select((s) => s.items));
     final loading = ref.watch(currentOrderProvider.select((s) => s.loading));
-    final total = order?.total ?? 0.0;
+    final pricingSummary = order == null
+        ? null
+        : summarizeOrderPricing(order, items);
+    final total = pricingSummary?.total ?? 0.0;
     final canPay = order != null && items.isNotEmpty && !loading && total > 0;
     return Scaffold(
       appBar: AppBar(
@@ -42,7 +46,9 @@ class QuickSaleView extends ConsumerWidget {
                   return ListTile(
                     title: Text(it.productName),
                     subtitle: Text('Cant: ${it.quantity}'),
-                    trailing: Text('RD\$ ${it.total.toStringAsFixed(2)}'),
+                    trailing: Text(
+                      'RD\$ ${itemDisplayTotal(order, it).toStringAsFixed(2)}',
+                    ),
                   );
                 },
               ),
@@ -66,7 +72,18 @@ class QuickSaleView extends ConsumerWidget {
                           showDialog(
                             context: context,
                             builder: (context) => PaymentModal(
-                              order: order,
+                              order: order.copyWith(
+                                subtotal:
+                                    pricingSummary?.subtotal ?? order.subtotal,
+                                discounts:
+                                    pricingSummary?.discounts ??
+                                    order.discounts,
+                                serviceFee:
+                                    pricingSummary?.serviceFee ??
+                                    order.serviceFee,
+                                tax: pricingSummary?.tax ?? order.tax,
+                                total: total,
+                              ),
                               onPaymentSuccess: () {
                                 ref
                                     .read(currentOrderProvider.notifier)

@@ -171,16 +171,20 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       try {
         final taxRows = await Supabase.instance.client
             .from('taxes')
-            .select('name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery')
+            .select(
+              'name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery',
+            )
             .eq('business_id', businessId)
             .eq('is_active', true);
         _cachedBusinessTaxes = List<Map<String, dynamic>>.from(taxRows);
 
         // Si hay un impuesto marcado como service fee, usar su tasa
-        final serviceTax = _cachedBusinessTaxes.cast<Map<String, dynamic>?>().firstWhere(
-          (tx) => TaxDef.fromMap(tx ?? const {}).effectiveIsServiceFee,
-          orElse: () => null,
-        );
+        final serviceTax = _cachedBusinessTaxes
+            .cast<Map<String, dynamic>?>()
+            .firstWhere(
+              (tx) => TaxDef.fromMap(tx ?? const {}).effectiveIsServiceFee,
+              orElse: () => null,
+            );
         if (serviceTax != null) {
           _cachedServiceFeeEnabled = true;
           _cachedServiceFeeRatePct = (serviceTax['rate'] as num).toDouble();
@@ -332,23 +336,25 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // 4. Calcular Pricing con contexto de Service Fee
     var pricingOrder = _pricingOrderContext(order, normalizedItems);
 
-    // Heurística de emergencia para el Front-end: 
-    // Si el backend devolvió service_fee = 0 pero sabemos que este origen lleva propina, 
+    // Heurística de emergencia para el Front-end:
+    // Si el backend devolvió service_fee = 0 pero sabemos que este origen lleva propina,
     // y el campo 'tax' es lo suficientemente grande, la separamos para evitar parpadeos
     if (pricingOrder.serviceFee == 0 && _isServiceFeeActiveForOrigin()) {
       final bizTaxRate = _calculateBusinessTaxRateForOrigin();
       final totalTaxInOrder = pricingOrder.tax;
       if (bizTaxRate > 0 && totalTaxInOrder > 0) {
-          final serviceRate = _cachedServiceFeeRatePct;
-          final totalEffectiveRate = bizTaxRate + serviceRate;
-          if (totalEffectiveRate > 0) {
-              final estimatedService = _roundMoney(totalTaxInOrder * (serviceRate / totalEffectiveRate));
-              final estimatedTax = _roundMoney(totalTaxInOrder - estimatedService);
-              pricingOrder = pricingOrder.copyWith(
-                tax: estimatedTax,
-                serviceFee: estimatedService,
-              );
-          }
+        final serviceRate = _cachedServiceFeeRatePct;
+        final totalEffectiveRate = bizTaxRate + serviceRate;
+        if (totalEffectiveRate > 0) {
+          final estimatedService = _roundMoney(
+            totalTaxInOrder * (serviceRate / totalEffectiveRate),
+          );
+          final estimatedTax = _roundMoney(totalTaxInOrder - estimatedService);
+          pricingOrder = pricingOrder.copyWith(
+            tax: estimatedTax,
+            serviceFee: estimatedService,
+          );
+        }
       }
     }
 
@@ -537,10 +543,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     state = state.copyWith(loading: true, error: null);
     try {
       await openTable(tableId, peopleCount: 1);
-      state = state.copyWith(
-        origin: 'delivery',
-        deliveryType: deliveryType,
-      );
+      state = state.copyWith(origin: 'delivery', deliveryType: deliveryType);
     } catch (e) {
       state = state.copyWith(loading: false, error: e.toString());
     }
@@ -825,13 +828,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       // Respect origin-based service fee toggle for optimistic update
       final sfActiveForOrigin = _isServiceFeeActiveForOrigin();
       final resolvedServiceFee = sfActiveForOrigin
-          ? (updatedSummary.serviceFee > 0 ? updatedSummary.serviceFee : addService)
+          ? (updatedSummary.serviceFee > 0
+                ? updatedSummary.serviceFee
+                : addService)
           : 0.0;
       final resolvedTotal = sfActiveForOrigin
           ? (updatedSummary.serviceFee > 0
-              ? updatedSummary.total
-              : updatedSummary.total + (productTaxMode == 'inclusive' ? 0 : addService))
-          : updatedSummary.subtotal + updatedSummary.tax - updatedSummary.discounts;
+                ? updatedSummary.total
+                : updatedSummary.total +
+                      (productTaxMode == 'inclusive' ? 0 : addService))
+          : updatedSummary.subtotal +
+                updatedSummary.tax -
+                updatedSummary.discounts;
       final updatedOrder = previousOrder.copyWith(
         subtotal: updatedSummary.subtotal,
         tax: updatedSummary.tax,
@@ -866,7 +874,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
                   .toList(growable: false),
             );
       }
-      
+
       // Corregir el tax_rate del item según el origin actual.
       // Usamos un RPC con SECURITY DEFINER para bypasear RLS que
       // bloquea updates directos en ventas rápidas/manuales.
@@ -887,7 +895,6 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
       // Bypassear el debounce para que la respuesta sea instantánea
       await _loadOrderDetail(orderId);
-
     } catch (e) {
       final businessId = _activeBusinessId;
       final isOffline =
@@ -942,25 +949,31 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     bool includeServiceInInclusivePrice = false,
   }) {
     final normalizedTaxRate = taxRate.clamp(0, 5).toDouble();
-    final normalizedFullTaxRate = (fullTaxRate ?? taxRate).clamp(0, 5).toDouble();
+    final normalizedFullTaxRate = (fullTaxRate ?? taxRate)
+        .clamp(0, 5)
+        .toDouble();
     final normalizedServiceRate = serviceRate.clamp(0, 5).toDouble();
 
     if (taxMode == 'inclusive' && normalizedFullTaxRate > 0) {
-      // El divisor usa la tasa FULL para extraer la base correcta
-      final divisor =
-          1 +
-          normalizedFullTaxRate +
-          (includeServiceInInclusivePrice ? normalizedServiceRate : 0);
-      
+      // normalizedFullTaxRate ya representa la tasa TOTAL incluida en el precio
+      // (ej. ITBIS + ley). Volver a sumar serviceRate aquí extraía de más la base
+      // y producía montos optimistas de 499.99/0.01 fuera de reconciliación.
+      final divisor = 1 + normalizedFullTaxRate;
+
       final subtotal = grossAmount / divisor;
-      
-      // El impuesto real se calcula sobre la base extraída, usando la tasa APLICABLE
+
+      // El impuesto real se calcula sobre la base extraída, usando la tasa aplicable.
       final tax = subtotal * normalizedTaxRate;
-      
-      // El total es base + impuestos (si taxRate < fullRate, el total bajará de grossAmount)
-      final total = subtotal + 
-                   tax + 
-                   (includeServiceInInclusivePrice ? (subtotal * normalizedServiceRate) : 0);
+
+      // Si la propina de ley está incluida en el precio, se muestra separada pero
+      // no se vuelve a agregar al divisor. El total debe reconciliar con grossAmount
+      // cuando todas las tasas siguen activas.
+      final total =
+          subtotal +
+          tax +
+          (includeServiceInInclusivePrice
+              ? (subtotal * normalizedServiceRate)
+              : 0);
 
       return (
         subtotal: double.parse(subtotal.toStringAsFixed(2)),
@@ -977,7 +990,6 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       total: double.parse(total.toStringAsFixed(2)),
     );
   }
-
 
   Future<void> toggleTakeout(bool value) async {
     final orderId = state.order?.id;
@@ -1109,7 +1121,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       final taxRate = targetItem.subtotal > 0
           ? (targetItem.tax / targetItem.subtotal)
           : 0.0;
-      final serviceRate = targetItem.isTakeout || !_isServiceFeeActiveForOrigin()
+      final serviceRate =
+          targetItem.isTakeout || !_isServiceFeeActiveForOrigin()
           ? 0.0
           : (_cachedServiceFeeRatePct / 100.0);
       final optimisticAmounts = _estimateOptimisticItemAmounts(
@@ -1120,16 +1133,21 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         includeServiceInInclusivePrice: !targetItem.isTakeout,
       );
       final optimisticItems = state.items
-          .map((item) => item.id != itemId
-              ? item
-              : item.copyWith(
-                  quantity: quantity,
-                  subtotal: optimisticAmounts.subtotal,
-                  tax: optimisticAmounts.tax,
-                  total: optimisticAmounts.total,
-                ))
+          .map(
+            (item) => item.id != itemId
+                ? item
+                : item.copyWith(
+                    quantity: quantity,
+                    subtotal: optimisticAmounts.subtotal,
+                    tax: optimisticAmounts.tax,
+                    total: optimisticAmounts.total,
+                  ),
+          )
           .toList(growable: false);
-      final updatedSummary = summarizeOrderPricing(state.order, optimisticItems);
+      final updatedSummary = summarizeOrderPricing(
+        state.order,
+        optimisticItems,
+      );
       state = state.copyWith(
         items: optimisticItems,
         order: state.order?.copyWith(
@@ -1158,7 +1176,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
               final taxRate = item.subtotal > 0
                   ? (item.tax / item.subtotal)
                   : 0.0;
-              final serviceRate = item.isTakeout || !_isServiceFeeActiveForOrigin()
+              final serviceRate =
+                  item.isTakeout || !_isServiceFeeActiveForOrigin()
                   ? 0.0
                   : (_cachedServiceFeeRatePct / 100.0);
               final optimisticAmounts = _estimateOptimisticItemAmounts(
@@ -1637,7 +1656,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       debugPrint('Note: Could not refresh cashier: $e');
     }
 
-      state = const CurrentOrderState();
+    state = const CurrentOrderState();
   }
 
   Future<void> cancelCurrentOrder({String? reason}) async {
@@ -1880,7 +1899,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       customerId = bundle.customerId;
       customerName = bundle.customerName;
       sessionNote = bundle.note;
-      
+
       loadedByBundle = order != null;
     } catch (e) {
       loadError = e.toString();
