@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(flutter pub *)",
+      "Read(//Users/cristiangomez/.pub-cache/hosted/pub.dev/flutter_usb_printer-0.1.0+1/lib/**)",
+      "Read(//Users/cristiangomez/.pub-cache/hosted/pub.dev/flutter_blue_plus-2.0.0/**)",
+      "Bash(grep -l \"CREATE TABLE.*print_area\" /Users/cristiangomez/dev/mangospos/supabase/migrations/*.sql)",
+      "Bash(grep -E \"\\\\.\\(dart|sql\\)$\")"
+    ]
+  }
+}

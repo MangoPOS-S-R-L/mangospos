@@ -192,10 +192,8 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
 
     final selected = await showDialog<PrinterDevice>(
       context: context,
-      builder: (dialogContext) => _ReceiptPrinterPickerDialog(
-        title: dialogTitle,
-        printers: printers,
-      ),
+      builder: (dialogContext) =>
+          _ReceiptPrinterPickerDialog(title: dialogTitle, printers: printers),
     );
     if (selected == null) return;
 
@@ -285,7 +283,8 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
                                 printerId: receiptPrinter!.id,
                                 removesPrebills: false,
                                 removesReceipts: true,
-                                onRemoved: (_) => _selectedReceiptPrinter = null,
+                                onRemoved: (_) =>
+                                    _selectedReceiptPrinter = null,
                               ),
                         onConfigure: receiptPrinter == null
                             ? null
@@ -314,7 +313,8 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
                                 printerId: prebillPrinter!.id,
                                 removesPrebills: true,
                                 removesReceipts: false,
-                                onRemoved: (_) => _selectedPrebillPrinter = null,
+                                onRemoved: (_) =>
+                                    _selectedPrebillPrinter = null,
                               ),
                         onConfigure: prebillPrinter == null
                             ? null
@@ -345,7 +345,8 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
                                   printerId: closurePrinter!.id,
                                   removesPrebills: false,
                                   removesReceipts: true,
-                                  onRemoved: (_) => _selectedClosurePrinter = null,
+                                  onRemoved: (_) =>
+                                      _selectedClosurePrinter = null,
                                 ),
                           onConfigure: closurePrinter == null
                               ? null
@@ -550,7 +551,9 @@ class _DocumentAssignmentCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'MAC: ${printer!.mac?.isNotEmpty == true ? printer!.mac! : 'No disponible'}',
+                    printer!.type == PrinterType.usb
+                        ? 'USB: ${printer!.devicePath?.isNotEmpty == true ? printer!.devicePath! : (printer!.mac?.isNotEmpty == true ? printer!.mac! : 'No disponible')}'
+                        : 'MAC: ${printer!.mac?.isNotEmpty == true ? printer!.mac! : 'No disponible'}',
                     style: const TextStyle(
                       fontSize: 13,
                       color: MangoColors.darkGray,
@@ -656,9 +659,11 @@ class _ReceiptPrinterPickerDialog extends StatelessWidget {
                                     ),
                                   ),
                                   Text(
-                                    printer.ip?.isNotEmpty == true
-                                        ? 'IP: ${printer.ip}'
-                                        : 'Sin IP configurada',
+                                    printer.type == PrinterType.usb
+                                        ? 'USB: ${printer.devicePath?.isNotEmpty == true ? printer.devicePath! : (printer.mac?.isNotEmpty == true ? printer.mac! : 'Sin identificador USB')}'
+                                        : (printer.ip?.isNotEmpty == true
+                                              ? 'IP: ${printer.ip}'
+                                              : 'Sin IP configurada'),
                                     style: const TextStyle(
                                       fontSize: 12,
                                       color: MangoColors.muted,

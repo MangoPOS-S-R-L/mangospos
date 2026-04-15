@@ -2,7 +2,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io'
-    show Directory, File, FileMode, Platform, Process, ProcessStartMode;
+    show Directory, File, FileMode, InternetAddressType, NetworkInterface, Platform, Process, ProcessStartMode;
 import 'dart:ui' show PlatformDispatcher;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -23,9 +23,13 @@ import 'app/router/app_router.dart';
 import 'app/router/routes.dart';
 import 'core/cache/cache_manager.dart';
 import 'core/network/supabase_config.dart';
+import 'core/agent/mobile_print_agent.dart';
 import 'core/services/local_print_service.dart';
 import 'core/utils/logger.dart';
 import 'env/env.dart';
+
+/// Global mobile print agent instance (Android/iOS only).
+final MobilePrintAgent _mobileAgent = MobilePrintAgent();
 
 const String agentHost = '127.0.0.1';
 
@@ -60,6 +64,55 @@ int _authRecoveryAttempts = 0;
 const int _maxAuthRecoveryAttempts = 3;
 DateTime? _lastTransientAuthLogAt;
 String? _lastTransientAuthSignature;
+
+/// Returns the first private IPv4 address (192.x / 10.x / 172.x) of this machine.
+Future<String?> _getLocalIp() async {
+  try {
+    final ifaces = await NetworkInterface.list();
+    for (final iface in ifaces) {
+      for (final addr in iface.addresses) {
+        final ip = addr.address;
+        if (addr.type == InternetAddressType.IPv4 &&
+            (ip.startsWith('192.') ||
+                ip.startsWith('10.') ||
+                ip.startsWith('172.'))) {
+          return ip;
+        }
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
+/// Publishes the agent URL (with LAN IP) to business_settings so tablets can find it.
+Future<void> _publishAgentUrlToDb() async {
+  try {
+    final localIp = await _getLocalIp();
+    if (localIp == null) {
+      debugPrint('[Agent] Could not determine LAN IP — skipping URL publish.');
+      return;
+    }
+    final agentUrl = 'http://$localIp:$agentPort';
+
+    // Get the active business ID from the current user's membership
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return;
+    final membership = await Supabase.instance.client
+        .from('business_members')
+        .select('business_id')
+        .eq('user_id', user.id)
+        .limit(1)
+        .maybeSingle();
+    if (membership == null) return;
+    final businessId = membership['business_id']?.toString();
+    if (businessId == null || businessId.isEmpty) return;
+
+    await LocalPrintService.publishAgentUrl(agentUrl, businessId);
+    debugPrint('[Agent] Published agent URL: $agentUrl for business $businessId');
+  } catch (e) {
+    debugPrint('[Agent] Failed to publish agent URL: $e');
+  }
+}
 
 Future<bool> _pingAgentOnce({
   Duration timeout = const Duration(milliseconds: 1000),
@@ -275,9 +328,21 @@ Future<void> _initializeBackgroundServices() async {
       }
     }
 
-    // Printer agent (puede tardar hasta 8s con los pings)
-    await _ensurePrinterAgentStarted();
-    LocalPrintService.primeBaseUrl('http://$agentHost:$agentPort');
+    // Printer agent
+    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+      // Mobile: start the built-in Dart agent
+      final agentUrl = await _mobileAgent.start(port: agentPort);
+      if (agentUrl != null) {
+        LocalPrintService.primeBaseUrl(agentUrl);
+        debugPrint('[Agent] Mobile agent running at $agentUrl');
+        unawaited(_publishAgentUrlToDb());
+      }
+    } else if (!kIsWeb) {
+      // Desktop: launch the Node.js agent (puede tardar hasta 8s con los pings)
+      await _ensurePrinterAgentStarted();
+      LocalPrintService.primeBaseUrl('http://$agentHost:$agentPort');
+      unawaited(_publishAgentUrlToDb());
+    }
     unawaited(LocalPrintService().warmup());
 
     // Cache

@@ -1,6 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mangopos/core/tax/tax_engine.dart';
 import 'package:mangopos/presentation/customers/viewmodel/customers_viewmodel.dart';
+import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
+import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
+import 'package:mangopos/services/printing/print_ticket_service.dart';
+import 'package:mangopos/services/session/session_controller.dart';
+import 'package:mangopos/data/repositories/pos_settings_repository.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../data/models/sales_models.dart';
 import '../../../data/utils/order_pricing_utils.dart';
@@ -46,6 +53,111 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
 
   double _linePrice(Order? order, OrderItem item) {
     return itemDisplayTotal(order, item);
+  }
+
+  Future<void> _printCheckPrecheck(
+    BuildContext context,
+    WidgetRef ref,
+    Order? order,
+    OrderCheck check,
+    List<OrderItem> items,
+  ) async {
+    if (order == null || items.isEmpty) return;
+
+    final scaffold = ScaffoldMessenger.of(context);
+    try {
+      final session = ref.read(sessionProvider);
+      final businessId = session.activeBusinessId;
+      if (businessId == null || businessId.isEmpty) {
+        throw Exception('No se pudo resolver el negocio activo.');
+      }
+
+      final printRepo = ref.read(printingPrintersRepositoryProvider);
+      final assignedPrinter = await printRepo.getAssignedPrinterForType(
+        businessId: businessId,
+        preferredAreaCodes: const ['cashier', 'fiscal'],
+        printsPrebills: true,
+      );
+      if (assignedPrinter == null) {
+        throw Exception('No hay impresora configurada para precuentas.');
+      }
+
+      // Build check-level order for pricing
+      final checkOrder = check.toOrder(createdAt: order.createdAt);
+
+      // Tax breakdown
+      final printSummary = summarizeOrderPricing(checkOrder, items);
+      final taxBreakdown = <({String label, double amount})>[];
+      try {
+        final taxRows = await Supabase.instance.client
+            .from('taxes')
+            .select('name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery')
+            .eq('business_id', businessId)
+            .eq('is_active', true);
+        final taxes = (taxRows as List)
+            .map((r) => TaxDef.fromMap(r as Map<String, dynamic>))
+            .toList();
+        final origin = parseSaleOrigin(
+            ref.read(currentOrderProvider).origin);
+        for (final tx in taxes) {
+          if (!tx.isActive || tx.rate <= 0 || !tx.appliesTo(origin)) continue;
+          final pctLabel = tx.rate.truncateToDouble() == tx.rate
+              ? '${tx.rate.toInt()}%'
+              : '${tx.rate}%';
+          final amount = double.parse(
+              (printSummary.subtotal * tx.rateDecimal).toStringAsFixed(2));
+          taxBreakdown
+              .add((label: '${tx.name} ($pctLabel)', amount: amount));
+        }
+      } catch (_) {}
+
+      // Business info
+      final profileRaw = await Supabase.instance.client
+          .from('businesses')
+          .select('name,legal_name,address,phone,rnc')
+          .eq('id', businessId)
+          .maybeSingle();
+
+      final receiptMode = await ref
+          .read(posSettingsRepositoryProvider)
+          .getReceiptItemDisplayMode(businessId);
+
+      final ticket = PrintTicketService.generatePrecheck(
+        order: checkOrder,
+        items: items,
+        tableName: check.label,
+        businessName: profileRaw?['name'] ?? profileRaw?['legal_name'],
+        legalName: profileRaw?['legal_name'],
+        businessAddress: profileRaw?['address'],
+        businessPhone: profileRaw?['phone'],
+        businessRnc: profileRaw?['rnc'],
+        title: 'PRECUENTA - ${check.label}',
+        receiptItemDisplayMode: receiptMode,
+        taxBreakdown: taxBreakdown,
+      );
+
+      await printRepo.printEscPos(
+        printer: assignedPrinter,
+        data: ticket.escPosCommands,
+      );
+
+      if (context.mounted) {
+        scaffold.showSnackBar(
+          SnackBar(
+              content: Text(
+                  'Precuenta ${check.label} enviada a impresora.')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        scaffold.showSnackBar(
+          SnackBar(
+            content: Text('Error imprimiendo precuenta: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -815,6 +927,13 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                                   ),
                             onDelete: () => viewModel.deleteCheck(check.id),
                             onRemoveItem: viewModel.unassignItem,
+                            onPrintPrecheck: () => _printCheckPrecheck(
+                              context,
+                              ref,
+                              state.order,
+                              check,
+                              items,
+                            ),
                             primaryColor: _primary,
                           );
                         },
@@ -1340,12 +1459,13 @@ class _CheckCard extends StatelessWidget {
   final Order? order;
   final OrderCheck check;
   final List<OrderItem> items;
-  final Set<String> selectedItemIds; // New prop
-  final Function(String) onToggleSelection; // New prop
+  final Set<String> selectedItemIds;
+  final Function(String) onToggleSelection;
   final VoidCallback onAssignCustomer;
   final VoidCallback? onClearCustomer;
   final VoidCallback onDelete;
   final Function(String) onRemoveItem;
+  final VoidCallback onPrintPrecheck;
   final Color primaryColor;
 
   const _CheckCard({
@@ -1358,6 +1478,7 @@ class _CheckCard extends StatelessWidget {
     required this.onClearCustomer,
     required this.onDelete,
     required this.onRemoveItem,
+    required this.onPrintPrecheck,
     required this.primaryColor,
   });
 
@@ -1605,7 +1726,7 @@ class _CheckCard extends StatelessWidget {
                 ),
                 Expanded(
                   child: TextButton.icon(
-                    onPressed: () {},
+                    onPressed: onPrintPrecheck,
                     icon: const Icon(
                       Icons.receipt_long,
                       color: Color(0xFF6B7280),

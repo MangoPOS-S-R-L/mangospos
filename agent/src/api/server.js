@@ -7,11 +7,9 @@ const discoveryService = require('../core/discovery');
 const app = express();
 const PORT = config.service.port || 9100;
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 
-// Auth Middleware
 const authenticate = (req, res, next) => {
     if (!config.security.enabled) return next();
 
@@ -23,20 +21,16 @@ const authenticate = (req, res, next) => {
     res.status(401).json({ error: 'Verify API Token' });
 };
 
-// --- Routes ---
-
-// Status
 app.get('/status', (req, res) => {
     res.json({
         service: config.service.name,
         version: '2.0.0',
         uptime: process.uptime(),
         queue: printerManager.getQueueStatus(),
-        discovery: discoveryService.isScanning ? 'scanning' : 'idle'
+        discovery: discoveryService.isScanning ? 'scanning' : 'idle',
     });
 });
 
-// Prerequisites: Get Printers (Discovery + Configured)
 app.get('/printers', authenticate, async (req, res) => {
     try {
         const configured = config.printers;
@@ -48,7 +42,6 @@ app.get('/printers', authenticate, async (req, res) => {
     }
 });
 
-// Compatibilidad con cliente Flutter legado/nuevo
 app.get('/api/printers/discover', authenticate, async (req, res) => {
     try {
         const discovered = await discoveryService.scan();
@@ -59,20 +52,22 @@ app.get('/api/printers/discover', authenticate, async (req, res) => {
     }
 });
 
-// Print Job
 app.post('/print', authenticate, async (req, res) => {
     const job = req.body;
-    // Contrato normalizado:
-    // { printerId, type: 'raw'|'text', content: '...' }
     if (!job.printerId || job.content == null) {
         return res.status(400).json({ error: 'Missing printerId or content' });
     }
 
     try {
-        logger.info(`Incoming /print request -> printerId=${job.printerId} type=${job.type || 'text'} from ${req.ip}`);
+        logger.info(
+            `Incoming /print request -> printerId=${job.printerId} type=${job.type || 'text'} from ${req.ip}` +
+            `${job.printer ? ' with-inline-printer=true' : ''}`
+        );
 
         const normalizedJob = {
             printerId: job.printerId,
+            printer: job.printer && typeof job.printer === 'object' ? job.printer : undefined,
+            meta: job.meta,
             data: {
                 type: job.type || 'text',
                 content: job.content,
@@ -86,12 +81,10 @@ app.post('/print', authenticate, async (req, res) => {
     }
 });
 
-// Test Print
 app.post('/test-print', authenticate, async (req, res) => {
     const { printerId } = req.body;
     if (!printerId) return res.status(400).json({ error: 'Printer ID required' });
 
-    // Internal test job
     const testJob = {
         printerId,
         data: {
@@ -113,7 +106,6 @@ Service Status: ONLINE
     res.json({ success: true, jobId, message: 'Test print queued' });
 });
 
-// Compatibilidad con cliente Flutter legado/nuevo
 app.post('/api/printers/test', authenticate, async (req, res) => {
     const { printerId, ip, port } = req.body;
     const normalizedPrinterId = printerId || (ip ? `${ip}:${port || 9100}` : null);
@@ -164,29 +156,20 @@ app.post('/api/printers/raw', authenticate, async (req, res) => {
     }
 });
 
-
-// --- Config & UI ---
-
-// Serve Admin UI
 app.use(express.static(require('path').join(__dirname, '../../public')));
 
-// Get Config
 app.get('/api/config', authenticate, (req, res) => {
     res.json(config);
 });
 
-// Update Config
 app.post('/api/config', authenticate, async (req, res) => {
     const newConfig = req.body;
-    // Basic validation
     if (!newConfig.service || !newConfig.printers) {
         return res.status(400).json({ error: 'Invalid config structure' });
     }
 
-    // Update runtime config
     Object.assign(config, newConfig);
 
-    // Save to disk
     try {
         const fs = require('fs');
         const yaml = require('js-yaml');
@@ -201,8 +184,6 @@ app.post('/api/config', authenticate, async (req, res) => {
     }
 });
 
-
-// Start Server
 const start = () => {
     app.listen(PORT, '0.0.0.0', () => {
         logger.info(`MangoPOS Agent running on port ${PORT}`);

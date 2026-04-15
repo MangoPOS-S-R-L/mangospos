@@ -295,8 +295,13 @@ class _PrinterConfigurationDialogState
             const SizedBox(width: 18),
             Expanded(
               child: _DialogField(
-                label: 'MAC de la impresora',
-                child: TextField(controller: _macCtrl),
+                label: 'MAC / puerto USB',
+                child: TextField(
+                  controller: _macCtrl,
+                  decoration: const InputDecoration(
+                    hintText: 'Ej. USB001, VID/PID o MAC si aplica',
+                  ),
+                ),
               ),
             ),
           ],

@@ -341,10 +341,18 @@ class _PrintingAreaAssignmentsPageState
                                       child: _AssignedPrinterCard(
                                         printer: printer,
                                         assignment: (() {
-                                          final matches = (_assignmentsByArea[area.id] ?? const [])
-                                              .where((a) => a.printerId == printer.id)
-                                              .toList(growable: false);
-                                          return matches.isEmpty ? null : matches.first;
+                                          final matches =
+                                              (_assignmentsByArea[area.id] ??
+                                                      const [])
+                                                  .where(
+                                                    (a) =>
+                                                        a.printerId ==
+                                                        printer.id,
+                                                  )
+                                                  .toList(growable: false);
+                                          return matches.isEmpty
+                                              ? null
+                                              : matches.first;
                                         })(),
                                         onDelete: () =>
                                             _removePrinterAssignment(
@@ -353,19 +361,25 @@ class _PrintingAreaAssignmentsPageState
                                             ),
                                         onConfigure: () =>
                                             _configurePrinter(printer),
-                                        onToggleModes: (sendToKitchen, markReady) async {
-                                          final ok = await ref
-                                              .read(printingAreasViewModelProvider.notifier)
-                                              .updateAreaPrinterModes(
-                                                areaId: area.id,
-                                                printerId: printer.id,
-                                                printsOrders: sendToKitchen,
-                                                printsReceipts: markReady,
-                                              );
-                                          if (ok) {
-                                            await _loadAssignedPrinters(area.id);
-                                          }
-                                        },
+                                        onToggleModes:
+                                            (sendToKitchen, markReady) async {
+                                              final ok = await ref
+                                                  .read(
+                                                    printingAreasViewModelProvider
+                                                        .notifier,
+                                                  )
+                                                  .updateAreaPrinterModes(
+                                                    areaId: area.id,
+                                                    printerId: printer.id,
+                                                    printsOrders: sendToKitchen,
+                                                    printsReceipts: markReady,
+                                                  );
+                                              if (ok) {
+                                                await _loadAssignedPrinters(
+                                                  area.id,
+                                                );
+                                              }
+                                            },
                                       ),
                                     ),
                                   );
@@ -400,11 +414,10 @@ class _AssignedPrinterCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final mac = printer.mac?.isNotEmpty == true
-        ? printer.mac!
-        : (printer.devicePath?.isNotEmpty == true
-              ? printer.devicePath!
-              : 'No disponible');
+    final deviceRef = printer.devicePath?.isNotEmpty == true
+        ? printer.devicePath!
+        : (printer.mac?.isNotEmpty == true ? printer.mac! : 'No disponible');
+    final isUsb = printer.printerType == PrinterType.usb;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -462,7 +475,7 @@ class _AssignedPrinterCard extends StatelessWidget {
         ),
         const SizedBox(height: 6),
         Text(
-          'MAC: $mac',
+          isUsb ? 'USB: $deviceRef' : 'MAC: $deviceRef',
           style: const TextStyle(fontSize: 13, color: MangoColors.darkGray),
         ),
         const SizedBox(height: 14),
@@ -481,22 +494,20 @@ class _AssignedPrinterCard extends StatelessWidget {
                 title: const Text('Imprimir al enviar a cocina'),
                 subtitle: const Text('Comanda sale al enviar desde la mesa.'),
                 value: assignment?.printsOrders == true,
-                onChanged: (value) => onToggleModes(
-                  value,
-                  assignment?.printsReceipts == true,
-                ),
+                onChanged: (value) =>
+                    onToggleModes(value, assignment?.printsReceipts == true),
               ),
               const Divider(height: 1),
               SwitchListTile(
                 dense: true,
                 contentPadding: EdgeInsets.zero,
                 title: const Text('Imprimir al marcar listo'),
-                subtitle: const Text('Comanda sale desde la pantalla de cocina.'),
-                value: assignment?.printsReceipts == true,
-                onChanged: (value) => onToggleModes(
-                  assignment?.printsOrders == true,
-                  value,
+                subtitle: const Text(
+                  'Comanda sale desde la pantalla de cocina.',
                 ),
+                value: assignment?.printsReceipts == true,
+                onChanged: (value) =>
+                    onToggleModes(assignment?.printsOrders == true, value),
               ),
             ],
           ),
@@ -592,9 +603,11 @@ class _PrinterPickerDialog extends StatelessWidget {
                                       ),
                                     ),
                                     Text(
-                                      printer.ip?.isNotEmpty == true
-                                          ? 'IP: ${printer.ip}'
-                                          : 'Sin IP configurada',
+                                      printer.type == PrinterType.usb
+                                          ? 'USB: ${printer.devicePath?.isNotEmpty == true ? printer.devicePath! : (printer.mac?.isNotEmpty == true ? printer.mac! : 'Sin identificador USB')} '
+                                          : (printer.ip?.isNotEmpty == true
+                                                ? 'IP: ${printer.ip}'
+                                                : 'Sin IP configurada'),
                                       style: const TextStyle(
                                         fontSize: 12,
                                         color: MangoColors.muted,

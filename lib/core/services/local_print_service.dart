@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class LocalPrintService {
   static const String _defaultApiToken = String.fromEnvironment(
@@ -24,11 +25,68 @@ class LocalPrintService {
   static String? _sharedResolvedBaseUrl;
   static DateTime? _sharedResolvedBaseUrlAt;
 
+  /// Cached agent URL loaded from business_settings.agent_url.
+  static String? _dbAgentUrl;
+  static DateTime? _dbAgentUrlAt;
+
   String? _resolvedBaseUrl;
   DateTime? _resolvedBaseUrlAt;
   final String? _apiToken;
 
   LocalPrintService({String? apiToken}) : _apiToken = apiToken;
+
+  /// Publish the agent URL to the DB so remote devices (tablets) can find it.
+  static Future<void> publishAgentUrl(String agentUrl, String businessId) async {
+    try {
+      await Supabase.instance.client
+          .from('business_settings')
+          .update({'agent_url': agentUrl})
+          .eq('business_id', businessId);
+      _dbAgentUrl = agentUrl;
+      _dbAgentUrlAt = DateTime.now();
+      debugPrint('[LocalPrintService] Published agent URL: $agentUrl');
+    } catch (e) {
+      debugPrint('[LocalPrintService] Failed to publish agent URL: $e');
+    }
+  }
+
+  /// Fetch the agent URL from business_settings (cached 5 min).
+  static Future<String?> _fetchDbAgentUrl() async {
+    if (_dbAgentUrl != null &&
+        _dbAgentUrlAt != null &&
+        DateTime.now().difference(_dbAgentUrlAt!) < const Duration(minutes: 5)) {
+      return _dbAgentUrl;
+    }
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null) return null;
+      // Get business_id from user's active membership
+      final membership = await Supabase.instance.client
+          .from('business_members')
+          .select('business_id')
+          .eq('user_id', user.id)
+          .limit(1)
+          .maybeSingle();
+      if (membership == null) return null;
+      final businessId = membership['business_id']?.toString();
+      if (businessId == null || businessId.isEmpty) return null;
+
+      final row = await Supabase.instance.client
+          .from('business_settings')
+          .select('agent_url')
+          .eq('business_id', businessId)
+          .maybeSingle();
+      final url = row?['agent_url']?.toString().trim();
+      if (url != null && url.isNotEmpty) {
+        _dbAgentUrl = url;
+        _dbAgentUrlAt = DateTime.now();
+        return url;
+      }
+    } catch (e) {
+      debugPrint('[LocalPrintService] Failed to fetch agent URL from DB: $e');
+    }
+    return null;
+  }
 
   Map<String, String> _headers({bool auth = true}) => {
     'Content-Type': 'application/json',
@@ -37,6 +95,35 @@ class LocalPrintService {
   };
 
   String _normalizePrinterId(String ip, [int port = 9100]) => '$ip:$port';
+
+  String? _resolvePrinterId(Map<String, dynamic>? printer) {
+    if (printer == null) return null;
+
+    final explicitId = printer['id']?.toString().trim();
+    if (explicitId != null && explicitId.isNotEmpty) {
+      return explicitId;
+    }
+
+    final ip = printer['ip']?.toString().trim();
+    if (ip != null && ip.isNotEmpty) {
+      return _normalizePrinterId(
+        ip,
+        (printer['port'] as num?)?.toInt() ?? 9100,
+      );
+    }
+
+    final devicePath = printer['device_path']?.toString().trim();
+    if (devicePath != null && devicePath.isNotEmpty) {
+      return devicePath;
+    }
+
+    final mac = printer['mac']?.toString().trim();
+    if (mac != null && mac.isNotEmpty) {
+      return mac;
+    }
+
+    return null;
+  }
 
   bool _isLegacyAgentBaseUrl(String baseUrl) =>
       baseUrl.endsWith(':4000') || baseUrl.endsWith(':3000');
@@ -97,14 +184,26 @@ class LocalPrintService {
       return sharedCached;
     }
 
+    // Try DB-stored agent URL first (enables tablets to find remote agent)
+    final dbUrl = await _fetchDbAgentUrl();
+
     final candidates = <String>[
       if (cached != null && cached.isNotEmpty) cached,
       if (sharedCached != null &&
           sharedCached.isNotEmpty &&
           sharedCached != cached)
         sharedCached,
+      // DB URL before localhost — critical for tablets that aren't on the same machine
+      if (dbUrl != null &&
+          dbUrl.isNotEmpty &&
+          dbUrl != cached &&
+          dbUrl != sharedCached)
+        dbUrl,
       ..._baseUrls.where(
-        (candidate) => candidate != cached && candidate != sharedCached,
+        (candidate) =>
+            candidate != cached &&
+            candidate != sharedCached &&
+            candidate != dbUrl,
       ),
     ];
 
@@ -197,14 +296,9 @@ class LocalPrintService {
     try {
       final printer = jobData['printer'] as Map<String, dynamic>?;
       final printerId =
-          (jobData['printerId'] ??
-                  printer?['id'] ??
-                  (printer != null && printer['ip'] != null
-                      ? _normalizePrinterId(
-                          printer['ip'].toString(),
-                          (printer['port'] as num?)?.toInt() ?? 9100,
-                        )
-                      : null))
+          (jobData['printerId']?.toString().trim().isNotEmpty == true
+                  ? jobData['printerId'].toString().trim()
+                  : _resolvePrinterId(printer))
               ?.toString();
 
       if (printerId == null || printerId.isEmpty) {
@@ -342,6 +436,34 @@ class LocalPrintService {
     }
   }
 
+  Future<void> printRawToAssignedPrinter({
+    required Map<String, dynamic> printer,
+    required List<int> data,
+    String? jobId,
+    Map<String, dynamic>? meta,
+  }) async {
+    final printerId = _resolvePrinterId(printer);
+    if (printerId == null || printerId.isEmpty) {
+      throw Exception(
+        'La impresora USB/local no tiene un identificador utilizable para el Agente Local.',
+      );
+    }
+
+    final success = await printJob({
+      'id': jobId?.trim().isNotEmpty == true
+          ? jobId!.trim()
+          : 'RAW-${DateTime.now().millisecondsSinceEpoch}',
+      'printerId': printerId,
+      'printer': Map<String, dynamic>.from(printer),
+      if (meta != null) 'meta': meta,
+      'content': {'type': 'raw_base64', 'dataBase64': base64Encode(data)},
+    });
+
+    if (!success) {
+      throw Exception('El agente local rechazó los datos RAW.');
+    }
+  }
+
   Future<bool> printRawData({
     required String ip,
     int port = 9100,
@@ -449,7 +571,6 @@ class LocalPrintService {
 
     return Exception('Fallo la impresión: $cleanMsg');
   }
-
 
   /// Descubrir impresoras en la red
   Future<List<dynamic>> discoverPrinters() async {

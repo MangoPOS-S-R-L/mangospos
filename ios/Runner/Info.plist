@@ -49,6 +49,14 @@
 	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>MangoPOS necesita Bluetooth para conectarse a impresoras termicas.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>MangoPOS necesita Bluetooth para conectarse a impresoras termicas.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>MangoPOS necesita acceso a la red local para comunicarse con impresoras y el agente de impresion.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>MangoPOS necesita la camara para escanear codigos QR.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

@@ -19,6 +19,7 @@ import 'package:mangopos/presentation/settings/more%20settings/printing/printers
 import 'package:mangopos/presentation/split_bill/widgets/split_bill_modal.dart';
 import 'package:mangopos/presentation/customers/viewmodel/customers_viewmodel.dart';
 
+import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
@@ -2416,7 +2417,22 @@ class _CartView extends ConsumerWidget {
         throw Exception('Negocio no resuelto.');
       }
 
-      final assignedPrinterFuture = printRepo.getAssignedPrinterForType(
+      // 1. Try register-specific printer first (each cash register can have its own)
+      PrinterConfig? assignedPrinter;
+      final registerId = ref.read(cashierViewModelProvider).currentRegisterId;
+      if (registerId != null) {
+        try {
+          final regPrinterId = await ref
+              .read(cashierRepositoryProvider)
+              .getRegisterPrinterId(registerId);
+          if (regPrinterId != null) {
+            assignedPrinter = await printRepo.getPrinter(regPrinterId);
+          }
+        } catch (_) {}
+      }
+
+      // 2. Fallback to global area-based printer
+      assignedPrinter ??= await printRepo.getAssignedPrinterForType(
         businessId: businessId,
         preferredAreaCodes: type == 'invoice'
             ? const ['fiscal', 'cashier']
@@ -2424,15 +2440,15 @@ class _CartView extends ConsumerWidget {
         printsPrebills: type == 'precheck',
         printsReceipts: type == 'invoice',
       );
+
       final receiptItemDisplayModeFuture = ref
           .read(posSettingsRepositoryProvider)
           .getReceiptItemDisplayMode(businessId);
 
-      final assignedPrinter = await assignedPrinterFuture;
-
       if (assignedPrinter == null) {
-        throw Exception('Impresora no configurada.');
+        throw Exception('Impresora no configurada para esta caja.');
       }
+      final printer = assignedPrinter;
 
       final receiptItemDisplayMode = await receiptItemDisplayModeFuture;
 
@@ -2501,21 +2517,21 @@ class _CartView extends ConsumerWidget {
       }
 
       final printTimeout = const Duration(seconds: 3);
-      final isUsbPrinter = assignedPrinter.printerType == PrinterType.usb;
+      final isUsbPrinter = printer.printerType == PrinterType.usb;
 
       final printFuture = Future(() async {
         if (ticket != null) {
           await printRepo.printEscPos(
-            printer: assignedPrinter,
+            printer: printer,
             data: ticket.escPosCommands,
           );
         } else {
-          if (!assignedPrinter.isNetwork) {
+          if (!printer.isNetwork) {
             throw Exception(
-              'La impresión ${assignedPrinter.type} requiere generar el ticket ESC/POS antes de enviarlo.',
+              'La impresión ${printer.type} requiere generar el ticket ESC/POS antes de enviarlo.',
             );
           }
-          final ip = assignedPrinter.ipAddress?.trim();
+          final ip = printer.ipAddress?.trim();
           if (ip == null || ip.isEmpty) {
             throw Exception('La impresora de red no tiene IP configurada.');
           }
@@ -2525,7 +2541,7 @@ class _CartView extends ConsumerWidget {
             'printer': {
               'type': 'network',
               'ip': ip,
-              'port': assignedPrinter.port ?? 9100,
+              'port': printer.port ?? 9100,
             },
             'content': {'type': type, 'data': data},
           });
@@ -2535,7 +2551,7 @@ class _CartView extends ConsumerWidget {
       unawaited(
         printFuture.catchError((error, stackTrace) {
           debugPrint(
-            'Impresión en ${assignedPrinter.name} falló después del timeout: $error',
+            'Impresión en ${printer.name} falló después del timeout: $error',
           );
         }),
       );

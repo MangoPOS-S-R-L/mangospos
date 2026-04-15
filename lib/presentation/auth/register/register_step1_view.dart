@@ -24,6 +24,7 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
   late final TextEditingController _passwordCtl;
   late final TextEditingController _confirmCtl;
   bool _termsAccepted = false;
+  bool _submitting = false;
 
   static const _steps = <AuthShellStep>[
     AuthShellStep(title: 'Crear cuenta'),
@@ -98,7 +99,11 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
                 validator: (value) {
                   final email = (value ?? '').trim();
                   if (email.isEmpty) return 'Este campo es obligatorio';
-                  if (!email.contains('@')) return 'Ingresa un correo válido';
+                  final emailRegex = RegExp(
+                      r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$');
+                  if (!emailRegex.hasMatch(email)) {
+                    return 'Ingresa un correo válido (ej: tu@empresa.com)';
+                  }
                   return null;
                 },
                 keyboardType: TextInputType.emailAddress,
@@ -192,14 +197,23 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
                       borderRadius: BorderRadius.circular(16),
                     ),
                   ),
-                  onPressed: _handleNext,
-                  child: Text(
-                    'Continuar',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 15.5,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
+                  onPressed: _submitting ? null : _handleNext,
+                  child: _submitting
+                      ? const SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : Text(
+                          'Continuar',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 15.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                 ),
               ),
             ],
@@ -266,20 +280,39 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
   }
 
   void _handleNext() {
-    if (!(_formKey.currentState?.validate() ?? false)) return;
-    if (!_termsAccepted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Debes aceptar los Términos y Condiciones'),
-        ),
-      );
+    if (_submitting) return;
+    if (!(_formKey.currentState?.validate() ?? false)) {
+      _showError('Revisa los campos marcados en rojo antes de continuar.');
       return;
     }
+    if (!_termsAccepted) {
+      _showError('Debes aceptar los Términos y Condiciones para continuar.');
+      return;
+    }
+    setState(() => _submitting = true);
     final vm = ref.read(registerStep1VmProvider.notifier);
     vm.setFullName(_fullNameCtl.text.trim());
     vm.setEmail(_emailCtl.text.trim());
     vm.setPassword(_passwordCtl.text);
     context.go(AppRoutes.registerStep2);
+  }
+
+  void _showError(String message) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        icon: const Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 40),
+        title: const Text('Atención'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Entendido'),
+          ),
+        ],
+      ),
+    );
   }
 
   String? _required(String? value) {
@@ -337,7 +370,14 @@ class _PasswordFieldState extends State<_PasswordField> {
       validator:
           widget.validator ??
           (value) {
-            if ((value ?? '').length < 6) return 'Minimo 6 caracteres';
+            final pwd = value ?? '';
+            if (pwd.length < 8) return 'Mínimo 8 caracteres';
+            if (!pwd.contains(RegExp(r'[A-Z]'))) {
+              return 'Debe contener al menos una mayúscula';
+            }
+            if (!pwd.contains(RegExp(r'[0-9]'))) {
+              return 'Debe contener al menos un número';
+            }
             return null;
           },
       autofillHints: const [AutofillHints.newPassword],

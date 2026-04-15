@@ -32,8 +32,28 @@
             android:value="2" />
     </application>
 
+    <!-- Network -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+
+    <!-- Bluetooth (classic + BLE) -->
+    <uses-permission android:name="android.permission.BLUETOOTH"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"/>
+    <!-- Android 12+ (API 31) -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE"/>
+
+    <!-- Location (required for BLE scanning on Android < 12) -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+
+    <!-- USB (OTG printers) -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="false"/>
+
+    <!-- Camera (for QR scanning if needed) -->
+    <uses-permission android:name="android.permission.CAMERA"/>
 
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

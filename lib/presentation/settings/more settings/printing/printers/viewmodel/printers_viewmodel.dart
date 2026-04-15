@@ -264,6 +264,26 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
     return _repo.getPrinterUsageSummaries(b);
   }
 
+  List<int> _buildSampleEscPos(PrinterDevice printer, {String? detail}) {
+    return <int>[
+      27,
+      64,
+      27,
+      97,
+      1,
+      ...utf8.encode('PRUEBA DE IMPRESION\n'),
+      ...utf8.encode('${printer.name}\n'),
+      ...utf8.encode('${detail ?? 'Conexion OK'}\n'),
+      10,
+      10,
+      10,
+      29,
+      86,
+      66,
+      0,
+    ];
+  }
+
   // ✅ No intentes sockets en Web. En Desktop/Mobile sí.
   Future<bool> printSampleDirect(String printerId) async {
     if (kIsWeb) {
@@ -300,26 +320,9 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       }
 
       if (printer.type == PrinterType.usb) {
-        final commands = <int>[
-          27,
-          64,
-          27,
-          97,
-          1,
-          ...utf8.encode('PRUEBA DE IMPRESION\n'),
-          ...utf8.encode('${printer.name}\n'),
-          ...utf8.encode('Conexion USB local\n'),
-          10,
-          10,
-          10,
-          29,
-          86,
-          66,
-          0,
-        ];
         await _repo.printRawDirectUsb(
           printer: _toPrinterConfig(printer),
-          data: commands,
+          data: _buildSampleEscPos(printer, detail: 'Conexion USB local'),
         );
         return true;
       }
@@ -342,35 +345,40 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       final p = state.items.firstWhere((x) => x.id == printerId);
 
       if (kIsWeb) {
-        if (p.type == PrinterType.usb) {
-          state = state.copyWith(
-            errorMessage:
-                'Las impresoras USB requieren la app local de Windows. En Web usa una impresora de red con el Agente LAN.',
-          );
-          return false;
-        }
         try {
           final up = await _repo.isAgentUp();
           if (!up) {
             state = state.copyWith(
               errorMessage:
-                  'Para imprimir desde la Web necesitas el Agente LAN activo en tu PC.',
+                  'Para imprimir desde la Web necesitas el Agente Local activo en tu PC.',
             );
             return false;
           }
+
+          if (p.type == PrinterType.usb) {
+            await _repo.printEscPos(
+              printer: _toPrinterConfig(p),
+              data: _buildSampleEscPos(
+                p,
+                detail: 'Prueba USB via Agente Local',
+              ),
+            );
+            return true;
+          }
+
           if (p.ip?.isNotEmpty ?? false) {
             await _repo.testPrintViaAgent(ip: p.ip!, port: p.port ?? 9100);
             return true;
-          } else {
-            state = state.copyWith(
-              errorMessage:
-                  'Esta impresora no tiene IP configurada para el Agente LAN.',
-            );
-            return false;
           }
+
+          state = state.copyWith(
+            errorMessage:
+                'Esta impresora no tiene IP configurada para el Agente Local.',
+          );
+          return false;
         } catch (e) {
           state = state.copyWith(
-            errorMessage: 'No se pudo imprimir con el Agente LAN: $e',
+            errorMessage: 'No se pudo imprimir con el Agente Local: $e',
           );
           return false;
         }

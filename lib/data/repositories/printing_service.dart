@@ -247,11 +247,32 @@ class PrintingService {
           '🖨️ Ruta seleccionada -> LOCAL/USB assigned printer ${printer.name} (${printer.id}) path=${printer.devicePath ?? 'n/a'}',
         );
         if (kIsWeb) {
-          throw Exception(
-            'Las impresoras USB no se usan desde la Web. Usa la app local de Windows o una impresora de red.',
+          if (!await _printingRepo.isAgentUp()) {
+            throw Exception(
+              'La impresora USB está asignada, pero este flujo necesita el Agente Local activo en la PC donde está conectada.',
+            );
+          }
+          await _printingRepo.printRawViaAgentToPrinter(
+            printer: printer,
+            data: bytes,
+            meta: const {'source': 'kitchen_order'},
+          );
+          return;
+        }
+
+        try {
+          await _printingRepo.printRawDirectUsb(printer: printer, data: bytes);
+        } catch (e) {
+          debugPrint(
+            '⚠️ Direct USB failed for ${printer.name}, using local agent fallback: $e',
+          );
+          if (!await _printingRepo.isAgentUp()) rethrow;
+          await _printingRepo.printRawViaAgentToPrinter(
+            printer: printer,
+            data: bytes,
+            meta: const {'source': 'kitchen_order'},
           );
         }
-        await _printingRepo.printRawDirectUsb(printer: printer, data: bytes);
         return;
       case 'bluetooth':
         debugPrint(
@@ -777,4 +798,3 @@ class PrintingService {
     }
   }
 }
-
