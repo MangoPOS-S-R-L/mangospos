@@ -137,9 +137,14 @@ flutter:
   # see https://flutter.dev/to/font-from-package
 
 msix_config:
-  display_name: MangoPOS
-  publisher_display_name: Mango POS
-  identity_name: do.mangopos.mangoposrestaurant
+  display_name: "MangoPOS Restaurant"
+  publisher_display_name: "Mango POS"
+  identity_name: MangoPOS.MangoPOSRestaurant
+  publisher: "CN=B178130F-7700-44FD-BEF2-B0F7F05AC658"
   msix_version: 1.0.0.0
-  logo_path: assets/icons/icon.png
-  capabilities: internetClient
+  logo_path: assets/images/logo.png
+  capabilities: internetClient, location, bluetooth
+  languages: es-DO, en-US
+  description: Professional POS system for restaurants.
+  store: true
+  architecture: x64

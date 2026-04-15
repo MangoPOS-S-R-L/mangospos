@@ -34,6 +34,12 @@ Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=admin
+CloseApplications=force
+RestartApplications=no
+AppMutex=MangoPOS_App_Mutex
+#ifdef SignApp
+SignTool=standard $f
+#endif
 
 [Languages]
 Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"

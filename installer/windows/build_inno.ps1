@@ -1,6 +1,9 @@
 param(
   [string]$Configuration = "Release",
   [string]$AppVersion = "",
+  [string]$CertPath = "",
+  [string]$CertPassword = "",
+  [string]$TimestampUrl = "http://timestamp.digicert.com",
   [switch]$SkipFlutterBuild,
   [switch]$SkipAgentBuild,
   [switch]$SkipStage
@@ -12,6 +15,45 @@ function Require-Tool([string]$Name) {
   if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
     throw "Falta herramienta requerida: $Name"
   }
+}
+
+function Resolve-SignTool {
+  $searchPaths = @(
+    "C:\Program Files (x86)\Windows Kits\10\App Certification Kit\signtool.exe",
+    "C:\Program Files (x86)\Windows Kits\10\bin\x64\signtool.exe"
+  )
+  
+  foreach ($path in $searchPaths) {
+    if (Test-Path $path) { return $path }
+  }
+  
+  $basePath = "C:\Program Files (x86)\Windows Kits\10\bin"
+  if (Test-Path $basePath) {
+    $dirs = Get-ChildItem $basePath | Where-Object { $_.PSIsContainer -and $_.Name -match "^10\." } | Sort-Object Name -Descending
+    foreach ($dir in $dirs) {
+      $path = Join-Path $dir.FullName "x64\signtool.exe"
+      if (Test-Path $path) { return $path }
+    }
+  }
+
+  $cmd = Get-Command signtool.exe -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+
+  return $null
+}
+
+function Sign-File([string]$FilePath, [string]$CertPath, [string]$Password, [string]$TimestampUrl) {
+  if ([string]::IsNullOrWhiteSpace($CertPath)) { return }
+  if (-not (Test-Path $FilePath)) { return }
+  
+  $signtool = Resolve-SignTool
+  if (-not $signtool) {
+    Write-Warning "signtool.exe no encontrado. Saltando firma de $FilePath"
+    return
+  }
+
+  Write-Host "==> Firmando $FilePath" -ForegroundColor Yellow
+  & $signtool sign /f $CertPath /p $Password /t $TimestampUrl /v $FilePath
 }
 
 function Resolve-InnoCompiler {
@@ -141,6 +183,8 @@ if (-not (Test-Path $appExe)) {
   throw "No se encontro el ejecutable esperado: $appExe"
 }
 
+Sign-File $appExe $CertPath $CertPassword $TimestampUrl
+
 if (-not $SkipAgentBuild) {
   Require-Tool npm
   Write-Host "==> Building MangoPOS LAN agent" -ForegroundColor Cyan
@@ -155,6 +199,8 @@ if (-not $SkipAgentBuild) {
 if (-not (Test-Path $agentExe)) {
   throw "No se encontro el ejecutable esperado del agente: $agentExe"
 }
+
+Sign-File $agentExe $CertPath $CertPassword $TimestampUrl
 
 if (-not $SkipStage) {
   if (Test-Path $stage) {
@@ -200,7 +246,20 @@ if (-not (Test-Path $stageSupport)) {
 }
 
 Write-Host "==> Building Inno Setup installer" -ForegroundColor Cyan
-& $iscc "/DAppVersion=$resolvedVersion" $issPath
+$isccArgs = @("/DAppVersion=$resolvedVersion")
+
+if (-not [string]::IsNullOrWhiteSpace($CertPath)) {
+    $isccArgs += "/DSignApp=1"
+    $signtoolPath = Resolve-SignTool
+    if ($signtoolPath) {
+        $isccArgs += "/Sstandard=`"$signtoolPath`" sign /f `"$CertPath`" /p `"$CertPassword`" /t $TimestampUrl `$f"
+    } else {
+        Write-Warning "No se pudo configurar firma automatica en Inno Setup porque signtool.exe no fue encontrado."
+    }
+}
+
+$isccArgs += $issPath
+& $iscc $isccArgs
 
 if ($LASTEXITCODE -ne 0) {
   throw "ISCC.exe devolvio un codigo de error: $LASTEXITCODE"
