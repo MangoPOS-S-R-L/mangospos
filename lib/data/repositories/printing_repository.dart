@@ -772,6 +772,20 @@ class PrintingRepository {
     }
   }
 
+  /// Enviar datos ESC/POS RAW a una impresora ya configurada en MangoPOS,
+  /// incluyendo impresoras USB que dependen del Agente Local.
+  Future<void> printRawViaAgentToPrinter({
+    required PrinterConfig printer,
+    required List<int> data,
+    Map<String, dynamic>? meta,
+  }) async {
+    await _localService.printRawToAssignedPrinter(
+      printer: printer.toMap(),
+      data: data,
+      meta: meta,
+    );
+  }
+
   /// Enviar datos ESC/POS directos por TCP (solo plataformas nativas)
   Future<void> printRawDirectTcp({
     required String ip,
@@ -831,12 +845,30 @@ class PrintingRepository {
         return;
       case PrinterType.usb:
         if (kIsWeb) {
-          throw Exception(
-            'Las impresoras USB no se usan desde la Web. Usa la app local de Windows o una impresora de red.',
-          );
+          final up = await isAgentUp();
+          if (!up) {
+            throw Exception(
+              'La impresora USB está asignada, pero este flujo necesita el Agente Local activo en la PC donde está conectada.',
+            );
+          }
+          await printRawViaAgentToPrinter(printer: printer, data: data);
+          return;
         }
-        await printRawDirectUsb(printer: printer, data: data, timeout: timeout);
-        return;
+
+        try {
+          await printRawDirectUsb(
+            printer: printer,
+            data: data,
+            timeout: timeout,
+          );
+          return;
+        } catch (_) {
+          if (await isAgentUp()) {
+            await printRawViaAgentToPrinter(printer: printer, data: data);
+            return;
+          }
+          rethrow;
+        }
       case PrinterType.bluetooth:
         throw Exception(
           'La impresión Bluetooth directa no está soportada en este flujo.',

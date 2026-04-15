@@ -23,11 +23,11 @@ class BlindCashCloseState {
   });
 
   int get totalCounted => CashCloseCalculator.calculateCashCounted(denominations);
-  int get numericCard => CashCloseCalculator.parseAmount(cardInput);
-  int get numericTransfer => CashCloseCalculator.parseAmount(transferInput);
-  int get totalReported => totalCounted + numericCard + numericTransfer;
+  double get numericCard => CashCloseCalculator.parseAmount(cardInput);
+  double get numericTransfer => CashCloseCalculator.parseAmount(transferInput);
+  double get totalReported => totalCounted + numericCard + numericTransfer;
   int get expectedTotal => input.expectedTotal;
-  int get difference => totalReported - expectedTotal;
+  double get difference => totalReported - expectedTotal;
 
   CashCloseResult get result => CashCloseCalculator.calculate(
         denominations: denominations,
@@ -115,12 +115,44 @@ class BlindCashCloseViewModel extends StateNotifier<BlindCashCloseState> {
         ? state.cardInput
         : state.transferInput;
 
-    final next = switch (value) {
-      'backspace' => current.isEmpty ? '' : current.substring(0, current.length - 1),
-      'clear' => '',
-      '00' => current.isEmpty ? '0' : '$current$value',
-      _ => '$current$value',
-    };
+    String next;
+    switch (value) {
+      case 'backspace':
+        next = current.isEmpty ? '' : current.substring(0, current.length - 1);
+      case 'clear':
+        next = '';
+      case '.':
+        // Only allow one decimal point, and max 2 decimal digits
+        if (current.contains('.')) {
+          next = current;
+        } else {
+          next = current.isEmpty ? '0.' : '$current.';
+        }
+      case '00':
+        // Don't allow more than 2 decimal digits
+        if (current.contains('.')) {
+          final decimals = current.split('.').last;
+          if (decimals.length >= 2) {
+            next = current;
+          } else {
+            next = '${current}0';
+          }
+        } else {
+          next = current.isEmpty ? '0' : '$current$value';
+        }
+      default:
+        // Don't allow more than 2 decimal digits
+        if (current.contains('.')) {
+          final decimals = current.split('.').last;
+          if (decimals.length >= 2) {
+            next = current;
+          } else {
+            next = '$current$value';
+          }
+        } else {
+          next = '$current$value';
+        }
+    }
 
     if (state.activeInput == BlindCashInputTarget.card) {
       state = state.copyWith(cardInput: next);

@@ -64,14 +64,14 @@ class CashCloseInput extends Equatable {
 
 class CashCloseResult extends Equatable {
   final int totalCounted;
-  final int numericCard;
-  final int numericTransfer;
-  final int totalReported;
+  final double numericCard;
+  final double numericTransfer;
+  final double totalReported;
   final int expectedTotal;
   final int cashDifference;
-  final int cardDifference;
-  final int transferDifference;
-  final int totalDifference;
+  final double cardDifference;
+  final double transferDifference;
+  final double totalDifference;
 
   const CashCloseResult({
     required this.totalCounted,
@@ -85,14 +85,14 @@ class CashCloseResult extends Equatable {
     required this.totalDifference,
   });
 
-  int get difference => totalDifference;
+  double get difference => totalDifference;
   bool get isBalanced =>
       cashDifference == 0 &&
-      cardDifference == 0 &&
-      transferDifference == 0 &&
-      totalDifference == 0;
-  bool get hasSurplus => totalDifference > 0;
-  bool get hasShortage => totalDifference < 0;
+      cardDifference.abs() < 0.01 &&
+      transferDifference.abs() < 0.01 &&
+      totalDifference.abs() < 0.01;
+  bool get hasSurplus => totalDifference > 0.01;
+  bool get hasShortage => totalDifference < -0.01;
 
   @override
   List<Object?> get props => [
@@ -109,10 +109,9 @@ class CashCloseResult extends Equatable {
 }
 
 class CashCloseCalculator {
-  static int parseAmount(String raw) {
-    final digits = raw.replaceAll(RegExp(r'[^0-9]'), '');
-    if (digits.isEmpty) return 0;
-    return int.tryParse(digits) ?? 0;
+  static double parseAmount(String raw) {
+    if (raw.isEmpty) return 0;
+    return double.tryParse(raw) ?? 0;
   }
 
   static int calculateCashCounted(List<DenominationCount> denominations) {

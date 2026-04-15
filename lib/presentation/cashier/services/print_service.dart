@@ -66,7 +66,7 @@ class CashClosePrintService {
     gen.text('Concepto   Esperado   Reportado   Dif.');
     gen.separator();
 
-    void row(String concept, int expected, int reported) {
+    void row(String concept, num expected, num reported) {
       final diff = reported - expected;
       final diffLabel =
           '${diff >= 0 ? '+' : '-'}${formatRD(diff.abs()).replaceFirst('RD\$ ', '')}';
@@ -152,12 +152,13 @@ class CashClosePrintService {
     }
 
     // 2. Fall back to area-based lookup
-    final preferredPrinter = registerPrinter ??
+    final preferredPrinter =
+        registerPrinter ??
         await _printingRepository.getAssignedPrinterForType(
           businessId: businessId,
           preferredAreaCodes: const [
-            'cashier',
             'cash_close',
+            'cashier',
             'receipt',
             'receipts',
             'fiscal',
@@ -172,7 +173,8 @@ class CashClosePrintService {
 
     // Para cierre de caja debe tener prioridad la impresora explícitamente
     // asignada al área de cierre, aunque el flag `online` no esté actualizado.
-    final printer = preferredPrinter ??
+    final printer =
+        preferredPrinter ??
         (activePrinters.isNotEmpty ? activePrinters.first : null);
 
     if (printer == null) {
@@ -181,16 +183,16 @@ class CashClosePrintService {
       );
     }
 
-    if (kIsWeb && printer.isUSB) {
+    if (kIsWeb && printer.isUSB && !await _printingRepository.isAgentUp()) {
       throw Exception(
-        'El cierre está asignado a una impresora USB, pero este flujo se está ejecutando en la Web. Para cierre desde Web usa una impresora de red o ejecuta la app local de Windows.',
+        'El cierre está asignado a una impresora USB, pero este flujo necesita el Agente Local activo en la PC donde está conectada.',
       );
     }
 
     await _printingRepository.printEscPos(printer: printer, data: bytes);
   }
 
-  String _shortMoney(int amount) {
+  String _shortMoney(num amount) {
     return formatRD(amount).replaceFirst('RD\$ ', '');
   }
 }

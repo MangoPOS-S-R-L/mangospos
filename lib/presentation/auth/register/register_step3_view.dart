@@ -264,12 +264,50 @@ class _RegisterStep3ViewState extends ConsumerState<RegisterStep3View> {
       }
     } catch (error) {
       if (!mounted) return;
+      final errorMsg = error.toString().replaceFirst('Exception: ', '');
       setState(() {
         _completed = false;
         _requiresEmailConfirmation = false;
         _successMessage = null;
-        _error = error.toString().replaceFirst('Exception: ', '');
+        _error = errorMsg;
       });
+      // Show error modal
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16)),
+            icon: const Icon(Icons.error_outline_rounded,
+                color: Colors.red, size: 44),
+            title: const Text('Error en el registro'),
+            content: Text(
+              errorMsg,
+              style: const TextStyle(fontSize: 15, height: 1.4),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.of(ctx).pop();
+                  context.go(AppRoutes.register);
+                },
+                child: const Text('Volver al inicio'),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: MangoTokens.primary,
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: () {
+                  Navigator.of(ctx).pop();
+                  _runSetup();
+                },
+                child: const Text('Reintentar'),
+              ),
+            ],
+          ),
+        );
+      }
     }
   }
 }

@@ -90,8 +90,8 @@ class CloseSummaryTable extends StatelessWidget {
 
 class _SummaryRowData {
   final String concept;
-  final int expected;
-  final int reported;
+  final num expected;
+  final num reported;
 
   const _SummaryRowData({
     required this.concept,

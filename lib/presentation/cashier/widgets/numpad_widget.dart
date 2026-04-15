@@ -23,7 +23,7 @@ class NumpadWidget extends StatelessWidget {
       '7',
       '8',
       '9',
-      '00',
+      '.',
       '0',
       'backspace',
       if (includeClear) 'clear',
