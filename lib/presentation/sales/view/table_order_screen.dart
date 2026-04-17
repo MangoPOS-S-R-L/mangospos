@@ -1384,26 +1384,23 @@ class _CartView extends ConsumerWidget {
       }).toList();
     }
 
-    // Calculate totals from the effective item amounts already validated in the UI.
-    // This avoids reintroducing taxes/service fees that are disabled for the current area.
-    final pricingSummary = summarizeOrderPricing(
-      orderState.order,
-      displayedItems,
-    );
-    final displayDiscounts = pricingSummary.discounts;
-    final displaySubtotal = pricingSummary.subtotal;
-    final taxBreakdown = buildOrderTaxBreakdown(
-      orderState.order,
-      displayedItems,
-      configuredBreakdown: ref
-          .read(currentOrderProvider.notifier)
-          .getTaxBreakdown(displaySubtotal),
-    );
-    final displayTaxTotal = taxBreakdown.fold<double>(
-      0,
-      (sum, entry) => sum + entry.amount,
-    );
+    // 2. Summary
+    final pricingSummary = summarizeOrderPricing(orderState.order, displayedItems);
     final displayTotal = pricingSummary.total;
+    final displaySubtotal = pricingSummary.subtotal;
+    final displayDiscounts = pricingSummary.discounts;
+
+    final vm = ref.read(currentOrderProvider.notifier);
+    final taxBreakdown = vm.getTaxBreakdown(displaySubtotal);
+    final reconciledBreakdown = buildOrderTaxBreakdown(
+      orderState.order,
+      displayedItems,
+      configuredBreakdown: taxBreakdown,
+    );
+    final displayTaxTotal = reconciledBreakdown.fold<double>(
+      0,
+      (sum, e) => sum + e.amount,
+    );
 
     final pendingOrderItems = openItems.where((i) {
       final checkIsClosed = allChecks.any(
@@ -1997,7 +1994,7 @@ class _CartView extends ConsumerWidget {
                 label: 'Subtotal',
                 value: 'RD\$ ${currency.format(displaySubtotal)}',
               ),
-              for (final entry in taxBreakdown) ...[
+              for (final entry in reconciledBreakdown) ...[
                 const SizedBox(height: 8),
                 _SummaryRow(
                   label: entry.label,
@@ -2462,17 +2459,10 @@ class _CartView extends ConsumerWidget {
             (type == 'invoice' ? 'FACTURA' : 'PRECUENTA');
 
         // Compute per-tax breakdown for the printed receipt
-        final printSubtotal = summarizeOrderPricing(
-          orderObj,
-          orderItems,
-        ).subtotal;
-        final printTaxBreakdown = buildOrderTaxBreakdown(
-          orderObj,
-          orderItems,
-          configuredBreakdown: ref
-              .read(currentOrderProvider.notifier)
-              .getTaxBreakdown(printSubtotal),
-        );
+        final printSummary = summarizeOrderPricing(orderObj, orderItems);
+        final printTaxBreakdown = ref
+            .read(currentOrderProvider.notifier)
+            .getTaxBreakdown(printSummary.subtotal);
 
         ticket = type == 'invoice'
             ? PrintTicketService.generateInvoice(

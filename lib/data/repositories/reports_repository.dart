@@ -860,7 +860,7 @@ class ReportsRepository {
     final taxes = List<Map<String, dynamic>>.from(
       await _client
           .from(ReportsQueries.tableTaxes)
-          .select('id, name, rate, is_active')
+          .select('id, name, rate, is_active, is_service_fee')
           .eq('business_id', businessId),
     );
 
@@ -904,10 +904,32 @@ class ReportsRepository {
     );
 
     final taxesByRate = <String, Map<String, dynamic>>{};
+    // Build lookup by rate AND detect which rate is the service fee
+    double configuredServiceFeeRateFromTaxes = 0;
     for (final tax in taxes) {
       final rate = _toDouble(tax['rate']);
       taxesByRate[rate.toStringAsFixed(4)] = tax;
+      final isServiceFee = tax['is_service_fee'] == true;
+      final name = (tax['name']?.toString() ?? '').toLowerCase();
+      final isHeuristicService = (rate - 10).abs() < 0.001 &&
+          (name.contains('propina') || name.contains('servicio'));
+      if (isServiceFee || isHeuristicService) {
+        configuredServiceFeeRateFromTaxes = rate;
+      }
     }
+
+    // Sum of all non-service-fee tax rates (for detecting combined rates in items)
+    final configuredTaxOnlyRate = taxes
+        .where((t) {
+          if (t['is_active'] != true) return false;
+          final isService = t['is_service_fee'] == true;
+          final name = (t['name']?.toString() ?? '').toLowerCase();
+          final rate = _toDouble(t['rate']);
+          final isHeuristic = (rate - 10).abs() < 0.001 &&
+              (name.contains('propina') || name.contains('servicio'));
+          return !isService && !isHeuristic;
+        })
+        .fold<double>(0, (sum, t) => sum + _toDouble(t['rate']));
 
     double totalTaxCollected = 0;
     double totalServiceFee = 0;
@@ -924,7 +946,7 @@ class ReportsRepository {
       if (status == 'void') continue;
 
       final taxAmount = _toDouble(item['tax']);
-      final taxRate = _toDouble(item['tax_rate']);
+      var taxRate = _toDouble(item['tax_rate']);
       final subtotal = _toDouble(item['subtotal']);
       final total = _toDouble(item['total']);
       final qty = _toDouble(item['qty'] ?? item['quantity']);
@@ -932,9 +954,18 @@ class ReportsRepository {
       grossSalesWithTax += total;
       totalQuantity += qty;
 
-      if (taxRate <= 0 || taxAmount <= 0) {
+      // Items with no tax configured are exempt
+      if (taxRate <= 0 && taxAmount <= 0) {
         exemptSales += subtotal;
         continue;
+      }
+
+      // Detect combined rate: if item.tax_rate includes service fee
+      // (e.g. 28 = 18% ITBIS + 10% Ley), split it for correct bucketing
+      if (configuredServiceFeeRateFromTaxes > 0 &&
+          (taxRate - configuredTaxOnlyRate - configuredServiceFeeRateFromTaxes).abs() < 0.01) {
+        // This item has a combined rate — use only the tax-only portion
+        taxRate = configuredTaxOnlyRate;
       }
 
       taxableSales += subtotal;
@@ -965,9 +996,10 @@ class ReportsRepository {
       bucket['count'] = (bucket['count'] as int) + 1;
     }
 
+    // Service fee: read from orders.service_fee (already calculated by DB)
     for (final order in orders) {
       final status = order['status_ext']?.toString().trim().toLowerCase();
-      if (status == 'void' || status == 'cancelled') continue;
+      if (status == 'void') continue;
 
       final serviceFee = _toDouble(order['service_fee']);
       if (serviceFee <= 0) continue;
@@ -975,14 +1007,18 @@ class ReportsRepository {
       totalServiceFee += serviceFee;
       serviceFeeOrdersCount += 1;
 
-      final inferredBase = serviceFeeEnabled && serviceFeeRate > 0
-          ? serviceFee / (serviceFeeRate / 100.0)
-          : _toDouble(order['subtotal']);
+      // Use the order's own subtotal as the base (more accurate than inferring)
+      final orderSubtotal = _toDouble(order['subtotal']);
+      final inferredBase = serviceFeeEnabled && serviceFeeRate > 0 && orderSubtotal > 0
+          ? orderSubtotal
+          : (serviceFeeRate > 0
+              ? serviceFee / (serviceFeeRate / 100.0)
+              : orderSubtotal);
       serviceFeeBaseTotal += inferredBase;
     }
 
     if (totalServiceFee > 0) {
-      final serviceRate = serviceFeeEnabled ? serviceFeeRate : 0.0;
+      final serviceRate = serviceFeeEnabled ? serviceFeeRate : configuredServiceFeeRateFromTaxes;
       breakdown['__service_fee__'] = {
         'label': 'Propina de ley',
         'rate': serviceRate,
@@ -1179,15 +1215,28 @@ class ReportsRepository {
     final taxConfigs = List<Map<String, dynamic>>.from(
       await _client
           .from(ReportsQueries.tableTaxes)
-          .select('id, name, rate, is_active')
+          .select('id, name, rate, is_active, is_service_fee')
           .eq('business_id', businessId),
     );
     final taxNameByRate = <String, String>{};
+    double configuredServiceFeeRate = 0;
+    double configuredTaxOnlyRate = 0;
     for (final t in taxConfigs) {
       final rate = _toDouble(t['rate']);
       final name = t['name']?.toString().trim() ?? '';
       if (name.isNotEmpty) {
         taxNameByRate[rate.toStringAsFixed(4)] = name;
+      }
+      final isService = t['is_service_fee'] == true;
+      final nameLower = name.toLowerCase();
+      final isHeuristic = (rate - 10).abs() < 0.001 &&
+          (nameLower.contains('propina') || nameLower.contains('servicio'));
+      if (t['is_active'] == true) {
+        if (isService || isHeuristic) {
+          configuredServiceFeeRate = rate;
+        } else {
+          configuredTaxOnlyRate += rate;
+        }
       }
     }
 
@@ -1254,10 +1303,17 @@ class ReportsRepository {
       if (oid.isEmpty) continue;
 
       final taxAmount = _toDouble(item['tax']);
-      final taxRate = _toDouble(item['tax_rate']);
+      var taxRate = _toDouble(item['tax_rate']);
       final subtotal = _toDouble(item['subtotal']);
 
       if (taxRate <= 0 && taxAmount <= 0) continue;
+
+      // Detect combined rate (e.g. 28 = 18% ITBIS + 10% Ley)
+      if (configuredServiceFeeRate > 0 &&
+          configuredTaxOnlyRate > 0 &&
+          (taxRate - configuredTaxOnlyRate - configuredServiceFeeRate).abs() < 0.01) {
+        taxRate = configuredTaxOnlyRate;
+      }
 
       final rateKey = taxRate.toStringAsFixed(4);
       final label =

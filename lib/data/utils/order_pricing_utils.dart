@@ -5,7 +5,7 @@ import '../models/sales_models.dart';
 double _r(double v) => double.parse(v.toStringAsFixed(2));
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Resolve service rate from order-level DB values (legacy compatibility)
+// Resolve service rate from order-level DB values
 // ─────────────────────────────────────────────────────────────────────────────
 
 double resolveOrderServiceRate(Order? order) {
@@ -52,45 +52,41 @@ double _itemGross(OrderItem item) {
 }
 
 OrderItemPricingSummary summarizeItemPricing(Order? order, OrderItem item) {
+  // ── Strategy: trust DB values, only recalculate service fee ──
+  //
+  // The DB trigger fn_compute_item_totals already computes subtotal, tax,
+  // and total correctly (including modifiers). Recalculating in Flutter
+  // causes drift because:
+  //   1. Modifiers may not be loaded (zones_repository, reprint)
+  //   2. Rounding accumulates differently than the DB
+  //   3. Service fee is NOT in item.tax (it's at order level)
+  //
+  // So we trust item.subtotal, item.tax, item.total from DB, and only
+  // compute service fee locally (since it's not stored per item).
+
+  final dbSubtotal = _r(item.subtotal > 0 ? item.subtotal : _itemGross(item));
+  final dbTax = _r(item.tax);
+  final dbDiscounts = _r(item.discounts);
+
+  // Service fee: computed from order-level rate applied to this item's subtotal
   final serviceRate = resolveOrderServiceRate(order);
-  final serviceRatePct = serviceRate * 100.0;
-  var effectiveTaxPct = item.taxRate;
-  final fullTaxPct = item.originalTaxRate ?? item.taxRate;
-  final gross = _itemGross(item);
+  final serviceFee =
+      (serviceRate > 0 && !item.isTakeout) ? _r(dbSubtotal * serviceRate) : 0.0;
 
-  // Guard against double-counting: if the item's taxRate already includes the
-  // service fee (e.g. taxRate=28 = ITBIS 18% + Ley 10%), adding serviceFeePct
-  // on top would count the 10% twice.
-  // Detection: effectiveTax + service > fullTax means service is already baked in.
-  double actualServicePct = item.isTakeout ? 0 : serviceRatePct;
-  if (actualServicePct > 0 &&
-      (effectiveTaxPct + actualServicePct - fullTaxPct) > 0.01) {
-    // Service fee is already inside effectiveTaxPct — strip it out.
-    effectiveTaxPct = _r(effectiveTaxPct - actualServicePct);
-    if (effectiveTaxPct < 0) effectiveTaxPct = 0;
-  }
-
-  final result = calculateItemTax(
-    grossAmount: gross,
-    taxMode: item.taxMode,
-    effectiveTaxPct: effectiveTaxPct,
-    fullTaxPct: item.taxMode == 'inclusive' ? fullTaxPct : 0,
-    serviceFeePct: actualServicePct,
-    isTakeout: item.isTakeout,
-    discounts: item.discounts,
-  );
-
-  // For exclusive items, service fee is an "extra" line (not in the item total
-  // from DB). For inclusive items, it's already extracted from the gross.
-  final isExtraService = item.taxMode != 'inclusive' && result.serviceFee > 0;
+  // For the "total" field we use the catalog display price (what the customer
+  // pays). For inclusive items this is unitPrice × qty + modifiers; for
+  // exclusive it's subtotal - discounts.  Using item.total from DB can be
+  // wrong because the DB decomposes inclusive prices into subtotal+tax which
+  // doesn't equal the catalog price after rounding.
+  final displayTotal = itemDisplayTotal(order, item);
 
   return OrderItemPricingSummary(
-    subtotal: result.baseAmount,
-    tax: result.taxAmount,
-    discounts: result.discounts,
-    serviceFee: result.serviceFee,
-    extraServiceFee: isExtraService ? result.serviceFee : 0,
-    total: result.total,
+    subtotal: dbSubtotal,
+    tax: dbTax,
+    discounts: dbDiscounts,
+    serviceFee: serviceFee,
+    extraServiceFee: 0,
+    total: displayTotal,
   );
 }
 
@@ -103,13 +99,35 @@ double itemServiceFee(Order? order, OrderItem item) {
 }
 
 double itemDisplayTotal(Order? order, OrderItem item) {
+  // For ALL items: display price = unitPrice × qty + modifiers - discounts.
+  // Always recalculate from unitPrice × qty because DB item.total may be
+  // stale after equal splits (qty changed but trigger not re-fired).
+  final qty = item.quantity <= 0 ? 1.0 : item.quantity;
+  final modsTotal = item.modifiers.fold<double>(
+      0, (sum, m) => sum + (m.price * m.qty));
+  final calculatedGross = _r((item.unitPrice * qty) + modsTotal);
+
   if (item.taxMode == 'inclusive') {
-    // For inclusive items, the catalog/menu price IS the display price.
-    // Recomposing base+tax causes drift when order.serviceFee is stale.
-    final gross = _itemGross(item);
-    return _r((gross - item.discounts).clamp(0, double.infinity));
+    // For inclusive: the display price = catalog gross = base × (1 + fullRate).
+    // When modifiers are not loaded (zones_repository), calculatedGross
+    // misses modifier prices. Reconstruct from DB subtotal × (1 + originalTaxRate).
+    if (item.modifiers.isEmpty && item.subtotal > 0) {
+      final originalRate = (item.originalTaxRate ?? item.taxRate) / 100.0;
+      final reconstructedGross = _r(item.subtotal * (1 + originalRate));
+      // Only use reconstruction if it's significantly larger than calculated gross,
+      // avoiding 0.01 drift from rounded subtotal bases.
+      if (reconstructedGross > calculatedGross + 0.015) {
+        return _r((reconstructedGross - item.discounts).clamp(0, double.infinity));
+      }
+    }
+    return _r((calculatedGross - item.discounts).clamp(0, double.infinity));
   }
-  return summarizeItemPricing(order, item).total;
+  // Exclusive: show base price without tax (tax is shown separately).
+  // When modifiers are not loaded, DB subtotal already includes them.
+  final gross = (item.modifiers.isEmpty && item.subtotal > calculatedGross)
+      ? item.subtotal
+      : calculatedGross;
+  return _r((gross - item.discounts).clamp(0, double.infinity));
 }
 
 double itemDisplayUnitPrice(Order? order, OrderItem item) {
@@ -139,6 +157,10 @@ class OrderPricingSummary {
   });
 }
 
+/// Builds a per-tax breakdown for display.
+///
+/// Tries to use [configuredBreakdown] (from viewmodel's getTaxBreakdown).
+/// Falls back to deriving from the order summary.
 List<({String label, double amount})> buildOrderTaxBreakdown(
   Order? order,
   Iterable<OrderItem> items, {
@@ -168,6 +190,7 @@ List<({String label, double amount})> buildOrderTaxBreakdown(
     }
   }
 
+  // Fallback: derive from summary values
   final fallback = <({String label, double amount})>[];
   if (summary.tax > 0.004) {
     final taxPct = summary.subtotal > 0
@@ -204,16 +227,42 @@ OrderPricingSummary summarizeOrderPricing(
   double extraServiceFee = 0;
   double total = 0;
 
+  final Map<double, double> taxGroups = {};
+  double serviceBase = 0;
+
   for (final item in items) {
     if (item.status == 'void') continue;
     final s = summarizeItemPricing(order, item);
+    
     subtotal += s.subtotal;
-    tax += s.tax;
     discounts += s.discounts;
-    serviceFee += s.serviceFee;
     extraServiceFee += s.extraServiceFee;
-    total += s.total;
+    
+    // Accumulate taxable base by rate to calculate tax on the sum (prevents rounding drift)
+    final rate = item.taxRate.toDouble();
+    taxGroups[rate] = (taxGroups[rate] ?? 0) + s.subtotal;
+    
+    // Accumulate base for service fee (non-takeout items only)
+    if (!item.isTakeout) {
+      serviceBase += s.subtotal;
+    }
   }
+
+  // Calculate taxes from aggregated bases
+  taxGroups.forEach((rate, base) {
+    if (rate > 0) {
+      tax += _r(base * (rate / 100.0));
+    }
+  });
+
+  // Calculate service fee from aggregated base
+  final serviceRate = resolveOrderServiceRate(order);
+  if (serviceRate > 0) {
+    serviceFee = _r(serviceBase * serviceRate); 
+  }
+
+  // Universal total formula: Base + Taxes + Service Fee - Discounts.
+  final finalTotal = _r(subtotal + tax + serviceFee + extraServiceFee - discounts);
 
   return OrderPricingSummary(
     subtotal: _r(subtotal),
@@ -221,6 +270,6 @@ OrderPricingSummary summarizeOrderPricing(
     discounts: _r(discounts),
     serviceFee: _r(serviceFee),
     extraServiceFee: _r(extraServiceFee),
-    total: _r(total),
+    total: finalTotal,
   );
 }

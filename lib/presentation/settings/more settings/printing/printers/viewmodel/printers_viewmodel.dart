@@ -1286,28 +1286,16 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
   }
 
   Set<BluetoothDevice> _filterLikelyPrinters(Set<BluetoothDevice> devices) {
-    final patterns = <RegExp>[
-      RegExp(r'printer', caseSensitive: false),
-      RegExp(r'\bpos\b', caseSensitive: false),
-      RegExp(r'\bescpos\b', caseSensitive: false),
-      RegExp(
-        r'\b(epson|star|bixolon|gprinter|xprinter)\b',
-        caseSensitive: false,
-      ),
-    ];
-
-    bool looksLikePrinter(String s) =>
-        s.isNotEmpty && patterns.any((rx) => rx.hasMatch(s));
-
+    // Show ALL named Bluetooth devices — many thermal printers use generic
+    // names like "PT-210", "MTP-II", "RPP02N", "BlueTooth Printer", etc.
+    // Filtering too aggressively hides valid printers.
     final out = <BluetoothDevice>{};
     for (final d in devices) {
       final name = (d.platformName.isNotEmpty ? d.platformName : d.advName)
           .trim();
-      final match = looksLikePrinter(name);
-      _log(
-        'BT found -> id=${d.remoteId.str}, name="$name", printerLikely=$match',
-      );
-      if (match) out.add(d);
+      _log('BT found -> id=${d.remoteId.str}, name="$name"');
+      // Only skip devices with no name at all (unnamed beacons, etc.)
+      if (name.isNotEmpty) out.add(d);
     }
     return out;
   }

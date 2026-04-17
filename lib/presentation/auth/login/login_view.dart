@@ -1,10 +1,10 @@
 // lib/presentation/auth/login/login_view.dart
+import 'dart:math';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:media_kit/media_kit.dart';
-import 'package:media_kit_video/media_kit_video.dart';
 import 'package:mangopos/core/utils/web_utils/web_utils.dart';
 
 import 'package:mangopos/app/router/routes.dart';
@@ -256,7 +256,7 @@ class _LoginViewState extends ConsumerState<LoginView> {
                       padding: EdgeInsets.all(24),
                       child: ClipRRect(
                         borderRadius: BorderRadius.all(Radius.circular(16)),
-                        child: _VideoPane(),
+                        child: _LoginImagePane(),
                       ),
                     ),
                   ),
@@ -270,7 +270,7 @@ class _LoginViewState extends ConsumerState<LoginView> {
                     children: [
                       const ClipRRect(
                         borderRadius: BorderRadius.all(Radius.circular(16)),
-                        child: _VideoPane(height: 220),
+                        child: _LoginImagePane(height: 220),
                       ),
                       const SizedBox(height: 16),
                       formCard,
@@ -312,177 +312,32 @@ class _LoginViewState extends ConsumerState<LoginView> {
   );
 }
 
-class _VideoPane extends StatefulWidget {
+class _LoginImagePane extends StatelessWidget {
+  static const _images = [
+    'assets/Login Images/pexels-japy-29142659.jpg',
+    'assets/Login Images/pexels-maxwell-de-sousa-2044217811-29161604.jpg',
+  ];
+
+  // Pick a random image once per app session (stable across rebuilds).
+  static final int _selectedIndex = Random().nextInt(_images.length);
+
   final double? height;
-  const _VideoPane({this.height});
-
-  @override
-  State<_VideoPane> createState() => _VideoPaneState();
-}
-
-class _VideoPaneState extends State<_VideoPane> {
-  Player? _player;
-  VideoController? _controller;
-  String? _webViewType;
-  bool _isInitialized = false;
-  late final bool _useNativeVideo;
-
-  @override
-  void initState() {
-    super.initState();
-    _useNativeVideo =
-        !kIsWeb && defaultTargetPlatform != TargetPlatform.windows;
-    _initializeVideo();
-  }
-
-  void _initializeVideo() {
-    if (!_useNativeVideo) {
-      _initializeWebVideo();
-    } else {
-      _initializeNativeVideo();
-    }
-  }
-
-  void _initializeWebVideo() {
-    _webViewType =
-        'mangopos-login-video-${DateTime.now().microsecondsSinceEpoch}';
-    _registerWebVideo();
-    if (mounted) {
-      setState(() {
-        _isInitialized = true;
-      });
-    }
-  }
-
-  void _registerWebVideo() {
-    if (kIsWeb && _webViewType != null) {
-      debugPrint('Web video initialization for $_webViewType');
-    }
-  }
-
-  void _initializeNativeVideo() {
-    try {
-      _player = Player();
-      _controller = VideoController(_player!);
-      _player!
-        ..open(Media('asset:///assets/videos/video_login.mp4'))
-        ..setVolume(0)
-        ..setPlaylistMode(PlaylistMode.loop);
-
-      if (mounted) {
-        setState(() {
-          _isInitialized = true;
-        });
-      }
-    } catch (e) {
-      debugPrint('Error initializing native video: $e');
-      if (mounted) {
-        setState(() {
-          _isInitialized = true;
-        });
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    if (_useNativeVideo) {
-      _player?.dispose();
-      _controller = null;
-    }
-    super.dispose();
-  }
+  const _LoginImagePane({this.height});
 
   @override
   Widget build(BuildContext context) {
-    if (!_isInitialized) {
-      return Container(
-        color: _dark.withValues(alpha: .06),
-        child: const Center(child: CircularProgressIndicator()),
-      );
-    }
-
-    Widget videoWidget;
-
-    if (!_useNativeVideo) {
-      final placeholderText = kIsWeb
-          ? 'Video no disponible en Web'
-          : 'Video desactivado temporalmente en Windows';
-      videoWidget = Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              _orange.withValues(alpha: .16),
-              _white,
-              _dark.withValues(alpha: .08),
-            ],
-          ),
-        ),
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                width: 84,
-                height: 84,
-                decoration: BoxDecoration(
-                  color: _white,
-                  borderRadius: BorderRadius.circular(24),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: .08),
-                      blurRadius: 18,
-                      offset: const Offset(0, 8),
-                    ),
-                  ],
-                ),
-                child: const Icon(
-                  Icons.storefront_rounded,
-                  size: 44,
-                  color: _orange,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                placeholderText,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: _dark,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'La pantalla de acceso seguira funcionando con fondo estatico.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: _dark.withValues(alpha: .65)),
-              ),
-            ],
-          ),
-        ),
-      );
-    } else {
-      videoWidget = _controller == null
-          ? Container(
-              color: _dark.withValues(alpha: .06),
-              child: const Center(
-                child: Text(
-                  'Video not available',
-                  style: TextStyle(color: Colors.grey),
-                ),
-              ),
-            )
-          : Video(controller: _controller!, controls: null);
-    }
-
     return SizedBox(
-      height: widget.height,
+      height: height,
       width: double.infinity,
-      child: DecoratedBox(
-        decoration: const BoxDecoration(color: _white),
-        child: videoWidget,
+      child: Image.asset(
+        _images[_selectedIndex],
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => Container(
+          color: _orange.withValues(alpha: 0.08),
+          child: const Center(
+            child: Icon(Icons.storefront_rounded, size: 64, color: _orange),
+          ),
+        ),
       ),
     );
   }

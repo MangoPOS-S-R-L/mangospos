@@ -1,12 +1,10 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:mangopos/core/tax/tax_engine.dart';
 import 'package:mangopos/core/utils/display_name_utils.dart';
 
 import '../models/sales_models.dart';
 import '../models/zone.dart';
 import '../models/table_status.dart';
-import '../utils/order_pricing_utils.dart';
-import '../models/dining_table.dart'; // ⬅️ importa el modelo de mesas
+import '../models/dining_table.dart';
 
 class ZonesRepository {
   final SupabaseClient sb;
@@ -244,61 +242,20 @@ class ZonesRepository {
         ordersById[orderId] = Order.fromMap(order);
       }
 
-      if (orderIds.isNotEmpty) {
-        final itemRows = List<Map<String, dynamic>>.from(
-          await sb
-              .from('order_items')
-              .select(
-                'id,order_id,product_id,product_name,sku,qty,quantity,unit_price,subtotal,discounts,tax,total,check_id,is_takeout,status,notes,tax_mode,tax_rate,original_tax_rate,created_at',
-              )
-              .inFilter('order_id', orderIds)
-              .not('status', 'in', '(paid,void)'),
+      // Use order.total directly from DB — calculate_order_totals already
+      // computes the correct total (subtotal + tax + service_fee - discounts)
+      // including modifiers, filtered by status and closed checks.
+      // Recalculating in Flutter causes inconsistencies because modifiers
+      // are not loaded and inclusive/exclusive decomposition drifts.
+      for (final orderId in orderIds) {
+        final sessionId = sessionIdByOrderId[orderId];
+        if (sessionId == null || sessionId.isEmpty) continue;
+        final order = ordersById[orderId];
+        if (order == null) continue;
+
+        totalBySessionId[sessionId] = _roundMoney(
+          (totalBySessionId[sessionId] ?? 0.0) + order.total,
         );
-
-        final checkRows = List<Map<String, dynamic>>.from(
-          await sb
-              .from('order_checks')
-              .select('id,order_id,is_closed')
-              .inFilter('order_id', orderIds),
-        );
-
-        final itemsByOrderId = <String, List<OrderItem>>{};
-        final closedCheckIdsByOrderId = <String, Set<String>>{};
-
-        for (final itemRow in itemRows) {
-          final item = OrderItem.fromMap(itemRow);
-          final orderId = item.orderId.trim();
-          if (orderId.isEmpty) continue;
-          itemsByOrderId.putIfAbsent(orderId, () => <OrderItem>[]).add(item);
-        }
-
-        for (final checkRow in checkRows) {
-          final checkId = checkRow['id']?.toString().trim();
-          final orderId = checkRow['order_id']?.toString().trim();
-          if (orderId == null || orderId.isEmpty) continue;
-          if (checkRow['is_closed'] != true) continue;
-          if (checkId == null || checkId.isEmpty) continue;
-          closedCheckIdsByOrderId
-              .putIfAbsent(orderId, () => <String>{})
-              .add(checkId);
-        }
-
-        for (final orderId in orderIds) {
-          final sessionId = sessionIdByOrderId[orderId];
-          if (sessionId == null || sessionId.isEmpty) continue;
-          final order = ordersById[orderId];
-          if (order == null) continue;
-          final closedCheckIds =
-              closedCheckIdsByOrderId[orderId] ?? const <String>{};
-          final pendingItems = (itemsByOrderId[orderId] ?? const <OrderItem>[])
-              .where((item) => !closedCheckIds.contains(item.checkId))
-              .toList(growable: false);
-
-          final pendingTotal = summarizeOrderPricing(order, pendingItems).total;
-          totalBySessionId[sessionId] = _roundMoney(
-            (totalBySessionId[sessionId] ?? 0.0) + pendingTotal,
-          );
-        }
       }
 
       for (final row in rows) {
