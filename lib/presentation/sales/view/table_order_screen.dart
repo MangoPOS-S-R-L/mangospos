@@ -1385,7 +1385,11 @@ class _CartView extends ConsumerWidget {
     }
 
     // 2. Summary
-    final pricingSummary = summarizeOrderPricing(orderState.order, displayedItems);
+    final pricingSummary = summarizeOrderPricing(
+      orderState.order,
+      displayedItems,
+      forcedOrigin: orderState.origin,
+    );
     final displayTotal = pricingSummary.total;
     final displaySubtotal = pricingSummary.subtotal;
     final displayDiscounts = pricingSummary.discounts;
@@ -1395,6 +1399,7 @@ class _CartView extends ConsumerWidget {
     final reconciledBreakdown = buildOrderTaxBreakdown(
       orderState.order,
       displayedItems,
+      forcedOrigin: orderState.origin,
       configuredBreakdown: taxBreakdown,
     );
     final displayTaxTotal = reconciledBreakdown.fold<double>(

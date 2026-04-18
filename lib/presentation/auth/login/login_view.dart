@@ -115,7 +115,7 @@ class _LoginViewState extends ConsumerState<LoginView> {
                 const SizedBox(height: 8),
                 TextField(
                   keyboardType: TextInputType.emailAddress,
-                  enabled: !isLoading,
+                  enabled: !isLoading && !state.needsEmailConfirmation,
                   onChanged: vm.setEmail,
                   decoration: _inputDecoration('tucorreo@ejemplo.com'),
                   style: const TextStyle(
@@ -125,14 +125,32 @@ class _LoginViewState extends ConsumerState<LoginView> {
                 ),
                 const SizedBox(height: 16),
 
-                _label('Contraseña'),
-                const SizedBox(height: 8),
-                _PasswordField(
-                  initial: state.password,
-                  enabled: !isLoading,
-                  onChanged: vm.setPassword,
-                ),
-                const SizedBox(height: 24),
+                if (state.needsEmailConfirmation) ...[
+                  _label('Código de verificación (6 dígitos)'),
+                  const SizedBox(height: 8),
+                  TextField(
+                    keyboardType: TextInputType.number,
+                    enabled: !isLoading,
+                    onChanged: vm.setConfirmationCode,
+                    maxLength: 6,
+                    decoration: _inputDecoration('000000').copyWith(counterText: ''),
+                    style: const TextStyle(
+                      color: _dark,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 8,
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                ] else ...[
+                  _label('Contraseña'),
+                  const SizedBox(height: 8),
+                  _PasswordField(
+                    initial: state.password,
+                    enabled: !isLoading,
+                    onChanged: vm.setPassword,
+                  ),
+                  const SizedBox(height: 24),
+                ],
 
                 SizedBox(
                   height: 48,
@@ -144,14 +162,18 @@ class _LoginViewState extends ConsumerState<LoginView> {
                       ),
                       elevation: 0,
                     ),
-                    onPressed: isLoading ? null : () async => vm.submit(),
+                    onPressed: isLoading
+                        ? null
+                        : (state.needsEmailConfirmation ? vm.verifyOTP : vm.submit),
                     child: isLoading
                         ? const CircularProgressIndicator.adaptive(
                             valueColor: AlwaysStoppedAnimation<Color>(_white),
                           )
-                        : const Text(
-                            'Iniciar sesion',
-                            style: TextStyle(
+                        : Text(
+                            state.needsEmailConfirmation
+                                ? 'Verificar y Entrar'
+                                : 'Iniciar sesión',
+                            style: const TextStyle(
                               color: _white,
                               fontWeight: FontWeight.w600,
                             ),

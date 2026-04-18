@@ -3,6 +3,10 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/utils/app_time.dart';
 import '../datasources/queries/reports_queries.dart';
 import '../utils/payment_amount_utils.dart';
+import '../utils/order_pricing_utils.dart';
+import '../models/sales_models.dart';
+import '../models/tax.dart';
+import '../../core/tax/tax_engine.dart';
 
 class ReportsRepository {
   final SupabaseClient _client;
@@ -891,45 +895,59 @@ class ReportsRepository {
 
     final items = await _selectInBatches(
       table: ReportsQueries.tableOrderItems,
-      select:
-          'order_id, product_name, qty, quantity, subtotal, total, tax, tax_rate, tax_mode, status',
+      select: 'id, order_id, product_name, qty, quantity, subtotal, total, tax, tax_rate, tax_mode, status, is_takeout, discounts',
       column: 'order_id',
       values: completedOrderIds,
     );
-    final orders = await _selectInBatches(
+
+    final itemIds = items.map((i) => i['id']?.toString()).whereType<String>().toList();
+    final modifierRows = await _selectInBatches(
+      table: 'order_item_modifiers',
+      select: 'item_id, name, qty, price',
+      column: 'item_id',
+      values: itemIds,
+    );
+
+    final modifiersByItem = <String, List<OrderItemModifier>>{};
+    for (final row in modifierRows) {
+      final itemId = row['item_id'] as String;
+      final mod = OrderItemModifier.fromMap(row);
+      modifiersByItem[itemId] = [...(modifiersByItem[itemId] ?? []), mod];
+    }
+
+    final orderRows = await _selectInBatches(
       table: ReportsQueries.tableOrders,
-      select: 'id, subtotal, service_fee, total, status_ext',
+      select: 'id, subtotal, service_fee, total, status_ext, origin:table_sessions!inner(origin)',
       column: 'id',
       values: completedOrderIds,
     );
+    
+    final ordersById = <String, Order>{
+      for (final row in orderRows) 
+        row['id'] as String: Order.fromMap({
+          ...row,
+          'origin': (row['origin'] as Map?)?['origin'] ?? 'table',
+        })
+    };
+
+    // Calculate how much was paid today vs total for each order
+    final paymentParticipationByOrder = <String, double>{};
+    for (final orderId in completedOrderIds) {
+      final orderPayments = payments.where((p) => p['order_id'] == orderId);
+      final paidInRange = orderPayments.fold<double>(0, (sum, p) => sum + netPaymentAmount(p['amount'], p['change_amount']));
+      
+      final orderRow = orderRows.firstWhere((r) => r['id'] == orderId, orElse: () => {});
+      final orderTotal = _toDouble(orderRow['total']);
+      
+      // If total is 0 or payments cover it all, factor is proportional
+      paymentParticipationByOrder[orderId] = (orderTotal <= 0) ? 1.0 : (paidInRange / orderTotal);
+    }
 
     final taxesByRate = <String, Map<String, dynamic>>{};
-    // Build lookup by rate AND detect which rate is the service fee
-    double configuredServiceFeeRateFromTaxes = 0;
     for (final tax in taxes) {
       final rate = _toDouble(tax['rate']);
       taxesByRate[rate.toStringAsFixed(4)] = tax;
-      final isServiceFee = tax['is_service_fee'] == true;
-      final name = (tax['name']?.toString() ?? '').toLowerCase();
-      final isHeuristicService = (rate - 10).abs() < 0.001 &&
-          (name.contains('propina') || name.contains('servicio'));
-      if (isServiceFee || isHeuristicService) {
-        configuredServiceFeeRateFromTaxes = rate;
-      }
     }
-
-    // Sum of all non-service-fee tax rates (for detecting combined rates in items)
-    final configuredTaxOnlyRate = taxes
-        .where((t) {
-          if (t['is_active'] != true) return false;
-          final isService = t['is_service_fee'] == true;
-          final name = (t['name']?.toString() ?? '').toLowerCase();
-          final rate = _toDouble(t['rate']);
-          final isHeuristic = (rate - 10).abs() < 0.001 &&
-              (name.contains('propina') || name.contains('servicio'));
-          return !isService && !isHeuristic;
-        })
-        .fold<double>(0, (sum, t) => sum + _toDouble(t['rate']));
 
     double totalTaxCollected = 0;
     double totalServiceFee = 0;
@@ -941,47 +959,80 @@ class ReportsRepository {
     int serviceFeeOrdersCount = 0;
     final breakdown = <String, Map<String, dynamic>>{};
 
-    for (final item in items) {
-      final status = item['status']?.toString();
+    final Set<String> ordersWithServiceFee = {};
+
+    for (final row in items) {
+      final status = row['status']?.toString();
       if (status == 'void') continue;
 
-      final taxAmount = _toDouble(item['tax']);
-      var taxRate = _toDouble(item['tax_rate']);
-      final subtotal = _toDouble(item['subtotal']);
-      final total = _toDouble(item['total']);
-      final qty = _toDouble(item['qty'] ?? item['quantity']);
+      final orderId = row['order_id'] as String;
+      final itemId = row['id'] as String;
+      final order = ordersById[orderId];
+      if (order == null) continue;
 
-      grossSalesWithTax += total;
+      // PROPORTIONALITY FACTOR: Only count the part that was paid in this range
+      final factor = paymentParticipationByOrder[orderId] ?? 1.0;
+
+      final item = OrderItem.fromMap(row).copyWith(
+        modifiers: modifiersByItem[itemId] ?? [],
+      );
+
+      // Use harmonized pricing to get the correct paid gross for this item.
+      // We deliberately do NOT use s.tax / s.subtotal for the breakdown because
+      // those values depend on what was stored in the DB (which may use wrong
+      // divisors or intermediate bases). Instead, we recompute from the
+      // actual paid gross using the CONFIGURED tax rates so that the effective
+      // ITBIS rate always equals the configured rate (e.g. 18 %).
+      final s = summarizeItemPricing(order, item, forcedOrigin: order.origin);
+      final paidGross = (s.subtotal + s.tax + s.serviceFee) * factor;
+      final qty = item.quantity * factor;
+
+      grossSalesWithTax += paidGross;
       totalQuantity += qty;
 
-      // Items with no tax configured are exempt
-      if (taxRate <= 0 && taxAmount <= 0) {
-        exemptSales += subtotal;
+      // Correcting combined rate stored as single tax_rate (e.g. 28 → 18 ITBIS)
+      final effectiveItbisRate = item.taxRate >= 27.9 ? 18.0 : item.taxRate;
+
+      if (effectiveItbisRate <= 0) {
+        exemptSales += paidGross;
         continue;
       }
 
-      // Detect combined rate: if item.tax_rate includes service fee
-      // (e.g. 28 = 18% ITBIS + 10% Ley), split it for correct bucketing
-      if (configuredServiceFeeRateFromTaxes > 0 &&
-          (taxRate - configuredTaxOnlyRate - configuredServiceFeeRateFromTaxes).abs() < 0.01) {
-        // This item has a combined rate — use only the tax-only portion
-        taxRate = configuredTaxOnlyRate;
-      }
+      // Determine whether propina de ley applies to this item
+      final origin = parseSaleOrigin(order.origin);
+      final applyLey = serviceFeeEnabled &&
+          !item.isTakeout &&
+          origin != SaleOrigin.quick &&
+          origin != SaleOrigin.delivery;
+      final leyRate = applyLey ? serviceFeeRate : 0.0;
+      final fullRatePct = effectiveItbisRate + leyRate;
 
-      taxableSales += subtotal;
-      totalTaxCollected += taxAmount;
+      // Recompute base and taxes from paidGross using configured rates.
+      // This guarantees ITBIS / base == configuredItbisRate regardless of how
+      // the order was originally stored.
+      final rawBase = fullRatePct > 0 ? paidGross / (1 + fullRatePct / 100) : paidGross;
+      final itbis = (rawBase * effectiveItbisRate / 100 * 100).round() / 100;
+      final ley = (rawBase * leyRate / 100 * 100).round() / 100;
+      // Base absorbs rounding residue so that base + itbis + ley == paidGross exactly
+      final base = ((paidGross - itbis - ley) * 100).round() / 100;
 
-      final rateKey = taxRate.toStringAsFixed(4);
-      final taxConfig = taxesByRate[rateKey];
+      taxableSales += base;
+      totalTaxCollected += itbis;
+
+      final effectiveRateKey = effectiveItbisRate.toStringAsFixed(4);
+      final taxConfig = taxesByRate[effectiveRateKey];
+      final rateDisplay = effectiveItbisRate == effectiveItbisRate.truncateToDouble()
+          ? effectiveItbisRate.toInt().toString()
+          : effectiveItbisRate.toStringAsFixed(2);
       final label = taxConfig?['name']?.toString().trim().isNotEmpty == true
           ? taxConfig!['name'].toString().trim()
-          : 'Impuesto ${taxRate.toStringAsFixed(2)}%';
+          : 'ITBIS ($rateDisplay%)';
 
       final bucket = breakdown.putIfAbsent(
-        rateKey,
+        effectiveRateKey,
         () => {
           'label': label,
-          'rate': taxRate,
+          'rate': effectiveItbisRate,
           'amount': 0.0,
           'taxable_amount': 0.0,
           'gross_amount': 0.0,
@@ -989,39 +1040,25 @@ class ReportsRepository {
           'count': 0,
         },
       );
-      bucket['amount'] = _toDouble(bucket['amount']) + taxAmount;
-      bucket['taxable_amount'] = _toDouble(bucket['taxable_amount']) + subtotal;
-      bucket['gross_amount'] = _toDouble(bucket['gross_amount']) + total;
+      bucket['amount'] = _toDouble(bucket['amount']) + itbis;
+      bucket['taxable_amount'] = _toDouble(bucket['taxable_amount']) + base;
+      bucket['gross_amount'] = _toDouble(bucket['gross_amount']) + paidGross;
       bucket['quantity'] = _toDouble(bucket['quantity']) + qty;
       bucket['count'] = (bucket['count'] as int) + 1;
+
+      if (ley > 0) {
+        totalServiceFee += ley;
+        serviceFeeBaseTotal += base;
+        ordersWithServiceFee.add(orderId);
+      }
     }
 
-    // Service fee: read from orders.service_fee (already calculated by DB)
-    for (final order in orders) {
-      final status = order['status_ext']?.toString().trim().toLowerCase();
-      if (status == 'void') continue;
-
-      final serviceFee = _toDouble(order['service_fee']);
-      if (serviceFee <= 0) continue;
-
-      totalServiceFee += serviceFee;
-      serviceFeeOrdersCount += 1;
-
-      // Use the order's own subtotal as the base (more accurate than inferring)
-      final orderSubtotal = _toDouble(order['subtotal']);
-      final inferredBase = serviceFeeEnabled && serviceFeeRate > 0 && orderSubtotal > 0
-          ? orderSubtotal
-          : (serviceFeeRate > 0
-              ? serviceFee / (serviceFeeRate / 100.0)
-              : orderSubtotal);
-      serviceFeeBaseTotal += inferredBase;
-    }
+    serviceFeeOrdersCount = ordersWithServiceFee.length;
 
     if (totalServiceFee > 0) {
-      final serviceRate = serviceFeeEnabled ? serviceFeeRate : configuredServiceFeeRateFromTaxes;
       breakdown['__service_fee__'] = {
         'label': 'Propina de ley',
-        'rate': serviceRate,
+        'rate': 10.0,
         'amount': totalServiceFee,
         'taxable_amount': serviceFeeBaseTotal,
         'gross_amount': serviceFeeBaseTotal + totalServiceFee,
@@ -1034,10 +1071,14 @@ class ReportsRepository {
       growable: false,
     )..sort((a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])));
 
+    // Final rounding of aggregated totals for the report cards
+    final rTotalTax = (totalTaxCollected * 100).round() / 100;
+    final rTotalService = (totalServiceFee * 100).round() / 100;
+
     final effectiveRate = taxableSales <= 0
         ? 0.0
         : (totalTaxCollected / taxableSales) * 100;
-    final totalChargesCollected = totalTaxCollected + totalServiceFee;
+    final totalChargesCollected = rTotalTax + rTotalService;
 
     return {
       'from': fromIso,
@@ -1051,17 +1092,22 @@ class ReportsRepository {
         (sum, row) => sum + ((row['count'] as int?) ?? 0),
       ),
       'items_quantity': totalQuantity,
-      'gross_sales': grossSalesWithTax,
-      'taxable_sales': taxableSales,
-      'exempt_sales': exemptSales,
-      'total_tax_collected': totalTaxCollected,
-      'total_service_fee': totalServiceFee,
-      'service_fee_rate': serviceFeeRate,
+      'gross_sales': (grossSalesWithTax * 100).round() / 100,
+      'taxable_sales': (taxableSales * 100).round() / 100,
+      'exempt_sales': (exemptSales * 100).round() / 100,
+      'total_tax_collected': rTotalTax,
+      'total_service_fee': rTotalService,
+      'service_fee_rate': 10.0,
       'service_fee_orders_count': serviceFeeOrdersCount,
-      'service_fee_base_total': serviceFeeBaseTotal,
-      'total_charges_collected': totalChargesCollected,
+      'service_fee_base_total': (serviceFeeBaseTotal * 100).round() / 100,
+      'total_charges_collected': (totalChargesCollected * 100).round() / 100,
       'effective_tax_rate': effectiveRate,
-      'tax_breakdown': breakdownRows,
+      'tax_breakdown': breakdownRows.map((r) => {
+        ...r,
+        'amount': (r['amount'] * 100).round() / 100,
+        'taxable_amount': (r['taxable_amount'] * 100).round() / 100,
+        'gross_amount': (r['gross_amount'] * 100).round() / 100,
+      }).toList(),
     };
   }
 

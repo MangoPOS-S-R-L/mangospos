@@ -33,9 +33,11 @@ class LoginViewModel extends Notifier<LoginState> {
     }
   }
 
+  void setConfirmationCode(String v) => _safeSet(state.copyWith(confirmationCode: v));
+
   Future<void> submit() async {
     if (state.email.isEmpty || state.password.isEmpty) {
-      _safeSet(state.copyWith(error: 'Ingresa correo y contrasena'));
+      _safeSet(state.copyWith(error: 'Ingresa correo y contraseña'));
       return;
     }
     _safeSet(state.copyWith(isLoading: true, error: null));
@@ -47,110 +49,35 @@ class LoginViewModel extends Notifier<LoginState> {
         password: state.password,
       );
 
-      final user = response.user;
-      if (user == null) {
-        AppLogger.w(
-          'Login exitoso pero usuario es null en la respuesta de Supabase',
-        );
-        _safeSet(
-          state.copyWith(
-            isLoading: false,
-            error: 'Credenciales invalidas o usuario no encontrado',
-          ),
-        );
-        return;
-      }
-
-      final profileResp = await supabase
-          .from('profiles')
-          .select('full_name')
-          .eq('id', user.id)
-          .maybeSingle();
-      final fullName = profileResp?['full_name'] as String? ?? 'Usuario';
-      final displayName = preferredDisplayName(
-        fullName: fullName,
-        email: user.email,
-      );
-
-      final userBizResp = await supabase
-          .from('user_businesses')
-          .select('business_id, role, businesses(business_name, domain)')
-          .eq('user_id', user.id);
-
-      final businessesList = userBizResp as List<dynamic>;
-
-      if (businessesList.isEmpty) {
-        AppLogger.w(
-          'Usuario sin perfil de negocio asignado (user_businesses esta vacia)',
-        );
-        await supabase.auth.signOut();
-        _safeSet(
-          state.copyWith(
-            isLoading: false,
-            error:
-                'Tu usuario no tiene negocio o rol asignado. Contacta al administrador.',
-          ),
-        );
-        return;
-      }
-
-      if (businessesList.length > 1) {
-        AppLogger.i(
-          'Usuario con multiples negocios (${businessesList.length}). Mostrando selector interno.',
-        );
-        _safeSet(
-          state.copyWith(isLoading: false, needsBusinessSelection: true),
-        );
-        return;
-      }
-
-      final singleBiz = businessesList.first;
-      final businessId = singleBiz['business_id'] as String?;
-      final roleStr = singleBiz['role']?.toString();
-      final posRole = _mapRole(roleStr);
-
-      if (businessId == null || businessId.isEmpty || posRole == null) {
-        AppLogger.e(
-          'Atributos criticos faltantes en Login -> businessId: $businessId',
-        );
-        await supabase.auth.signOut();
-        _safeSet(
-          state.copyWith(
-            isLoading: false,
-            error: 'Tu acceso no esta configurado correctamente.',
-          ),
-        );
-        return;
-      }
-
-      ref
-          .read(sessionProvider.notifier)
-          .setAuthenticated(
-            user.id,
-            businessId: businessId,
-            userName: displayName,
-            activeRole: posRole,
-            availableRoles: [posRole],
-          );
-
-      AppLogger.i('[$businessId] Login exitoso para $fullName ($roleStr)');
-
-      _safeSet(const LoginState());
+      await _handleSuccessfulLogin(response.user);
     } on AuthException catch (e, st) {
       AppLogger.w('AuthException durante login', error: e, stackTrace: st);
       await _resetBrokenSessionIfNeeded(e);
+
+      final msg = e.message.toLowerCase();
+      if (msg.contains('email not confirmed') || msg.contains('verificar')) {
+        _safeSet(
+          state.copyWith(
+            isLoading: false,
+            needsEmailConfirmation: true,
+            error: 'Tu correo no ha sido verificado. Ingresa el código que recibiste.',
+          ),
+        );
+        return;
+      }
+
       final message =
           SupabaseConfig.isAuthRefreshSchemaMismatchError(e) ||
-              SupabaseConfig.isTlsCertificateError(e)
-          ? SupabaseConfig.getFriendlyErrorMessage(e)
-          : e.message;
+                  SupabaseConfig.isTlsCertificateError(e)
+              ? SupabaseConfig.getFriendlyErrorMessage(e)
+              : e.message;
       _safeSet(state.copyWith(isLoading: false, error: message));
     } on TimeoutException catch (e, st) {
       AppLogger.w('Timeout en auth', error: e, stackTrace: st);
       _safeSet(
         state.copyWith(
           isLoading: false,
-          error: 'Tiempo de espera agotado. Revisa tu conexion de red.',
+          error: 'Tiempo de espera agotado. Revisa tu conexión de red.',
         ),
       );
     } catch (e, st) {
@@ -163,6 +90,123 @@ class LoginViewModel extends Notifier<LoginState> {
         ),
       );
     }
+  }
+
+  Future<void> verifyOTP() async {
+    if (state.confirmationCode.length < 6) {
+      _safeSet(state.copyWith(error: 'El código debe tener 6 dígitos'));
+      return;
+    }
+    _safeSet(state.copyWith(isLoading: true, error: null));
+
+    try {
+      final supabase = Supabase.instance.client;
+      final response = await supabase.auth.verifyOTP(
+        email: state.email,
+        token: state.confirmationCode,
+        type: OtpType.signup,
+      );
+
+      if (response.user != null) {
+        await _handleSuccessfulLogin(response.user);
+      } else {
+        _safeSet(state.copyWith(isLoading: false, error: 'Código inválido o expirado.'));
+      }
+    } on AuthException catch (e) {
+      _safeSet(state.copyWith(isLoading: false, error: e.message));
+    } catch (e) {
+      _safeSet(state.copyWith(isLoading: false, error: 'Error verificando el código.'));
+    }
+  }
+
+  Future<void> _handleSuccessfulLogin(User? user) async {
+    final supabase = Supabase.instance.client;
+    if (user == null) {
+      AppLogger.w(
+        'Login exitoso pero usuario es null en la respuesta de Supabase',
+      );
+      _safeSet(
+        state.copyWith(
+          isLoading: false,
+          error: 'Credenciales inválidas o usuario no encontrado',
+        ),
+      );
+      return;
+    }
+
+    final profileResp = await supabase
+        .from('profiles')
+        .select('full_name')
+        .eq('id', user.id)
+        .maybeSingle();
+    final fullName = profileResp?['full_name'] as String? ?? 'Usuario';
+    final displayName = preferredDisplayName(
+      fullName: fullName,
+      email: user.email,
+    );
+
+    final userBizResp = await supabase
+        .from('user_businesses')
+        .select('business_id, role, businesses(business_name, domain)')
+        .eq('user_id', user.id);
+
+    final businessesList = userBizResp as List<dynamic>;
+
+    if (businessesList.isEmpty) {
+      AppLogger.w(
+        'Usuario sin perfil de negocio asignado (user_businesses esta vacia)',
+      );
+      await supabase.auth.signOut();
+      _safeSet(
+        state.copyWith(
+          isLoading: false,
+          error:
+              'Tu usuario no tiene negocio o rol asignado. Contacta al administrador.',
+        ),
+      );
+      return;
+    }
+
+    if (businessesList.length > 1) {
+      AppLogger.i(
+        'Usuario con multiples negocios (${businessesList.length}). Mostrando selector interno.',
+      );
+      _safeSet(
+        state.copyWith(isLoading: false, needsBusinessSelection: true),
+      );
+      return;
+    }
+
+    final singleBiz = businessesList.first;
+    final businessId = singleBiz['business_id'] as String?;
+    final roleStr = singleBiz['role']?.toString();
+    final posRole = _mapRole(roleStr);
+
+    if (businessId == null || businessId.isEmpty || posRole == null) {
+      AppLogger.e(
+        'Atributos criticos faltantes en Login -> businessId: $businessId',
+      );
+      await supabase.auth.signOut();
+      _safeSet(
+        state.copyWith(
+          isLoading: false,
+          error: 'Tu acceso no está configurado correctamente.',
+        ),
+      );
+      return;
+    }
+
+    ref.read(sessionProvider.notifier).setAuthenticated(
+          user.id,
+          businessId: businessId,
+          userName: displayName,
+          activeRole: posRole,
+          availableRoles: [posRole],
+        );
+
+    AppLogger.i('[$businessId] Login exitoso para $fullName ($roleStr)');
+
+    _safeSet(const LoginState());
   }
 
   Future<void> _resetBrokenSessionIfNeeded(Object error) async {

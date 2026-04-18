@@ -249,8 +249,10 @@ class _ReportToolbar extends StatelessWidget {
           icon: const Icon(Icons.date_range_outlined),
           label: const Text('Rango personalizado'),
         ),
-        OutlinedButton.icon(
-          style: reportOutlineButtonStyle(),
+        _ExportButton(
+          icon: Icons.picture_as_pdf_outlined,
+          label: 'PDF',
+          color: const Color(0xFFDC2626),
           onPressed: () async {
             await ReportsExportService.exportCurrentReport(
               category: category,
@@ -258,11 +260,11 @@ class _ReportToolbar extends StatelessWidget {
               viewModel: viewModel,
             );
           },
-          icon: const Icon(Icons.picture_as_pdf_outlined),
-          label: const Text('PDF'),
         ),
-        OutlinedButton.icon(
-          style: reportOutlineButtonStyle(),
+        _ExportButton(
+          icon: Icons.table_chart_outlined,
+          label: 'Excel / CSV',
+          color: const Color(0xFF059669),
           onPressed: () async {
             await ReportsCsvExportService.exportCurrentReport(
               category: category,
@@ -270,8 +272,6 @@ class _ReportToolbar extends StatelessWidget {
               viewModel: viewModel,
             );
           },
-          icon: const Icon(Icons.table_view_outlined),
-          label: const Text('CSV'),
         ),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -300,6 +300,46 @@ class _ReportToolbar extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Export button
+// ---------------------------------------------------------------------------
+
+class _ExportButton extends StatelessWidget {
+  const _ExportButton({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      style: OutlinedButton.styleFrom(
+        foregroundColor: color,
+        side: BorderSide(color: color.withValues(alpha: 0.4)),
+        backgroundColor: color.withValues(alpha: 0.05),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(reportRadius),
+        ),
+        textStyle: const TextStyle(
+          fontWeight: FontWeight.w600,
+          fontSize: 13,
+        ),
+      ),
+      onPressed: onPressed,
+      icon: Icon(icon, size: 16),
+      label: Text(label),
     );
   }
 }

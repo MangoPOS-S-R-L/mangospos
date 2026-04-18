@@ -4,6 +4,8 @@ class LoginState {
   final String password;
   final String? error;
   final bool needsBusinessSelection;
+  final bool needsEmailConfirmation;
+  final String confirmationCode;
 
   const LoginState({
     this.isLoading = false,
@@ -11,6 +13,8 @@ class LoginState {
     this.password = '',
     this.error,
     this.needsBusinessSelection = false,
+    this.needsEmailConfirmation = false,
+    this.confirmationCode = '',
   });
 
   LoginState copyWith({
@@ -19,6 +23,8 @@ class LoginState {
     String? password,
     String? error,
     bool? needsBusinessSelection,
+    bool? needsEmailConfirmation,
+    String? confirmationCode,
   }) {
     return LoginState(
       isLoading: isLoading ?? this.isLoading,
@@ -26,6 +32,8 @@ class LoginState {
       password: password ?? this.password,
       error: error,
       needsBusinessSelection: needsBusinessSelection ?? this.needsBusinessSelection,
+      needsEmailConfirmation: needsEmailConfirmation ?? this.needsEmailConfirmation,
+      confirmationCode: confirmationCode ?? this.confirmationCode,
     );
   }
 }

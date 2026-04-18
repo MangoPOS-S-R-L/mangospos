@@ -5,6 +5,7 @@ import '../models/sales_models.dart';
 import '../models/zone.dart';
 import '../models/table_status.dart';
 import '../models/dining_table.dart';
+import '../utils/order_pricing_utils.dart';
 
 class ZonesRepository {
   final SupabaseClient sb;
@@ -242,19 +243,55 @@ class ZonesRepository {
         ordersById[orderId] = Order.fromMap(order);
       }
 
-      // Use order.total directly from DB — calculate_order_totals already
-      // computes the correct total (subtotal + tax + service_fee - discounts)
-      // including modifiers, filtered by status and closed checks.
-      // Recalculating in Flutter causes inconsistencies because modifiers
-      // are not loaded and inclusive/exclusive decomposition drifts.
+      // Use items to calculate the real total using our harmonized logic
+      // This ensures inclusive pricing is respected and matches the order screen.
+      final itemsMap = <String, List<OrderItem>>{};
+      
+      final itemsRows = await sb
+          .from('order_items')
+          .select()
+          .inFilter('order_id', orderIds)
+          .neq('status', 'void') as List;
+
+      final itemIds = itemsRows.map((r) => r['id'] as String).toList();
+      final modifiersMap = <String, List<OrderItemModifier>>{};
+      
+      if (itemIds.isNotEmpty) {
+        final modsRows = await sb
+            .from('order_item_modifiers')
+            .select()
+            .inFilter('item_id', itemIds) as List;
+            
+        for (final row in modsRows) {
+          final itemId = row['item_id'] as String;
+          final mod = OrderItemModifier.fromMap(row);
+          modifiersMap[itemId] = [...(modifiersMap[itemId] ?? []), mod];
+        }
+      }
+
+      for (final row in itemsRows) {
+        final orderId = row['order_id'] as String;
+        final itemId = row['id'] as String;
+        final item = OrderItem.fromMap(row).copyWith(
+          modifiers: modifiersMap[itemId] ?? [],
+        );
+        itemsMap[orderId] = [...(itemsMap[orderId] ?? []), item];
+      }
+
       for (final orderId in orderIds) {
         final sessionId = sessionIdByOrderId[orderId];
         if (sessionId == null || sessionId.isEmpty) continue;
         final order = ordersById[orderId];
-        if (order == null) continue;
+        final items = itemsMap[orderId] ?? [];
+        
+        final summary = summarizeOrderPricing(
+          order, 
+          items, 
+          forcedOrigin: 'table',
+        );
 
         totalBySessionId[sessionId] = _roundMoney(
-          (totalBySessionId[sessionId] ?? 0.0) + order.total,
+          (totalBySessionId[sessionId] ?? 0.0) + summary.total,
         );
       }
 

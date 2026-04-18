@@ -90,6 +90,7 @@ class Order extends Equatable {
   final double total;
   final DateTime createdAt;
   final DateTime? closedAt;
+  final String origin;
 
   const Order({
     required this.id,
@@ -102,6 +103,7 @@ class Order extends Equatable {
     required this.total,
     required this.createdAt,
     this.closedAt,
+    this.origin = 'table',
   });
 
   factory Order.fromMap(Map<String, dynamic> map) {
@@ -118,6 +120,7 @@ class Order extends Equatable {
       closedAt: map['closed_at'] != null
           ? DateTime.tryParse(map['closed_at'])
           : null,
+      origin: map['origin'] ?? 'table',
     );
   }
 
@@ -132,6 +135,7 @@ class Order extends Equatable {
     'total': total,
     'created_at': createdAt.toIso8601String(),
     'closed_at': closedAt?.toIso8601String(),
+    'origin': origin,
   };
 
   Order copyWith({
@@ -145,6 +149,7 @@ class Order extends Equatable {
     double? total,
     DateTime? createdAt,
     DateTime? closedAt,
+    String? origin,
   }) {
     return Order(
       id: id ?? this.id,
@@ -157,6 +162,7 @@ class Order extends Equatable {
       total: total ?? this.total,
       createdAt: createdAt ?? this.createdAt,
       closedAt: closedAt ?? this.closedAt,
+      origin: origin ?? this.origin,
     );
   }
 

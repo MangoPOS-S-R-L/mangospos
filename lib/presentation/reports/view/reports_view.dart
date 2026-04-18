@@ -300,7 +300,8 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
         color: const Color(0xFF0891B2),
         quickStat: '$fiscalDocsCount',
         quickStatLabel: 'Documentos emitidos',
-        onTap: () => context.go(AppRoutes.reportsFiscal),
+        disabled: true,
+        disabledLabel: 'Próximamente',
       ),
     ];
 
@@ -342,7 +343,9 @@ class _ReportHubCardData {
   final Color color;
   final String quickStat;
   final String quickStatLabel;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
+  final bool disabled;
+  final String? disabledLabel;
 
   const _ReportHubCardData({
     required this.title,
@@ -351,7 +354,9 @@ class _ReportHubCardData {
     required this.color,
     required this.quickStat,
     required this.quickStatLabel,
-    required this.onTap,
+    this.onTap,
+    this.disabled = false,
+    this.disabledLabel,
   });
 }
 
@@ -374,26 +379,35 @@ class _ReportHubCardState extends State<_ReportHubCard> {
   @override
   Widget build(BuildContext context) {
     final d = widget.data;
+    final isDisabled = d.disabled;
+    final effectiveColor = isDisabled ? AppColors.mutedForeground : d.color;
 
     return MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
+      onEnter: (_) {
+        if (!isDisabled) setState(() => _isHovered = true);
+      },
       onExit: (_) => setState(() => _isHovered = false),
-      cursor: SystemMouseCursors.click,
+      cursor: isDisabled
+          ? SystemMouseCursors.forbidden
+          : SystemMouseCursors.click,
       child: GestureDetector(
-        onTap: d.onTap,
+        onTap: isDisabled ? null : d.onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
           curve: Curves.easeInOut,
           padding: const EdgeInsets.all(AppSpacing.cardPadding),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: isDisabled
+                ? AppColors.secondary
+                : Colors.white,
             borderRadius: BorderRadius.circular(_reportRadius),
             border: Border.all(
               color: _isHovered
-                  ? d.color.withValues(alpha: 0.4)
+                  ? effectiveColor.withValues(alpha: 0.4)
                   : AppColors.border,
             ),
-            boxShadow: _isHovered ? AppShadows.cardInteractive : AppShadows.soft,
+            boxShadow:
+                _isHovered ? AppShadows.cardInteractive : AppShadows.soft,
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -405,26 +419,55 @@ class _ReportHubCardState extends State<_ReportHubCard> {
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
                       color: _isHovered
-                          ? d.color.withValues(alpha: 0.15)
-                          : d.color.withValues(alpha: 0.1),
+                          ? effectiveColor.withValues(alpha: 0.15)
+                          : effectiveColor.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(_reportRadius),
                     ),
-                    child: Icon(d.icon, color: d.color, size: 28),
+                    child: Icon(d.icon, color: effectiveColor, size: 28),
                   ),
                   const SizedBox(width: AppSpacing.itemGap),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          d.title,
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w800,
-                            color: _isHovered
-                                ? d.color
-                                : AppColors.foreground,
-                          ),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                d.title,
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w800,
+                                  color: isDisabled
+                                      ? AppColors.mutedForeground
+                                      : (_isHovered
+                                          ? d.color
+                                          : AppColors.foreground),
+                                ),
+                              ),
+                            ),
+                            if (isDisabled && d.disabledLabel != null)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: AppColors.mutedForeground
+                                      .withValues(alpha: 0.12),
+                                  borderRadius:
+                                      BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  d.disabledLabel!,
+                                  style: const TextStyle(
+                                    color: AppColors.mutedForeground,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
                         const SizedBox(height: 4),
                         Text(
@@ -440,17 +483,14 @@ class _ReportHubCardState extends State<_ReportHubCard> {
                       ],
                     ),
                   ),
-                  AnimatedRotation(
-                    turns: _isHovered ? 0.0 : 0.0,
-                    duration: const Duration(milliseconds: 200),
-                    child: Icon(
+                  if (!isDisabled)
+                    Icon(
                       Icons.chevron_right_rounded,
                       color: _isHovered
                           ? d.color
                           : AppColors.mutedForeground,
                       size: 28,
                     ),
-                  ),
                 ],
               ),
               const Spacer(),
@@ -458,10 +498,10 @@ class _ReportHubCardState extends State<_ReportHubCard> {
                 padding: const EdgeInsets.symmetric(
                     horizontal: 14, vertical: 10),
                 decoration: BoxDecoration(
-                  color: d.color.withValues(alpha: 0.06),
+                  color: effectiveColor.withValues(alpha: 0.06),
                   borderRadius: BorderRadius.circular(_reportRadius),
                   border: Border.all(
-                    color: d.color.withValues(alpha: 0.12),
+                    color: effectiveColor.withValues(alpha: 0.12),
                   ),
                 ),
                 child: Row(
@@ -471,7 +511,7 @@ class _ReportHubCardState extends State<_ReportHubCard> {
                       style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.w800,
-                        color: d.color,
+                        color: effectiveColor,
                       ),
                     ),
                     const SizedBox(width: AppSpacing.tightGap),

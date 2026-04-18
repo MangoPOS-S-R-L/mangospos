@@ -54,7 +54,6 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
         throw Exception('Falta el nombre del negocio. Regresa al paso 2.');
       }
 
-      final domain = 'app.mangopos.do';
 
       // 1. Create auth user
       final AuthResponse resp;
@@ -62,6 +61,7 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
         resp = await supabase.auth.signUp(
           email: step1.email!,
           password: step1.password!,
+          emailRedirectTo: 'https://app.mangopos.do/auth/callback',
         );
       } on AuthException catch (e) {
         throw Exception(_friendlyAuthError(e));
@@ -91,6 +91,24 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
 
       // 3. Create business
       final Map<String, dynamic> business;
+      
+      // Clean and ensure unique domain/slug
+      var slug = step2.subdomain.trim().toLowerCase();
+      if (slug.isEmpty) {
+        slug = step2.businessName
+            .toLowerCase()
+            .replaceAll(RegExp(r'[^a-z0-9]'), '-')
+            .replaceAll(RegExp(r'-+'), '-')
+            .trim();
+        if (slug.endsWith('-')) slug = slug.substring(0, slug.length - 1);
+        
+        // Add a small random suffix if slug is very common or to be safer
+        final random = DateTime.now().millisecondsSinceEpoch.toString().substring(10);
+        slug = '$slug-$random';
+      }
+      
+      final finalDomain = '$slug.mangopos.do';
+
       try {
         business = await supabase
             .from('businesses')
@@ -105,7 +123,7 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
               'address': step2.address,
               'phone':
                   step2.phone.trim().isEmpty ? null : step2.phone.trim(),
-              'domain': domain,
+              'domain': finalDomain,
               'status': 'active',
               'created_at': DateTime.now().toIso8601String(),
               'updated_at': DateTime.now().toIso8601String(),
