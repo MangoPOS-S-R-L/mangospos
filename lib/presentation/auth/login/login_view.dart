@@ -78,36 +78,10 @@ class _LoginViewState extends ConsumerState<LoginView> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Container(
-                      width: 36,
-                      height: 36,
-                      decoration: BoxDecoration(
-                        color: _orange,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: const Center(
-                        child: Text(
-                          'M',
-                          style: TextStyle(
-                            color: _white,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    const Text(
-                      'MangoPOS',
-                      style: TextStyle(
-                        color: _dark,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
+                Image.asset(
+                  'assets/images/Logo Completo.png',
+                  height: 80,
+                  fit: BoxFit.contain,
                 ),
                 const SizedBox(height: 20),
 
@@ -216,50 +190,6 @@ class _LoginViewState extends ConsumerState<LoginView> {
                   textAlign: TextAlign.center,
                 ),
 
-                if (kDebugMode || kIsWeb) ...[
-                  const SizedBox(height: 20),
-                  const Divider(),
-                  Builder(
-                    builder: (context) {
-                      String debugStr = 'N/A';
-                      if (kIsWeb) {
-                        try {
-                          final href = WebUtils.href;
-                          final hash = WebUtils.hash;
-                          final pathname = WebUtils.pathname;
-                          final search = WebUtils.search;
-                          debugStr =
-                              'href: $href\nhash: $hash\npath: $pathname\nsearch: $search';
-                        } catch (e) {
-                          debugStr = 'Error leyendo URL: $e';
-                        }
-                      }
-                      return Container(
-                        margin: const EdgeInsets.symmetric(vertical: 8),
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.amber.withValues(alpha: .2),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          '🔍 URL DETECTADA POR FLUTTER:\n$debugStr',
-                          style: const TextStyle(
-                            fontSize: 10,
-                            fontFamily: 'monospace',
-                            color: Colors.blueGrey,
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                  const Center(
-                    child: Text(
-                      'WASM Build - Debug Mode\nRev: 1.0.1',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.grey, fontSize: 10),
-                    ),
-                  ),
-                ],
               ],
             ),
           ),
