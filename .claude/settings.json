@@ -5,7 +5,23 @@
       "Read(//Users/cristiangomez/.pub-cache/hosted/pub.dev/flutter_usb_printer-0.1.0+1/lib/**)",
       "Read(//Users/cristiangomez/.pub-cache/hosted/pub.dev/flutter_blue_plus-2.0.0/**)",
       "Bash(grep -l \"CREATE TABLE.*print_area\" /Users/cristiangomez/dev/mangospos/supabase/migrations/*.sql)",
-      "Bash(grep -E \"\\\\.\\(dart|sql\\)$\")"
+      "Bash(grep -E \"\\\\.\\(dart|sql\\)$\")",
+      "Bash(grep -n \"fn_delete_business\" /Users/cristiangomez/dev/mangospos/supabase/migrations/*.sql)",
+      "Bash(flutter build *)",
+      "Bash(keytool -list -v -keystore /Users/cristiangomez/dev/mangospos/android/app/upload-keystore.jks -alias upload -storepass 'Noviembre0824@')",
+      "Read(//Users/cristiangomez/**)",
+      "Bash(keytool -list -v -keystore /Users/cristiangomez/upload-keystore.jks -alias upload -storepass 'Noviembre0824@')",
+      "Bash(keytool -genkeypair -v -keystore /tmp/temp-check.jks -alias upload -storepass 'Noviembre0824@')",
+      "Bash(keytool -list -keystore /Users/cristiangomez/dev/mangospos/android/app/upload-keystore.jks -alias upload -storepass 'Noviembre0824@')",
+      "Bash(keytool -list -v -keystore /tmp/original-keystore.jks -alias upload -storepass 'Noviembre0824@')",
+      "Bash(flutter run *)",
+      "Bash(dart -e ' *)",
+      "Bash(python3 -c ' *)",
+      "Bash(head -1172 /Users/cristiangomez/dev/mangospos/lib/presentation/cashier/view/sales_history_view.dart)",
+      "Bash(mv /tmp/sales_history_trimmed.dart /Users/cristiangomez/dev/mangospos/lib/presentation/cashier/view/sales_history_view.dart)"
+    ],
+    "additionalDirectories": [
+      "/Users/cristiangomez"
     ]
   }
 }

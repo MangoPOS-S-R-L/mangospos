@@ -48,7 +48,7 @@ class MainShell extends ConsumerWidget {
               ),
               child: Row(
                 children: [
-                  // Logo
+                  const SizedBox(width: 12),
                   const _Logo(),
                   const SizedBox(width: 32),
 
@@ -429,8 +429,8 @@ class _Logo extends StatelessWidget {
   Widget build(BuildContext context) {
     // final logoHeight = context.hp(context.isMobile ? 6 : 5);
     return Image.asset(
-      'assets/images/logo.png',
-      height: 40, // Height fijo para que se vea correctamente
+      'assets/images/Logo Completo.png',
+      height: 32, // Más compacto y elegante para el Dashboard
       fit: BoxFit.contain,
     );
   }

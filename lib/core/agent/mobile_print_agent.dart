@@ -390,10 +390,20 @@ class MobilePrintAgent {
     final device = BluetoothDevice.fromId(address);
     try {
       await device.connect(
-        license: License.free,
         autoConnect: false,
         timeout: _btWriteTimeout,
+        license: License.free,
       );
+      
+      // Try to request a larger MTU for faster printing on supported devices
+      try {
+        if (Platform.isAndroid) {
+          await device.requestMtu(512);
+        }
+      } catch (e) {
+        debugPrint('[MobileAgent] MTU request failed (ignoring): $e');
+      }
+
       await Future.delayed(const Duration(milliseconds: 500));
 
       final services = await device.discoverServices();
@@ -413,19 +423,22 @@ class MobilePrintAgent {
         throw Exception('No writable characteristic found on Bluetooth device');
       }
 
-      // Send data in chunks (BLE has MTU limits, typically 20-512 bytes)
-      const chunkSize = 200;
-      for (var i = 0; i < data.length; i += chunkSize) {
-        final end = (i + chunkSize > data.length) ? data.length : i + chunkSize;
+      // Send data in chunks. 
+      // Default BLE MTU is 23 bytes (20 bytes for data). 
+      // We use a safe chunk size of 20 to ensure compatibility with all printers.
+      const int safeChunkSize = 20;
+      
+      for (var i = 0; i < data.length; i += safeChunkSize) {
+        final end = (i + safeChunkSize > data.length) ? data.length : i + safeChunkSize;
         final chunk = data.sublist(i, end);
+        
         await writableChar.write(
           chunk.toList(),
           withoutResponse: writableChar.properties.writeWithoutResponse,
         );
-        // Small delay between chunks to avoid overwhelming the printer
-        if (end < data.length) {
-          await Future.delayed(const Duration(milliseconds: 50));
-        }
+        
+        // Very small delay to allow the printer's buffer to catch up
+        await Future.delayed(const Duration(milliseconds: 10));
       }
     } finally {
       try {

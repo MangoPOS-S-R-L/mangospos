@@ -70,6 +70,7 @@ class BranchManagementController extends ChangeNotifier {
     required String branchName,
     String? address,
     String? phone,
+    String? copyProductsFromBusinessId,
   }) async {
     final user = _client.auth.currentUser;
     if (user == null) throw Exception('Sesión no iniciada');
@@ -79,7 +80,7 @@ class BranchManagementController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      await _client.rpc(
+      final result = await _client.rpc(
         'create_branch_business',
         params: {
           'p_business_name': companyName.trim(),
@@ -91,6 +92,20 @@ class BranchManagementController extends ChangeNotifier {
           'p_domain': null,
         },
       );
+
+      // Copy products from source branch if requested
+      if (copyProductsFromBusinessId != null) {
+        final newBusinessId = (result as Map<String, dynamic>?)?['business_id']?.toString();
+        if (newBusinessId != null && newBusinessId.isNotEmpty) {
+          await _client.rpc(
+            'fn_copy_products_to_branch',
+            params: {
+              'p_source_business_id': copyProductsFromBusinessId,
+              'p_target_business_id': newBusinessId,
+            },
+          );
+        }
+      }
 
       await load();
     } catch (e) {
@@ -268,165 +283,255 @@ class _BranchManagementViewState extends ConsumerState<BranchManagementView> {
         ? (session.availableBusinesses.first.companyName ?? '')
         : (session.activeBusinessName ?? '');
 
+    bool copyProducts = false;
+    String? copyFromBusinessId = session.activeBusinessId;
+
+    final branches = session.availableBusinesses;
+
     await showDialog<void>(
       context: context,
       builder: (dialogContext) {
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-          child: Container(
-            width: 560,
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(28),
-              border: Border.all(color: AppColors.border),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0x14000000),
-                  blurRadius: 30,
-                  offset: Offset(0, 10),
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: 56,
-                  height: 56,
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [AppColors.primary, AppColors.primaryGradientEnd],
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            return Dialog(
+              backgroundColor: Colors.transparent,
+              insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+              child: Container(
+                width: 560,
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(28),
+                  border: Border.all(color: AppColors.border),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x14000000),
+                      blurRadius: 30,
+                      offset: Offset(0, 10),
                     ),
-                    borderRadius: BorderRadius.circular(18),
-                  ),
-                  child: const Icon(
-                    Icons.add_business_rounded,
-                    color: Colors.white,
-                    size: 28,
-                  ),
+                  ],
                 ),
-                const SizedBox(height: 18),
-                const Text(
-                  'Crear nueva sucursal',
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.foreground,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                const Text(
-                  'La sucursal se crea aislada. No hereda ventas, clientes ni productos automáticamente.',
-                  style: TextStyle(
-                    color: AppColors.mutedForeground,
-                    fontSize: 14,
-                  ),
-                ),
-                const SizedBox(height: 22),
-                _FormInput(
-                  controller: companyCtrl,
-                  label: 'Nombre del negocio',
-                  hint: 'Ej. MangoPOS Restaurant Group',
-                ),
-                const SizedBox(height: 14),
-                _FormInput(
-                  controller: branchCtrl,
-                  label: 'Nombre de la sucursal',
-                  hint: 'Ej. Piantini / Jardines / Santiago Centro',
-                ),
-                const SizedBox(height: 14),
-                _FormInput(
-                  controller: addressCtrl,
-                  label: 'Dirección',
-                  hint: 'Opcional',
-                ),
-                const SizedBox(height: 14),
-                _FormInput(
-                  controller: phoneCtrl,
-                  label: 'Teléfono',
-                  hint: 'Opcional',
-                ),
-                const SizedBox(height: 14),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: AppColors.infoBg,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: AppColors.infoBorder),
-                  ),
-                  child: const Row(
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(
-                        Icons.info_outline_rounded,
-                        color: AppColors.info,
-                        size: 18,
+                      Container(
+                        width: 56,
+                        height: 56,
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [AppColors.primary, AppColors.primaryGradientEnd],
+                          ),
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                        child: const Icon(
+                          Icons.add_business_rounded,
+                          color: Colors.white,
+                          size: 28,
+                        ),
                       ),
-                      SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          'No se crea un subdominio visible para el usuario. Solo se genera un identificador técnico interno requerido por el esquema actual.',
-                          style: TextStyle(
-                            fontSize: 12.5,
-                            color: AppColors.mutedForeground,
-                            height: 1.45,
+                      const SizedBox(height: 18),
+                      const Text(
+                        'Crear nueva sucursal',
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.foreground,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'La sucursal se crea con datos aislados. Puedes copiar los productos de una sucursal existente.',
+                        style: TextStyle(
+                          color: AppColors.mutedForeground,
+                          fontSize: 14,
+                        ),
+                      ),
+                      const SizedBox(height: 22),
+                      _FormInput(
+                        controller: companyCtrl,
+                        label: 'Nombre del negocio',
+                        hint: 'Ej. MangoPOS Restaurant Group',
+                      ),
+                      const SizedBox(height: 14),
+                      _FormInput(
+                        controller: branchCtrl,
+                        label: 'Nombre de la sucursal',
+                        hint: 'Ej. Piantini / Jardines / Santiago Centro',
+                      ),
+                      const SizedBox(height: 14),
+                      _FormInput(
+                        controller: addressCtrl,
+                        label: 'Dirección',
+                        hint: 'Opcional',
+                      ),
+                      const SizedBox(height: 14),
+                      _FormInput(
+                        controller: phoneCtrl,
+                        label: 'Teléfono',
+                        hint: 'Opcional',
+                      ),
+                      const SizedBox(height: 18),
+                      // ── Copy products section ──
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: copyProducts
+                              ? AppColors.primary.withValues(alpha: 0.06)
+                              : AppColors.background,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: copyProducts
+                                ? AppColors.primary.withValues(alpha: 0.3)
+                                : AppColors.border,
                           ),
                         ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Checkbox(
+                                  value: copyProducts,
+                                  activeColor: AppColors.primary,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  onChanged: (v) {
+                                    setDialogState(() => copyProducts = v ?? false);
+                                  },
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: GestureDetector(
+                                    onTap: () {
+                                      setDialogState(() => copyProducts = !copyProducts);
+                                    },
+                                    child: const Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Copiar productos de otra sucursal',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 14,
+                                            color: AppColors.foreground,
+                                          ),
+                                        ),
+                                        SizedBox(height: 2),
+                                        Text(
+                                          'Copia categorías, productos y menús. No copia ventas ni inventario.',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: AppColors.mutedForeground,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            if (copyProducts && branches.length > 1) ...[
+                              const SizedBox(height: 12),
+                              DropdownButtonFormField<String>(
+                                value: copyFromBusinessId,
+                                isExpanded: true,
+                                decoration: InputDecoration(
+                                  labelText: 'Copiar desde',
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 12,
+                                  ),
+                                ),
+                                items: branches.map((b) {
+                                  final label = b.name.isNotEmpty
+                                      ? b.name
+                                      : (b.companyName ?? 'Sucursal');
+                                  return DropdownMenuItem<String>(
+                                    value: b.id,
+                                    child: Text(label),
+                                  );
+                                }).toList(),
+                                onChanged: (v) {
+                                  setDialogState(() => copyFromBusinessId = v);
+                                },
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 22),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () => Navigator.of(dialogContext).pop(),
+                            child: const Text('Cancelar'),
+                          ),
+                          const SizedBox(width: 10),
+                          FilledButton(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: AppColors.primary,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 20,
+                                vertical: 14,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                            ),
+                            onPressed: () async {
+                              if (companyCtrl.text.trim().isEmpty ||
+                                  branchCtrl.text.trim().isEmpty) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Completa negocio y sucursal.'),
+                                  ),
+                                );
+                                return;
+                              }
+                              await ref.read(branchManagementProvider).createBranch(
+                                    companyName: companyCtrl.text,
+                                    branchName: branchCtrl.text,
+                                    address: addressCtrl.text,
+                                    phone: phoneCtrl.text,
+                                    copyProductsFromBusinessId:
+                                        copyProducts ? copyFromBusinessId : null,
+                                  );
+                              if (!context.mounted) return;
+                              Navigator.of(dialogContext).pop();
+                              if (copyProducts) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'Sucursal creada con productos copiados exitosamente.',
+                                    ),
+                                    backgroundColor: Color(0xFF16A34A),
+                                  ),
+                                );
+                              }
+                            },
+                            child: Text(
+                              copyProducts
+                                  ? 'Crear y copiar productos'
+                                  : 'Crear sucursal',
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 22),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    TextButton(
-                      onPressed: () => Navigator.of(dialogContext).pop(),
-                      child: const Text('Cancelar'),
-                    ),
-                    const SizedBox(width: 10),
-                    FilledButton(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: AppColors.primary,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 14,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                      ),
-                      onPressed: () async {
-                        if (companyCtrl.text.trim().isEmpty ||
-                            branchCtrl.text.trim().isEmpty) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Completa negocio y sucursal.'),
-                            ),
-                          );
-                          return;
-                        }
-                        await ref.read(branchManagementProvider).createBranch(
-                              companyName: companyCtrl.text,
-                              branchName: branchCtrl.text,
-                              address: addressCtrl.text,
-                              phone: phoneCtrl.text,
-                            );
-                        if (!context.mounted) return;
-                        Navigator.of(dialogContext).pop();
-                      },
-                      child: const Text('Crear sucursal'),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
+              ),
+            );
+          },
         );
       },
     );

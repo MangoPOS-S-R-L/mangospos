@@ -4,9 +4,9 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/app/widgets/date_range_modal.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
-import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/presentation/reports/services/reports_csv_export_service.dart';
 import 'package:mangopos/presentation/reports/services/reports_export_service.dart';
 import 'package:mangopos/presentation/reports/viewmodel/reports_viewmodel.dart';
@@ -233,24 +233,39 @@ class _ReportToolbar extends StatelessWidget {
         ),
         OutlinedButton.icon(
           style: reportOutlineButtonStyle(),
-          onPressed: () async {
-            final picked = await showDateRangePicker(
+          onPressed: () {
+            showDialog<void>(
               context: context,
-              firstDate: DateTime(2024, 1, 1),
-              lastDate: AppTime.nowAst().add(const Duration(days: 365)),
-              initialDateRange: DateTimeRange(
-                start: state.salesFrom,
-                end: displayedTo,
+              builder: (ctx) => Dialog(
+                backgroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20)),
+                insetPadding: const EdgeInsets.symmetric(
+                    horizontal: 24, vertical: 40),
+                child: SizedBox(
+                  width: 400,
+                  child: DateRangeModal(
+                    initialFrom: state.salesFrom,
+                    initialTo: state.salesTo,
+                    onApply: (from, to) async {
+                      await viewModel.setCustomSalesRange(from, to);
+                    },
+                    onClear: () {
+                      viewModel
+                          .setSalesPreset(SalesReportRangePreset.today);
+                    },
+                  ),
+                ),
               ),
             );
-            if (picked == null) return;
-            await viewModel.setCustomSalesRange(picked.start, picked.end);
           },
           icon: const Icon(Icons.date_range_outlined),
           label: const Text('Rango personalizado'),
         ),
-        OutlinedButton.icon(
-          style: reportOutlineButtonStyle(),
+        _ExportButton(
+          icon: Icons.picture_as_pdf_outlined,
+          label: 'PDF',
+          color: const Color(0xFFDC2626),
           onPressed: () async {
             await ReportsExportService.exportCurrentReport(
               category: category,
@@ -258,11 +273,11 @@ class _ReportToolbar extends StatelessWidget {
               viewModel: viewModel,
             );
           },
-          icon: const Icon(Icons.picture_as_pdf_outlined),
-          label: const Text('PDF'),
         ),
-        OutlinedButton.icon(
-          style: reportOutlineButtonStyle(),
+        _ExportButton(
+          icon: Icons.table_chart_outlined,
+          label: 'Excel / CSV',
+          color: const Color(0xFF059669),
           onPressed: () async {
             await ReportsCsvExportService.exportCurrentReport(
               category: category,
@@ -270,8 +285,6 @@ class _ReportToolbar extends StatelessWidget {
               viewModel: viewModel,
             );
           },
-          icon: const Icon(Icons.table_view_outlined),
-          label: const Text('CSV'),
         ),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -300,6 +313,46 @@ class _ReportToolbar extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Export button
+// ---------------------------------------------------------------------------
+
+class _ExportButton extends StatelessWidget {
+  const _ExportButton({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      style: OutlinedButton.styleFrom(
+        foregroundColor: color,
+        side: BorderSide(color: color.withValues(alpha: 0.4)),
+        backgroundColor: color.withValues(alpha: 0.05),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(reportRadius),
+        ),
+        textStyle: const TextStyle(
+          fontWeight: FontWeight.w600,
+          fontSize: 13,
+        ),
+      ),
+      onPressed: onPressed,
+      icon: Icon(icon, size: 16),
+      label: Text(label),
     );
   }
 }

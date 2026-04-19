@@ -263,18 +263,17 @@ ItemTaxResult _calcInclusive({
   // This ensures the base stays constant regardless of which taxes are active.
   final divisor = 1 + fullRate;
   final netGross = _r(max(grossAmount - discounts, 0));
-  final base = _r(netGross / divisor);
-  final tax = _r(base * effectiveRate);
-  final service = _r(base * serviceRate);
-  var total = _r(base + tax + service);
 
-  // When ALL taxes that were baked into the price are still active,
-  // the total must equal the original gross (no rounding drift).
-  // effectiveRate + serviceRate == fullRate means nothing was toggled off.
-  final allActive = (effectiveRate + serviceRate - fullRate).abs() < 0.0001;
-  if (allActive && discounts <= 0) {
-    total = _r(grossAmount);
-  }
+  // Step 1: Calculate components using the full gross as reference to minimize drift
+  final tax = _r(netGross * (effectiveRate / divisor));
+  final service = _r(netGross * (serviceRate / divisor));
+
+  // Step 2: The base amount ABSORBS the residue
+  // This ensures that base + tax + service == netGross exactly.
+  final base = _r(netGross - tax - service);
+
+  // Step 3: Final total is the sum of these rounded components
+  final total = _r(base + tax + service);
 
   return ItemTaxResult(
     baseAmount: base,

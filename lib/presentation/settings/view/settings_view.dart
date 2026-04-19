@@ -101,7 +101,7 @@ class SettingsView extends ConsumerWidget {
             route: AppRoutes.cashier,
           ),
           _SettingsOption(
-            title: 'Historial de Ventas',
+            title: 'Historial de Venta',
             subtitle: 'Consulta de ventas realizadas',
             icon: Icons.receipt_long_rounded,
             color: Color(0xFFF1F1F1),

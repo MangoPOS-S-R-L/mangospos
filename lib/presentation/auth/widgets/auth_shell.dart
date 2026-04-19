@@ -313,8 +313,8 @@ class _Header extends StatelessWidget {
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(12),
                       child: Image.asset(
-                        'assets/favicon/android-chrome-512x512.png',
-                        fit: BoxFit.cover,
+                        'assets/images/Logo Completo.png',
+                        fit: BoxFit.contain,
                       ),
                     ),
                   ),

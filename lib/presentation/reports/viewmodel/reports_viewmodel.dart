@@ -141,9 +141,10 @@ class ReportsState {
 
   factory ReportsState.initial() {
     final range = ReportsViewModel.resolveRange(
-      SalesReportRangePreset.thisWeek,
+      SalesReportRangePreset.today,
     );
     return ReportsState(
+      salesRangePreset: SalesReportRangePreset.today,
       salesFrom: range.from,
       salesTo: range.to,
       selectedCategory: null,
@@ -1097,8 +1098,9 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
       SalesMetricCardData(
         title: 'Tasa efectiva ITBIS',
         value: '${effectiveRate.toStringAsFixed(2)}%',
-        subtitle:
-            'Propina de ley configurada: ${serviceFeeRate.toStringAsFixed(2)}%',
+        subtitle: serviceFeeRate > 0
+            ? 'Propina de ley configurada: ${serviceFeeRate == serviceFeeRate.truncateToDouble() ? serviceFeeRate.toInt() : serviceFeeRate.toStringAsFixed(2)}%'
+            : 'Sin propina de ley configurada',
         icon: Icons.percent_outlined,
         color: const Color(0xFF6D28D9),
       ),
@@ -1131,7 +1133,11 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
     final label = row['label']?.toString().trim();
     final safeLabel = (label?.isNotEmpty ?? false) ? label! : 'Impuesto';
     final rate = (row['rate'] as num?)?.toDouble() ?? 0;
-    return rate > 0 ? '$safeLabel (${rate.toStringAsFixed(2)}%)' : safeLabel;
+    if (rate <= 0) return safeLabel;
+    final rateStr = rate == rate.truncateToDouble()
+        ? rate.toInt().toString()
+        : rate.toStringAsFixed(2);
+    return '$safeLabel ($rateStr%)';
   }
 
   // --- Fiscal (comprobantes) helpers ---
@@ -1202,6 +1208,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
           (row) => SalesBreakdownRow(
             label: row['label']?.toString() ?? 'Tipo',
             amount: (row['amount'] as num?)?.toDouble() ?? 0,
+            quantity: (row['itbis'] as num?)?.toDouble() ?? 0,
             count: (row['count'] as num?)?.toInt() ?? 0,
           ),
         )

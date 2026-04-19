@@ -180,5 +180,33 @@ void main() {
         expect(breakdown.last.amount, 10.0);
       },
     );
+
+    test('inclusive breakdown closes exact 300.00 by absorbing residual in base', () {
+      final order = _order(
+        subtotal: 234.37,
+        tax: 42.19,
+        serviceFee: 23.43,
+        total: 300.00,
+      );
+      final item = _item(
+        id: 'inclusive300',
+        quantity: 1,
+        unitPrice: 300.00,
+        subtotal: 234.37,
+        tax: 42.19,
+        total: 300.00,
+        taxMode: 'inclusive',
+        taxRate: 18,
+        originalTaxRate: 28,
+      );
+
+      final summary = summarizeOrderPricing(order, [item]);
+
+      expect(summary.total, 300.00);
+      expect(summary.subtotal, 234.37);
+      expect(summary.tax, 42.19);
+      expect(summary.serviceFee, 23.44);
+      expect(summary.subtotal + summary.tax + summary.serviceFee, 300.00);
+    });
   });
 }

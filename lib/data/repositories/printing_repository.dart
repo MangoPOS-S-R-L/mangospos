@@ -870,9 +870,15 @@ class PrintingRepository {
           rethrow;
         }
       case PrinterType.bluetooth:
-        throw Exception(
-          'La impresión Bluetooth directa no está soportada en este flujo.',
-        );
+        // Bluetooth printing always goes through the local agent (MobilePrintAgent on mobile)
+        final up = await isAgentUp();
+        if (!up) {
+          throw Exception(
+            'Para imprimir por Bluetooth necesitas que el Agente de Impresión esté activo.',
+          );
+        }
+        await printRawViaAgentToPrinter(printer: printer, data: data);
+        return;
     }
   }
 

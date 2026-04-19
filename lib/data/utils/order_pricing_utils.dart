@@ -5,17 +5,17 @@ import '../models/sales_models.dart';
 double _r(double v) => double.parse(v.toStringAsFixed(2));
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Resolve service rate from order-level DB values (legacy compatibility)
+// Resolve service rate from order-level DB values
 // ─────────────────────────────────────────────────────────────────────────────
 
 double resolveOrderServiceRate(Order? order) {
-  if (order == null) return 0;
+  if (order == null) return 0.10; // Default 10%
   final subtotal = order.subtotal;
   final serviceFee = order.serviceFee;
   if (subtotal > 0 && serviceFee > 0) {
     return serviceFee / subtotal;
   }
-  return 0;
+  return 0.10; // Default 10%
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -51,65 +51,80 @@ double _itemGross(OrderItem item) {
   );
 }
 
-OrderItemPricingSummary summarizeItemPricing(Order? order, OrderItem item) {
-  final serviceRate = resolveOrderServiceRate(order);
-  final serviceRatePct = serviceRate * 100.0;
-  var effectiveTaxPct = item.taxRate;
-  final fullTaxPct = item.originalTaxRate ?? item.taxRate;
-  final gross = _itemGross(item);
+OrderItemPricingSummary summarizeItemPricing(Order? order, OrderItem item, {String? forcedOrigin}) {
+  final dbSubtotal = _r(item.subtotal > 0 ? item.subtotal : _itemGross(item));
+  final dbTax = _r(item.tax);
+  final dbDiscounts = _r(item.discounts);
 
-  // Guard against double-counting: if the item's taxRate already includes the
-  // service fee (e.g. taxRate=28 = ITBIS 18% + Ley 10%), adding serviceFeePct
-  // on top would count the 10% twice.
-  // Detection: effectiveTax + service > fullTax means service is already baked in.
-  double actualServicePct = item.isTakeout ? 0 : serviceRatePct;
-  if (actualServicePct > 0 &&
-      (effectiveTaxPct + actualServicePct - fullTaxPct) > 0.01) {
-    // Service fee is already inside effectiveTaxPct — strip it out.
-    effectiveTaxPct = _r(effectiveTaxPct - actualServicePct);
-    if (effectiveTaxPct < 0) effectiveTaxPct = 0;
+  final displayTotal = itemDisplayTotal(order, item);
+
+  if (item.taxMode == 'inclusive') {
+    final origin = parseSaleOrigin(forcedOrigin ?? 'zone');
+    final orderServicePct = resolveOrderServiceRate(order) * 100.0;
+    
+    double effectiveTaxPct = item.taxRate;
+    double fullTaxPct = item.originalTaxRate ?? (effectiveTaxPct + (item.isTakeout ? 0.0 : orderServicePct));
+    
+    // Si el ITBIS llegó como 28% camuflado, lo corregimos a 18% para el desglose
+    if (effectiveTaxPct >= 27.9) {
+       effectiveTaxPct = 18.0;
+       fullTaxPct = 28.0;
+    }
+
+    // Calculamos SIEMPRE con la tasa completa (28%) para extraer la base real (39.06)
+    final serviceFeePct = (fullTaxPct - effectiveTaxPct).abs() > 0.01 
+        ? (fullTaxPct - effectiveTaxPct) 
+        : (item.isTakeout ? 0.0 : orderServicePct);
+
+    final inclusiveResult = calculateItemTax(
+      grossAmount: _r(displayTotal + dbDiscounts),
+      taxMode: 'inclusive',
+      effectiveTaxPct: effectiveTaxPct,
+      fullTaxPct: fullTaxPct,
+      serviceFeePct: serviceFeePct,
+      isTakeout: item.isTakeout,
+      discounts: dbDiscounts,
+    );
+
+    // Ahora decidimos si mostramos/cobramos la ley según el origen
+    bool shouldShowServiceFee = !item.isTakeout && origin != SaleOrigin.quick && origin != SaleOrigin.delivery;
+    
+    final finalServiceFee = shouldShowServiceFee ? inclusiveResult.serviceFee : 0.0;
+    final finalTotal = _r(inclusiveResult.baseAmount + inclusiveResult.taxAmount + finalServiceFee);
+
+    return OrderItemPricingSummary(
+      subtotal: _r(inclusiveResult.baseAmount),
+      tax: _r(inclusiveResult.taxAmount),
+      discounts: dbDiscounts,
+      serviceFee: _r(finalServiceFee),
+      extraServiceFee: 0,
+      total: finalTotal,
+    );
   }
 
-  final result = calculateItemTax(
-    grossAmount: gross,
-    taxMode: item.taxMode,
-    effectiveTaxPct: effectiveTaxPct,
-    fullTaxPct: item.taxMode == 'inclusive' ? fullTaxPct : 0,
-    serviceFeePct: actualServicePct,
-    isTakeout: item.isTakeout,
-    discounts: item.discounts,
-  );
-
-  // For exclusive items, service fee is an "extra" line (not in the item total
-  // from DB). For inclusive items, it's already extracted from the gross.
-  final isExtraService = item.taxMode != 'inclusive' && result.serviceFee > 0;
+  final serviceRate = resolveOrderServiceRate(order);
+  final serviceFee =
+      (serviceRate > 0 && !item.isTakeout) ? _r(dbSubtotal * serviceRate) : 0.0;
 
   return OrderItemPricingSummary(
-    subtotal: result.baseAmount,
-    tax: result.taxAmount,
-    discounts: result.discounts,
-    serviceFee: result.serviceFee,
-    extraServiceFee: isExtraService ? result.serviceFee : 0,
-    total: result.total,
+    subtotal: dbSubtotal,
+    tax: dbTax,
+    discounts: dbDiscounts,
+    serviceFee: serviceFee,
+    extraServiceFee: 0,
+    total: _r(dbSubtotal + dbTax + serviceFee - dbDiscounts),
   );
-}
-
-bool isServiceIncludedInItemTotal(Order? order, OrderItem item) {
-  return item.taxMode == 'inclusive' && resolveOrderServiceRate(order) > 0;
-}
-
-double itemServiceFee(Order? order, OrderItem item) {
-  return summarizeItemPricing(order, item).serviceFee;
 }
 
 double itemDisplayTotal(Order? order, OrderItem item) {
+  final catalogGross = _itemGross(item);
   if (item.taxMode == 'inclusive') {
-    // For inclusive items, the catalog/menu price IS the display price.
-    // Recomposing base+tax causes drift when order.serviceFee is stale.
-    final gross = _itemGross(item);
-    return _r((gross - item.discounts).clamp(0, double.infinity));
+    return _r((catalogGross - item.discounts).clamp(0, double.infinity));
   }
-  return summarizeItemPricing(order, item).total;
+  final gross = (item.modifiers.isEmpty && item.subtotal > catalogGross)
+      ? item.subtotal
+      : catalogGross;
+  return _r((gross - item.discounts).clamp(0, double.infinity));
 }
 
 double itemDisplayUnitPrice(Order? order, OrderItem item) {
@@ -128,6 +143,7 @@ class OrderPricingSummary {
   final double serviceFee;
   final double extraServiceFee;
   final double total;
+  final Map<double, double> taxDetails;
 
   const OrderPricingSummary({
     required this.subtotal,
@@ -136,84 +152,70 @@ class OrderPricingSummary {
     required this.serviceFee,
     required this.extraServiceFee,
     required this.total,
+    this.taxDetails = const {},
   });
 }
 
 List<({String label, double amount})> buildOrderTaxBreakdown(
   Order? order,
   Iterable<OrderItem> items, {
+  String? forcedOrigin,
   Iterable<({String label, double amount})> configuredBreakdown = const [],
 }) {
-  final summary = summarizeOrderPricing(order, items);
-  final targetTaxTotal = _r(summary.tax + summary.serviceFee);
+  final summary = summarizeOrderPricing(order, items, forcedOrigin: forcedOrigin);
+  final breakdown = <({String label, double amount})>[];
 
-  final normalizedConfigured = configuredBreakdown
-      .map((entry) => (label: entry.label, amount: _r(entry.amount)))
-      .where((entry) => entry.amount > 0.004)
-      .toList(growable: false);
-
-  if (normalizedConfigured.isNotEmpty) {
-    final configuredSum = _r(
-      normalizedConfigured.fold<double>(0, (sum, entry) => sum + entry.amount),
-    );
-    final diff = _r(targetTaxTotal - configuredSum);
-
-    if (diff.abs() <= 0.01) {
-      final reconciled = normalizedConfigured.toList(growable: true);
-      if (diff.abs() > 0.0001) {
-        final last = reconciled.removeLast();
-        reconciled.add((label: last.label, amount: _r(last.amount + diff)));
-      }
-      return reconciled;
+  summary.taxDetails.forEach((rate, amount) {
+    if (amount > 0.004) {
+      final displayRate = (rate == 28.0) ? 18.0 : rate;
+      final pct = displayRate % 1 == 0 ? displayRate.toInt() : displayRate;
+      breakdown.add((label: 'ITBIS ($pct%)', amount: amount));
     }
+  });
+
+  if (summary.serviceFee > 0.004) {
+    final rate = (resolveOrderServiceRate(order) * 100).roundToDouble();
+    final displayRate = rate > 0 ? rate : 10.0;
+    final pct = displayRate % 1 == 0 ? displayRate.toInt() : displayRate;
+    breakdown.add((label: 'Propina Ley ($pct%)', amount: summary.serviceFee));
   }
 
-  final fallback = <({String label, double amount})>[];
-  if (summary.tax > 0.004) {
-    final taxPct = summary.subtotal > 0
-        ? ((summary.tax / summary.subtotal) * 100)
-        : 0.0;
-    final taxPctLabel = taxPct > 0
-        ? ' (${taxPct.toStringAsFixed(taxPct % 1 == 0 ? 0 : 2)}%)'
-        : '';
-    fallback.add((label: 'ITBIS$taxPctLabel', amount: _r(summary.tax)));
-  }
-  if (summary.serviceFee > 0.004) {
-    final servicePct = summary.subtotal > 0
-        ? ((summary.serviceFee / summary.subtotal) * 100)
-        : 0.0;
-    final servicePctLabel = servicePct > 0
-        ? ' (${servicePct.toStringAsFixed(servicePct % 1 == 0 ? 0 : 2)}%)'
-        : '';
-    fallback.add((
-      label: 'Propina Ley$servicePctLabel',
-      amount: _r(summary.serviceFee),
-    ));
-  }
-  return fallback;
+  return breakdown;
 }
 
 OrderPricingSummary summarizeOrderPricing(
   Order? order,
-  Iterable<OrderItem> items,
-) {
+  Iterable<OrderItem> items, {
+  String? forcedOrigin,
+}) {
   double subtotal = 0;
   double tax = 0;
   double discounts = 0;
   double serviceFee = 0;
   double extraServiceFee = 0;
-  double total = 0;
+
+  final Map<double, double> taxGroups = {};
 
   for (final item in items) {
     if (item.status == 'void') continue;
-    final s = summarizeItemPricing(order, item);
+    final s = summarizeItemPricing(order, item, forcedOrigin: forcedOrigin);
+    
     subtotal += s.subtotal;
     tax += s.tax;
-    discounts += s.discounts;
     serviceFee += s.serviceFee;
+    discounts += s.discounts;
     extraServiceFee += s.extraServiceFee;
-    total += s.total;
+    
+    final rate = item.taxRate.toDouble();
+    if (rate > 0) {
+      taxGroups[rate] = (taxGroups[rate] ?? 0) + s.tax;
+    }
   }
+
+  // Universal total formula: Base + Taxes + Service Fee.
+  // Discounts are already included in the base/tax/service components of each item
+  // so we don't subtract them again here.
+  final finalTotal = _r(subtotal + tax + serviceFee + extraServiceFee);
 
   return OrderPricingSummary(
     subtotal: _r(subtotal),
@@ -221,6 +223,7 @@ OrderPricingSummary summarizeOrderPricing(
     discounts: _r(discounts),
     serviceFee: _r(serviceFee),
     extraServiceFee: _r(extraServiceFee),
-    total: _r(total),
+    total: finalTotal,
+    taxDetails: taxGroups.map((key, value) => MapEntry(key, _r(value))),
   );
 }

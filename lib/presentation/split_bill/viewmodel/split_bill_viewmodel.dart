@@ -95,11 +95,15 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
         return i.copyWith(forceCheckIdNull: true);
       }).toList();
 
+      // Recalculate check totals using catalog prices (not DB values which
+      // may include service fee or have rounding drift for inclusive items).
+      final reconciledChecks = _recalculateChecksTotals(visibleChecks, visibleItems);
+
       state = state.copyWith(
         loading: false,
         order: effectiveOrder,
         allItems: visibleItems,
-        checks: visibleChecks,
+        checks: reconciledChecks,
         pendingDeletedCheckIds: <String>{},
       );
       _snapshotItemAssignments(visibleItems);
@@ -471,6 +475,15 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
           final checkItems = itemsByCheckId[c.id] ?? const <OrderItem>[];
           final summary = summarizeOrderPricing(state.order, checkItems);
 
+          // For the displayed total, use the catalog prices (itemDisplayTotal)
+          // so inclusive items show the menu price, not base+tax recomposition.
+          final catalogTotal = double.parse(
+            checkItems.fold<double>(
+              0,
+              (sum, item) => sum + itemDisplayTotal(state.order, item),
+            ).toStringAsFixed(2),
+          );
+
           return OrderCheck(
             id: c.id,
             orderId: c.orderId,
@@ -481,7 +494,7 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
             discounts: summary.discounts,
             serviceFee: summary.serviceFee,
             tax: summary.tax,
-            total: summary.total,
+            total: catalogTotal,
             items: checkItems,
           );
         })
@@ -514,10 +527,8 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
       } else {
         consolidatedByKey[key] = existing.copyWith(
           quantity: existing.quantity + item.quantity,
-          subtotal: existing.subtotal + item.subtotal,
           discounts: existing.discounts + item.discounts,
-          tax: existing.tax + item.tax,
-          total: existing.total + item.total,
+          // subtotal, tax and total will be recalculated by summarizeOrderPricing
         );
       }
     }
@@ -548,10 +559,8 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
       } else {
         consolidatedByKey[key] = existing.copyWith(
           quantity: existing.quantity + item.quantity,
-          subtotal: existing.subtotal + item.subtotal,
           discounts: existing.discounts + item.discounts,
-          tax: existing.tax + item.tax,
-          total: existing.total + item.total,
+          // subtotal, tax and total will be recalculated by summarizeOrderPricing
           forceCheckIdNull: true,
         );
       }

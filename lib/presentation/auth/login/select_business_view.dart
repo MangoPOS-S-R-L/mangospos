@@ -156,11 +156,11 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               // Logo Oculto / Branding
-              const Center(
-                child: Icon(
-                  Icons.storefront_rounded,
-                  size: 48,
-                  color: Color(0xFFF97316), // Naranja MangosPOS
+              Center(
+                child: Image.asset(
+                  'assets/images/Logo Completo.png',
+                  height: 75,
+                  fit: BoxFit.contain,
                 ),
               ).animate().fadeIn(duration: 400.ms).slideY(begin: 0.2),
 
@@ -191,22 +191,10 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
                           ),
                           child: Row(
                             children: [
-                              Container(
-                                width: 32,
-                                height: 32,
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFF97316),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: const Center(
-                                  child: Text(
-                                    'M',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
+                              Image.asset(
+                                'assets/images/Logo Completo.png',
+                                height: 30,
+                                fit: BoxFit.contain,
                               ),
                               const SizedBox(width: 12),
                               const Text(

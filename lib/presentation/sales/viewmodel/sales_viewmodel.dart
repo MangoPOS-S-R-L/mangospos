@@ -227,6 +227,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     _taxSettingsBusinessId = null;
   }
 
+  /// Expose resolved rates for the current origin (used by UI for base extraction).
+  ResolvedTaxRates resolveCurrentRates() => _resolveRatesForOrigin();
+
   /// Returns a per-tax breakdown for display in the order summary.
   /// Each entry has a label (e.g. "ITBIS (18%)") and the computed amount.
   /// Service fee is returned as a separate entry.
@@ -960,7 +963,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       // y producía montos optimistas de 499.99/0.01 fuera de reconciliación.
       final divisor = 1 + normalizedFullTaxRate;
 
-      final subtotal = grossAmount / divisor;
+      final subtotal = _roundMoney(grossAmount / divisor);
 
       // El impuesto real se calcula sobre la base extraída, usando la tasa aplicable.
       final tax = subtotal * normalizedTaxRate;

@@ -278,9 +278,18 @@ class PrintingService {
         debugPrint(
           '🖨️ Ruta seleccionada -> BLUETOOTH assigned printer ${printer.name} (${printer.id})',
         );
-        throw Exception(
-          'La autoimpresión de cocina no soporta Bluetooth todavía.',
+        // Bluetooth printing always goes through the local agent (MobilePrintAgent on Android/iOS)
+        if (!await _printingRepo.isAgentUp()) {
+          throw Exception(
+            'Para imprimir por Bluetooth necesitas que el Agente de Impresión esté activo.',
+          );
+        }
+        await _printingRepo.printRawViaAgentToPrinter(
+          printer: printer,
+          data: bytes,
+          meta: const {'source': 'kitchen_order'},
         );
+        return;
       default:
         throw Exception('Tipo de impresora no soportado: ${printer.type}.');
     }

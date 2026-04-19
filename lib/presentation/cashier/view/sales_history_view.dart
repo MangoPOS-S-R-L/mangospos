@@ -1,11 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/app/widgets/date_range_modal.dart';
 import 'package:mangopos/core/utils/app_time.dart';
-import 'package:mangopos/data/models/payment_models.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
@@ -36,43 +38,111 @@ class SalesHistoryView extends ConsumerStatefulWidget {
 }
 
 class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
-  late Future<_SessionHistoryData?> _future;
+  _SalesHistoryData? _data;
+  bool _loading = false;
+  String? _error;
+
+  int _currentPage = 1;
+  static const int _pageSize = 15;
+  String? _searchQuery;
+  DateTime? _fromDate;
+  DateTime? _toDate;
+
+  final _searchController = TextEditingController();
+  Timer? _debounce;
 
   @override
   void initState() {
     super.initState();
-    _future = _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
-  Future<_SessionHistoryData?> _load() async {
-    final vm = ref.read(cashierViewModelProvider);
-    if (vm.lastSession == null) return null;
-
-    final sessionId = vm.lastSession!['id'] as String?;
-    if (sessionId == null || sessionId.isEmpty) return null;
-
-    final repository = ref.read(cashierRepositoryProvider);
-    final transactions = await repository.getSessionTransactions(sessionId);
-    final payments = await repository.getSessionPaymentsDetailed(sessionId);
-    final summary = await repository.getSessionSummary(sessionId);
-
-    return _SessionHistoryData(
-      sessionId: sessionId,
-      transactions: transactions,
-      payments: payments,
-      summary: summary,
-      status: vm.lastSession!['status'] as String? ?? 'unknown',
-      openedAt: vm.lastSession!['opened_at'] as String?,
-      closedAt: vm.lastSession!['closed_at'] as String?,
-    );
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _searchController.dispose();
+    super.dispose();
   }
 
-  Future<void> _reload() async {
-    await ref.read(cashierViewModelProvider).refreshSilently();
-    if (!mounted) return;
+  Future<void> _load() async {
+    final businessId = ref.read(sessionProvider).activeBusinessId;
+    if (businessId == null) return;
+
     setState(() {
-      _future = _load();
+      _loading = true;
+      _error = null;
     });
+
+    try {
+      final repository = ref.read(cashierRepositoryProvider);
+      final result = await repository.getGlobalSalesHistoryPaged(
+        businessId: businessId,
+        page: _currentPage,
+        pageSize: _pageSize,
+        from: _fromDate,
+        to: _toDate,
+        searchTerm: _searchQuery,
+      );
+
+      if (mounted) {
+        setState(() {
+          _data = _SalesHistoryData(
+            payments: result.payments,
+            totalCount: result.totalCount,
+          );
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _reload() => _load();
+
+  void _changePage(int page) {
+    if (_currentPage == page) return;
+    _currentPage = page;
+    _load();
+  }
+
+  Future<void> _selectDateRange() async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+        child: SizedBox(
+          width: 400,
+          child: DateRangeModal(
+            initialFrom: _fromDate,
+            initialTo: _toDate,
+            onApply: (from, to) {
+              setState(() {
+                _fromDate = DateTime(from.year, from.month, from.day);
+                _toDate = DateTime(to.year, to.month, to.day, 23, 59, 59);
+                _currentPage = 1;
+              });
+              _load();
+            },
+            onClear: () {
+              setState(() {
+                _fromDate = null;
+                _toDate = null;
+                _currentPage = 1;
+              });
+              _load();
+            },
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -80,10 +150,11 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F5F5),
       appBar: AppBar(
-        title: const Text('Historial de Caja'),
+        title: const Text('Historial de venta'),
         backgroundColor: Colors.white,
         foregroundColor: Colors.black87,
         elevation: 0,
+        centerTitle: true,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => context.go(AppRoutes.cashier),
@@ -91,151 +162,176 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
       ),
       body: RefreshIndicator(
         onRefresh: _reload,
-        child: FutureBuilder<_SessionHistoryData?>(
-          future: _future,
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
+        child: _buildBody(),
+      ),
+    );
+  }
 
-            if (snapshot.hasError) {
-              return _CashierInfoState(
-                icon: Icons.error_outline,
-                title: 'No se pudo cargar el historial',
-                subtitle: '${snapshot.error}',
-              );
-            }
+  Widget _buildBody() {
+    if (_loading && _data == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
 
-            final data = snapshot.data;
-            if (data == null) {
-              return const _CashierInfoState(
-                icon: Icons.receipt_long_outlined,
-                title: 'No hay sesiones registradas',
-                subtitle:
-                    'Abre una caja y procesa ventas para ver movimientos.',
-              );
-            }
+    if (_error != null && _data == null) {
+      return _CashierInfoState(
+        icon: Icons.error_outline,
+        title: 'No se pudo cargar el historial',
+        subtitle: _error!,
+      );
+    }
 
-            final currency = NumberFormat.currency(
-              symbol: 'RD\$',
-              decimalDigits: 2,
-            );
-            return Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(Icons.history, size: 32),
-                      const SizedBox(width: 12),
-                      const Text(
-                        'Historial de ventas',
-                        style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.w800,
-                          color: MangoColors.darkGray,
-                        ),
-                      ),
-                      const Spacer(),
-                      TextButton.icon(
-                        onPressed: () {},
-                        icon: const Icon(Icons.videocam_outlined),
-                        label: const Text('¿Cómo realizarlo?'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          decoration: InputDecoration(
-                            hintText:
-                                'Buscar por comprobante, cliente o número de comprobante',
-                            prefixIcon: const Icon(Icons.search),
-                            filled: true,
-                            fillColor: MangoColors.white,
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: const BorderSide(
-                                color: MangoColors.cardBorder,
-                              ),
-                            ),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: const BorderSide(
-                                color: MangoColors.cardBorder,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 12,
-                        ),
-                        decoration: BoxDecoration(
-                          color: MangoColors.white,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: MangoColors.cardBorder),
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.calendar_today_outlined, size: 18),
-                            const SizedBox(width: 12),
-                            Text(
-                              '${DateFormat('dd MMM. yyyy').format(AppTime.nowAst())} → ${DateFormat('dd MMM. yyyy').format(AppTime.nowAst())}',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-                  Expanded(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: MangoColors.white,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: MangoColors.cardBorder),
-                      ),
-                      child: Column(
-                        children: [
-                          _buildTableHeader(),
-                          const Divider(height: 1),
-                          Expanded(
-                            child: data.payments.isEmpty
-                                ? const Center(
-                                    child: Text('No hay ventas registradas.'),
-                                  )
-                                : ListView.separated(
-                                    itemCount: data.payments.length,
-                                    separatorBuilder: (_, _) =>
-                                        const Divider(height: 1),
-                                    itemBuilder: (context, index) =>
-                                        _PaymentTableRow(
-                                          payment: data.payments[index],
-                                          currency: currency,
-                                          onRefresh: _reload,
-                                        ),
-                                  ),
-                          ),
-                          _buildTableFooter(),
-                        ],
+    final data = _data;
+    if (data == null || (data.payments.isEmpty && _currentPage == 1 && _searchQuery == null && _fromDate == null)) {
+      return const _CashierInfoState(
+        icon: Icons.receipt_long_outlined,
+        title: 'No hay ventas registradas',
+        subtitle: 'Procesa ventas para ver movimientos en el historial.',
+      );
+    }
+
+    final currency = NumberFormat.currency(
+      symbol: 'RD\$',
+      decimalDigits: 2,
+    );
+
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (_loading)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 8),
+              child: LinearProgressIndicator(minHeight: 2),
+            ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _searchController,
+                  onChanged: (val) {
+                    _debounce?.cancel();
+                    _debounce = Timer(const Duration(milliseconds: 400), () {
+                      setState(() {
+                        _searchQuery = val.trim().isEmpty ? null : val.trim();
+                        _currentPage = 1;
+                      });
+                      _load();
+                    });
+                  },
+                  decoration: InputDecoration(
+                    hintText: 'Buscar por comprobante o cliente',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: _searchController.text.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear, size: 18),
+                            onPressed: () {
+                              _searchController.clear();
+                              _debounce?.cancel();
+                              setState(() {
+                                _searchQuery = null;
+                                _currentPage = 1;
+                              });
+                              _load();
+                            },
+                          )
+                        : null,
+                    filled: true,
+                    fillColor: MangoColors.white,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(
+                        color: MangoColors.cardBorder,
                       ),
                     ),
                   ),
+                ),
+              ),
+              const SizedBox(width: 16),
+              InkWell(
+                onTap: _selectDateRange,
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                  decoration: BoxDecoration(
+                    color: MangoColors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: MangoColors.cardBorder),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.calendar_today_outlined, size: 18),
+                      const SizedBox(width: 12),
+                      Text(
+                        _fromDate == null || _toDate == null
+                            ? 'Filtrar por fecha'
+                            : '${DateFormat('dd MMM.').format(_fromDate!)} → ${DateFormat('dd MMM.').format(_toDate!)}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      if (_fromDate != null)
+                        Padding(
+                          padding: const EdgeInsets.only(left: 8),
+                          child: InkWell(
+                            onTap: () {
+                              setState(() {
+                                _fromDate = null;
+                                _toDate = null;
+                                _currentPage = 1;
+                              });
+                              _load();
+                            },
+                            child: const Icon(Icons.close, size: 16),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(
+                color: MangoColors.white,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: MangoColors.cardBorder),
+              ),
+              child: Column(
+                children: [
+                  _buildTableHeader(),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: data.payments.isEmpty
+                        ? Center(
+                            child: Text(
+                              _searchQuery != null || _fromDate != null
+                                  ? 'No se encontraron resultados para los filtros aplicados.'
+                                  : 'No hay ventas registradas.',
+                            ),
+                          )
+                        : ListView.separated(
+                            itemCount: data.payments.length,
+                            separatorBuilder: (_, _) => const Divider(height: 1),
+                            itemBuilder: (context, index) => _PaymentTableRow(
+                              payment: data.payments[index],
+                              currency: currency,
+                              onRefresh: _reload,
+                            ),
+                          ),
+                  ),
+                  _buildTableFooter(data.totalCount),
                 ],
               ),
-            );
-          },
-        ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -261,15 +357,31 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
     );
   }
 
-  Widget _buildTableFooter() {
+  Widget _buildTableFooter(int totalCount) {
+    if (totalCount <= _pageSize) return const SizedBox.shrink();
+
+    final totalPages = (totalCount / _pageSize).ceil();
+    final start = (_currentPage - 1) * _pageSize + 1;
+    final end = (_currentPage * _pageSize) > totalCount
+        ? totalCount
+        : (_currentPage * _pageSize);
+
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.end,
         children: [
           Text(
-            '«  ‹  ',
-            style: TextStyle(color: MangoColors.muted.withValues(alpha: 0.5)),
+            'Mostrando $start - $end de $totalCount ventas',
+            style: const TextStyle(color: MangoColors.muted, fontSize: 13),
+          ),
+          const Spacer(),
+          IconButton(
+            icon: const Icon(Icons.first_page),
+            onPressed: _currentPage > 1 ? () => _changePage(1) : null,
+          ),
+          IconButton(
+            icon: const Icon(Icons.chevron_left),
+            onPressed: _currentPage > 1 ? () => _changePage(_currentPage - 1) : null,
           ),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -277,15 +389,24 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
               color: MangoColors.primaryOrange,
               borderRadius: BorderRadius.circular(4),
             ),
-            child: const Text(
-              '1',
-              style: TextStyle(
+            child: Text(
+              '$_currentPage',
+              style: const TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.bold,
               ),
             ),
           ),
-          const Text('  2  3  4  5  6  7  8  ›  »'),
+          IconButton(
+            icon: const Icon(Icons.chevron_right),
+            onPressed:
+                _currentPage < totalPages ? () => _changePage(_currentPage + 1) : null,
+          ),
+          IconButton(
+            icon: const Icon(Icons.last_page),
+            onPressed:
+                _currentPage < totalPages ? () => _changePage(totalPages) : null,
+          ),
         ],
       ),
     );
@@ -1004,23 +1125,13 @@ class _PaymentTableRow extends ConsumerWidget {
   String? get _waiterNameFromPayment => payment['waiter_name']?.toString();
 }
 
-class _SessionHistoryData {
-  final String sessionId;
-  final List<CashTransaction> transactions;
+class _SalesHistoryData {
   final List<Map<String, dynamic>> payments;
-  final Map<String, dynamic> summary;
-  final String status;
-  final String? openedAt;
-  final String? closedAt;
+  final int totalCount;
 
-  const _SessionHistoryData({
-    required this.sessionId,
-    required this.transactions,
+  const _SalesHistoryData({
     required this.payments,
-    required this.summary,
-    required this.status,
-    required this.openedAt,
-    required this.closedAt,
+    required this.totalCount,
   });
 }
 
@@ -1058,3 +1169,4 @@ class _CashierInfoState extends StatelessWidget {
     );
   }
 }
+
