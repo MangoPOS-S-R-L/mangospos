@@ -141,9 +141,10 @@ class ReportsState {
 
   factory ReportsState.initial() {
     final range = ReportsViewModel.resolveRange(
-      SalesReportRangePreset.thisWeek,
+      SalesReportRangePreset.today,
     );
     return ReportsState(
+      salesRangePreset: SalesReportRangePreset.today,
       salesFrom: range.from,
       salesTo: range.to,
       selectedCategory: null,
@@ -1207,6 +1208,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
           (row) => SalesBreakdownRow(
             label: row['label']?.toString() ?? 'Tipo',
             amount: (row['amount'] as num?)?.toDouble() ?? 0,
+            quantity: (row['itbis'] as num?)?.toDouble() ?? 0,
             count: (row['count'] as num?)?.toInt() ?? 0,
           ),
         )

@@ -242,8 +242,11 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
         (state.purchasesSummary?['total_ordered'] as num?)?.toDouble() ?? 0;
     final inventoryItems =
         (state.inventorySummary?['total_items'] as num?)?.toInt() ?? 0;
-    final taxTotal =
-        (state.taxSummary?['total_tax_collected'] as num?)?.toDouble() ?? 0;
+    final fiscalItbis =
+        (state.fiscalSummary?['total_itbis'] as num?)?.toDouble() ?? 0;
+    final fiscalServiceFee =
+        (state.fiscalSummary?['total_service_fee'] as num?)?.toDouble() ?? 0;
+    final taxTotal = fiscalItbis + fiscalServiceFee;
     final fiscalDocsCount =
         (state.fiscalSummary?['total_documents'] as num?)?.toInt() ?? 0;
 

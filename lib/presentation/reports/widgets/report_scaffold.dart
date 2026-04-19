@@ -4,9 +4,9 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/app/widgets/date_range_modal.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
-import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/presentation/reports/services/reports_csv_export_service.dart';
 import 'package:mangopos/presentation/reports/services/reports_export_service.dart';
 import 'package:mangopos/presentation/reports/viewmodel/reports_viewmodel.dart';
@@ -233,18 +233,31 @@ class _ReportToolbar extends StatelessWidget {
         ),
         OutlinedButton.icon(
           style: reportOutlineButtonStyle(),
-          onPressed: () async {
-            final picked = await showDateRangePicker(
+          onPressed: () {
+            showDialog<void>(
               context: context,
-              firstDate: DateTime(2024, 1, 1),
-              lastDate: AppTime.nowAst().add(const Duration(days: 365)),
-              initialDateRange: DateTimeRange(
-                start: state.salesFrom,
-                end: displayedTo,
+              builder: (ctx) => Dialog(
+                backgroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20)),
+                insetPadding: const EdgeInsets.symmetric(
+                    horizontal: 24, vertical: 40),
+                child: SizedBox(
+                  width: 400,
+                  child: DateRangeModal(
+                    initialFrom: state.salesFrom,
+                    initialTo: state.salesTo,
+                    onApply: (from, to) async {
+                      await viewModel.setCustomSalesRange(from, to);
+                    },
+                    onClear: () {
+                      viewModel
+                          .setSalesPreset(SalesReportRangePreset.today);
+                    },
+                  ),
+                ),
               ),
             );
-            if (picked == null) return;
-            await viewModel.setCustomSalesRange(picked.start, picked.end);
           },
           icon: const Icon(Icons.date_range_outlined),
           label: const Text('Rango personalizado'),

@@ -16,7 +16,9 @@
       "Bash(keytool -list -v -keystore /tmp/original-keystore.jks -alias upload -storepass 'Noviembre0824@')",
       "Bash(flutter run *)",
       "Bash(dart -e ' *)",
-      "Bash(python3 -c ' *)"
+      "Bash(python3 -c ' *)",
+      "Bash(head -1172 /Users/cristiangomez/dev/mangospos/lib/presentation/cashier/view/sales_history_view.dart)",
+      "Bash(mv /tmp/sales_history_trimmed.dart /Users/cristiangomez/dev/mangospos/lib/presentation/cashier/view/sales_history_view.dart)"
     ],
     "additionalDirectories": [
       "/Users/cristiangomez"

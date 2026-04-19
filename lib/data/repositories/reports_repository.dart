@@ -5,7 +5,6 @@ import '../datasources/queries/reports_queries.dart';
 import '../utils/payment_amount_utils.dart';
 import '../utils/order_pricing_utils.dart';
 import '../models/sales_models.dart';
-import '../models/tax.dart';
 import '../../core/tax/tax_engine.dart';
 
 class ReportsRepository {
@@ -1249,7 +1248,7 @@ class ReportsRepository {
       await _client
           .from('fiscal_documents')
           .select(
-            'id, order_id, payment_id, customer_id, ncf_type, ncf_number, customer_rnc, customer_name, subtotal, taxable_amount, itbis_amount, total, status, issued_at',
+            'id, order_id, payment_id, customer_id, ncf_type, ncf_number, customer_rnc, customer_name, subtotal, taxable_amount, itbis_amount, service_fee, total, status, issued_at',
           )
           .eq('business_id', businessId)
           .gte('issued_at', fromIso)
@@ -1267,6 +1266,7 @@ class ReportsRepository {
     final taxNameByRate = <String, String>{};
     double configuredServiceFeeRate = 0;
     double configuredTaxOnlyRate = 0;
+    String configuredServiceFeeName = 'Propina de ley';
     for (final t in taxConfigs) {
       final rate = _toDouble(t['rate']);
       final name = t['name']?.toString().trim() ?? '';
@@ -1280,22 +1280,12 @@ class ReportsRepository {
       if (t['is_active'] == true) {
         if (isService || isHeuristic) {
           configuredServiceFeeRate = rate;
+          if (name.isNotEmpty) configuredServiceFeeName = name;
         } else {
           configuredTaxOnlyRate += rate;
         }
       }
     }
-
-    // --- Fetch service fee config ---
-    final businessSettings = await _client
-        .from('business_settings')
-        .select('service_fee_enabled, service_fee_rate')
-        .eq('business_id', businessId)
-        .maybeSingle();
-    final serviceFeeEnabled = businessSettings?['service_fee_enabled'] == true;
-    final serviceFeeRate = _toDouble(
-      businessSettings?['service_fee_rate'],
-    ).clamp(0, 100);
 
     // --- Collect order IDs from active fiscal docs ---
     final activeRows = rows.where(
@@ -1387,10 +1377,8 @@ class ReportsRepository {
 
     // --- Global tax type aggregation ---
     final globalTaxBreakdown = <String, Map<String, dynamic>>{};
-    double totalServiceFee = 0;
 
     for (final oid in orderIds) {
-      // Tax items
       final items = taxBreakdownByOrder[oid] ?? const [];
       for (final item in items) {
         final rateKey = item['rate_key'] as String;
@@ -1409,50 +1397,26 @@ class ReportsRepository {
         bucket['base'] = _toDouble(bucket['base']) + _toDouble(item['base']);
         bucket['count'] = (bucket['count'] as int) + 1;
       }
-
-      // Service fee
-      final fee = serviceFeeByOrder[oid] ?? 0;
-      if (fee > 0) {
-        totalServiceFee += fee;
-      }
     }
 
-    // Add service fee as a tax type in the global breakdown
-    if (totalServiceFee > 0) {
-      final sfLabel = serviceFeeEnabled
-          ? 'Propina de ley (${serviceFeeRate.toStringAsFixed(0)}%)'
-          : 'Propina de ley';
-      globalTaxBreakdown['__service_fee__'] = {
-        'label': sfLabel,
-        'rate': serviceFeeRate,
-        'tax_amount': totalServiceFee,
-        'base': serviceFeeRate > 0
-            ? totalServiceFee / (serviceFeeRate / 100.0)
-            : 0.0,
-        'count': serviceFeeByOrder.length,
-      };
-    }
+    // taxBreakdownRows is built after standard aggregations so it can use
+    // totalServiceFee read directly from fiscal_documents.service_fee.
 
-    final taxBreakdownRows = globalTaxBreakdown.values.toList(growable: false)
-      ..sort(
-        (a, b) =>
-            _toDouble(b['tax_amount']).compareTo(_toDouble(a['tax_amount'])),
-      );
-
-    // --- Standard aggregations ---
+    // --- Standard aggregations (all values read directly from fiscal_documents) ---
     double totalSubtotal = 0;
     double totalItbis = 0;
+    double totalServiceFee = 0;
     double totalAmount = 0;
     int activeCount = 0;
     int voidCount = 0;
     final byType = <String, Map<String, dynamic>>{};
 
-    // Enrich each document with its per-order tax breakdown
     final enrichedDocs = <Map<String, dynamic>>[];
     for (final doc in rows) {
       final status = doc['status']?.toString() ?? 'active';
       final subtotal = _toDouble(doc['subtotal']);
       final itbis = _toDouble(doc['itbis_amount']);
+      final serviceFee = _toDouble(doc['service_fee']);
       final total = _toDouble(doc['total']);
       final ncfType = doc['ncf_type']?.toString() ?? 'B02';
       final oid = doc['order_id']?.toString() ?? '';
@@ -1461,6 +1425,7 @@ class ReportsRepository {
         activeCount += 1;
         totalSubtotal += subtotal;
         totalItbis += itbis;
+        totalServiceFee += serviceFee;
         totalAmount += total;
       } else {
         voidCount += 1;
@@ -1472,28 +1437,44 @@ class ReportsRepository {
           'label': _ncfTypeLabel(ncfType),
           'amount': 0.0,
           'itbis': 0.0,
+          'service_fee': 0.0,
           'count': 0,
         },
       );
       if (status == 'active') {
         bucket['amount'] = _toDouble(bucket['amount']) + total;
         bucket['itbis'] = _toDouble(bucket['itbis']) + itbis;
+        bucket['service_fee'] = _toDouble(bucket['service_fee']) + serviceFee;
         bucket['count'] = (bucket['count'] as int) + 1;
       }
 
-      // Attach per-doc tax breakdown + service fee
       final docTaxes = taxBreakdownByOrder[oid] ?? const [];
-      final docServiceFee = serviceFeeByOrder[oid] ?? 0.0;
       enrichedDocs.add({
         ...doc,
         'tax_breakdown': docTaxes,
-        'service_fee': docServiceFee,
       });
     }
 
     final typeRows = byType.values.toList(
       growable: false,
     )..sort((a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])));
+
+    // Add service fee bucket using the fiscal_documents.service_fee total
+    if (totalServiceFee > 0) {
+      globalTaxBreakdown['__service_fee__'] = {
+        'label': configuredServiceFeeName,
+        'rate': configuredServiceFeeRate,
+        'tax_amount': totalServiceFee,
+        'base': configuredServiceFeeRate > 0
+            ? totalServiceFee / (configuredServiceFeeRate / 100.0)
+            : totalSubtotal,
+        'count': activeCount,
+      };
+    }
+
+    final taxBreakdownRows = globalTaxBreakdown.values.toList(growable: false)
+      ..sort((a, b) =>
+          _toDouble(b['tax_amount']).compareTo(_toDouble(a['tax_amount'])));
 
     return {
       'from': fromIso,
@@ -1505,6 +1486,8 @@ class ReportsRepository {
       'total_itbis': totalItbis,
       'total_amount': totalAmount,
       'total_service_fee': totalServiceFee,
+      'service_fee_label': configuredServiceFeeName,
+      'service_fee_rate': configuredServiceFeeRate,
       'by_type': typeRows,
       'tax_breakdown': taxBreakdownRows,
       'documents': enrichedDocs,

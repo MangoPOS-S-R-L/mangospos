@@ -480,4 +480,119 @@ class CashierRepository {
         .order('created_at');
     return List<Map<String, dynamic>>.from(data);
   }
+
+  /// Get global sales history for a business with pagination and optional filters.
+  Future<({List<Map<String, dynamic>> payments, int totalCount})> getGlobalSalesHistoryPaged({
+    required String businessId,
+    int page = 1,
+    int pageSize = 20,
+    DateTime? from,
+    DateTime? to,
+    String? searchTerm,
+  }) async {
+    final fromIndex = (page - 1) * pageSize;
+    final toIndex = fromIndex + pageSize - 1;
+
+    var query = _client
+        .from('payments')
+        .select(
+          'id, order_id, check_id, payment_method_id, amount, change_amount, reference, status, session_id, created_at, business_id, fiscal_documents(ncf_number, ncf_type, customer_rnc, customer_name)',
+        )
+        .eq('business_id', businessId)
+        .inFilter('status', ['completed', 'void', 'cancelled']);
+
+    if (from != null) {
+      query = query.gte('created_at', from.toIso8601String());
+    }
+    if (to != null) {
+      query = query.lt('created_at', to.toIso8601String());
+    }
+
+    if (searchTerm != null && searchTerm.isNotEmpty) {
+      // Pre-fetch payment IDs from fiscal_documents matching NCF or customer fields
+      final fiscalRaw = await _client
+          .from('fiscal_documents')
+          .select('payment_id')
+          .eq('business_id', businessId)
+          .or('ncf_number.ilike.%$searchTerm%,customer_name.ilike.%$searchTerm%,customer_rnc.ilike.%$searchTerm%');
+
+      final fiscalIds = List<Map<String, dynamic>>.from(fiscalRaw)
+          .map((r) => r['payment_id']?.toString())
+          .whereType<String>()
+          .toSet()
+          .toList(growable: false);
+
+      if (fiscalIds.isNotEmpty) {
+        query = query.or('reference.ilike.%$searchTerm%,id.in.(${fiscalIds.join(',')})');
+      } else {
+        query = query.ilike('reference', '%$searchTerm%');
+      }
+    }
+
+    final response = await query
+        .order('created_at', ascending: false)
+        .range(fromIndex, toIndex)
+        .count(CountOption.exact);
+
+    final paymentsRaw = List<Map<String, dynamic>>.from(response.data);
+    final totalCount = response.count;
+
+    if (paymentsRaw.isEmpty) return (payments: <Map<String, dynamic>>[], totalCount: totalCount);
+
+    // Enrich data as in getSessionPaymentsDetailed
+    final orderIds = paymentsRaw
+        .map((p) => p['order_id']?.toString())
+        .whereType<String>()
+        .toSet()
+        .toList(growable: false);
+    
+    final tableSessionsRaw = orderIds.isEmpty
+        ? []
+        : await _client
+            .from('orders')
+            .select('id, session_id, table_sessions!inner(id, customer_name, table_id, business_id, opened_by, waiter:profiles!opened_by(full_name))')
+            .inFilter('id', orderIds);
+
+    final tableSessionsByOrderId = {
+      for (final row in tableSessionsRaw)
+        row['id'].toString(): row['table_sessions']
+    };
+
+    final tableIds = tableSessionsRaw
+        .map((s) => (s['table_sessions'] as Map?)?['table_id']?.toString())
+        .whereType<String>()
+        .toSet()
+        .toList(growable: false);
+
+    final tablesRaw = tableIds.isEmpty
+        ? []
+        : await _client
+            .from('dining_tables')
+            .select('id, code')
+            .inFilter('id', tableIds);
+    final tablesById = {for (final t in tablesRaw) t['id'].toString(): t};
+
+    final enriched = paymentsRaw.map((payment) {
+      final orderId = payment['order_id']?.toString();
+      final tableSession = orderId == null ? null : tableSessionsByOrderId[orderId] as Map?;
+      final tableCode = tableSession == null ? null : tablesById[tableSession['table_id']?.toString()]?['code'];
+      final fiscal = payment['fiscal_documents'];
+      final fiscalData = fiscal is List && fiscal.isNotEmpty
+          ? fiscal.first
+          : (fiscal is Map ? fiscal : null);
+
+      return {
+        ...payment,
+        'net_amount': netPaymentAmount(payment['amount'], payment['change_amount']),
+        'customer_name': fiscalData?['customer_name'] ?? tableSession?['customer_name'],
+        'customer_tax_id': fiscalData?['customer_rnc'],
+        'ncf_number': fiscalData?['ncf_number'],
+        'ncf_type_name': fiscalData?['ncf_type'],
+        'table_code': tableCode,
+        'waiter_name': (tableSession?['waiter'] as Map?)?['full_name']?.toString() ?? 'Servicio',
+      };
+    }).toList();
+
+    return (payments: enriched, totalCount: totalCount);
+  }
 }
