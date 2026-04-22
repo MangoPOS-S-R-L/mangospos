@@ -33,7 +33,8 @@ class _SalesReportBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
+    final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2, locale: 'en_US');
+    final numberFormat = NumberFormat('#,##0', 'en_US');
     final summary = state.salesSummary ?? const <String, dynamic>{};
     final metrics = viewModel.getSalesMetricCards();
     final selectedSub = state.salesSubReport;
@@ -262,67 +263,47 @@ class _SalesReportBody extends StatelessWidget {
             rows: methodRows,
             color: AppColors.primary,
           ),
+          const Divider(color: AppColors.border),
           const SizedBox(height: AppSpacing.sectionGap),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final singleColumn =
-                  constraints.maxWidth < AppBreakpoints.desktop;
-              final cards = [
-                _SalesCommercialReportCard(
-                  title: 'Ventas por categoría',
-                  subtitle:
-                      'Qué familias del menú están empujando la facturación.',
-                  icon: Icons.category_outlined,
-                  color: const Color(0xFF2563EB),
-                  rows: viewModel.getCategoryRows(),
-                  emptyText: 'No hay ventas por categoría en el rango.',
-                  showQuantity: true,
-                  amountLabel: 'Ventas',
-                  countLabel: 'Tickets',
-                ),
-                _SalesCommercialReportCard(
-                  title: 'Ventas por empleado',
-                  subtitle:
-                      'Rendimiento comercial por colaborador asignado.',
-                  icon: Icons.person_outline,
-                  color: const Color(0xFF7C3AED),
-                  rows: viewModel.getEmployeeRows(),
-                  emptyText: 'No hay ventas por empleado en el rango.',
-                  amountLabel: 'Ventas',
-                  countLabel: 'Órdenes',
-                ),
-                _SalesCommercialReportCard(
-                  title: 'Ventas por tipo de pago',
-                  subtitle:
-                      'Composición de ingresos por método de cobro.',
-                  icon: Icons.payments_outlined,
-                  color: const Color(0xFF059669),
-                  rows: viewModel.getPaymentMethodRows(),
-                  emptyText: 'No hay pagos en el rango seleccionado.',
-                  amountLabel: 'Cobrado',
-                  countLabel: 'Pagos',
-                ),
-              ];
-              if (singleColumn) {
-                return Column(
-                  children: [
-                    for (var i = 0; i < cards.length; i++) ...[
-                      if (i > 0) const SizedBox(height: AppSpacing.itemGap),
-                      cards[i],
-                    ],
-                  ],
-                );
-              }
-              final cardWidth =
-                  (constraints.maxWidth - AppSpacing.itemGap * 2) / 3;
-              return Wrap(
-                spacing: AppSpacing.itemGap,
-                runSpacing: AppSpacing.itemGap,
-                children: cards
-                    .map((c) => SizedBox(width: cardWidth, child: c))
-                    .toList(growable: false),
-              );
-            },
+          _SalesCommercialReportCard(
+            title: 'Ventas por categoría',
+            subtitle: 'Qué familias del menú están empujando la facturación.',
+            icon: Icons.category_outlined,
+            color: const Color(0xFF2563EB),
+            rows: viewModel.getCategoryRows(),
+            emptyText: 'No hay ventas por categoría en el rango.',
+            showQuantity: true,
+            amountLabel: 'Ventas',
+            countLabel: 'Tickets',
+            onViewAll: () => viewModel.setSalesSubReport(SalesSubReport.byCategory),
+          ),
+          const SizedBox(height: AppSpacing.sectionGap),
+          const Divider(color: AppColors.border),
+          const SizedBox(height: AppSpacing.sectionGap),
+          _SalesCommercialReportCard(
+            title: 'Ventas por empleado',
+            subtitle: 'Rendimiento comercial por colaborador asignado.',
+            icon: Icons.person_outline,
+            color: const Color(0xFF7C3AED),
+            rows: viewModel.getEmployeeRows(),
+            emptyText: 'No hay ventas por empleado en el rango.',
+            amountLabel: 'Ventas',
+            countLabel: 'Órdenes',
+            onViewAll: () => viewModel.setSalesSubReport(SalesSubReport.byEmployee),
+          ),
+          const SizedBox(height: AppSpacing.sectionGap),
+          const Divider(color: AppColors.border),
+          const SizedBox(height: AppSpacing.sectionGap),
+          _SalesCommercialReportCard(
+            title: 'Ventas por tipo de pago',
+            subtitle: 'Composición de ingresos por método de cobro.',
+            icon: Icons.payments_outlined,
+            color: const Color(0xFF059669),
+            rows: viewModel.getPaymentMethodRows(),
+            emptyText: 'No hay pagos en el rango seleccionado.',
+            amountLabel: 'Cobrado',
+            countLabel: 'Pagos',
+            onViewAll: () => viewModel.setSalesSubReport(SalesSubReport.byPayment),
           ),
         ];
       case SalesSubReport.byCategory:
@@ -338,6 +319,7 @@ class _SalesReportBody extends StatelessWidget {
             showQuantity: true,
             amountLabel: 'Ventas',
             countLabel: 'Tickets',
+            isFullReport: true,
           ),
         ];
       case SalesSubReport.byEmployee:
@@ -351,6 +333,7 @@ class _SalesReportBody extends StatelessWidget {
             emptyText: 'No hay ventas por empleado en el rango.',
             amountLabel: 'Ventas',
             countLabel: 'Órdenes',
+            isFullReport: true,
           ),
         ];
       case SalesSubReport.byPayment:
@@ -360,7 +343,8 @@ class _SalesReportBody extends StatelessWidget {
             rows: viewModel.getPaymentMethodRows(),
             color: AppColors.primary,
           ),
-          const SizedBox(height: AppSpacing.itemGap),
+          const Divider(color: AppColors.border),
+          const SizedBox(height: AppSpacing.sectionGap),
           _SalesCommercialReportCard(
             title: 'Ventas por tipo de pago',
             subtitle: 'Composición de ingresos por método de cobro.',
@@ -370,6 +354,7 @@ class _SalesReportBody extends StatelessWidget {
             emptyText: 'No hay pagos en el rango seleccionado.',
             amountLabel: 'Cobrado',
             countLabel: 'Pagos',
+            isFullReport: true,
           ),
         ];
       case SalesSubReport.byReceipt:
@@ -384,6 +369,7 @@ class _SalesReportBody extends StatelessWidget {
             emptyText: 'No hay recibos o comprobantes en el rango.',
             amountLabel: 'Facturado',
             countLabel: 'Documentos',
+            isFullReport: true,
           ),
         ];
       case SalesSubReport.byModifiers:
@@ -398,6 +384,7 @@ class _SalesReportBody extends StatelessWidget {
             showQuantity: true,
             amountLabel: 'Ingreso',
             countLabel: 'Aplicaciones',
+            isFullReport: true,
           ),
         ];
       case SalesSubReport.byDiscounts:
@@ -413,6 +400,7 @@ class _SalesReportBody extends StatelessWidget {
             showQuantity: true,
             amountLabel: 'Impacto',
             countLabel: 'Líneas',
+            isFullReport: true,
           ),
         ];
       case SalesSubReport.byProduct:
@@ -467,6 +455,7 @@ class _SalesReportBody extends StatelessWidget {
             emptyText: 'No hay ventas por zona en el rango.',
             amountLabel: 'Ventas',
             countLabel: 'Órdenes',
+            isFullReport: true,
           ),
         ];
       case SalesSubReport.byHour:
@@ -476,7 +465,8 @@ class _SalesReportBody extends StatelessWidget {
             rows: viewModel.getHourlyRows(),
             color: const Color(0xFF7C3AED),
           ),
-          const SizedBox(height: AppSpacing.itemGap),
+          const Divider(color: AppColors.border),
+          const SizedBox(height: AppSpacing.sectionGap),
           _SalesCommercialReportCard(
             title: 'Ventas por hora',
             subtitle: 'Actividad de ventas por franja horaria.',
@@ -486,6 +476,7 @@ class _SalesReportBody extends StatelessWidget {
             emptyText: 'No hay actividad en el rango.',
             amountLabel: 'Ventas',
             countLabel: 'Transacciones',
+            isFullReport: true,
           ),
         ];
     }
@@ -507,6 +498,8 @@ class _SalesCommercialReportCard extends StatelessWidget {
     required this.amountLabel,
     required this.countLabel,
     this.showQuantity = false,
+    this.onViewAll,
+    this.isFullReport = false,
   });
 
   final String title;
@@ -518,10 +511,13 @@ class _SalesCommercialReportCard extends StatelessWidget {
   final String amountLabel;
   final String countLabel;
   final bool showQuantity;
+  final VoidCallback? onViewAll;
+  final bool isFullReport;
 
   @override
   Widget build(BuildContext context) {
-    final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
+    final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2, locale: 'en_US');
+    final numberFormat = NumberFormat('#,##0', 'en_US');
     final totalAmount = rows.fold<double>(0, (sum, row) => sum + row.amount);
     final totalCount = rows.fold<int>(0, (sum, row) => sum + row.count);
     final totalQuantity =
@@ -574,6 +570,20 @@ class _SalesCommercialReportCard extends StatelessWidget {
                   ],
                 ),
               ),
+              if (!isFullReport && onViewAll != null && rows.length > 6)
+                TextButton.icon(
+                  onPressed: onViewAll,
+                  icon: const Icon(Icons.arrow_forward, size: 16),
+                  label: const Text('Ver todo'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: color,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    textStyle: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
             ],
           ),
           const SizedBox(height: AppSpacing.lg),
@@ -590,9 +600,9 @@ class _SalesCommercialReportCard extends StatelessWidget {
               Expanded(
                 child: CommercialStatTile(
                   label: countLabel,
-                  value: '$totalCount',
+                  value: numberFormat.format(totalCount),
                   hint: showQuantity
-                      ? '${totalQuantity.toStringAsFixed(0)} unidades'
+                      ? '${numberFormat.format(totalQuantity)} unidades'
                       : 'Movimientos registrados',
                 ),
               ),
@@ -611,7 +621,7 @@ class _SalesCommercialReportCard extends StatelessWidget {
             ReportEmptyPlaceholder(icon: icon, message: emptyText)
           else
             _SalesCommercialTable(
-              rows: rows.take(6).toList(growable: false),
+              rows: isFullReport ? rows : rows.take(6).toList(growable: false),
               showQuantity: showQuantity,
               amountLabel: amountLabel,
               countLabel: countLabel,
@@ -637,7 +647,8 @@ class _SalesCommercialTable extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
+    final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2, locale: 'en_US');
+    final numberFormat = NumberFormat('#,##0', 'en_US');
     final totalAmount = rows.fold<double>(0, (sum, row) => sum + row.amount);
     final totalCount = rows.fold<int>(0, (sum, row) => sum + row.count);
     final totalQuantity =
@@ -712,7 +723,7 @@ class _SalesCommercialTable extends StatelessWidget {
                   flex: 2,
                   child: Text(
                     showQuantity
-                        ? rows[i].quantity.toStringAsFixed(0)
+                        ? numberFormat.format(rows[i].quantity)
                         : '—',
                     textAlign: TextAlign.end,
                     style: const TextStyle(
@@ -724,7 +735,7 @@ class _SalesCommercialTable extends StatelessWidget {
                 Expanded(
                   flex: 2,
                   child: Text(
-                    '${rows[i].count}',
+                    '${numberFormat.format(rows[i].count)}',
                     textAlign: TextAlign.end,
                     style: const TextStyle(
                       color: AppColors.mutedForeground,
@@ -783,7 +794,7 @@ class _SalesCommercialTable extends StatelessWidget {
               Expanded(
                 flex: 2,
                 child: Text(
-                  '$totalCount',
+                  numberFormat.format(totalCount),
                   textAlign: TextAlign.end,
                   style: const TextStyle(
                     fontWeight: FontWeight.w700,

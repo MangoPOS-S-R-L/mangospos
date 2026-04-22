@@ -48,84 +48,84 @@ class ReportsExportService {
         return [
           _metricsTable(viewModel.getSalesMetricCards()),
           pw.SizedBox(height: 16),
-          _breakdownTable(
+          ..._breakdownTable(
             'Ventas por tipo de pago',
             viewModel.getPaymentMethodRows(),
           ),
           pw.SizedBox(height: 12),
-          _breakdownTable(
+          ..._breakdownTable(
             'Ventas por categoría',
             viewModel.getCategoryRows(),
             showQuantity: true,
           ),
           pw.SizedBox(height: 12),
-          _breakdownTable('Ventas por empleado', viewModel.getEmployeeRows()),
+          ..._breakdownTable('Ventas por empleado', viewModel.getEmployeeRows()),
           pw.SizedBox(height: 12),
-          _breakdownTable(
+          ..._breakdownTable(
             'Ventas por recibo / comprobante',
             viewModel.getReceiptRows(),
           ),
           pw.SizedBox(height: 12),
-          _breakdownTable(
+          ..._breakdownTable(
             'Ventas por modificadores',
             viewModel.getModifierRows(),
             showQuantity: true,
           ),
           pw.SizedBox(height: 12),
-          _breakdownTable(
+          ..._breakdownTable(
             'Descuentos y cortesías',
             viewModel.getDiscountRows(),
             showQuantity: true,
           ),
           pw.SizedBox(height: 12),
-          _productSalesTable(viewModel.getFilteredProductSalesRows()),
+          ..._productSalesTable(viewModel.getFilteredProductSalesRows()),
           pw.SizedBox(height: 12),
-          _breakdownTable(
+          ..._breakdownTable(
             'Top productos',
             viewModel.getTopProductRows(),
             showQuantity: true,
           ),
           pw.SizedBox(height: 12),
-          _breakdownTable('Ventas por zona', viewModel.getZoneRows()),
+          ..._breakdownTable('Ventas por zona', viewModel.getZoneRows()),
           pw.SizedBox(height: 12),
-          _breakdownTable('Ventas por hora', viewModel.getHourlyRows()),
+          ..._breakdownTable('Ventas por hora', viewModel.getHourlyRows()),
         ];
       case ReportCategory.finances:
         return [
           _metricsTable(viewModel.getFinanceMetricCards()),
           pw.SizedBox(height: 16),
-          _breakdownTable(
+          ..._breakdownTable(
             'Movimientos por tipo',
             viewModel.getFinanceTypeRows(),
           ),
           pw.SizedBox(height: 12),
-          _breakdownTable('Sesiones', viewModel.getFinanceSessionRows()),
+          ..._breakdownTable('Sesiones', viewModel.getFinanceSessionRows()),
         ];
       case ReportCategory.inventory:
         return [
           _metricsTable(viewModel.getInventoryMetricCards()),
           pw.SizedBox(height: 16),
-          _breakdownTable(
+          ..._breakdownTable(
             'Top stock',
             viewModel.getInventoryTopStockRows(),
             showQuantity: true,
           ),
           pw.SizedBox(height: 12),
-          _breakdownTable(
+          ..._breakdownTable(
             'Alertas',
             viewModel.getInventoryAlertRows(),
             showQuantity: true,
           ),
           pw.SizedBox(height: 12),
-          _breakdownTable('Movimientos', viewModel.getInventoryMovementRows()),
+          ..._breakdownTable('Movimientos', viewModel.getInventoryMovementRows()),
         ];
       case ReportCategory.purchases:
         return [
           _metricsTable(viewModel.getPurchaseMetricCards()),
           pw.SizedBox(height: 16),
-          _breakdownTable('Estados', viewModel.getPurchaseStatusRows()),
+          ..._breakdownTable('Estados', viewModel.getPurchaseStatusRows()),
           pw.SizedBox(height: 12),
-          _breakdownTable(
+          ..._breakdownTable(
             'Top proveedores',
             viewModel.getPurchaseSupplierRows(),
           ),
@@ -134,7 +134,7 @@ class ReportsExportService {
         return [
           _metricsTable(viewModel.getTaxMetricCards()),
           pw.SizedBox(height: 16),
-          _breakdownTable(
+          ..._breakdownTable(
             'Impuestos por tipo',
             viewModel.getTaxTypeRows(),
             showQuantity: true,
@@ -144,12 +144,12 @@ class ReportsExportService {
         return [
           _metricsTable(viewModel.getFiscalMetricCards()),
           pw.SizedBox(height: 16),
-          _breakdownTable(
+          ..._breakdownTable(
             'Comprobantes por tipo de NCF',
             viewModel.getFiscalTypeRows(),
           ),
           pw.SizedBox(height: 12),
-          _breakdownTable(
+          ..._breakdownTable(
             'Desglose por tipo de impuesto',
             viewModel.getFiscalTaxBreakdownRows(),
             showQuantity: true,
@@ -169,47 +169,46 @@ class ReportsExportService {
     );
   }
 
-  static pw.Widget _productSalesTable(List<ProductSalesReportRow> rows) {
-    return pw.Column(
-      crossAxisAlignment: pw.CrossAxisAlignment.start,
-      children: [
-        pw.Text(
-          'Ventas por producto',
-          style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
-        ),
-        pw.SizedBox(height: 6),
-        pw.TableHelper.fromTextArray(
-          headerStyle: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
-          cellStyle: const pw.TextStyle(fontSize: 8),
-          headers: const [
-            'Producto',
-            'Categoría',
-            'Cant.',
-            'Brutas',
-            'Desc.',
-            'Cortesías',
-            'Netas',
-            'Costo',
-            'Gan. bruta',
-          ],
-          data: rows
-              .map(
-                (row) => [
-                  row.product,
-                  row.category,
-                  row.quantitySold.toStringAsFixed(2),
-                  row.grossSales.toStringAsFixed(2),
-                  row.discounts.toStringAsFixed(2),
-                  row.courtesies.toStringAsFixed(2),
-                  row.netSales.toStringAsFixed(2),
-                  row.cost.toStringAsFixed(2),
-                  row.grossProfit.toStringAsFixed(2),
-                ],
-              )
-              .toList(growable: false),
-        ),
-      ],
-    );
+  static List<pw.Widget> _productSalesTable(List<ProductSalesReportRow> rows) {
+    if (rows.isEmpty) return [];
+    final numberFormat = NumberFormat('#,##0.00', 'en_US');
+    return [
+      pw.Text(
+        'Ventas por producto',
+        style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
+      ),
+      pw.SizedBox(height: 6),
+      pw.TableHelper.fromTextArray(
+        headerStyle: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
+        cellStyle: const pw.TextStyle(fontSize: 8),
+        headers: const [
+          'Producto',
+          'Categoría',
+          'Cant.',
+          'Brutas',
+          'Desc.',
+          'Cortesías',
+          'Netas',
+          'Costo',
+          'Gan. bruta',
+        ],
+        data: rows
+            .map(
+              (row) => [
+                row.product,
+                row.category,
+                numberFormat.format(row.quantitySold),
+                numberFormat.format(row.grossSales),
+                numberFormat.format(row.discounts),
+                numberFormat.format(row.courtesies),
+                numberFormat.format(row.netSales),
+                numberFormat.format(row.cost),
+                numberFormat.format(row.grossProfit),
+              ],
+            )
+            .toList(growable: false),
+      ),
+    ];
   }
 
   static String _ncfTypeName(String type) {
@@ -292,7 +291,7 @@ class ReportsExportService {
     }
 
     final dateFormat = DateFormat('dd/MM/yyyy');
-    final numberFormat = NumberFormat('#,##0.00', 'es_DO');
+    final numberFormat = NumberFormat('#,##0.00', 'en_US');
     final taxLabels = _collectTaxLabels(documents);
 
     return [
@@ -358,38 +357,38 @@ class ReportsExportService {
     ];
   }
 
-  static pw.Widget _breakdownTable(
+  static List<pw.Widget> _breakdownTable(
     String title,
     List<SalesBreakdownRow> rows, {
     bool showQuantity = false,
   }) {
-    return pw.Column(
-      crossAxisAlignment: pw.CrossAxisAlignment.start,
-      children: [
-        pw.Text(title, style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-        pw.SizedBox(height: 6),
-        pw.TableHelper.fromTextArray(
-          headers: showQuantity
-              ? const ['Concepto', 'Monto', 'Cantidad', 'Conteo']
-              : const ['Concepto', 'Monto', 'Conteo'],
-          data: rows
-              .map(
-                (r) => showQuantity
-                    ? [
-                        r.label,
-                        r.amount.toStringAsFixed(2),
-                        r.quantity.toStringAsFixed(2),
-                        r.count.toString(),
-                      ]
-                    : [
-                        r.label,
-                        r.amount.toStringAsFixed(2),
-                        r.count.toString(),
-                      ],
-              )
-              .toList(growable: false),
-        ),
-      ],
-    );
+    if (rows.isEmpty) return [];
+    final numberFormat = NumberFormat('#,##0.00', 'en_US');
+    final intFormat = NumberFormat('#,##0', 'en_US');
+    return [
+      pw.Text(title, style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+      pw.SizedBox(height: 6),
+      pw.TableHelper.fromTextArray(
+        headers: showQuantity
+            ? const ['Concepto', 'Monto', 'Cantidad', 'Conteo']
+            : const ['Concepto', 'Monto', 'Conteo'],
+        data: rows
+            .map(
+              (r) => showQuantity
+                  ? [
+                      r.label,
+                      numberFormat.format(r.amount),
+                      numberFormat.format(r.quantity),
+                      intFormat.format(r.count),
+                    ]
+                  : [
+                      r.label,
+                      numberFormat.format(r.amount),
+                      intFormat.format(r.count),
+                    ],
+            )
+            .toList(growable: false),
+      ),
+    ];
   }
 }
