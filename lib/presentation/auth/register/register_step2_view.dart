@@ -159,7 +159,7 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
               const SizedBox(height: 22),
               _FieldLabel('Tipo de negocio'),
               DropdownButtonFormField<String>(
-                value: _businessType,
+                initialValue: _businessType,
                 items: businessTypeOptions
                     .map(
                       (option) => DropdownMenuItem(
@@ -186,7 +186,7 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
                       children: [
                         _FieldLabel('País'),
                         DropdownButtonFormField<String>(
-                          value: _country,
+                          initialValue: _country,
                           items: _countries
                               .map(
                                 (country) => DropdownMenuItem(
@@ -214,7 +214,7 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
                       children: [
                         _FieldLabel('Moneda'),
                         DropdownButtonFormField<String>(
-                          value: _currency,
+                          initialValue: _currency,
                           items: _currencyOptions
                               .map(
                                 (currency) => DropdownMenuItem(
@@ -246,7 +246,7 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
                       children: [
                         _FieldLabel('Tamaño del negocio'),
                         DropdownButtonFormField<String>(
-                          value: _businessSize,
+                          initialValue: _businessSize,
                           items: _businessSizeOptions
                               .map(
                                 (size) => DropdownMenuItem(

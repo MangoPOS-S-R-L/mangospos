@@ -1,11 +1,9 @@
 // lib/presentation/auth/login/login_view.dart
 import 'dart:math';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:mangopos/core/utils/web_utils/web_utils.dart';
 
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/services/session/session_controller.dart';
