@@ -144,5 +144,5 @@ msix_config:
   publisher_display_name: Mango POS
   identity_name: do.mangopos.mangoposrestaurant
   msix_version: 1.0.0.0
-  logo_path: assets/icons/icon.png
+  logo_path: assets/images/logo.png
   capabilities: internetClient

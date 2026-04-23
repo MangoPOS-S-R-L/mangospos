@@ -20,8 +20,9 @@ if (localPropertiesFile.exists()) {
     localPropertiesFile.inputStream().use { localProperties.load(it) }
 }
 
-// Minimum Android version: 6.0 (API 23). Overrides flutter.minSdkVersion (24).
-val appMinSdk: Int = localProperties.getProperty("app.minSdkVersion", "23").toInt()
+// Minimum Android version: 7.0 (API 24). This matches current Flutter/plugin
+// requirements and avoids forcing libraries onto unsupported Android APIs.
+val appMinSdk: Int = localProperties.getProperty("app.minSdkVersion", "24").toInt()
 
 android {
     namespace = "do_mangopos.mangoposrestaurant"

@@ -78,6 +78,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   }
   StartupLog::Log("window.Create() succeeded");
 
+  StartupLog::Log("Showing native window immediately as startup safety fallback...");
+  if (window.Show()) {
+    StartupLog::Log("Native window shown before first Flutter frame");
+  } else {
+    StartupLog::Log("WARNING: window.Show() returned false during startup fallback");
+  }
+
   window.SetQuitOnClose(true);
   StartupLog::Log("Entering message loop (Flutter should render first frame soon)...");
 

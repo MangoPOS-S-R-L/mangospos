@@ -35,6 +35,7 @@ class ProductsViewModel extends ChangeNotifier {
   String _searchQuery = '';
   String? _selectedCategoryFilterId;
   String? _selectedMenuFilterId;
+  int _loadGeneration = 0;
 
   List<Map<String, dynamic>> get products => _products;
   List<Map<String, dynamic>> get filteredProducts {
@@ -45,15 +46,13 @@ class ProductsViewModel extends ChangeNotifier {
           final sku = product['sku']?.toString().toLowerCase() ?? '';
           final barcode = product['barcode']?.toString().toLowerCase() ?? '';
           final categoryId = product['category_id']?.toString();
-          final links =
-              product['menu_item_links'] as List<dynamic>? ?? const [];
-          String? firstMenuId;
-          if (links.isNotEmpty) {
-            final firstLink = links.first;
-            if (firstLink is Map<String, dynamic>) {
-              firstMenuId = firstLink['menu_id']?.toString();
-            }
-          }
+          final links = _asList(product['menu_item_links']);
+          final menuIds = links
+              .map(_asMap)
+              .map((link) => link['menu_id']?.toString())
+              .whereType<String>()
+              .where((id) => id.isNotEmpty)
+              .toSet();
 
           final matchesSearch =
               query.isEmpty ||
@@ -65,7 +64,7 @@ class ProductsViewModel extends ChangeNotifier {
               categoryId == _selectedCategoryFilterId;
           final matchesMenu =
               _selectedMenuFilterId == null ||
-              firstMenuId == _selectedMenuFilterId;
+              menuIds.contains(_selectedMenuFilterId);
 
           return matchesSearch && matchesCategory && matchesMenu;
         })
@@ -80,26 +79,49 @@ class ProductsViewModel extends ChangeNotifier {
   String? get selectedCategoryFilterId => _selectedCategoryFilterId;
   String? get selectedMenuFilterId => _selectedMenuFilterId;
 
-  Future<void> init() async {
+  Future<void> init({String? businessId}) async {
+    final generation = ++_loadGeneration;
     _isLoading = true;
     _error = null;
     notifyListeners();
 
     try {
-      _businessId = await _repository.getBusinessIdForCurrentUser();
-      if (_businessId == null) {
+      final resolvedBusinessId = businessId?.trim().isNotEmpty == true
+          ? businessId!.trim()
+          : await _repository.getBusinessIdForCurrentUser();
+      if (resolvedBusinessId == null || resolvedBusinessId.isEmpty) {
         throw Exception(
           'No se encontró negocio activo para este usuario. Verifica membresía.',
         );
       }
 
-      await Future.wait([_fetchProducts(), _fetchCategories(), _fetchMenus()]);
+      final results = await Future.wait([
+        _repository.getProducts(resolvedBusinessId),
+        _repository.getCategories(resolvedBusinessId),
+        _repository.getMenus(resolvedBusinessId),
+      ]);
+      if (generation != _loadGeneration) return;
+
+      final businessChanged = _businessId != resolvedBusinessId;
+      _businessId = resolvedBusinessId;
+      _products = results[0];
+      _categories = results[1];
+      _menus = results[2];
+      if (businessChanged) {
+        _searchQuery = '';
+        _selectedCategoryFilterId = null;
+        _selectedMenuFilterId = null;
+      }
+      _sanitizeFilters();
     } catch (e) {
+      if (generation != _loadGeneration) return;
       _error = 'Error cargando productos: $e';
       debugPrint('Error initializing ProductsViewModel: $e');
     } finally {
-      _isLoading = false;
-      notifyListeners();
+      if (generation == _loadGeneration) {
+        _isLoading = false;
+        notifyListeners();
+      }
     }
   }
 
@@ -130,9 +152,34 @@ class ProductsViewModel extends ChangeNotifier {
     _categories = await _repository.getCategories(_businessId!);
   }
 
-  Future<void> _fetchMenus() async {
-    if (_businessId == null) return;
-    _menus = await _repository.getMenus(_businessId!);
+  void _sanitizeFilters() {
+    final categoryIds = _categories
+        .map((category) => category['id']?.toString())
+        .whereType<String>()
+        .toSet();
+    final menuIds = _menus
+        .map((menu) => menu['id']?.toString())
+        .whereType<String>()
+        .toSet();
+
+    if (_selectedCategoryFilterId != null &&
+        !categoryIds.contains(_selectedCategoryFilterId)) {
+      _selectedCategoryFilterId = null;
+    }
+    if (_selectedMenuFilterId != null &&
+        !menuIds.contains(_selectedMenuFilterId)) {
+      _selectedMenuFilterId = null;
+    }
+  }
+
+  static List<dynamic> _asList(dynamic value) {
+    return value is List ? value : const [];
+  }
+
+  static Map<String, dynamic> _asMap(dynamic value) {
+    if (value is Map<String, dynamic>) return value;
+    if (value is Map) return Map<String, dynamic>.from(value);
+    return const <String, dynamic>{};
   }
 
   Future<void> addProduct({

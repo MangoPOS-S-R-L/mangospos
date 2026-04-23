@@ -216,12 +216,6 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     return _resolveRatesForOrigin(originOverride).effectiveTaxPct;
   }
 
-  /// Full tax rate (pct) including ALL active taxes (ITBIS + service fee).
-  /// Used to extract the base from inclusive prices.
-  double _calculateFullBusinessTaxRate() {
-    return _resolveRatesForOrigin().fullTaxPct;
-  }
-
   /// Fuerza recarga de las configuraciones de impuestos/service fee.
   void invalidateTaxSettings() {
     _taxSettingsBusinessId = null;
@@ -255,7 +249,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       final sfRate = _cachedServiceFeeRatePct;
       final pctLabel = sfRate.truncateToDouble() == sfRate
           ? '${sfRate.toInt()}%'
-          : '${sfRate}%';
+          : '$sfRate%';
       final amount = _roundMoney(subtotal * (sfRate / 100.0));
       result.add((label: 'Propina Ley ($pctLabel)', amount: amount));
     }
@@ -738,16 +732,17 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
     await _ensureBusinessTaxSettingsLoaded();
 
-    // Usar impuestos del NEGOCIO filtrados por origin (no los del producto).
-    // Esto asegura que TODOS los impuestos activos del negocio apliquen.
-    final businessTaxForOrigin = _calculateBusinessTaxRateForOrigin();
-    final businessFullTax = _calculateFullBusinessTaxRate();
-    final resolvedTaxRate = businessTaxForOrigin > 0
-        ? businessTaxForOrigin
-        : (productTaxRate ?? _cachedTaxRatePct);
-    final resolvedFullTaxRate = businessFullTax > 0
-        ? businessFullTax
-        : (productFullTaxRate ?? productTaxRate ?? _cachedTaxRatePct);
+    // Los impuestos son globales en configuración, pero se activan por producto.
+    // Si el navegador de menú envía 0%, respetamos ese 0% y no caemos al impuesto
+    // global del negocio.
+    final resolvedTaxRate = productTaxRate ?? _cachedTaxRatePct;
+    final productFullTaxOnly =
+        productFullTaxRate ?? productTaxRate ?? _cachedTaxRatePct;
+    final serviceFeeForInclusiveBase =
+        takeout || !_isServiceFeeActiveForOrigin()
+        ? 0.0
+        : _cachedServiceFeeRatePct;
+    final resolvedFullTaxRate = productFullTaxOnly + serviceFeeForInclusiveBase;
 
     final effectiveTaxRatePct = _sanitizeProductTaxRatePct(
       rawTaxRatePct: resolvedTaxRate,
@@ -876,24 +871,6 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
                   .map((modifier) => modifier.toMap())
                   .toList(growable: false),
             );
-      }
-
-      // Corregir el tax_rate del item según el origin actual.
-      // Usamos un RPC con SECURITY DEFINER para bypasear RLS que
-      // bloquea updates directos en ventas rápidas/manuales.
-      {
-        try {
-          await Supabase.instance.client.rpc(
-            'fn_update_item_tax_rate',
-            params: {
-              'p_item_id': itemId,
-              'p_tax_rate': effectiveTaxRatePct,
-              'p_original_tax_rate': resolvedFullTaxRate,
-            },
-          );
-        } catch (e) {
-          debugPrint('Error updating tax rates for item $itemId: $e');
-        }
       }
 
       // Bypassear el debounce para que la respuesta sea instantánea

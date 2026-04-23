@@ -2,7 +2,15 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io'
-    show Directory, File, FileMode, InternetAddressType, NetworkInterface, Platform, Process, ProcessStartMode;
+    show
+        Directory,
+        File,
+        FileMode,
+        InternetAddressType,
+        NetworkInterface,
+        Platform,
+        Process,
+        ProcessStartMode;
 import 'dart:ui' show PlatformDispatcher;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -39,9 +47,12 @@ void _logToFile(String message) {
   try {
     if (kIsWeb) return;
     // Platform-aware home directory resolution
-    final home = Platform.environment['USERPROFILE'] // Windows
-        ?? Platform.environment['HOME']              // macOS / Linux
-        ?? '';
+    final home =
+        Platform.environment['USERPROFILE'] // Windows
+        ??
+        Platform.environment['HOME'] // macOS / Linux
+        ??
+        '';
     if (home.isEmpty) return;
     final logDir = Platform.isWindows
         ? p.join(home, 'Desktop')
@@ -57,9 +68,11 @@ void _logToFile(String message) {
     // Si no puede escribir el log, no romper la app
   }
 }
+
 const int agentPort = 4000;
 bool _authRecoveryScheduled = false;
 bool _authResetScheduled = false;
+bool _startupUiMounted = false;
 int _authRecoveryAttempts = 0;
 const int _maxAuthRecoveryAttempts = 3;
 DateTime? _lastTransientAuthLogAt;
@@ -108,7 +121,9 @@ Future<void> _publishAgentUrlToDb() async {
     if (businessId == null || businessId.isEmpty) return;
 
     await LocalPrintService.publishAgentUrl(agentUrl, businessId);
-    debugPrint('[Agent] Published agent URL: $agentUrl for business $businessId');
+    debugPrint(
+      '[Agent] Published agent URL: $agentUrl for business $businessId',
+    );
   } catch (e) {
     debugPrint('[Agent] Failed to publish agent URL: $e');
   }
@@ -215,6 +230,22 @@ Future<void> _lockLandscapeIfMobile() async {
   }
 }
 
+Future<void> _forceShowStartupWindow() async {
+  if (kIsWeb || !(Platform.isWindows || Platform.isMacOS || Platform.isLinux)) {
+    return;
+  }
+
+  try {
+    await windowManager.setSkipTaskbar(false);
+    await windowManager.restore();
+    await windowManager.show();
+    await windowManager.focus();
+    _logToFile('Native window restored/shown/focused');
+  } catch (e) {
+    _logToFile('Native window show/focus failed (non-fatal): $e');
+  }
+}
+
 void main() {
   runZonedGuarded(
     () async {
@@ -257,10 +288,12 @@ Future<void> _bootstrapApp() async {
 
     if (kIsWeb) usePathUrlStrategy();
 
-    if (!kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux)) {
+    if (!kIsWeb &&
+        (Platform.isWindows || Platform.isMacOS || Platform.isLinux)) {
       _logToFile('windowManager.ensureInitialized()...');
       await windowManager.ensureInitialized();
       await windowManager.setMinimumSize(const Size(800, 600));
+      await _forceShowStartupWindow();
       _logToFile('windowManager OK, min size set to 800x600');
     }
 
@@ -272,6 +305,11 @@ Future<void> _bootstrapApp() async {
     await SupabaseConfig.initialize(
       url: Env.supabaseUrl,
       anonKey: Env.supabaseAnonKey,
+    ).timeout(
+      const Duration(seconds: 20),
+      onTimeout: () => throw TimeoutException(
+        'Supabase.initialize excedio 20s durante el arranque',
+      ),
     );
     _logToFile('Supabase OK');
 
@@ -290,6 +328,8 @@ Future<void> _bootstrapApp() async {
     // ── Montar la UI de inmediato para que la ventana aparezca ──
     _logToFile('runApp() - mounting UI...');
     runApp(const ProviderScope(child: MyApp()));
+    _startupUiMounted = true;
+    await _forceShowStartupWindow();
     _logToFile('runApp() done - UI mounted, waiting for first frame');
 
     // ── Inicialización pesada DESPUÉS del primer frame ──
@@ -299,6 +339,11 @@ Future<void> _bootstrapApp() async {
     });
   } catch (e, st) {
     _logToFile('FATAL ERROR in _bootstrapApp: $e\n$st');
+    if (!_startupUiMounted) {
+      runApp(StartupFailureApp(error: e, stackTrace: st));
+      _startupUiMounted = true;
+      await _forceShowStartupWindow();
+    }
     AppLogger.f(
       'Error FATAL durante la inicializacion de la app',
       error: e,
@@ -615,6 +660,87 @@ class MyApp extends ConsumerWidget {
       debugShowCheckedModeBanner: false,
       routerConfig: AppRouter.router,
       theme: ThemeData(primaryColor: const Color(0xFFF97316)),
+    );
+  }
+}
+
+class StartupFailureApp extends StatelessWidget {
+  const StartupFailureApp({
+    super.key,
+    required this.error,
+    required this.stackTrace,
+  });
+
+  final Object error;
+  final StackTrace stackTrace;
+
+  @override
+  Widget build(BuildContext context) {
+    final friendlyMessage = SupabaseConfig.getFriendlyErrorMessage(error);
+
+    return MaterialApp(
+      title: 'MangoPOS',
+      debugShowCheckedModeBanner: false,
+      home: Scaffold(
+        backgroundColor: const Color(0xFFF8F5F1),
+        body: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: Card(
+                elevation: 3,
+                margin: const EdgeInsets.all(24),
+                child: Padding(
+                  padding: const EdgeInsets.all(28),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(
+                        Icons.warning_amber_rounded,
+                        color: Color(0xFFF97316),
+                        size: 44,
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'MangoPOS abrió, pero no pudo completar el arranque',
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFF1C1917),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        friendlyMessage,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          height: 1.4,
+                          color: Color(0xFF57534E),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Revisa el log mangopos_startup.log en el Escritorio para soporte técnico.',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Color(0xFF78716C),
+                        ),
+                      ),
+                      const SizedBox(height: 22),
+                      FilledButton.icon(
+                        onPressed: () => SystemNavigator.pop(),
+                        icon: const Icon(Icons.close_rounded),
+                        label: const Text('Cerrar'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

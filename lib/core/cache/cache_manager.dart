@@ -34,6 +34,7 @@ class CacheManager {
   CacheState _currentState = CacheState(status: CacheStatus.initializing);
 
   bool _initialized = false;
+  bool _baseServicesReady = false;
 
   // Constructor privado
   CacheManager._();
@@ -42,6 +43,75 @@ class CacheManager {
   factory CacheManager() {
     _instance ??= CacheManager._();
     return _instance!;
+  }
+
+  /// Limpia los datos temporales locales sin cerrar sesión ni borrar
+  /// operaciones offline pendientes.
+  Future<CacheClearResult> clearSystemCache() async {
+    await _ensureBaseServices();
+    _updateState(CacheStatus.syncing);
+
+    final deletedByPrefix = <String, int>{};
+    final deletedKeys = <String>[];
+
+    const prefixes = [
+      StorageKeys.cachePrefix,
+      StorageKeys.metadataPrefix,
+      StorageKeys.hashPrefix,
+      'offline_catalog_',
+      'printing_cached_printers_',
+      'printing_cached_ready_printers_',
+    ];
+
+    const exactKeys = [
+      StorageKeys.totalCacheSize,
+      'print_agent_url',
+      'print_agent_url:ts',
+    ];
+
+    try {
+      var deletedCount = 0;
+
+      for (final prefix in prefixes) {
+        final deleted = await _storage.deleteByPrefix(prefix);
+        deletedByPrefix[prefix] = deleted;
+        deletedCount += deleted;
+      }
+
+      for (final key in exactKeys) {
+        if (await _storage.delete(key)) {
+          deletedKeys.add(key);
+          deletedCount++;
+        }
+      }
+
+      final clearedAt = DateTime.now();
+      await _storage.write(
+        StorageKeys.lastCleanup,
+        clearedAt.toIso8601String(),
+      );
+      _updateState(CacheStatus.empty);
+
+      return CacheClearResult(
+        deletedCount: deletedCount,
+        deletedByPrefix: deletedByPrefix,
+        deletedKeys: deletedKeys,
+        clearedAt: clearedAt,
+      );
+    } catch (e) {
+      debugPrint('Error clearing system cache: $e');
+      _updateState(CacheStatus.error, errorMessage: e.toString());
+      rethrow;
+    }
+  }
+
+  Future<void> _ensureBaseServices() async {
+    if (_baseServicesReady) return;
+
+    _storage = await StorageService.getInstance();
+    _connectivity = ConnectivityService();
+    await _connectivity.initialize();
+    _baseServicesReady = true;
   }
 
   /// Stream de estado para UI reactiva
@@ -76,6 +146,7 @@ class CacheManager {
       manager._storage = await StorageService.getInstance();
       manager._connectivity = ConnectivityService();
       await manager._connectivity.initialize();
+      manager._baseServicesReady = true;
 
       // 2. Verificar versión del caché
       await manager._checkCacheVersion();
@@ -123,15 +194,17 @@ class CacheManager {
     );
 
     final isNewInstall = storedVersion == null || storedAppVersion == null;
-    final isAppUpdate = storedAppVersion != null && storedAppVersion != currentAppVersion;
-    final isCacheUpdate = storedVersion != null && storedVersion != currentVersion;
+    final isAppUpdate =
+        storedAppVersion != null && storedAppVersion != currentAppVersion;
+    final isCacheUpdate =
+        storedVersion != null && storedVersion != currentVersion;
 
     if (isNewInstall || isAppUpdate || isCacheUpdate) {
       final reason = isNewInstall
           ? 'nueva instalación'
           : isAppUpdate
-              ? 'actualización de app ($storedAppVersion → $currentAppVersion)'
-              : 'actualización de cache ($storedVersion → $currentVersion)';
+          ? 'actualización de app ($storedAppVersion → $currentAppVersion)'
+          : 'actualización de cache ($storedVersion → $currentVersion)';
       debugPrint('🧹 Limpiando cache: $reason');
 
       // Limpiar todo el cache de datos (preservar keys de sesión/auth)
@@ -491,4 +564,19 @@ class CacheManager {
     _stateController.close();
     _connectivity.dispose();
   }
+}
+
+@immutable
+class CacheClearResult {
+  const CacheClearResult({
+    required this.deletedCount,
+    required this.deletedByPrefix,
+    required this.deletedKeys,
+    required this.clearedAt,
+  });
+
+  final int deletedCount;
+  final Map<String, int> deletedByPrefix;
+  final List<String> deletedKeys;
+  final DateTime clearedAt;
 }

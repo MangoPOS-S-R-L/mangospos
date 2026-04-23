@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../core/tax/tax_engine.dart';
 import '../../../core/network/connectivity_service.dart';
 import '../../../core/offline/offline_catalog_service.dart';
 import '../../../data/utils/business_id_resolver.dart';
@@ -62,7 +63,6 @@ class MenuProduct {
     this.associatedTaxes = const [],
   });
 
-
   factory MenuProduct.fromMap(Map<String, dynamic> m) {
     double resolvedRate = 0;
     final taxList = <Map<String, dynamic>>[];
@@ -78,22 +78,11 @@ class MenuProduct {
       }
     }
 
-    final rawEffectiveRate = m['effective_tax_rate'];
-    if (rawEffectiveRate is num) {
-      resolvedRate = rawEffectiveRate.toDouble();
-    } else if (rawEffectiveRate != null) {
-      resolvedRate = double.tryParse(rawEffectiveRate.toString()) ?? 0;
-    } else {
-      // Sum all active taxes if no effective rate is provided by the view
-      for (final tx in taxList) {
-        final isActive = tx['is_active'] as bool? ?? true;
-        if (!isActive) continue;
-        final rate = tx['rate'];
-        if (rate is num) resolvedRate += rate.toDouble();
-      }
-
+    for (final tx in taxList) {
+      final tax = TaxDef.fromMap(tx);
+      if (!tax.isActive || tax.effectiveIsServiceFee) continue;
+      resolvedRate += tax.rate;
     }
-
 
     return MenuProduct(
       id: m['id'] as String,
@@ -112,49 +101,26 @@ class MenuProduct {
   }
 
   double calculateTaxRate(String origin) {
-    // origin: 'table', 'manual', 'quick', 'delivery'
+    final saleOrigin = parseSaleOrigin(origin);
     double total = 0;
     for (final tx in associatedTaxes) {
-      final rate = tx['rate'] as num? ?? 0;
-      final onZone = tx['apply_on_zone'] as bool? ?? true;
-      final onManual = tx['apply_on_manual'] as bool? ?? true;
-      final onQuick = tx['apply_on_quick'] as bool? ?? true;
-      final onDelivery = tx['apply_on_delivery'] as bool? ?? true;
-
-      final isActive = tx['is_active'] as bool? ?? true;
-      if (!isActive) continue;
-
-      bool applies = false;
-      if (origin == 'table' || origin == 'dine_in' || origin == 'zone' || origin == 'table_order') {
-        applies = onZone;
-      } else if (origin == 'manual' || origin == 'manual_order') {
-        applies = onManual;
-      } else if (origin == 'quick' || origin == 'quick_sale') {
-        applies = onQuick;
-      } else if (origin == 'delivery') {
-        applies = onDelivery;
-      } else {
-        applies = true;
-      }
-
-      if (applies) {
-        total += rate.toDouble();
-      }
+      final tax = TaxDef.fromMap(tx);
+      if (!tax.isActive || tax.effectiveIsServiceFee) continue;
+      if (tax.appliesTo(saleOrigin)) total += tax.rate;
     }
-    return total > 0 ? total : 0; // Return 0 if no applicable taxes
+    return total;
   }
 
   double calculateFullTaxRate() {
     double total = 0;
     for (final tx in associatedTaxes) {
-      final rate = tx['rate'] as num? ?? 0;
-      total += rate.toDouble();
+      final tax = TaxDef.fromMap(tx);
+      if (!tax.isActive || tax.effectiveIsServiceFee) continue;
+      total += tax.rate;
     }
-    return total > 0 ? total : taxRate; // taxRate is the initial sum from DB
+    return total;
   }
-
 }
-
 
 enum MenuProductsMode { none, category, menu, all, search, favorites }
 
@@ -247,10 +213,9 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
   bool _backgroundSyncRunning = false;
 
   static const _menuItemsSelect =
-      'id,name,price,image_url,category_id,is_active,position,tax_mode,item_type,menu_item_taxes(tax_id,taxes(rate,is_active,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery))';
+      'id,name,price,image_url,category_id,is_active,position,tax_mode,item_type,menu_item_taxes(tax_id,taxes(name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery))';
   static const _menuListSelect =
-      'id,name,price,image_url,category_id,menu_id,is_active,position,tax_mode,item_type,effective_tax_rate,menu_item_taxes(tax_id,taxes(rate,is_active,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery))';
-
+      'id,name,price,image_url,category_id,menu_id,is_active,position,tax_mode,item_type,effective_tax_rate,menu_item_taxes(tax_id,taxes(name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery))';
 
   Future<String> _resolveBusinessId() async {
     final sessionBusinessId = ref.read(sessionProvider).activeBusinessId;
@@ -328,15 +293,12 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
 
       // Changed if count differs or there's a newer updated_at
       if (remoteCount != localCount) {
-        debugPrint(
-          'Catalog changed: count $localCount → $remoteCount',
-        );
+        debugPrint('Catalog changed: count $localCount → $remoteCount');
         return true;
       }
 
       if (remoteUpdatedAt != null &&
-          (localUpdatedAt == null ||
-              remoteUpdatedAt.isAfter(localUpdatedAt))) {
+          (localUpdatedAt == null || remoteUpdatedAt.isAfter(localUpdatedAt))) {
         debugPrint(
           'Catalog changed: updated_at $localUpdatedAt → $remoteUpdatedAt',
         );
@@ -395,7 +357,8 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
     final categories = _rowsToMaps(results[0]);
     final menus = _rowsToMaps(results[1]);
     final products = _rowsToMaps(results[2]);
-    final menuProducts = existing?.menuProducts ?? const <Map<String, dynamic>>[];
+    final menuProducts =
+        existing?.menuProducts ?? const <Map<String, dynamic>>[];
     final favoriteIds = existing?.favoriteProductIds ?? const <String>[];
     final maxUpdatedAt = _extractMaxUpdatedAt(products);
 
@@ -500,10 +463,7 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
 
     if (cachedRows.isNotEmpty) {
       // Return cached immediately, refresh in background
-      _refreshMenuProductsInBackground(
-        businessId: businessId,
-        menuId: menuId,
-      );
+      _refreshMenuProductsInBackground(businessId: businessId, menuId: menuId);
       return _parseProducts(cachedRows);
     }
 
@@ -606,7 +566,8 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
       await loadProductsByCategory(state.loadedCategoryId!);
       return;
     }
-    if (state.selectedCategoryId != null && state.selectedCategoryId!.isNotEmpty) {
+    if (state.selectedCategoryId != null &&
+        state.selectedCategoryId!.isNotEmpty) {
       await loadProductsByCategory(state.selectedCategoryId!);
       return;
     }
@@ -781,8 +742,9 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
 
       await _offlineCatalog.saveSnapshot(
         businessId: businessId,
-        favoriteProductIds:
-            favorites.map((product) => product.id).toList(growable: false),
+        favoriteProductIds: favorites
+            .map((product) => product.id)
+            .toList(growable: false),
       );
 
       state = state.copyWith(

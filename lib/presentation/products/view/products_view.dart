@@ -23,7 +23,8 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
     super.initState();
     // Initialize data
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(productsViewModelProvider).init();
+      final businessId = ref.read(sessionProvider).activeBusinessId;
+      ref.read(productsViewModelProvider).init(businessId: businessId);
       ref.read(taxesVmProvider.notifier).load(businessId: 'auto');
     });
   }
@@ -39,7 +40,9 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
       _lastBusinessId = session.activeBusinessId;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
-          ref.read(productsViewModelProvider).init();
+          ref
+              .read(productsViewModelProvider)
+              .init(businessId: session.activeBusinessId);
           ref.read(taxesVmProvider.notifier).load(businessId: 'auto');
         }
       });
@@ -48,11 +51,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
     return Scaffold(
       backgroundColor: AppColors.background,
       body: viewModel.isLoading
-          ? Center(
-              child: CircularProgressIndicator(
-                color: AppColors.primary,
-              ),
-            )
+          ? Center(child: CircularProgressIndicator(color: AppColors.primary))
           : SingleChildScrollView(
               padding: const EdgeInsets.all(AppSpacing.xxl),
               child: Column(
@@ -81,7 +80,9 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                       Row(
                         children: [
                           IconButton(
-                            onPressed: () => viewModel.init(),
+                            onPressed: () => viewModel.init(
+                              businessId: session.activeBusinessId,
+                            ),
                             icon: Icon(
                               Icons.refresh,
                               color: AppColors.mutedForeground,
@@ -102,8 +103,9 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                                 vertical: AppSpacing.lg,
                               ),
                               shape: RoundedRectangleBorder(
-                                borderRadius:
-                                    BorderRadius.circular(AppRadius.button),
+                                borderRadius: BorderRadius.circular(
+                                  AppRadius.button,
+                                ),
                               ),
                             ),
                           ),
@@ -117,16 +119,19 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                       width: double.infinity,
                       padding: const EdgeInsets.all(AppSpacing.md),
                       decoration: BoxDecoration(
-                        color: AppColors.destructive.withValues(alpha:0.06),
+                        color: AppColors.destructive.withValues(alpha: 0.06),
                         borderRadius: BorderRadius.circular(AppRadius.lg),
                         border: Border.all(
-                          color: AppColors.destructive.withValues(alpha:0.2),
+                          color: AppColors.destructive.withValues(alpha: 0.2),
                         ),
                       ),
                       child: Row(
                         children: [
-                          Icon(Icons.error_outline,
-                              size: 18, color: AppColors.destructive),
+                          Icon(
+                            Icons.error_outline,
+                            size: 18,
+                            color: AppColors.destructive,
+                          ),
                           const SizedBox(width: AppSpacing.sm),
                           Expanded(
                             child: Text(
@@ -147,26 +152,32 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                         child: TextField(
                           onChanged: viewModel.setSearchQuery,
                           decoration: InputDecoration(
-                            hintText: 'Busca tu elemento del men\u00fa aqu\u00ed',
+                            hintText:
+                                'Busca tu elemento del men\u00fa aqu\u00ed',
                             prefixIcon: Icon(
                               Icons.search,
                               color: AppColors.mutedForeground,
                             ),
                             border: OutlineInputBorder(
-                              borderRadius:
-                                  BorderRadius.circular(AppRadius.button),
+                              borderRadius: BorderRadius.circular(
+                                AppRadius.button,
+                              ),
                               borderSide: BorderSide(color: AppColors.border),
                             ),
                             enabledBorder: OutlineInputBorder(
-                              borderRadius:
-                                  BorderRadius.circular(AppRadius.button),
+                              borderRadius: BorderRadius.circular(
+                                AppRadius.button,
+                              ),
                               borderSide: BorderSide(color: AppColors.border),
                             ),
                             focusedBorder: OutlineInputBorder(
-                              borderRadius:
-                                  BorderRadius.circular(AppRadius.button),
+                              borderRadius: BorderRadius.circular(
+                                AppRadius.button,
+                              ),
                               borderSide: BorderSide(
-                                  color: AppColors.primary, width: 1.5),
+                                color: AppColors.primary,
+                                width: 1.5,
+                              ),
                             ),
                             contentPadding: const EdgeInsets.symmetric(
                               vertical: 0,
@@ -193,318 +204,16 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                   ),
                   const SizedBox(height: AppSpacing.xxl),
 
-                  // Table Header
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      vertical: AppSpacing.md,
-                      horizontal: AppSpacing.lg,
+                  _ProductsTable(
+                    products: products,
+                    viewModel: viewModel,
+                    onEdit: (product) => _showAddEditDialog(
+                      context,
+                      viewModel,
+                      product: product,
                     ),
-                    decoration: BoxDecoration(
-                      color: AppColors.card,
-                      border: Border(
-                        bottom: BorderSide(color: AppColors.border),
-                      ),
-                    ),
-                    child: Row(
-                      children: const [
-                        Expanded(
-                          flex: 3,
-                          child: Text(
-                            'ART\u00cdCULO',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12,
-                              color: AppColors.mutedForeground,
-                            ),
-                          ),
-                        ),
-                        Expanded(
-                          flex: 1,
-                          child: Text(
-                            'PRECIO',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12,
-                              color: AppColors.mutedForeground,
-                            ),
-                          ),
-                        ),
-                        Expanded(
-                          flex: 1,
-                          child: Text(
-                            'CATEGOR\u00cdA',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12,
-                              color: AppColors.mutedForeground,
-                            ),
-                          ),
-                        ),
-                        Expanded(
-                          flex: 1,
-                          child: Text(
-                            'MEN\u00da',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12,
-                              color: AppColors.mutedForeground,
-                            ),
-                          ),
-                        ),
-                        Expanded(
-                          flex: 1,
-                          child: Center(
-                            child: Text(
-                              'DISPONIBLE',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 12,
-                                color: AppColors.mutedForeground,
-                              ),
-                            ),
-                          ),
-                        ),
-                        Expanded(
-                          flex: 1,
-                          child: Text(
-                            'ACCI\u00d3N',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12,
-                              color: AppColors.mutedForeground,
-                            ),
-                            textAlign: TextAlign.right,
-                          ),
-                        ),
-                      ],
-                    ),
+                    onDelete: (id) => _confirmDelete(context, viewModel, id),
                   ),
-
-                  // Table Body
-                  if (products.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.all(AppSpacing.xxxl),
-                      child: Center(
-                        child: Column(
-                          children: [
-                            Icon(Icons.inventory_2_outlined,
-                                size: 48,
-                                color: AppColors.mutedForeground
-                                    .withValues(alpha:0.5)),
-                            const SizedBox(height: AppSpacing.md),
-                            Text(
-                              'No hay productos para los filtros actuales',
-                              style: TextStyle(
-                                color: AppColors.mutedForeground,
-                                fontSize: 14,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    )
-                  else
-                    ListView.separated(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      itemCount: products.length,
-                      separatorBuilder: (context, index) =>
-                          Divider(height: 1, color: AppColors.border),
-                      itemBuilder: (context, index) {
-                        final product = products[index];
-                        final categoryName =
-                            product['categories']?['name'] ?? '-';
-                        final links =
-                            product['menu_item_links'] as List<dynamic>? ?? [];
-                        String? firstMenu;
-                        if (links.isNotEmpty) {
-                          final firstLink = links.first as Map<String, dynamic>;
-                          final menu =
-                              firstLink['menus'] as Map<String, dynamic>?;
-                          firstMenu = menu?['name']?.toString();
-                        }
-                        final menuName = firstMenu ?? '-';
-                        final isActive = product['is_active'] == true;
-                        final taxMode =
-                            product['tax_mode']?.toString() == 'inclusive'
-                            ? 'Incluido'
-                            : 'Excluido';
-                        final taxModeColor =
-                            product['tax_mode']?.toString() == 'inclusive'
-                            ? AppColors.info
-                            : AppColors.primary;
-
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(
-                            vertical: AppSpacing.lg,
-                            horizontal: AppSpacing.lg,
-                          ),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                flex: 3,
-                                child: Row(
-                                  children: [
-                                    Container(
-                                      width: 40,
-                                      height: 40,
-                                      decoration: BoxDecoration(
-                                        borderRadius: BorderRadius.circular(
-                                            AppRadius.button),
-                                        color: AppColors.muted,
-                                        image: product['image_url'] != null
-                                            ? DecorationImage(
-                                                image: NetworkImage(
-                                                  product['image_url'],
-                                                ),
-                                                fit: BoxFit.cover,
-                                              )
-                                            : null,
-                                      ),
-                                      child: product['image_url'] == null
-                                          ? Icon(
-                                              Icons.image,
-                                              size: 20,
-                                              color:
-                                                  AppColors.mutedForeground,
-                                            )
-                                          : null,
-                                    ),
-                                    const SizedBox(width: AppSpacing.md),
-                                    Expanded(
-                                      child: Text(
-                                        product['name'] ?? 'Sin nombre',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.w500,
-                                          color: AppColors.foreground,
-                                        ),
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              Expanded(
-                                flex: 1,
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      '\$${(product['price'] ?? 0).toStringAsFixed(2)}',
-                                      style: TextStyle(
-                                        color: AppColors.mutedForeground,
-                                      ),
-                                    ),
-                                    const SizedBox(height: AppSpacing.xs),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: AppSpacing.sm,
-                                        vertical: 3,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: taxModeColor.withValues(alpha:0.10),
-                                        borderRadius: BorderRadius.circular(
-                                            AppRadius.badge),
-                                      ),
-                                      child: Text(
-                                        'Imp. $taxMode',
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.w700,
-                                          color: taxModeColor,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              Expanded(
-                                flex: 1,
-                                child: Text(
-                                  categoryName,
-                                  style: TextStyle(
-                                      color: AppColors.mutedForeground),
-                                ),
-                              ),
-                              Expanded(
-                                flex: 1,
-                                child: Text(
-                                  menuName,
-                                  style: TextStyle(
-                                      color: AppColors.mutedForeground),
-                                ),
-                              ),
-                              Expanded(
-                                flex: 1,
-                                child: Center(
-                                  child: InkWell(
-                                    onTap: () => viewModel.toggleAvailability(
-                                      product['id'].toString(),
-                                      isActive,
-                                    ),
-                                    borderRadius: BorderRadius.circular(
-                                        AppRadius.sm),
-                                    child: Container(
-                                      width: 20,
-                                      height: 20,
-                                      decoration: BoxDecoration(
-                                        color: isActive
-                                            ? AppColors.success
-                                            : AppColors.mutedForeground,
-                                        borderRadius: BorderRadius.circular(
-                                            AppRadius.sm),
-                                      ),
-                                      child: const Icon(
-                                        Icons.check,
-                                        size: 14,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              Expanded(
-                                flex: 1,
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.end,
-                                  children: [
-                                    IconButton(
-                                      onPressed: () => _showAddEditDialog(
-                                        context,
-                                        viewModel,
-                                        product: product,
-                                      ),
-                                      icon: Icon(
-                                        Icons.edit,
-                                        size: 18,
-                                        color: AppColors.mutedForeground,
-                                      ),
-                                      padding: EdgeInsets.zero,
-                                      constraints: const BoxConstraints(),
-                                    ),
-                                    const SizedBox(width: AppSpacing.lg),
-                                    IconButton(
-                                      onPressed: () => _confirmDelete(
-                                        context,
-                                        viewModel,
-                                        product['id'],
-                                      ),
-                                      icon: Icon(
-                                        Icons.delete_outline,
-                                        size: 18,
-                                        color: AppColors.destructive,
-                                      ),
-                                      padding: EdgeInsets.zero,
-                                      constraints: const BoxConstraints(),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
                 ],
               ),
             ),
@@ -532,10 +241,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
           ),
           icon: Icon(Icons.arrow_drop_down, color: AppColors.mutedForeground),
           items: [
-            DropdownMenuItem<String>(
-              value: null,
-              child: Text('-- $label --'),
-            ),
+            DropdownMenuItem<String>(value: null, child: Text('-- $label --')),
             ...items.map((item) {
               return DropdownMenuItem<String>(
                 value: item['id'].toString(),
@@ -675,13 +381,317 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
               viewModel.deleteProduct(id);
               Navigator.pop(context);
             },
-            style: TextButton.styleFrom(
-              foregroundColor: AppColors.destructive,
-            ),
+            style: TextButton.styleFrom(foregroundColor: AppColors.destructive),
             child: const Text('Eliminar'),
           ),
         ],
       ),
+    );
+  }
+}
+
+class _ProductsTable extends StatelessWidget {
+  const _ProductsTable({
+    required this.products,
+    required this.viewModel,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  final List<Map<String, dynamic>> products;
+  final ProductsViewModel viewModel;
+  final ValueChanged<Map<String, dynamic>> onEdit;
+  final ValueChanged<String> onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        children: [
+          Container(
+            color: Colors.white,
+            padding: const EdgeInsets.symmetric(
+              vertical: AppSpacing.md,
+              horizontal: AppSpacing.lg,
+            ),
+            child: Row(
+              children: const [
+                Expanded(flex: 3, child: _TableHeaderCell('ARTICULO')),
+                Expanded(flex: 1, child: _TableHeaderCell('PRECIO')),
+                Expanded(flex: 1, child: _TableHeaderCell('CATEGORIA')),
+                Expanded(flex: 1, child: _TableHeaderCell('MENU')),
+                Expanded(
+                  flex: 1,
+                  child: Center(child: _TableHeaderCell('DISPONIBLE')),
+                ),
+                Expanded(
+                  flex: 1,
+                  child: _TableHeaderCell('ACCION', textAlign: TextAlign.right),
+                ),
+              ],
+            ),
+          ),
+          Divider(height: 1, color: AppColors.border),
+          if (products.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(AppSpacing.xxxl),
+              child: Center(
+                child: Column(
+                  children: [
+                    Icon(
+                      Icons.inventory_2_outlined,
+                      size: 48,
+                      color: AppColors.mutedForeground.withValues(alpha: 0.5),
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                    Text(
+                      'No hay productos para los filtros actuales',
+                      style: TextStyle(
+                        color: AppColors.mutedForeground,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else
+            ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: products.length,
+              separatorBuilder: (context, index) =>
+                  Divider(height: 1, color: AppColors.border),
+              itemBuilder: (context, index) {
+                final product = products[index];
+                final categoryName =
+                    _asMap(product['categories'])['name']?.toString() ?? '-';
+                final links = _asList(product['menu_item_links']);
+                final menuNames = links
+                    .map(_asMap)
+                    .map((link) => _asMap(link['menus'])['name']?.toString())
+                    .whereType<String>()
+                    .where((name) => name.trim().isNotEmpty)
+                    .toSet()
+                    .toList(growable: false);
+                final menuName = menuNames.isEmpty ? '-' : menuNames.join(', ');
+                final isActive = product['is_active'] == true;
+                final taxMode = product['tax_mode']?.toString() == 'inclusive'
+                    ? 'Incluido'
+                    : 'Excluido';
+                final taxModeColor =
+                    product['tax_mode']?.toString() == 'inclusive'
+                    ? AppColors.info
+                    : AppColors.primary;
+                final imageUrl = product['image_url']?.toString();
+
+                return Container(
+                  color: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                    vertical: AppSpacing.lg,
+                    horizontal: AppSpacing.lg,
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        flex: 3,
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 40,
+                              height: 40,
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(
+                                  AppRadius.button,
+                                ),
+                                color: AppColors.muted,
+                                image: imageUrl != null && imageUrl.isNotEmpty
+                                    ? DecorationImage(
+                                        image: NetworkImage(imageUrl),
+                                        fit: BoxFit.cover,
+                                      )
+                                    : null,
+                              ),
+                              child: imageUrl == null || imageUrl.isEmpty
+                                  ? Icon(
+                                      Icons.image,
+                                      size: 20,
+                                      color: AppColors.mutedForeground,
+                                    )
+                                  : null,
+                            ),
+                            const SizedBox(width: AppSpacing.md),
+                            Expanded(
+                              child: Text(
+                                product['name']?.toString() ?? 'Sin nombre',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w500,
+                                  color: AppColors.foreground,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        flex: 1,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '\$${_toDouble(product['price']).toStringAsFixed(2)}',
+                              style: TextStyle(
+                                color: AppColors.mutedForeground,
+                              ),
+                            ),
+                            const SizedBox(height: AppSpacing.xs),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: AppSpacing.sm,
+                                vertical: 3,
+                              ),
+                              decoration: BoxDecoration(
+                                color: taxModeColor.withValues(alpha: 0.10),
+                                borderRadius: BorderRadius.circular(
+                                  AppRadius.badge,
+                                ),
+                              ),
+                              child: Text(
+                                'Imp. $taxMode',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  color: taxModeColor,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        flex: 1,
+                        child: Text(
+                          categoryName,
+                          style: TextStyle(color: AppColors.mutedForeground),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      Expanded(
+                        flex: 1,
+                        child: Text(
+                          menuName,
+                          style: TextStyle(color: AppColors.mutedForeground),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      Expanded(
+                        flex: 1,
+                        child: Center(
+                          child: InkWell(
+                            onTap: () => viewModel.toggleAvailability(
+                              product['id'].toString(),
+                              isActive,
+                            ),
+                            borderRadius: BorderRadius.circular(AppRadius.sm),
+                            child: Container(
+                              width: 20,
+                              height: 20,
+                              decoration: BoxDecoration(
+                                color: isActive
+                                    ? AppColors.success
+                                    : AppColors.mutedForeground,
+                                borderRadius: BorderRadius.circular(
+                                  AppRadius.sm,
+                                ),
+                              ),
+                              child: const Icon(
+                                Icons.check,
+                                size: 14,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        flex: 1,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            IconButton(
+                              onPressed: () => onEdit(product),
+                              icon: Icon(
+                                Icons.edit,
+                                size: 18,
+                                color: AppColors.mutedForeground,
+                              ),
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(),
+                            ),
+                            const SizedBox(width: AppSpacing.lg),
+                            IconButton(
+                              onPressed: () =>
+                                  onDelete(product['id'].toString()),
+                              icon: Icon(
+                                Icons.delete_outline,
+                                size: 18,
+                                color: AppColors.destructive,
+                              ),
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+        ],
+      ),
+    );
+  }
+
+  static List<dynamic> _asList(dynamic value) {
+    return value is List ? value : const [];
+  }
+
+  static Map<String, dynamic> _asMap(dynamic value) {
+    if (value is Map<String, dynamic>) return value;
+    if (value is Map) return Map<String, dynamic>.from(value);
+    return const <String, dynamic>{};
+  }
+
+  static double _toDouble(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '') ?? 0;
+  }
+}
+
+class _TableHeaderCell extends StatelessWidget {
+  const _TableHeaderCell(this.text, {this.textAlign = TextAlign.left});
+
+  final String text;
+  final TextAlign textAlign;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      style: const TextStyle(
+        fontWeight: FontWeight.bold,
+        fontSize: 12,
+        color: AppColors.mutedForeground,
+      ),
+      textAlign: textAlign,
     );
   }
 }
