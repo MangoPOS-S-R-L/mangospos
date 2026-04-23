@@ -150,7 +150,20 @@ bool Win32Window::Create(const std::wstring& title,
 }
 
 bool Win32Window::Show() {
-  return ShowWindow(window_handle_, SW_SHOWNORMAL);
+  if (!window_handle_) {
+    return false;
+  }
+
+  // In production POS environments the process must never stay alive as a
+  // hidden/background-only app. Restore and foreground the window every time
+  // Show() is requested, including first-frame and startup fallback paths.
+  const int show_command = IsIconic(window_handle_) ? SW_RESTORE : SW_SHOWNORMAL;
+  const BOOL shown = ShowWindow(window_handle_, show_command);
+  SetWindowPos(window_handle_, HWND_TOP, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+  SetForegroundWindow(window_handle_);
+  SetFocus(window_handle_);
+  return shown != 0 || IsWindowVisible(window_handle_);
 }
 
 // static

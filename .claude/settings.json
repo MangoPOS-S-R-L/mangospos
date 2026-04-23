@@ -18,7 +18,11 @@
       "Bash(dart -e ' *)",
       "Bash(python3 -c ' *)",
       "Bash(head -1172 /Users/cristiangomez/dev/mangospos/lib/presentation/cashier/view/sales_history_view.dart)",
-      "Bash(mv /tmp/sales_history_trimmed.dart /Users/cristiangomez/dev/mangospos/lib/presentation/cashier/view/sales_history_view.dart)"
+      "Bash(mv /tmp/sales_history_trimmed.dart /Users/cristiangomez/dev/mangospos/lib/presentation/cashier/view/sales_history_view.dart)",
+      "Bash(cat)",
+      "Read(//tmp/**)",
+      "Bash(flutter --version)",
+      "Bash(sort -t= -k2 -rn)"
     ],
     "additionalDirectories": [
       "/Users/cristiangomez"

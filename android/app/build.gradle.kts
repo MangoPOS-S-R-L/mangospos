@@ -13,6 +13,17 @@ if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(keystorePropertiesFile.inputStream())
 }
 
+// Read local.properties so we can override flutter defaults
+val localPropertiesFile = rootProject.file("local.properties")
+val localProperties = Properties()
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.inputStream().use { localProperties.load(it) }
+}
+
+// Minimum Android version: 7.0 (API 24). This matches current Flutter/plugin
+// requirements and avoids forcing libraries onto unsupported Android APIs.
+val appMinSdk: Int = localProperties.getProperty("app.minSdkVersion", "24").toInt()
+
 android {
     namespace = "do_mangopos.mangoposrestaurant"
     compileSdk = flutter.compileSdkVersion
@@ -39,11 +50,8 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "do.mangopos.mangoposrestaurant"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        minSdk = appMinSdk
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/cache/cache_manager.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/presentation/settings/widgets/system_update_dialog.dart';
 
@@ -10,6 +11,87 @@ class SettingsView extends ConsumerWidget {
   const SettingsView({super.key, this.businessId = ''});
 
   final String businessId;
+
+  Future<void> _confirmAndClearSystemCache(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Limpiar caché del sistema'),
+          content: const Text(
+            'Se borrarán datos temporales locales para forzar una recarga fresca del sistema. '
+            'No se cerrará tu sesión ni se eliminarán operaciones offline pendientes.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFEF4444),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Limpiar caché'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true || !context.mounted) return;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) {
+        return const Center(
+          child: Card(
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(strokeWidth: 2.5),
+                  ),
+                  SizedBox(width: 14),
+                  Text('Limpiando caché...'),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    try {
+      final result = await CacheManager().clearSystemCache();
+      if (!context.mounted) return;
+
+      Navigator.of(context, rootNavigator: true).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Caché limpiado correctamente (${result.deletedCount} elementos).',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+
+      Navigator.of(context, rootNavigator: true).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: const Color(0xFFB91C1C),
+          content: Text('No se pudo limpiar la caché: $e'),
+        ),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -527,6 +609,13 @@ class SettingsView extends ConsumerWidget {
               );
             },
           ),
+          _SettingsOption(
+            title: 'Limpiar caché del sistema',
+            subtitle: 'Borra datos temporales y fuerza recarga',
+            icon: Icons.cleaning_services_rounded,
+            color: const Color(0xFFFFEDED),
+            onTap: () => _confirmAndClearSystemCache(context),
+          ),
           const _SettingsOption(
             title: 'Integración con Marketing',
             subtitle: 'Conexión con herramientas de marketing',
@@ -945,13 +1034,15 @@ class _SettingsCardItemState extends State<_SettingsCardItem> {
           color: Colors.transparent,
           child: InkWell(
             borderRadius: BorderRadius.circular(16),
-            onTap: isClickable ? () {
-              if (data.route != null) {
-                context.go(data.route!);
-              } else if (data.onTap != null) {
-                data.onTap!();
-              }
-            } : null,
+            onTap: isClickable
+                ? () {
+                    if (data.route != null) {
+                      context.go(data.route!);
+                    } else if (data.onTap != null) {
+                      data.onTap!();
+                    }
+                  }
+                : null,
             child: Opacity(
               opacity: isClickable ? 1.0 : 0.62,
               child: Padding(

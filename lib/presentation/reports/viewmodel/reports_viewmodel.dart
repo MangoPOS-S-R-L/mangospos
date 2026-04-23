@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/utils/app_time.dart';
@@ -408,15 +409,17 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
             (state.salesSummary?['total_sales'] as num?)?.toDouble() ?? 0;
         final txCount = state.salesSummary?['payments_count'] ?? 0;
         final itemsSold = state.salesSummary?['items_sold'] ?? 0;
+        final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2, locale: 'en_US');
+        final numberFormat = NumberFormat('#,##0', 'en_US');
         return [
           ReportItem(
             title: 'Ventas por rango',
             description:
-                'Total: RD\$${total.toStringAsFixed(2)} | Transacciones: $txCount',
+                'Total: ${currency.format(total)} | Transacciones: ${numberFormat.format(txCount)}',
           ),
           ReportItem(
             title: 'Items vendidos',
-            description: 'Items cobrados en el rango: $itemsSold',
+            description: 'Items cobrados en el rango: ${numberFormat.format(itemsSold)}',
           ),
         ];
       case ReportCategory.purchases:
@@ -430,16 +433,18 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         final receivedCount = state.purchasesSummary?['received_count'] ?? 0;
         final partialCount = state.purchasesSummary?['partial_count'] ?? 0;
         final draftCount = state.purchasesSummary?['draft_count'] ?? 0;
+        final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2, locale: 'en_US');
+        final numberFormat = NumberFormat('#,##0', 'en_US');
         return [
           ReportItem(
             title: 'Órdenes de compra',
             description:
-                'Órdenes: $ordersCount | Total ordenado: RD\$${totalOrdered.toStringAsFixed(2)}',
+                'Órdenes: ${numberFormat.format(ordersCount)} | Total ordenado: ${currency.format(totalOrdered)}',
           ),
           ReportItem(
             title: 'Recepción y proveedores',
             description:
-                'Recibidas: $receivedCount | Parciales: $partialCount | Borradores: $draftCount | Proveedores activos: $suppliersCount | Recibido: RD\$${totalReceived.toStringAsFixed(2)}',
+                'Recibidas: ${numberFormat.format(receivedCount)} | Parciales: ${numberFormat.format(partialCount)} | Borradores: ${numberFormat.format(draftCount)} | Proveedores activos: ${numberFormat.format(suppliersCount)} | Recibido: ${currency.format(totalReceived)}',
           ),
         ];
       case ReportCategory.finances:
@@ -450,16 +455,18 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
             (state.cashSummary?['manual_in_total'] as num?)?.toDouble() ?? 0;
         final outTotal =
             (state.cashSummary?['manual_out_total'] as num?)?.toDouble() ?? 0;
+        final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2, locale: 'en_US');
+        final numberFormat = NumberFormat('#,##0', 'en_US');
         return [
           ReportItem(
             title: 'Resumen de caja',
             description:
-                'Sesiones: $sessions | Diferencia acumulada: RD\$${differences.toStringAsFixed(2)}',
+                'Sesiones: ${numberFormat.format(sessions)} | Diferencia acumulada: ${currency.format(differences)}',
           ),
           ReportItem(
             title: 'Movimientos manuales',
             description:
-                'Entradas: RD\$${inTotal.toStringAsFixed(2)} | Salidas: RD\$${outTotal.toStringAsFixed(2)}',
+                'Entradas: ${currency.format(inTotal)} | Salidas: ${currency.format(outTotal)}',
           ),
         ];
       case ReportCategory.inventory:
@@ -469,15 +476,17 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
             (state.inventorySummary?['total_units'] as num?)?.toDouble() ?? 0;
         final lowStock = state.inventorySummary?['low_stock_count'] ?? 0;
         final outOfStock = state.inventorySummary?['out_of_stock_count'] ?? 0;
+        final numberFormat = NumberFormat('#,##0', 'en_US');
+        final decFormat = NumberFormat('#,##0.00', 'en_US');
         return [
           ReportItem(
             title: 'Estado de inventario',
             description:
-                'Items: $itemsCount | Activos: $activeItems | Stock total: ${totalUnits.toStringAsFixed(2)} unidades',
+                'Items: ${numberFormat.format(itemsCount)} | Activos: ${numberFormat.format(activeItems)} | Stock total: ${decFormat.format(totalUnits)} unidades',
           ),
           ReportItem(
             title: 'Alertas de stock',
-            description: 'Bajo mínimo: $lowStock | Agotados: $outOfStock',
+            description: 'Bajo mínimo: ${numberFormat.format(lowStock)} | Agotados: ${numberFormat.format(outOfStock)}',
           ),
         ];
       case ReportCategory.taxes:
@@ -493,16 +502,18 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
             (state.taxSummary?['taxable_sales'] as num?)?.toDouble() ?? 0;
         final configured = state.taxSummary?['configured_taxes_count'] ?? 0;
         final active = state.taxSummary?['active_taxes_count'] ?? 0;
+        final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2, locale: 'en_US');
+        final numberFormat = NumberFormat('#,##0', 'en_US');
         return [
           ReportItem(
             title: 'Impuestos y ley generados',
             description:
-                'Impuestos: RD\$${totalTax.toStringAsFixed(2)} | Propina de ley: RD\$${serviceFee.toStringAsFixed(2)} | Total: RD\$${totalCharges.toStringAsFixed(2)}',
+                'Impuestos: ${currency.format(totalTax)} | Propina de ley: ${currency.format(serviceFee)} | Total: ${currency.format(totalCharges)}',
           ),
           ReportItem(
             title: 'Configuración fiscal',
             description:
-                'Tipos configurados: $configured | Activos: $active | Base gravable: RD\$${taxableSales.toStringAsFixed(2)}',
+                'Tipos configurados: ${numberFormat.format(configured)} | Activos: ${numberFormat.format(active)} | Base gravable: ${currency.format(taxableSales)}',
           ),
         ];
       case ReportCategory.fiscal:
@@ -513,16 +524,18 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
             (state.fiscalSummary?['total_amount'] as num?)?.toDouble() ?? 0;
         final totalItbis =
             (state.fiscalSummary?['total_itbis'] as num?)?.toDouble() ?? 0;
+        final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2, locale: 'en_US');
+        final numberFormat = NumberFormat('#,##0', 'en_US');
         return [
           ReportItem(
             title: 'Comprobantes fiscales',
             description:
-                'Documentos: $docsCount | Activos: $activeCount | Anulados: $voidCount',
+                'Documentos: ${numberFormat.format(docsCount)} | Activos: ${numberFormat.format(activeCount)} | Anulados: ${numberFormat.format(voidCount)}',
           ),
           ReportItem(
             title: 'Totales facturados',
             description:
-                'Total: RD\$${totalAmount.toStringAsFixed(2)} | ITBIS: RD\$${totalItbis.toStringAsFixed(2)}',
+                'Total: ${currency.format(totalAmount)} | ITBIS: ${currency.format(totalItbis)}',
           ),
         ];
     }
@@ -537,38 +550,41 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
     final itemsSold = (summary['items_sold'] as num?)?.toInt() ?? 0;
     final avgTicket = (summary['avg_ticket'] as num?)?.toDouble() ?? 0;
 
+    final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2, locale: 'en_US');
+    final numberFormat = NumberFormat('#,##0', 'en_US');
+
     return [
       SalesMetricCardData(
         title: 'Ventas netas',
-        value: 'RD\$${netSales.toStringAsFixed(2)}',
+        value: currency.format(netSales),
         subtitle: 'Ventas completadas menos anuladas',
         icon: Icons.payments_outlined,
         color: const Color(0xFF2563EB),
       ),
       SalesMetricCardData(
         title: 'Ventas brutas',
-        value: 'RD\$${totalSales.toStringAsFixed(2)}',
-        subtitle: '$paymentsCount transacciones cobradas',
+        value: currency.format(totalSales),
+        subtitle: '${numberFormat.format(paymentsCount)} transacciones cobradas',
         icon: Icons.point_of_sale_outlined,
         color: const Color(0xFFF97316),
       ),
       SalesMetricCardData(
         title: 'Ticket promedio',
-        value: 'RD\$${avgTicket.toStringAsFixed(2)}',
+        value: currency.format(avgTicket),
         subtitle: 'Promedio por transacción completada',
         icon: Icons.receipt_long_outlined,
         color: const Color(0xFF7C3AED),
       ),
       SalesMetricCardData(
         title: 'Items vendidos',
-        value: '$itemsSold',
+        value: numberFormat.format(itemsSold),
         subtitle: 'Cantidad total de productos cobrados',
         icon: Icons.inventory_2_outlined,
         color: const Color(0xFF059669),
       ),
       SalesMetricCardData(
         title: 'Ventas anuladas',
-        value: 'RD\$${voidedSales.toStringAsFixed(2)}',
+        value: currency.format(voidedSales),
         subtitle: 'Montos cancelados o void en el rango',
         icon: Icons.cancel_outlined,
         color: const Color(0xFFDC2626),

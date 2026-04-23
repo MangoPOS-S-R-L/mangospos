@@ -146,8 +146,12 @@ msix_config:
   publisher: "CN=B178130F-7700-44FD-BEF2-B0F7F05AC658"
   msix_version: 1.0.0.0
   logo_path: assets/images/logo.png
+<<<<<<< HEAD
   capabilities: internetClient, location, bluetooth
   languages: es-DO, en-US
   description: Professional POS system for restaurants.
   store: true
   architecture: x64
+=======
+  capabilities: internetClient
+>>>>>>> 100ff2f6b40b04c9577fdc1d8b97ef981328e3ba

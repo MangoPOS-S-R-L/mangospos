@@ -124,12 +124,6 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
   Widget _buildHeader(BuildContext context) {
     return Row(
       children: [
-        Image.asset(
-          'assets/images/Logo Completo.png',
-          height: 50,
-          fit: BoxFit.contain,
-        ),
-        const SizedBox(width: 10),
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

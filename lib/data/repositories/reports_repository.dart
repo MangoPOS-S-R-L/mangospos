@@ -311,18 +311,20 @@ class ReportsRepository {
         label,
         () => {'label': label, 'amount': 0.0, 'quantity': 0.0, 'count': 0},
       );
-      bucket['amount'] = _toDouble(bucket['amount']) + _toDouble(item['total']);
-      bucket['quantity'] = _toDouble(bucket['quantity']) + qty;
-      bucket['count'] = (bucket['count'] as int) + 1;
-
       final productId = item['product_id']?.toString() ?? '';
       final categoryName = categoryByProductId[productId] ?? 'Sin categoría';
       final discount = _toDouble(item['discounts']);
       final adjustmentLabel =
           discount > 0.009 ? adjustmentLabelForItem(item) : null;
       final courtesyAmount = adjustmentLabel == 'Cortesías' ? discount : 0.0;
+      // Use subtotal+tax instead of item['total']: the April-17 migration dropped
+      // and re-added the total column (resetting historical rows to 0), while
+      // subtotal and tax retained their correct values.
       final itemGrossSales = _toDouble(item['subtotal']) + _toDouble(item['tax']);
-      final itemNetSales = _toDouble(item['total']);
+      final itemNetSales = itemGrossSales;
+      bucket['amount'] = _toDouble(bucket['amount']) + itemNetSales;
+      bucket['quantity'] = _toDouble(bucket['quantity']) + qty;
+      bucket['count'] = (bucket['count'] as int) + 1;
       final itemCost = (productCostById[productId] ?? 0) * qty;
       final productKey = productId.isNotEmpty ? productId : label;
       final productBucket = productSales.putIfAbsent(
@@ -365,7 +367,7 @@ class ReportsRepository {
         },
       );
       catBucket['amount'] =
-          _toDouble(catBucket['amount']) + _toDouble(item['total']);
+          _toDouble(catBucket['amount']) + itemNetSales;
       catBucket['quantity'] = _toDouble(catBucket['quantity']) + qty;
       catBucket['count'] = (catBucket['count'] as int) + 1;
 
