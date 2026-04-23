@@ -62,6 +62,7 @@ Name: "{autoprograms}\{#AppName}\Reparar red y TLS"; Filename: "{app}\Support\Re
 
 [Run]
 Filename: "{cmd}"; Parameters: "/c sc config W32Time start= auto >nul 2>&1 && net start W32Time >nul 2>&1 && w32tm /resync /force >nul 2>&1"; Flags: runhidden waituntilterminated
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\Support\Purge-MangoPOS-LocalState.ps1"""; Flags: runhidden waituntilterminated; StatusMsg: "Limpiando datos locales obsoletos..."
 Filename: "{cmd}"; Parameters: "/c taskkill /F /IM mangopos-agent.exe /T >nul 2>&1"; Flags: runhidden waituntilterminated; Check: ShouldInstallAgent
 Filename: "{cmd}"; Parameters: "/c taskkill /F /IM mangopos-agent-service.exe /T >nul 2>&1"; Flags: runhidden waituntilterminated; Check: ShouldInstallAgent
 Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "stop"; Flags: runhidden waituntilterminated; Check: ShouldStopExistingAgentService

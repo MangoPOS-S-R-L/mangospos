@@ -10,10 +10,11 @@ import 'dart:io'
         NetworkInterface,
         Platform,
         Process,
-        ProcessStartMode;
+        ProcessStartMode,
+        stderr;
 import 'dart:ui' show PlatformDispatcher;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -23,7 +24,9 @@ import 'package:http/http.dart' as http;
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:auto_updater/auto_updater.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -41,23 +44,41 @@ final MobilePrintAgent _mobileAgent = MobilePrintAgent();
 
 const String agentHost = '127.0.0.1';
 
-/// Escribe logs de diagnóstico a archivo junto al ejecutable.
-/// Complementa el log nativo C++ (mangopos_startup.log) con info de Dart.
+/// Escribe logs de diagnóstico a archivo.
+///
+/// Nota: el runner nativo (C++) escribe `mangopos_startup.log` y mantiene el
+/// archivo abierto, lo que en Windows puede bloquear escrituras simultáneas.
+/// Por eso el log de Dart usa un archivo separado: `mangopos_dart.log`.
 void _logToFile(String message) {
   try {
     if (kIsWeb) return;
-    // Platform-aware home directory resolution
+
+    String? pickExistingDir(List<String?> candidates) {
+      for (final dir in candidates) {
+        if (dir == null || dir.trim().isEmpty) continue;
+        try {
+          if (Directory(dir).existsSync()) return dir;
+        } catch (_) {}
+      }
+      return null;
+    }
+
     final home =
-        Platform.environment['USERPROFILE'] // Windows
-        ??
-        Platform.environment['HOME'] // macOS / Linux
-        ??
-        '';
-    if (home.isEmpty) return;
+        Platform.environment['USERPROFILE'] ?? Platform.environment['HOME'];
+    final oneDrive = Platform.environment['OneDrive'];
+    final temp = Platform.environment['TEMP'] ?? Platform.environment['TMP'];
+
     final logDir = Platform.isWindows
-        ? p.join(home, 'Desktop')
-        : home; // macOS/Linux: log in home dir instead of Desktop
-    final logFile = File(p.join(logDir, 'mangopos_startup.log'));
+        ? pickExistingDir([
+            if (home != null) p.join(home, 'Desktop'),
+            if (oneDrive != null) p.join(oneDrive, 'Desktop'),
+            temp,
+            home,
+          ])
+        : pickExistingDir([home, temp]);
+
+    if (logDir == null) return;
+    final logFile = File(p.join(logDir, 'mangopos_dart.log'));
     final timestamp = DateTime.now().toIso8601String().substring(0, 19);
     logFile.writeAsStringSync(
       '[$timestamp] [Dart] $message\n',
@@ -67,6 +88,35 @@ void _logToFile(String message) {
   } catch (_) {
     // Si no puede escribir el log, no romper la app
   }
+}
+
+/// Log a mensaje a la consola (cuando exista), para que `flutter run` muestre
+/// la causa del cierre/crash durante debug.
+void _logToConsole(String message) {
+  try {
+    if (kIsWeb) return;
+    if (!kDebugMode) return;
+    final timestamp = DateTime.now().toIso8601String().substring(0, 19);
+    // Usar stderr para que aparezca incluso si stdout es filtrado.
+    stderr.writeln('[$timestamp] [MangoPOS] $message');
+  } catch (_) {
+    // No romper por logging
+  }
+}
+
+void _logCritical(String message, {Object? error, StackTrace? stackTrace}) {
+  final details = <String>[message];
+  if (error != null) details.add('error=$error');
+  if (stackTrace != null) details.add('stack=$stackTrace');
+  final line = details.join(' | ');
+  _logToFile(line);
+  _logToConsole(line);
+}
+
+void _logStep(String message) {
+  // Step-level logs: útiles para saber el último punto antes de un crash nativo.
+  _logToFile(message);
+  _logToConsole(message);
 }
 
 const int agentPort = 4000;
@@ -230,8 +280,71 @@ Future<void> _lockLandscapeIfMobile() async {
   }
 }
 
+/// Detecta si `shared_preferences.json` está corrupto y lo elimina para que el
+/// siguiente `SharedPreferences.getInstance()` lo regenere vacío.
+///
+/// `shared_preferences_windows` hace `json.decode(readAsStringSync())` sin
+/// try/catch, así que si el archivo tiene bytes no-JSON (corrupción de disco,
+/// antivirus, interrupción de escritura) tira un `FormatException` que sube
+/// hasta `Supabase.initialize` y tumba el arranque de la app.
+Future<void> _purgeCorruptSharedPreferencesIfNeeded() async {
+  if (kIsWeb) return;
+
+  try {
+    await SharedPreferences.getInstance();
+    return;
+  } on FormatException catch (e) {
+    _logStep('shared_preferences corrupto detectado (FormatException): $e');
+  } catch (e) {
+    _logStep('SharedPreferences.getInstance error no-Format: $e');
+    return;
+  }
+
+  String? deletedPath;
+  try {
+    final supportDir = await getApplicationSupportDirectory();
+    final file = File(p.join(supportDir.path, 'shared_preferences.json'));
+    if (file.existsSync()) {
+      file.deleteSync();
+      deletedPath = file.path;
+    }
+  } catch (e) {
+    _logStep('No se pudo borrar shared_preferences.json via path_provider: $e');
+  }
+
+  if (deletedPath == null && Platform.isWindows) {
+    final appData = Platform.environment['APPDATA'];
+    if (appData != null) {
+      try {
+        final fallback = File(
+          p.join(appData, 'com.example', 'mangopos', 'shared_preferences.json'),
+        );
+        if (fallback.existsSync()) {
+          fallback.deleteSync();
+          deletedPath = fallback.path;
+        }
+      } catch (e) {
+        _logStep('Fallback delete de shared_preferences.json fallo: $e');
+      }
+    }
+  }
+
+  if (deletedPath != null) {
+    _logStep('shared_preferences.json corrupto eliminado: $deletedPath');
+  }
+
+  try {
+    await SharedPreferences.getInstance();
+    _logStep('SharedPreferences reinicializado tras purga');
+  } catch (e) {
+    _logStep('SharedPreferences sigue fallando tras purga (se continuara): $e');
+  }
+}
+
 Future<void> _forceShowStartupWindow() async {
-  if (kIsWeb || !(Platform.isWindows || Platform.isMacOS || Platform.isLinux)) {
+  // En Windows hacemos esto en el runner nativo (Win32Window::Show) para evitar
+  // crashes intermitentes del plugin `window_manager` en algunos entornos.
+  if (kIsWeb || Platform.isWindows || !(Platform.isMacOS || Platform.isLinux)) {
     return;
   }
 
@@ -240,22 +353,25 @@ Future<void> _forceShowStartupWindow() async {
     await windowManager.restore();
     await windowManager.show();
     await windowManager.focus();
-    _logToFile('Native window restored/shown/focused');
+    _logStep('Native window restored/shown/focused');
   } catch (e) {
-    _logToFile('Native window show/focus failed (non-fatal): $e');
+    _logStep('Native window show/focus failed (non-fatal): $e');
   }
 }
 
 void main() {
+  print('>>> [MangoPOS] main() entry point');
   runZonedGuarded(
     () async {
       WidgetsFlutterBinding.ensureInitialized();
+      print('>>> [MangoPOS] WidgetsBinding OK');
       _logToFile('main() - WidgetsBinding initialized');
       _installGlobalErrorHandlers();
+      print('>>> [MangoPOS] Calling _bootstrapApp()...');
       await _bootstrapApp();
     },
     (error, stackTrace) {
-      _logToFile('ZONE ERROR: $error\n$stackTrace');
+      _logCritical('ZONE ERROR', error: error, stackTrace: stackTrace);
       if (_isSupabaseAuthRefreshSchemaMismatch(error)) {
         _scheduleExpiredAuthReset(error, stackTrace);
         return;
@@ -284,61 +400,107 @@ void main() {
 
 Future<void> _bootstrapApp() async {
   try {
-    _logToFile('_bootstrapApp() started');
+    print('>>> [MangoPOS] _bootstrapApp() started');
+    _logStep('_bootstrapApp() started');
+
+    const bool skipWindowManager = bool.fromEnvironment(
+      'SKIP_WINDOW_MANAGER',
+      defaultValue: false,
+    );
+    const bool skipSupabase = bool.fromEnvironment(
+      'SKIP_SUPABASE',
+      defaultValue: false,
+    );
+    const bool skipMediaKit = bool.fromEnvironment(
+      'SKIP_MEDIA_KIT',
+      defaultValue: false,
+    );
 
     if (kIsWeb) usePathUrlStrategy();
 
     if (!kIsWeb &&
-        (Platform.isWindows || Platform.isMacOS || Platform.isLinux)) {
-      _logToFile('windowManager.ensureInitialized()...');
+        (Platform.isMacOS || Platform.isLinux) &&
+        !skipWindowManager) {
+      _logStep('windowManager.ensureInitialized()...');
+      print('>>> [MangoPOS] windowManager.ensureInitialized()...');
       await windowManager.ensureInitialized();
+
+      _logStep('windowManager.setMinimumSize(800x600)...');
+      print('>>> [MangoPOS] windowManager.setMinimumSize(800x600)...');
       await windowManager.setMinimumSize(const Size(800, 600));
+
+      _logStep('_forceShowStartupWindow()...');
+      print('>>> [MangoPOS] _forceShowStartupWindow()...');
       await _forceShowStartupWindow();
-      _logToFile('windowManager OK, min size set to 800x600');
+
+      _logStep('windowManager OK');
+      print('>>> [MangoPOS] windowManager OK');
     }
 
-    _logToFile('initializeDateFormatting...');
+    _logStep('initializeDateFormatting(es_DO)...');
+    print('>>> [MangoPOS] initializeDateFormatting(es_DO)...');
     await initializeDateFormatting('es_DO', null);
+    _logStep('initializeDateFormatting OK');
+
+    _logStep('Verificando integridad de shared_preferences...');
+    await _purgeCorruptSharedPreferencesIfNeeded();
+    _logStep('shared_preferences OK');
 
     // ── Inicializar Supabase ANTES de montar la UI (requerido por auth/router) ──
-    _logToFile('Supabase.initialize() -> ${Env.supabaseUrl}');
-    await SupabaseConfig.initialize(
-      url: Env.supabaseUrl,
-      anonKey: Env.supabaseAnonKey,
-    ).timeout(
-      const Duration(seconds: 20),
-      onTimeout: () => throw TimeoutException(
-        'Supabase.initialize excedio 20s durante el arranque',
-      ),
-    );
-    _logToFile('Supabase OK');
+    if (!skipSupabase) {
+      _logStep('Supabase.initialize() -> ${Env.supabaseUrl}');
+      print('>>> [MangoPOS] Supabase.initialize()...');
+      await SupabaseConfig.initialize(
+        url: Env.supabaseUrl,
+        anonKey: Env.supabaseAnonKey,
+      ).timeout(
+        const Duration(seconds: 20),
+        onTimeout: () => throw TimeoutException(
+          'Supabase.initialize excedio 20s durante el arranque',
+        ),
+      );
+      _logStep('Supabase OK');
+      print('>>> [MangoPOS] Supabase OK');
+    } else {
+      _logStep('Supabase SKIPPED via SKIP_SUPABASE');
+      print('>>> [MangoPOS] Supabase SKIPPED');
+    }
 
     if (!kIsWeb) {
       try {
-        _logToFile('MediaKit.ensureInitialized()...');
-        MediaKit.ensureInitialized();
-        _logToFile('MediaKit OK');
+        if (!skipMediaKit) {
+          _logStep('MediaKit.ensureInitialized()...');
+          print('>>> [MangoPOS] MediaKit.ensureInitialized()...');
+          MediaKit.ensureInitialized();
+          _logStep('MediaKit OK');
+          print('>>> [MangoPOS] MediaKit OK');
+        } else {
+          _logStep('MediaKit SKIPPED via SKIP_MEDIA_KIT');
+          print('>>> [MangoPOS] MediaKit SKIPPED');
+        }
       } catch (e) {
-        _logToFile('MediaKit init failed (non-fatal): $e');
+        _logStep('MediaKit init failed (non-fatal): $e');
       }
     }
 
     await _lockLandscapeIfMobile();
 
     // ── Montar la UI de inmediato para que la ventana aparezca ──
-    _logToFile('runApp() - mounting UI...');
+    _logStep('runApp() - mounting UI...');
+    print('>>> [MangoPOS] runApp()...');
     runApp(const ProviderScope(child: MyApp()));
     _startupUiMounted = true;
     await _forceShowStartupWindow();
-    _logToFile('runApp() done - UI mounted, waiting for first frame');
+    _logStep('runApp() done - UI mounted, waiting for first frame');
+    print('>>> [MangoPOS] runApp() done');
 
     // ── Inicialización pesada DESPUÉS del primer frame ──
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _logToFile('First frame rendered - starting background services');
+      _logStep('First frame rendered - starting background services');
       _initializeBackgroundServices();
     });
   } catch (e, st) {
-    _logToFile('FATAL ERROR in _bootstrapApp: $e\n$st');
+    _logCritical('FATAL ERROR in _bootstrapApp', error: e, stackTrace: st);
     if (!_startupUiMounted) {
       runApp(StartupFailureApp(error: e, stackTrace: st));
       _startupUiMounted = true;
@@ -349,7 +511,10 @@ Future<void> _bootstrapApp() async {
       error: e,
       stackTrace: st,
     );
-    rethrow;
+    // No re-lanzar: si fallamos antes de montar la UI, queremos mantener la
+    // app viva mostrando la pantalla de error para poder diagnosticar (log en
+    // mangopos_startup.log). En POS es preferible a cerrar silenciosamente.
+    return;
   }
 }
 
@@ -424,6 +589,11 @@ void _installGlobalErrorHandlers() {
     }
 
     FlutterError.presentError(details);
+    _logCritical(
+      'FlutterError no controlado',
+      error: details.exception,
+      stackTrace: details.stack,
+    );
     AppLogger.e(
       'FlutterError no controlado',
       error: details.exception,
@@ -449,6 +619,11 @@ void _installGlobalErrorHandlers() {
       return true;
     }
 
+    _logCritical(
+      'Error asincrono no controlado',
+      error: error,
+      stackTrace: stackTrace,
+    );
     AppLogger.e(
       'Error asincrono no controlado',
       error: error,
@@ -721,7 +896,7 @@ class StartupFailureApp extends StatelessWidget {
                       ),
                       const SizedBox(height: 16),
                       const Text(
-                        'Revisa el log mangopos_startup.log en el Escritorio para soporte técnico.',
+                        'Revisa el log mangopos_startup.log (Escritorio o carpeta TEMP) para soporte técnico.',
                         style: TextStyle(
                           fontSize: 13,
                           color: Color(0xFF78716C),

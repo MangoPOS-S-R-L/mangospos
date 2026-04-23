@@ -338,7 +338,11 @@ class PrintTicketService {
     // ════════════════════════════════════════════
     gen.lineFeed();
 
-    final printableSummary = summarizeOrderPricing(order, consolidatedItems);
+    // Totales salen de los items ORIGINALES (no consolidados) para que el
+    // subtotal absorba el centavo de redondeo por-item y coincida exactamente
+    // con lo que ve el cajero en pantalla. Los items consolidados se usan solo
+    // para el render de las lineas del ticket.
+    final printableSummary = summarizeOrderPricing(order, items);
     final printableSubtotal = printableSummary.subtotal;
     final printableDiscounts = printableSummary.discounts;
 
@@ -595,9 +599,12 @@ class PrintTicketService {
     gen.lineFeed();
 
     // Totals
+    // Ver comentario en generatePrecheck: usamos los items ORIGINALES para
+    // que la absorcion del centavo quede en el subtotal y el papel coincida
+    // con la pantalla al centavo.
     final effectiveTotals = _resolvePrintableTotals(
       order: order,
-      items: consolidatedItems,
+      items: items,
       preferStoredOrderTotals: preferStoredOrderTotals,
     );
     final effectiveSubtotal = effectiveTotals.subtotal;
@@ -728,10 +735,39 @@ class PrintTicketService {
         discounts: existing.discounts + item.discounts,
         tax: existing.tax + item.tax,
         total: existing.total + item.total,
+        modifiers: _sumMatchingModifiers(existing.modifiers, item.modifiers),
       );
     }
 
     return consolidatedByKey.values.toList(growable: false);
+  }
+
+  /// Suma las cantidades de modificadores coincidentes cuando dos ítems con
+  /// el mismo set de modificadores se fusionan en la consolidación.
+  /// Sin esto, `catalogGrossAmount` aplica el precio del modificador una sola
+  /// vez a una línea con `quantity>1`, produciendo un total menor al real.
+  static List<OrderItemModifier> _sumMatchingModifiers(
+    List<OrderItemModifier> a,
+    List<OrderItemModifier> b,
+  ) {
+    if (a.length != b.length) {
+      return [...a, ...b];
+    }
+    final merged = <OrderItemModifier>[];
+    for (var i = 0; i < a.length; i++) {
+      final ma = a[i];
+      final mb = b[i];
+      merged.add(
+        OrderItemModifier(
+          id: ma.id,
+          itemId: ma.itemId,
+          name: ma.name,
+          qty: ma.qty + mb.qty,
+          price: ma.price,
+        ),
+      );
+    }
+    return merged;
   }
 
   static List<OrderItem> _separatePrintableItems(List<OrderItem> items) {
@@ -921,9 +957,10 @@ class PrintTicketService {
       items,
       receiptItemDisplayMode: receiptItemDisplayMode,
     );
+    // Totales desde items ORIGINALES para paridad al centavo con la pantalla.
     final effectiveTotals = _resolvePrintableTotals(
       order: order,
-      items: printableItems,
+      items: items,
       preferStoredOrderTotals: preferStoredOrderTotals,
     );
 

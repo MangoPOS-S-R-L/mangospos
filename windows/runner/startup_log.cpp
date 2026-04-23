@@ -1,5 +1,6 @@
 #include "startup_log.h"
 
+#include <windows.h>
 #include <shlobj.h>
 #include <stdio.h>
 #include <time.h>
@@ -10,12 +11,27 @@ namespace StartupLog {
 
 static FILE* g_log_file = nullptr;
 
+static void EmitToConsoleAndDebugger(const std::string& line) {
+  // Always send to debugger (View -> Output) when available.
+  ::OutputDebugStringA(line.c_str());
+
+  // If a console is attached (e.g. `flutter run`), print there too.
+  if (::GetConsoleWindow() != nullptr) {
+    fwrite(line.c_str(), 1, line.size(), stderr);
+    fflush(stderr);
+  }
+}
+
 static std::string GetLogFilePath() {
   // Write to Desktop so the user can find it immediately
   char desktop[MAX_PATH];
   if (SUCCEEDED(::SHGetFolderPathA(nullptr, CSIDL_DESKTOPDIRECTORY, nullptr, 0,
                                     desktop))) {
-    return std::string(desktop) + "\\mangopos_startup.log";
+    DWORD attrs = ::GetFileAttributesA(desktop);
+    if (attrs != INVALID_FILE_ATTRIBUTES &&
+        (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+      return std::string(desktop) + "\\mangopos_startup.log";
+    }
   }
   // Fallback to temp directory
   char temp[MAX_PATH];
@@ -35,16 +51,20 @@ static std::string GetTimestamp() {
 void Init() {
   std::string path = GetLogFilePath();
   fopen_s(&g_log_file, path.c_str(), "w");
-  if (g_log_file) {
-    Log("=== MangoPOS Startup Log ===");
-    Log("Log file: " + path);
-  }
+  Log("=== MangoPOS Startup Log ===");
+  Log("Log file: " + path);
 }
 
 void Log(const char* message) {
-  if (!g_log_file) return;
-  fprintf(g_log_file, "[%s] %s\n", GetTimestamp().c_str(), message);
-  fflush(g_log_file);
+  std::string line =
+      "[" + GetTimestamp() + "] " + std::string(message ? message : "") + "\n";
+
+  if (g_log_file) {
+    fwrite(line.c_str(), 1, line.size(), g_log_file);
+    fflush(g_log_file);
+  }
+
+  EmitToConsoleAndDebugger(line);
 }
 
 void Log(const std::string& message) {
