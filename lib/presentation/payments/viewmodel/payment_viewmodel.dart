@@ -46,6 +46,14 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
   }
 
   String _cleanError(Object e) {
+    final raw = e.toString();
+    if (raw.contains('Demasiadas colisiones de NCF')) {
+      return 'No se pudo emitir el comprobante fiscal de este negocio porque su numeracion entra en conflicto con otra configuracion fiscal. Revisa Ajustes > Fiscal.';
+    }
+    if (raw.contains('No hay secuencia NCF disponible para tipo') ||
+        raw.contains('Secuencia NCF agotada para tipo')) {
+      return 'El negocio no tiene una secuencia fiscal activa para el tipo de comprobante seleccionado. Revisa Ajustes > Fiscal.';
+    }
     if (e is TimeoutException || e is SocketException) {
       return 'Error de conexion con el servidor.';
     }
@@ -81,7 +89,11 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
 
   /// Inicializar pago para un check específico (split bill)
   Future<void> initializeForCheck(Order order, OrderCheck check) async {
-    await _initializePayment(order: order, check: check, totalToPay: check.total);
+    await _initializePayment(
+      order: order,
+      check: check,
+      totalToPay: check.total,
+    );
   }
 
   Future<void> _initializePayment({
@@ -250,7 +262,8 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         offlineQueued: false,
       );
     } catch (e) {
-      final shouldQueueOffline = !_connectivity.isConnected ||
+      final shouldQueueOffline =
+          !_connectivity.isConnected ||
           orderId.startsWith('local-order-') ||
           e is TimeoutException ||
           e is SocketException;
@@ -292,7 +305,8 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
           },
         );
 
-        final businessPaymentId = 'local-payment-${DateTime.now().millisecondsSinceEpoch}';
+        final businessPaymentId =
+            'local-payment-${DateTime.now().millisecondsSinceEpoch}';
         final localPayment = Payment(
           id: businessPaymentId,
           businessId: businessId,

@@ -134,6 +134,34 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     _loadOrderForReceipt();
   }
 
+  String _friendlyPaymentError(Object error) {
+    final raw = error.toString();
+
+    if (raw.contains('Demasiadas colisiones de NCF')) {
+      return 'No se pudo emitir el comprobante fiscal de este negocio porque su numeracion entra en conflicto con una configuracion fiscal existente. Revisa Ajustes > Fiscal.';
+    }
+
+    if (raw.contains('No hay secuencia NCF disponible para tipo') ||
+        raw.contains('Secuencia NCF agotada para tipo')) {
+      return 'El negocio no tiene una secuencia fiscal activa para el tipo de comprobante seleccionado. Revisa Ajustes > Fiscal.';
+    }
+
+    if (raw.contains('ORDER_OUT_OF_SCOPE')) {
+      return 'La orden ya no pertenece al negocio activo. Recarga la mesa e intenta de nuevo.';
+    }
+
+    if (raw.contains('CASH_SESSION_REQUIRED') ||
+        raw.contains('CASH_SESSION_NOT_OPEN')) {
+      return 'Debes abrir una caja antes de procesar el cobro.';
+    }
+
+    if (raw.startsWith('Exception: ')) {
+      return raw.substring('Exception: '.length);
+    }
+
+    return raw;
+  }
+
   Future<String?> _resolveCashierSessionId() async {
     if (_cashierSessionId != null && _cashierSessionId.isNotEmpty) {
       return _cashierSessionId;
@@ -382,7 +410,10 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       return createdPayments;
     } catch (e, stack) {
       debugPrint('❌ Fatal Error in confirmPayment: $e\n$stack');
-      state = state.copyWith(isProcessing: false, error: e.toString());
+      state = state.copyWith(
+        isProcessing: false,
+        error: _friendlyPaymentError(e),
+      );
       return null;
     }
   }

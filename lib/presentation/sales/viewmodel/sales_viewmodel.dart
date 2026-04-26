@@ -58,10 +58,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   bool _syncInFlight = false;
   String? _taxSettingsBusinessId;
   DateTime? _lastTaxLoad;
+  String? _fiscalSettingsBusinessId;
+  DateTime? _lastFiscalSettingsLoad;
   double _cachedTaxRatePct = _defaultTaxRatePct;
   double _cachedServiceFeeRatePct = _defaultServiceFeeRatePct;
   bool _cachedServiceFeeEnabled = false;
+  String _cachedDefaultFiscalType = '';
   List<Map<String, dynamic>> _cachedBusinessTaxes = const [];
+  bool _hasManualFiscalTypeSelection = false;
 
   /// Parsed tax definitions from [_cachedBusinessTaxes].
   List<TaxDef> get _taxDefs =>
@@ -130,6 +134,88 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }
 
   String? get _activeBusinessId => ref.read(sessionProvider).activeBusinessId;
+
+  String _normalizeFiscalTypeValue(String? raw) {
+    final value = raw?.trim().toUpperCase() ?? '';
+    if (value.isEmpty) return '';
+    if (value.length >= 3 && (value.startsWith('B') || value.startsWith('E'))) {
+      return value.substring(1);
+    }
+    return value;
+  }
+
+  bool _matchesFiscalSequenceType(FiscalNcfSequence sequence, String type) {
+    final normalized = _normalizeFiscalTypeValue(type);
+    if (normalized.isEmpty) return false;
+    return sequence.tipo.toUpperCase() == normalized ||
+        sequence.ncfType.toUpperCase() == type.trim().toUpperCase();
+  }
+
+  String _resolveFiscalTypeForState(
+    CurrentOrderState source,
+    List<FiscalNcfSequence> sequences,
+  ) {
+    final activeSequences = sequences
+        .where((sequence) => sequence.activo)
+        .toList(growable: false);
+    final currentType = _normalizeFiscalTypeValue(source.fiscalType);
+    final defaultType = _cachedDefaultFiscalType;
+
+    final currentMatches = activeSequences.any(
+      (sequence) => _matchesFiscalSequenceType(sequence, currentType),
+    );
+
+    if (_hasManualFiscalTypeSelection && currentMatches) {
+      return currentType;
+    }
+
+    if (defaultType.isNotEmpty) {
+      return defaultType;
+    }
+
+    if (currentMatches) {
+      return currentType;
+    }
+
+    if (activeSequences.isNotEmpty) {
+      return activeSequences.first.tipo;
+    }
+
+    return '';
+  }
+
+  Future<void> _ensureBusinessFiscalSettingsLoaded() async {
+    final businessId = _activeBusinessId;
+    if (businessId == null || businessId.isEmpty) {
+      _fiscalSettingsBusinessId = null;
+      _cachedDefaultFiscalType = '';
+      return;
+    }
+
+    if (_fiscalSettingsBusinessId == businessId &&
+        _lastFiscalSettingsLoad != null &&
+        DateTime.now().difference(_lastFiscalSettingsLoad!) <
+            const Duration(seconds: 1)) {
+      return;
+    }
+
+    try {
+      final row = await Supabase.instance.client
+          .from('fiscal_settings')
+          .select('default_ncf_type')
+          .eq('business_id', businessId)
+          .maybeSingle();
+
+      _cachedDefaultFiscalType = _normalizeFiscalTypeValue(
+        row?['default_ncf_type']?.toString(),
+      );
+    } catch (_) {
+      _cachedDefaultFiscalType = '';
+    }
+
+    _fiscalSettingsBusinessId = businessId;
+    _lastFiscalSettingsLoad = DateTime.now();
+  }
 
   Future<void> _ensureBusinessTaxSettingsLoaded() async {
     final businessId = _activeBusinessId;
@@ -462,6 +548,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         ),
       );
     } else {
+      _hasManualFiscalTypeSelection = false;
       state = const CurrentOrderState(loading: true, origin: 'table');
     }
     try {
@@ -599,7 +686,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }
 
   void updateFiscalType(String type) {
-    state = state.copyWith(fiscalType: type);
+    _hasManualFiscalTypeSelection = true;
+    state = state.copyWith(fiscalType: _normalizeFiscalTypeValue(type));
   }
 
   Future<void> updateCurrentSessionNote(String? note) async {
@@ -1636,12 +1724,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       debugPrint('Note: Could not refresh cashier: $e');
     }
 
+    _hasManualFiscalTypeSelection = false;
     state = const CurrentOrderState();
   }
 
   Future<void> cancelCurrentOrder({String? reason}) async {
     final orderId = state.order?.id;
     if (orderId == null) {
+      _hasManualFiscalTypeSelection = false;
       state = const CurrentOrderState();
       return;
     }
@@ -1652,6 +1742,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     await ref
         .read(salesRepositoryProvider)
         .closeOrder(orderId: orderId, status: 'void');
+    _hasManualFiscalTypeSelection = false;
     state = const CurrentOrderState();
   }
 
@@ -1833,6 +1924,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
         await _loadOrderDetail(orderId);
         if (clearIfPaid && (state.order?.isPaid ?? false)) {
+          _hasManualFiscalTypeSelection = false;
           state = const CurrentOrderState();
         }
       }
@@ -1856,8 +1948,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     String? origin,
     String? tableId,
   }) async {
+    if (state.order?.id != orderId) {
+      _hasManualFiscalTypeSelection = false;
+    }
+
     _refreshOrderDebounceTimer?.cancel();
     await _ensureBusinessTaxSettingsLoaded();
+    await _ensureBusinessFiscalSettingsLoaded();
     final repo = ref.read(salesRepositoryProvider);
     Order? order;
     List<OrderItem> items = const [];
@@ -1960,15 +2057,27 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
     // Fetch fiscal sequences if not loaded for this business
     List<FiscalNcfSequence> fiscalSequences = state.fiscalSequences;
-    if (fiscalSequences.isEmpty && _activeBusinessId != null) {
+    final activeBusinessId = _activeBusinessId;
+    final shouldReloadFiscalSequences =
+        activeBusinessId != null &&
+        (fiscalSequences.isEmpty ||
+            fiscalSequences.any(
+              (sequence) => sequence.businessId != activeBusinessId,
+            ));
+    if (shouldReloadFiscalSequences) {
       try {
         fiscalSequences = await ref
             .read(fiscalServiceProvider)
-            .getSequences(_activeBusinessId!);
+            .getSequences(activeBusinessId);
       } catch (e) {
         debugPrint('Error loading fiscal sequences: $e');
       }
     }
+
+    final resolvedFiscalType = _resolveFiscalTypeForState(
+      state,
+      fiscalSequences,
+    );
 
     state = _normalizeHydratedState(
       state.copyWith(
@@ -1986,6 +2095,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         clearCustomer: customerId == null && customerName == null,
         sessionNote: sessionNote,
         clearSessionNote: sessionNote == null,
+        fiscalType: resolvedFiscalType,
+        fiscalDefaultType: _cachedDefaultFiscalType,
         fiscalSequences: fiscalSequences,
       ),
     );

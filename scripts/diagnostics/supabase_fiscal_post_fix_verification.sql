@@ -76,12 +76,14 @@ select
 from public.ncf_sequences s
 left join (
   select
-    ncf_sequence_id,
+    business_id,
+    left(ncf_number, 3) as prefix,
     max(cast(substring(ncf_number from 4) as bigint)) as max_numeric_suffix
   from public.fiscal_documents
   where ncf_number ~ '^[A-Z][0-9]{2}[0-9]+$'
-  group by ncf_sequence_id
-) d on d.ncf_sequence_id = s.id
+  group by business_id, left(ncf_number, 3)
+) d on d.business_id = s.business_id
+   and d.prefix = s.prefix
 order by s.ncf_type, s.prefix, s.created_at desc nulls last;
 
 -- ============================================================
@@ -99,12 +101,14 @@ select
 from public.ncf_sequences s
 join (
   select
-    ncf_sequence_id,
+    business_id,
+    left(ncf_number, 3) as prefix,
     max(cast(substring(ncf_number from 4) as bigint)) as max_numeric_suffix
   from public.fiscal_documents
   where ncf_number ~ '^[A-Z][0-9]{2}[0-9]+$'
-  group by ncf_sequence_id
-) d on d.ncf_sequence_id = s.id
+  group by business_id, left(ncf_number, 3)
+) d on d.business_id = s.business_id
+   and d.prefix = s.prefix
 where s.current_number < d.max_numeric_suffix
 order by gap desc;
 

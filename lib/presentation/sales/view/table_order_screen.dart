@@ -952,6 +952,17 @@ class _CartView extends ConsumerWidget {
     String? customerName,
   }) async {
     var currentOrderState = ref.read(currentOrderProvider);
+    final fiscalConfigError = _buildFiscalConfigError(currentOrderState);
+    if (fiscalConfigError != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(fiscalConfigError),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+
     final isFiscal =
         currentOrderState.fiscalType == 'B01' ||
         currentOrderState.fiscalType == '01' ||
@@ -978,6 +989,8 @@ class _CartView extends ConsumerWidget {
         );
 
         await onAssignClient();
+
+        if (!context.mounted) return;
 
         // RE-LEER estado después de la asignación
         currentOrderState = ref.read(currentOrderProvider);
@@ -1013,6 +1026,8 @@ class _CartView extends ConsumerWidget {
 
     // Usamos el tableCode disponible en la vista
     final tableName = tableCode;
+
+    if (!context.mounted) return;
 
     _showSmoothDialog(
       context: context,
@@ -1577,83 +1592,87 @@ class _CartView extends ConsumerWidget {
                               _salesRadiusButton,
                             ),
                           ),
-                          child: PopupMenuButton<String>(
-                            initialValue: orderState.fiscalType,
-                            onSelected: (String newValue) {
-                              ref
-                                  .read(currentOrderProvider.notifier)
-                                  .updateFiscalType(newValue);
-                            },
-                            tooltip: 'Tipo de comprobante',
-                            padding: EdgeInsets.zero,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            offset: const Offset(0, 40),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 8,
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(
-                                    '${_getNcfLabel(orderState.fiscalType)} (${orderState.fiscalType})',
-                                    style: const TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
-                                      color: _salesTextPrimary,
+                          child: Builder(
+                            builder: (context) {
+                              final activeSequences = orderState.fiscalSequences
+                                  .where((sequence) => sequence.activo)
+                                  .toList(growable: false);
+                              final selectedFiscalType = _normalizeFiscalType(
+                                orderState.fiscalType,
+                              );
+                              final initialValue =
+                                  activeSequences.any(
+                                    (sequence) => _matchesFiscalSequenceType(
+                                      sequence,
+                                      selectedFiscalType,
                                     ),
+                                  )
+                                  ? selectedFiscalType
+                                  : null;
+
+                              return PopupMenuButton<String>(
+                                initialValue: initialValue,
+                                onSelected: (String newValue) {
+                                  ref
+                                      .read(currentOrderProvider.notifier)
+                                      .updateFiscalType(newValue);
+                                },
+                                tooltip: 'Tipo de comprobante',
+                                padding: EdgeInsets.zero,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                offset: const Offset(0, 40),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 8,
                                   ),
-                                  const SizedBox(width: 4),
-                                  const Icon(
-                                    Icons.arrow_drop_down,
-                                    color: _salesTotalColor,
-                                    size: 20,
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        selectedFiscalType.isEmpty
+                                            ? 'Sin configurar'
+                                            : '${_getNcfLabel(selectedFiscalType)} ($selectedFiscalType)',
+                                        style: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                          color: _salesTextPrimary,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 4),
+                                      const Icon(
+                                        Icons.arrow_drop_down,
+                                        color: _salesTotalColor,
+                                        size: 20,
+                                      ),
+                                    ],
                                   ),
-                                ],
-                              ),
-                            ),
-                            itemBuilder: (BuildContext context) {
-                              final sequences =
-                                  orderState.fiscalSequences.isNotEmpty
-                                  ? orderState.fiscalSequences
-                                  : [
-                                      FiscalNcfSequence(
-                                        tipo: 'B02',
-                                        serie: 'B',
-                                        ultimoSeq: 0,
-                                        maximoSeq: 0,
-                                      ),
-                                      FiscalNcfSequence(
-                                        tipo: 'B01',
-                                        serie: 'B',
-                                        ultimoSeq: 0,
-                                        maximoSeq: 0,
-                                      ),
-                                      FiscalNcfSequence(
-                                        tipo: 'B14',
-                                        serie: 'B',
-                                        ultimoSeq: 0,
-                                        maximoSeq: 0,
-                                      ),
-                                      FiscalNcfSequence(
-                                        tipo: 'B15',
-                                        serie: 'B',
-                                        ultimoSeq: 0,
-                                        maximoSeq: 0,
+                                ),
+                                itemBuilder: (BuildContext context) {
+                                  if (activeSequences.isEmpty) {
+                                    return const [
+                                      PopupMenuItem<String>(
+                                        enabled: false,
+                                        value: '__no_sequences__',
+                                        child: Text(
+                                          'Sin secuencias fiscales activas',
+                                        ),
                                       ),
                                     ];
+                                  }
 
-                              return sequences.map((seq) {
-                                return PopupMenuItem<String>(
-                                  value: seq.tipo,
-                                  child: Text(
-                                    '${_getNcfLabel(seq.tipo)} (${seq.tipo})',
-                                  ),
-                                );
-                              }).toList();
+                                  return activeSequences.map((seq) {
+                                    return PopupMenuItem<String>(
+                                      value: seq.tipo,
+                                      child: Text(
+                                        '${_getNcfLabel(seq.tipo)} (${seq.tipo})',
+                                      ),
+                                    );
+                                  }).toList();
+                                },
+                              );
                             },
                           ),
                         ),
@@ -2603,6 +2622,54 @@ class _CartView extends ConsumerWidget {
     }
   }
 
+  String _normalizeFiscalType(String? raw) {
+    final value = raw?.trim().toUpperCase() ?? '';
+    if (value.isEmpty) return '';
+    if (value.length >= 3 && (value.startsWith('B') || value.startsWith('E'))) {
+      return value.substring(1);
+    }
+    return value;
+  }
+
+  bool _matchesFiscalSequenceType(FiscalNcfSequence sequence, String type) {
+    final normalized = _normalizeFiscalType(type);
+    if (normalized.isEmpty) return false;
+    return sequence.activo &&
+        (sequence.tipo.toUpperCase() == normalized ||
+            sequence.ncfType.toUpperCase() == type.trim().toUpperCase());
+  }
+
+  String? _buildFiscalConfigError(CurrentOrderState orderState) {
+    final activeSequences = orderState.fiscalSequences
+        .where((sequence) => sequence.activo)
+        .toList(growable: false);
+
+    if (activeSequences.isEmpty) {
+      return 'Este negocio no tiene secuencias fiscales activas configuradas. Revisa Ajustes > Fiscal antes de cobrar.';
+    }
+
+    final configuredType = _normalizeFiscalType(orderState.fiscalDefaultType);
+    if (configuredType.isNotEmpty &&
+        !activeSequences.any(
+          (sequence) => _matchesFiscalSequenceType(sequence, configuredType),
+        )) {
+      return 'Este negocio esta configurado para ${_getNcfLabel(configuredType)} ($configuredType), pero no tiene una secuencia activa para ese tipo.';
+    }
+
+    final selectedType = _normalizeFiscalType(orderState.fiscalType);
+    if (selectedType.isEmpty) {
+      return 'No se pudo determinar el tipo de comprobante para este negocio.';
+    }
+
+    if (!activeSequences.any(
+      (sequence) => _matchesFiscalSequenceType(sequence, selectedType),
+    )) {
+      return 'El tipo de comprobante seleccionado ${_getNcfLabel(selectedType)} ($selectedType) no tiene una secuencia activa configurada.';
+    }
+
+    return null;
+  }
+
   void _showReimpresionDialog({
     required BuildContext context,
     required WidgetRef ref,
@@ -2730,6 +2797,7 @@ class _CartView extends ConsumerWidget {
                               );
                               onFinish?.call();
                             } catch (e) {
+                              if (!context.mounted) return;
                               _showReimpresionDialog(
                                 context: context,
                                 ref: ref,

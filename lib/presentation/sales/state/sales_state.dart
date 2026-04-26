@@ -13,18 +13,18 @@ class CurrentOrderState extends Equatable {
   final String? deliveryType; // 'own' | 'uber_eats' | 'pedidos_ya'
   final String? selectedCheckId;
   final String? customerId;
-    final String? customerName;
-    final String? customerLegalName;
-    final String? sessionNote;
-    final bool isOfflineMode;
-    final bool syncInFlight;
-    final int pendingOfflineActions;
-    final String? syncStatus;
-    final DateTime? lastSyncAt;
-  
-    final String fiscalType; // 'B01', 'B02', etc.
-    final List<FiscalNcfSequence> fiscalSequences;
-    final String? customerTaxId;
+  final String? customerName;
+  final String? customerLegalName;
+  final String? sessionNote;
+  final bool isOfflineMode;
+  final bool syncInFlight;
+  final int pendingOfflineActions;
+  final String? syncStatus;
+  final DateTime? lastSyncAt;
+  final String fiscalType; // '01', '02', '31', '32', etc.
+  final String fiscalDefaultType; // Default from fiscal_settings
+  final List<FiscalNcfSequence> fiscalSequences;
+  final String? customerTaxId;
 
   const CurrentOrderState({
     this.loading = false,
@@ -45,7 +45,8 @@ class CurrentOrderState extends Equatable {
     this.pendingOfflineActions = 0,
     this.syncStatus,
     this.lastSyncAt,
-    this.fiscalType = '02',
+    this.fiscalType = '',
+    this.fiscalDefaultType = '',
     this.fiscalSequences = const [],
     this.customerTaxId,
   });
@@ -75,6 +76,7 @@ class CurrentOrderState extends Equatable {
     String? syncStatus,
     DateTime? lastSyncAt,
     String? fiscalType,
+    String? fiscalDefaultType,
     List<FiscalNcfSequence>? fiscalSequences,
     String? customerTaxId,
   }) {
@@ -86,14 +88,17 @@ class CurrentOrderState extends Equatable {
       checks: checks ?? this.checks,
       takeout: takeout ?? this.takeout,
       origin: clearOrigin ? null : (origin ?? this.origin),
-      deliveryType: clearDeliveryType ? null : (deliveryType ?? this.deliveryType),
+      deliveryType: clearDeliveryType
+          ? null
+          : (deliveryType ?? this.deliveryType),
       selectedCheckId: clearSelectedCheck
           ? null
           : (selectedCheckId ?? this.selectedCheckId),
       customerId: clearCustomer ? null : (customerId ?? this.customerId),
       customerName: clearCustomer ? null : (customerName ?? this.customerName),
-      customerLegalName:
-          clearCustomer ? null : (customerLegalName ?? this.customerLegalName),
+      customerLegalName: clearCustomer
+          ? null
+          : (customerLegalName ?? this.customerLegalName),
       sessionNote: clearSessionNote ? null : (sessionNote ?? this.sessionNote),
       isOfflineMode: isOfflineMode ?? this.isOfflineMode,
       syncInFlight: syncInFlight ?? this.syncInFlight,
@@ -102,9 +107,11 @@ class CurrentOrderState extends Equatable {
       syncStatus: syncStatus,
       lastSyncAt: lastSyncAt ?? this.lastSyncAt,
       fiscalType: fiscalType ?? this.fiscalType,
+      fiscalDefaultType: fiscalDefaultType ?? this.fiscalDefaultType,
       fiscalSequences: fiscalSequences ?? this.fiscalSequences,
-      customerTaxId:
-          clearCustomer ? null : (customerTaxId ?? this.customerTaxId),
+      customerTaxId: clearCustomer
+          ? null
+          : (customerTaxId ?? this.customerTaxId),
     );
   }
 
@@ -129,6 +136,7 @@ class CurrentOrderState extends Equatable {
     syncStatus,
     lastSyncAt,
     fiscalType,
+    fiscalDefaultType,
     fiscalSequences,
     customerTaxId,
   ];

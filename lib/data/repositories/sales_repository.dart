@@ -1300,10 +1300,66 @@ class SalesRepository {
           msg.contains('CASH_SESSION_NOT_OPEN')) {
         rethrow;
       }
+      if (msg.contains('Demasiadas colisiones de NCF')) {
+        final recovered = await _recoverCompletedPaymentAfterNcfCollision(
+          orderId: orderId,
+          checkId: checkId,
+          amount: amount,
+          changeAmount: changeAmount,
+          cashierSessionId: cashierSessionId,
+        );
+        if (recovered != null) {
+          return recovered;
+        }
+      }
       throw Exception(
         'No se pudo procesar el pago de forma atomica. La operacion fue cancelada: $e',
       );
     }
+  }
+
+  Future<Payment?> _recoverCompletedPaymentAfterNcfCollision({
+    required String orderId,
+    String? checkId,
+    required double amount,
+    required double changeAmount,
+    String? cashierSessionId,
+  }) async {
+    try {
+      dynamic query = _client
+          .from('payments')
+          .select()
+          .eq('order_id', orderId)
+          .eq('status', 'completed');
+
+      query = checkId == null
+          ? query.isFilter('check_id', null)
+          : query.eq('check_id', checkId);
+
+      if (cashierSessionId != null && cashierSessionId.isNotEmpty) {
+        query = query.eq('session_id', cashierSessionId);
+      }
+
+      final rows = await query.order('created_at', ascending: false).limit(5);
+      final now = DateTime.now().toUtc();
+
+      for (final row in rows) {
+        final payment = Payment.fromMap(Map<String, dynamic>.from(row as Map));
+        final secondsDiff = now
+            .difference(payment.createdAt.toUtc())
+            .inSeconds
+            .abs();
+        final amountMatches = (payment.amount - amount).abs() <= 0.01;
+        final changeMatches =
+            (payment.changeAmount - changeAmount).abs() <= 0.01;
+
+        if (secondsDiff <= 120 && amountMatches && changeMatches) {
+          return payment;
+        }
+      }
+    } catch (_) {}
+
+    return null;
   }
 
   /// Obtener pagos de una orden
