@@ -165,13 +165,24 @@ List<({String label, double amount})> buildOrderTaxBreakdown(
   final summary = summarizeOrderPricing(order, items, forcedOrigin: forcedOrigin);
   final breakdown = <({String label, double amount})>[];
 
+  // Agrupamos primero por displayRate para que ítems con taxRate "camuflado"
+  // (28 = 18 ITBIS + 10 propina) y sin camuflar (18 puro) caigan en la misma
+  // línea de "ITBIS (18%)" en vez de duplicar el renglón.
+  final Map<double, double> itbisByDisplayRate = <double, double>{};
   summary.taxDetails.forEach((rate, amount) {
-    if (amount > 0.004) {
-      final displayRate = (rate == 28.0) ? 18.0 : rate;
-      final pct = displayRate % 1 == 0 ? displayRate.toInt() : displayRate;
-      breakdown.add((label: 'ITBIS ($pct%)', amount: amount));
-    }
+    if (amount <= 0.004) return;
+    final displayRate = (rate == 28.0) ? 18.0 : rate;
+    itbisByDisplayRate[displayRate] =
+        (itbisByDisplayRate[displayRate] ?? 0) + amount;
   });
+
+  final sortedDisplayRates = itbisByDisplayRate.keys.toList()..sort();
+  for (final displayRate in sortedDisplayRates) {
+    final amount = _r(itbisByDisplayRate[displayRate] ?? 0);
+    if (amount <= 0.004) continue;
+    final pct = displayRate % 1 == 0 ? displayRate.toInt() : displayRate;
+    breakdown.add((label: 'ITBIS ($pct%)', amount: amount));
+  }
 
   if (summary.serviceFee > 0.004) {
     final rate = (resolveOrderServiceRate(order) * 100).roundToDouble();

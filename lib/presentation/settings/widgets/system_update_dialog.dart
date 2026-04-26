@@ -4,7 +4,7 @@ import 'dart:io' show Platform;
 import 'package:auto_updater/auto_updater.dart';
 
 class SystemUpdateDialog extends StatefulWidget {
-  const SystemUpdateDialog({Key? key}) : super(key: key);
+  const SystemUpdateDialog({super.key});
 
   @override
   State<SystemUpdateDialog> createState() => _SystemUpdateDialogState();

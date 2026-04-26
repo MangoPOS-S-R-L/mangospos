@@ -2482,11 +2482,22 @@ class _CartView extends ConsumerWidget {
             data['title'] as String? ??
             (type == 'invoice' ? 'FACTURA' : 'PRECUENTA');
 
-        // Compute per-tax breakdown for the printed receipt
-        final printSummary = summarizeOrderPricing(orderObj, orderItems);
-        final printTaxBreakdown = ref
+        // Compute per-tax breakdown for the printed receipt.
+        // Usamos buildOrderTaxBreakdown (mismo camino que el cashier UI) para que
+        // la absorcion del centavo quede identica: ITBIS/Propina vienen del
+        // summary ya absorbido en vez de recalcular `subtotal * rate` redondeado
+        // (que produce drift de 0.01 contra lo que ve el usuario en pantalla).
+        final configuredBreakdown = ref
             .read(currentOrderProvider.notifier)
-            .getTaxBreakdown(printSummary.subtotal);
+            .getTaxBreakdown(
+              summarizeOrderPricing(orderObj, orderItems).subtotal,
+            );
+        final printTaxBreakdown = buildOrderTaxBreakdown(
+          orderObj,
+          orderItems,
+          forcedOrigin: orderObj.origin,
+          configuredBreakdown: configuredBreakdown,
+        );
 
         ticket = type == 'invoice'
             ? PrintTicketService.generateInvoice(

@@ -182,6 +182,27 @@ class SupabaseConfig {
       return 'La operación tardó demasiado. Por favor, intenta de nuevo.';
     }
 
-    return 'Error inesperado: ${error.toString()}';
+    if (error is FormatException) {
+      return 'Se detectaron datos locales corruptos. Cierra la app y vuelvela a abrir; el siguiente arranque se repara solo. Si persiste, reinstala MangoPOS.';
+    }
+
+    return 'Error inesperado: ${_sanitizeErrorText(error.toString())}';
+  }
+
+  /// Limpia bytes no imprimibles para que un error con contenido binario
+  /// (por ejemplo `FormatException` con `source` binario) no se muestre como
+  /// cuadritos ilegibles en la UI.
+  static String _sanitizeErrorText(String text) {
+    final buffer = StringBuffer();
+    for (final rune in text.runes) {
+      // Conservar tabs, saltos de linea y caracteres imprimibles ASCII/Unicode.
+      if (rune == 9 || rune == 10 || rune == 13 || (rune >= 32 && rune != 0xFFFD)) {
+        buffer.writeCharCode(rune);
+      } else {
+        buffer.write('?');
+      }
+    }
+    final cleaned = buffer.toString();
+    return cleaned.length > 280 ? '${cleaned.substring(0, 280)}...' : cleaned;
   }
 }

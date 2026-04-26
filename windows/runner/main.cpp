@@ -89,9 +89,22 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   StartupLog::Log("Entering message loop (Flutter should render first frame soon)...");
 
   ::MSG msg;
-  while (::GetMessage(&msg, nullptr, 0, 0)) {
+  BOOL get_message_result = 0;
+  while ((get_message_result = ::GetMessage(&msg, nullptr, 0, 0)) > 0) {
     ::TranslateMessage(&msg);
     ::DispatchMessage(&msg);
+  }
+
+  if (get_message_result == -1) {
+    DWORD err = ::GetLastError();
+    char buf[128];
+    snprintf(buf, sizeof(buf), "GetMessage FAILED: GetLastError=%lu", err);
+    StartupLog::Log(buf);
+  } else {
+    char buf[128];
+    snprintf(buf, sizeof(buf), "WM_QUIT received: exitCode=%llu",
+             static_cast<unsigned long long>(msg.wParam));
+    StartupLog::Log(buf);
   }
 
   StartupLog::Log("Message loop exited, shutting down");

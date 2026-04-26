@@ -735,7 +735,7 @@ class _SalesCommercialTable extends StatelessWidget {
                 Expanded(
                   flex: 2,
                   child: Text(
-                    '${numberFormat.format(rows[i].count)}',
+                    numberFormat.format(rows[i].count),
                     textAlign: TextAlign.end,
                     style: const TextStyle(
                       color: AppColors.mutedForeground,

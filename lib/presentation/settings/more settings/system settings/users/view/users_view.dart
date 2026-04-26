@@ -1423,7 +1423,11 @@ class _UserDialogState extends State<_UserDialog> {
     }
 
     final normalizedPin = _pin.text.trim();
-    if (normalizedPin.isEmpty) {
+    final isEditing = widget.user != null;
+    // Al editar un usuario existente, si dejan el PIN vacío lo mantenemos como
+    // estaba (no queremos forzar re-teclearlo cada vez que se modifica otro
+    // campo). Solo exigimos PIN al crear un usuario nuevo.
+    if (!isEditing && normalizedPin.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Debes asignar un PIN de 4 dígitos al usuario.'),
@@ -1431,7 +1435,8 @@ class _UserDialogState extends State<_UserDialog> {
       );
       return;
     }
-    if (!RegExp(r'^\d{4}$').hasMatch(normalizedPin)) {
+    if (normalizedPin.isNotEmpty &&
+        !RegExp(r'^\d{4}$').hasMatch(normalizedPin)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('El PIN debe ser numérico y de 4 dígitos.'),
@@ -2293,14 +2298,24 @@ class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
 
   @override
   Widget build(BuildContext context) {
+    const kPrimary = Color(0xFFFF7F1F);
+    const kTextSecondary = Color(0xFF6B7280);
     return AlertDialog(
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.white,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      title: const Text('Cambiar Contraseña'),
+      title: const Text(
+        'Cambiar Contraseña',
+        style: TextStyle(fontWeight: FontWeight.w700),
+      ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Nueva contraseña para ${widget.user.fullName}:'),
+          Text(
+            'Nueva contraseña para ${widget.user.fullName}:',
+            style: const TextStyle(color: kTextSecondary),
+          ),
           const SizedBox(height: 16),
           TextField(
             controller: widget.passwordController,
@@ -2326,17 +2341,33 @@ class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
       actions: [
         TextButton(
           onPressed: _saving ? null : () => Navigator.pop(context),
+          style: TextButton.styleFrom(foregroundColor: kTextSecondary),
           child: const Text('Cancelar'),
         ),
         ElevatedButton(
           onPressed: _saving ? null : _handleReset,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: kPrimary,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+            elevation: 0,
+          ),
           child: _saving
               ? const SizedBox(
                   width: 20,
                   height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                  ),
                 )
-              : const Text('Cambiar'),
+              : const Text(
+                  'Guardar',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
         ),
       ],
     );

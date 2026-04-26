@@ -659,7 +659,7 @@ class _PlanTotalCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 14),
-            ...highlights.map((feature) => _PlanFeatureRow(feature)).toList(),
+            ...highlights.map((feature) => _PlanFeatureRow(feature)),
           ],
         ),
       ),

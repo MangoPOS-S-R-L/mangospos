@@ -437,7 +437,7 @@ class _BranchManagementViewState extends ConsumerState<BranchManagementView> {
                             if (copyProducts && branches.length > 1) ...[
                               const SizedBox(height: 12),
                               DropdownButtonFormField<String>(
-                                value: copyFromBusinessId,
+                                initialValue: copyFromBusinessId,
                                 isExpanded: true,
                                 decoration: InputDecoration(
                                   labelText: 'Copiar desde',

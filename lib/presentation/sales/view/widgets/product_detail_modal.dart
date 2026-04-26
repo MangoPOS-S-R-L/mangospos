@@ -1023,10 +1023,15 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
 
   double _estimatedTax() {
     final rawAmount = _baseSubtotalForQuantity(_quantity);
+    // Usamos la tasa COMPLETA (ITBIS + Propina Ley) para que
+    // "Impuestos estimados" + subtotal = precio mostrado del producto.
+    // Antes usabamos solo taxRate (18%), lo que dejaba fuera la propina y
+    // hacia que "Total estimado del item" saliera menor al precio del menu.
+    final fullRate = _fullTaxRateDecimal();
     if (widget.item.taxMode == 'inclusive') {
-      return _estimatedSubtotal() * _taxRateDecimal();
+      return _estimatedSubtotal() * fullRate;
     }
-    return rawAmount * _taxRateDecimal();
+    return rawAmount * fullRate;
   }
 
   double _fullAmountForQuantity(double quantity) {

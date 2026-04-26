@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.1+3
+version: 1.0.1+11
 
 environment:
   sdk: ^3.8.1
@@ -59,6 +59,7 @@ dependencies:
   equatable: ^2.0.7
   tuple: ^2.0.2
   shared_preferences: ^2.2.2
+  path_provider: ^2.1.3
   connectivity_plus: ^6.0.0
   crypto: ^3.0.3
   uuid: ^4.5.1
@@ -140,9 +141,14 @@ flutter:
   # see https://flutter.dev/to/font-from-package
 
 msix_config:
-  display_name: MangoPOS
-  publisher_display_name: Mango POS
-  identity_name: do.mangopos.mangoposrestaurant
+  display_name: "MangoPOS Restaurant"
+  publisher_display_name: "Mango POS"
+  identity_name: MangoPOS.MangoPOSRestaurant
+  publisher: "CN=B178130F-7700-44FD-BEF2-B0F7F05AC658"
   msix_version: 1.0.0.0
   logo_path: assets/images/logo.png
-  capabilities: internetClient
+  capabilities: internetClient, location, bluetooth
+  languages: es-DO, en-US
+  description: Professional POS system for restaurants.
+  store: true
+  architecture: x64

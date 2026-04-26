@@ -4,6 +4,7 @@
 #include <flutter_windows.h>
 
 #include "resource.h"
+#include "startup_log.h"
 
 namespace {
 
@@ -25,6 +26,10 @@ constexpr const wchar_t kWindowClassName[] = L"FLUTTER_RUNNER_WIN32_WINDOW";
 constexpr const wchar_t kGetPreferredBrightnessRegKey[] =
   L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
 constexpr const wchar_t kGetPreferredBrightnessRegValue[] = L"AppsUseLightTheme";
+
+// Minimum usable window size in logical pixels (will be scaled by DPI).
+constexpr int kMinWindowWidth = 800;
+constexpr int kMinWindowHeight = 600;
 
 // The number of Win32Window objects that currently exist.
 static int g_active_window_count = 0;
@@ -188,11 +193,26 @@ LRESULT CALLBACK Win32Window::WndProc(HWND const window,
 
 LRESULT
 Win32Window::MessageHandler(HWND hwnd,
-                            UINT const message,
-                            WPARAM const wparam,
-                            LPARAM const lparam) noexcept {
+                             UINT const message,
+                             WPARAM const wparam,
+                             LPARAM const lparam) noexcept {
   switch (message) {
+    case WM_GETMINMAXINFO: {
+      // Enforce a minimum resize size without depending on the window_manager
+      // plugin (which can crash on some setups).
+      auto* mmi = reinterpret_cast<MINMAXINFO*>(lparam);
+      HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+      UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
+      double scale_factor = dpi / 96.0;
+      mmi->ptMinTrackSize.x = Scale(kMinWindowWidth, scale_factor);
+      mmi->ptMinTrackSize.y = Scale(kMinWindowHeight, scale_factor);
+      return 0;
+    }
+    case WM_CLOSE:
+      StartupLog::Log("WM_CLOSE received");
+      break;
     case WM_DESTROY:
+      StartupLog::Log("WM_DESTROY received");
       window_handle_ = nullptr;
       Destroy();
       if (quit_on_close_) {
