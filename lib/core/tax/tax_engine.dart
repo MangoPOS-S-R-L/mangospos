@@ -78,13 +78,11 @@ class TaxDef {
   double get rateDecimal => rate / 100.0;
 
   /// Whether this tax should be treated as a service-fee charge.
-  /// Uses explicit flag first, then heuristic for legacy data.
-  bool get effectiveIsServiceFee {
-    if (isServiceFee) return true;
-    final n = name.toLowerCase();
-    return (rate - 10).abs() < 0.001 &&
-        (n.contains('propina') || n.contains('servicio'));
-  }
+  ///
+  /// PRD 1: eliminada la heurística por nombre/tasa. Sólo cuenta el flag
+  /// explícito `is_service_fee` de la fila en `taxes`. Cualquier impuesto
+  /// que deba comportarse como propina debe marcarse explícitamente en DB.
+  bool get effectiveIsServiceFee => isServiceFee;
 
   /// Does this tax apply to the given [origin]?
   bool appliesTo(SaleOrigin origin) {

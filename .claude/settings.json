@@ -22,7 +22,9 @@
       "Bash(cat)",
       "Read(//tmp/**)",
       "Bash(flutter --version)",
-      "Bash(sort -t= -k2 -rn)"
+      "Bash(sort -t= -k2 -rn)",
+      "Bash(flutter test *)",
+      "Bash(git stash *)"
     ],
     "additionalDirectories": [
       "/Users/cristiangomez"

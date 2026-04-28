@@ -350,7 +350,6 @@ class _TaxFormDialogState extends ConsumerState<_TaxFormDialog> {
   bool _applyOnManual = true;
   bool _applyOnQuick = true;
   bool _applyOnDelivery = true;
-  bool _isServiceFee = false;
 
 
   @override
@@ -365,7 +364,6 @@ class _TaxFormDialogState extends ConsumerState<_TaxFormDialog> {
       _applyOnManual = e.applyOnManual;
       _applyOnQuick = e.applyOnQuick;
       _applyOnDelivery = e.applyOnDelivery;
-      _isServiceFee = e.isServiceFee;
     }
 
   }
@@ -512,15 +510,6 @@ class _TaxFormDialogState extends ConsumerState<_TaxFormDialog> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  _dialogToggleCard(
-                    label: '¿Es Propina de Ley (10%)?',
-                    subtitle:
-                        'Si se marca, el sistema lo tratará como comisión por servicio.',
-                    value: _isServiceFee,
-                    onChanged: (v) => setState(() => _isServiceFee = v),
-                    activeColor: MangoColors.primaryOrange,
-                  ),
                   const SizedBox(height: 16),
                   const Text(
                     'Aplicar en áreas de venta',
@@ -631,7 +620,6 @@ class _TaxFormDialogState extends ConsumerState<_TaxFormDialog> {
                             applyOnManual: _applyOnManual,
                             applyOnQuick: _applyOnQuick,
                             applyOnDelivery: _applyOnDelivery,
-                            isServiceFee: _isServiceFee,
                           );
                         } else {
                           await vm.create(
@@ -642,7 +630,6 @@ class _TaxFormDialogState extends ConsumerState<_TaxFormDialog> {
                             applyOnManual: _applyOnManual,
                             applyOnQuick: _applyOnQuick,
                             applyOnDelivery: _applyOnDelivery,
-                            isServiceFee: _isServiceFee,
                           );
                         }
 

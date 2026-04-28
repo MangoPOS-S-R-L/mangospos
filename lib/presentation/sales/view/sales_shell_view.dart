@@ -7,6 +7,7 @@ import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/presentation/sales/state/sales_state.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/sales/view/theme/sales_theme.dart';
+import 'package:mangopos/presentation/sales/view/widgets/tax_config_error_banner.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 
 enum SalesTab { byZone, manual, quick, delivery, selfService }
@@ -200,6 +201,7 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
           Expanded(
             child: Column(
               children: [
+                const TaxConfigErrorBanner(),
                 if (orderState.isOfflineMode ||
                     orderState.syncInFlight ||
                     orderState.pendingOfflineActions > 0 ||

@@ -8,6 +8,7 @@ import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/data/repositories/sales_repository.dart';
 import 'package:mangopos/core/tax/tax_engine.dart';
+import 'package:mangopos/core/tax/tax_exceptions.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -45,8 +46,6 @@ class SelectedModifierInput {
 class SalesViewModel extends Notifier<CurrentOrderState> {
   static const _courtesyPrefix = '[CORTESIA:';
   static const _promoPrefix = '[PROMO_AUTO:';
-  static const _defaultTaxRatePct = 18.0;
-  static const _defaultServiceFeeRatePct = 10.0;
   final Map<String, CurrentOrderState> _tableCache = {};
   final OfflinePosService _offlinePos = OfflinePosService();
   final ConnectivityService _connectivity = ConnectivityService();
@@ -60,8 +59,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   DateTime? _lastTaxLoad;
   String? _fiscalSettingsBusinessId;
   DateTime? _lastFiscalSettingsLoad;
-  double _cachedTaxRatePct = _defaultTaxRatePct;
-  double _cachedServiceFeeRatePct = _defaultServiceFeeRatePct;
+  // PRD 1: sin defaults numéricos. Si la config fiscal no carga, estos
+  // quedan en 0 y `state.taxConfigError` se setea para bloquear pagos.
+  double _cachedTaxRatePct = 0.0;
+  double _cachedServiceFeeRatePct = 0.0;
   bool _cachedServiceFeeEnabled = false;
   String _cachedDefaultFiscalType = '';
   List<Map<String, dynamic>> _cachedBusinessTaxes = const [];
@@ -220,10 +221,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   Future<void> _ensureBusinessTaxSettingsLoaded() async {
     final businessId = _activeBusinessId;
     if (businessId == null || businessId.isEmpty) {
+      // Sin negocio activo no hay configuración fiscal que cargar.
+      // No es un error per se: dejamos las tasas en 0 y limpiamos error previo.
       _taxSettingsBusinessId = null;
-      _cachedTaxRatePct = _defaultTaxRatePct;
-      _cachedServiceFeeRatePct = _defaultServiceFeeRatePct;
+      _cachedTaxRatePct = 0.0;
+      _cachedServiceFeeRatePct = 0.0;
       _cachedServiceFeeEnabled = false;
+      _cachedBusinessTaxes = const [];
+      _setTaxConfigError(null);
       return;
     }
 
@@ -243,17 +248,38 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           .eq('business_id', businessId)
           .maybeSingle();
 
-      _cachedTaxRatePct =
-          (row?['default_tax_rate'] as num?)?.toDouble() ?? _defaultTaxRatePct;
-      _cachedServiceFeeEnabled = row?['service_fee_enabled'] == true;
-      _cachedServiceFeeRatePct =
-          (row?['service_fee_rate'] as num?)?.toDouble() ??
-          _defaultServiceFeeRatePct;
+      // PRD 1: sin defaults silenciosos. Si falta business_settings o
+      // default_tax_rate, marcamos error fiscal y dejamos las tasas en 0.
+      if (row == null) {
+        throw TaxConfigException(
+          'No existe business_settings para este negocio. '
+          'Contactá al administrador para configurar la fiscalidad.',
+        );
+      }
+
+      final defaultTaxRate = (row['default_tax_rate'] as num?)?.toDouble();
+      if (defaultTaxRate == null) {
+        throw TaxConfigException(
+          'default_tax_rate no configurado en business_settings.',
+        );
+      }
+      _cachedTaxRatePct = defaultTaxRate;
+
+      _cachedServiceFeeEnabled = row['service_fee_enabled'] == true;
+
+      if (_cachedServiceFeeEnabled) {
+        final sfRate = (row['service_fee_rate'] as num?)?.toDouble();
+        if (sfRate == null) {
+          throw TaxConfigException(
+            'service_fee_rate no configurado pero service_fee_enabled = true.',
+          );
+        }
+        _cachedServiceFeeRatePct = sfRate;
+      } else {
+        _cachedServiceFeeRatePct = 0.0;
+      }
 
       // Cargar TODOS los impuestos activos del negocio.
-      // The per-origin flags (apply_on_zone, etc.) are now resolved by the
-      // tax engine from _cachedBusinessTaxes via TaxDef, so we don't cache
-      // them as separate fields.
       try {
         final taxRows = await Supabase.instance.client
             .from('taxes')
@@ -264,7 +290,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             .eq('is_active', true);
         _cachedBusinessTaxes = List<Map<String, dynamic>>.from(taxRows);
 
-        // Si hay un impuesto marcado como service fee, usar su tasa
+        // Si hay un impuesto marcado explícitamente como service fee, usar su tasa.
         final serviceTax = _cachedBusinessTaxes
             .cast<Map<String, dynamic>?>()
             .firstWhere(
@@ -275,31 +301,53 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           _cachedServiceFeeEnabled = true;
           _cachedServiceFeeRatePct = (serviceTax['rate'] as num).toDouble();
         }
-      } catch (_) {
+      } catch (e) {
+        // Si falla la carga de `taxes`, no asumimos nada: lista vacía + error.
         _cachedBusinessTaxes = const [];
+        throw TaxConfigException(
+          'No se pudieron cargar los impuestos del negocio: $e',
+        );
       }
 
       _taxSettingsBusinessId = businessId;
       _lastTaxLoad = DateTime.now();
+      _setTaxConfigError(null);
     } catch (e) {
-      _cachedTaxRatePct = _defaultTaxRatePct;
-      _cachedServiceFeeRatePct = _defaultServiceFeeRatePct;
+      // Fail-loud: dejamos tasas en 0, lista vacía, y marcamos error visible.
+      // No relanzamos: los flujos de venta no deben crashear; el bloqueo
+      // efectivo lo hace processPayment al ver state.taxConfigError.
+      _cachedTaxRatePct = 0.0;
+      _cachedServiceFeeRatePct = 0.0;
       _cachedServiceFeeEnabled = false;
       _cachedBusinessTaxes = const [];
       _taxSettingsBusinessId = businessId;
+      _lastTaxLoad = DateTime.now();
+      _setTaxConfigError(
+        e is TaxConfigException ? e.message : e.toString(),
+      );
     }
+  }
+
+  void _setTaxConfigError(String? message) {
+    if (message == null) {
+      if (state.taxConfigError != null) {
+        state = state.copyWith(clearTaxConfigError: true);
+      }
+    } else if (state.taxConfigError != message) {
+      state = state.copyWith(taxConfigError: message);
+    }
+  }
+
+  /// Forzar recarga de la configuración fiscal (usado por el banner UI).
+  Future<void> reloadTaxConfiguration() async {
+    invalidateTaxSettings();
+    await _ensureBusinessTaxSettingsLoaded();
   }
 
   /// Determina si el service fee (propina de ley) aplica para el origin actual.
   bool _isServiceFeeActiveForOrigin([String? originOverride]) {
     if (!_cachedServiceFeeEnabled) return false;
     return _resolveRatesForOrigin(originOverride).serviceFeeActive;
-  }
-
-  /// Tax rate (pct) for the given origin, excluding service fee.
-  /// Delegates to the tax engine for consistent origin matching.
-  double _calculateBusinessTaxRateForOrigin([String? originOverride]) {
-    return _resolveRatesForOrigin(originOverride).effectiveTaxPct;
   }
 
   /// Fuerza recarga de las configuraciones de impuestos/service fee.
@@ -416,30 +464,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // La DB debe ser la fuente de verdad para items ya guardados.
     final normalizedItems = activeItems;
 
-    // 4. Calcular Pricing con contexto de Service Fee
-    var pricingOrder = _pricingOrderContext(order, normalizedItems);
-
-    // Heurística de emergencia para el Front-end:
-    // Si el backend devolvió service_fee = 0 pero sabemos que este origen lleva propina,
-    // y el campo 'tax' es lo suficientemente grande, la separamos para evitar parpadeos
-    if (pricingOrder.serviceFee == 0 && _isServiceFeeActiveForOrigin()) {
-      final bizTaxRate = _calculateBusinessTaxRateForOrigin();
-      final totalTaxInOrder = pricingOrder.tax;
-      if (bizTaxRate > 0 && totalTaxInOrder > 0) {
-        final serviceRate = _cachedServiceFeeRatePct;
-        final totalEffectiveRate = bizTaxRate + serviceRate;
-        if (totalEffectiveRate > 0) {
-          final estimatedService = _roundMoney(
-            totalTaxInOrder * (serviceRate / totalEffectiveRate),
-          );
-          final estimatedTax = _roundMoney(totalTaxInOrder - estimatedService);
-          pricingOrder = pricingOrder.copyWith(
-            tax: estimatedTax,
-            serviceFee: estimatedService,
-          );
-        }
-      }
-    }
+    // 4. Calcular Pricing con contexto de Service Fee.
+    // PRD 1: Eliminada la heurística de emergencia que estimaba propina
+    // dividiendo `tax` cuando el backend devolvía service_fee=0. Si el
+    // backend persiste 0, ahora confiamos en ese 0 y dejamos que el operador
+    // vea el problema real en lugar de inventar un valor.
+    final pricingOrder = _pricingOrderContext(order, normalizedItems);
 
     final orderSummary = summarizeOrderPricing(pricingOrder, normalizedItems);
     final normalizedOrder = order.copyWith(

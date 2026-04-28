@@ -1098,7 +1098,8 @@ class ReportsRepository {
       'exempt_sales': (exemptSales * 100).round() / 100,
       'total_tax_collected': rTotalTax,
       'total_service_fee': rTotalService,
-      'service_fee_rate': 10.0,
+      // PRD 1: leer la tasa real del negocio en vez del hardcode 10.0.
+      'service_fee_rate': serviceFeeEnabled ? serviceFeeRate.toDouble() : 0.0,
       'service_fee_orders_count': serviceFeeOrdersCount,
       'service_fee_base_total': (serviceFeeBaseTotal * 100).round() / 100,
       'total_charges_collected': (totalChargesCollected * 100).round() / 100,

@@ -26,6 +26,10 @@ class CurrentOrderState extends Equatable {
   final List<FiscalNcfSequence> fiscalSequences;
   final String? customerTaxId;
 
+  /// Mensaje de error si la configuración fiscal no se pudo cargar.
+  /// Cuando es != null, los pagos deben bloquearse (PRD 1).
+  final String? taxConfigError;
+
   const CurrentOrderState({
     this.loading = false,
     this.error,
@@ -49,6 +53,7 @@ class CurrentOrderState extends Equatable {
     this.fiscalDefaultType = '',
     this.fiscalSequences = const [],
     this.customerTaxId,
+    this.taxConfigError,
   });
 
   CurrentOrderState copyWith({
@@ -79,6 +84,8 @@ class CurrentOrderState extends Equatable {
     String? fiscalDefaultType,
     List<FiscalNcfSequence>? fiscalSequences,
     String? customerTaxId,
+    String? taxConfigError,
+    bool clearTaxConfigError = false,
   }) {
     return CurrentOrderState(
       loading: loading ?? this.loading,
@@ -112,6 +119,9 @@ class CurrentOrderState extends Equatable {
       customerTaxId: clearCustomer
           ? null
           : (customerTaxId ?? this.customerTaxId),
+      taxConfigError: clearTaxConfigError
+          ? null
+          : (taxConfigError ?? this.taxConfigError),
     );
   }
 
@@ -139,5 +149,6 @@ class CurrentOrderState extends Equatable {
     fiscalDefaultType,
     fiscalSequences,
     customerTaxId,
+    taxConfigError,
   ];
 }

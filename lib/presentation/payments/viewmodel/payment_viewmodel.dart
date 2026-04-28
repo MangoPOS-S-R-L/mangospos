@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/network/connectivity_service.dart';
 import '../../../core/offline/offline_pos_service.dart';
+import '../../../core/tax/tax_exceptions.dart';
 import '../../../data/models/payment_models.dart';
 import '../../../data/models/sales_models.dart';
 import '../../../data/repositories/cashier_repository.dart';
@@ -24,6 +25,7 @@ final paymentViewModelProvider =
       (ref) => PaymentViewModel(
         ref.read(cashierRepositoryProvider),
         ref.read(salesRepositoryProvider),
+        ref,
       ),
     );
 
@@ -31,10 +33,11 @@ final paymentViewModelProvider =
 class PaymentViewModel extends StateNotifier<PaymentState> {
   final CashierRepository _cashierRepo;
   final SalesRepository _salesRepo;
+  final Ref _ref;
   final ConnectivityService _connectivity = ConnectivityService();
   final OfflinePosService _offlinePos = OfflinePosService();
 
-  PaymentViewModel(this._cashierRepo, this._salesRepo)
+  PaymentViewModel(this._cashierRepo, this._salesRepo, this._ref)
     : super(const PaymentState()) {
     unawaited(_connectivity.initialize());
   }
@@ -217,6 +220,18 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
   // ============================================================
 
   Future<void> processPayment() async {
+    // PRD 1: bloqueo fail-loud. Si la configuración fiscal no se pudo cargar
+    // para el negocio actual, no permitimos procesar el pago.
+    final taxConfigError = _ref.read(currentOrderProvider).taxConfigError;
+    if (taxConfigError != null) {
+      final blocked = PaymentBlockedException(
+        'No se puede procesar el pago: configuración fiscal no disponible. '
+        'Detalle: $taxConfigError. Contactá al administrador.',
+      );
+      state = state.copyWith(error: _cleanError(blocked));
+      return;
+    }
+
     if (!state.canProcessPayment) {
       state = state.copyWith(
         error: 'No se puede procesar el pago. Verifica los datos.',
