@@ -1,0 +1,26 @@
+Captured from production on 2026-04-28 (PRD 2 F2.2 pre-step).
+Schema de public.taxes:
+
+column_name        | data_type                | nullable | default
+-------------------+--------------------------+----------+----------------------
+id                 | uuid                     | NO       | gen_random_uuid()
+business_id        | uuid                     | NO       | (none)
+name               | text                     | NO       | (none)
+rate               | numeric                  | NO       | (none)
+is_active          | boolean                  | NO       | true
+created_at         | timestamptz              | YES      | now()
+apply_on_zone      | boolean                  | NO       | true
+apply_on_manual    | boolean                  | NO       | true
+apply_on_quick     | boolean                  | NO       | true
+apply_on_delivery  | boolean                  | NO       | true
+is_service_fee     | boolean                  | YES      | false
+
+Notas para PRD 2:
+
+- Todas las columnas que el PRD asumía existen.
+- `apply_on_*` son NOT NULL con default true → cualquier tax recién creado
+  aplica a todos los origins por default.
+- `is_service_fee` es nullable con default false → en queries hay que
+  manejar `coalesce(is_service_fee, false)`.
+- Falta `apply_on_self_service`. PRD 2 OQ2-1: fail-loud cubre esto sin
+  necesidad de columna nueva.

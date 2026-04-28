@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mangopos/core/tax/tax_engine.dart';
 import 'package:mangopos/presentation/customers/viewmodel/customers_viewmodel.dart';
-import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
 import 'package:mangopos/services/session/session_controller.dart';
@@ -85,31 +83,12 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
       // Build check-level order for pricing
       final checkOrder = check.toOrder(createdAt: order.createdAt);
 
-      // Tax breakdown
-      final printSummary = summarizeOrderPricing(checkOrder, items);
-      final taxBreakdown = <({String label, double amount})>[];
-      try {
-        final taxRows = await Supabase.instance.client
-            .from('taxes')
-            .select('name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery')
-            .eq('business_id', businessId)
-            .eq('is_active', true);
-        final taxes = (taxRows as List)
-            .map((r) => TaxDef.fromMap(r as Map<String, dynamic>))
-            .toList();
-        final origin = parseSaleOrigin(
-            ref.read(currentOrderProvider).origin);
-        for (final tx in taxes) {
-          if (!tx.isActive || tx.rate <= 0 || !tx.appliesTo(origin)) continue;
-          final pctLabel = tx.rate.truncateToDouble() == tx.rate
-              ? '${tx.rate.toInt()}%'
-              : '${tx.rate}%';
-          final amount = double.parse(
-              (printSummary.subtotal * tx.rateDecimal).toStringAsFixed(2));
-          taxBreakdown
-              .add((label: '${tx.name} ($pctLabel)', amount: amount));
-        }
-      } catch (_) {}
+      // Tax breakdown.
+      // PRD 2: lee `order_item_tax_lines` (snapshot real del motor backend)
+      // si los items vienen poblados; sino fallback al path heurístico.
+      // Esto reemplaza el cálculo predictivo viejo que iteraba `taxes` y
+      // multiplicaba por subtotal — frágil con renombres y origins parciales.
+      final taxBreakdown = buildOrderTaxBreakdown(checkOrder, items);
 
       // Business info
       final profileRaw = await Supabase.instance.client

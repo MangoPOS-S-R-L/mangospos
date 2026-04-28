@@ -1,0 +1,39 @@
+Captured from production on 2026-04-28 (PRD 2 F2.2 pre-step).
+Schema de public.business_settings:
+
+column_name                          | data_type     | nullable | default
+-------------------------------------+---------------+----------+--------------------------
+id                                   | uuid          | NO       | gen_random_uuid()
+business_id                          | uuid          | NO       | (none)
+timezone                             | text          | YES      | 'America/Santo_Domingo'
+language                             | text          | YES      | 'es'
+date_format                          | text          | YES      | 'DD/MM/YYYY'
+default_tax_rate                     | numeric       | YES      | 18                       *
+auto_print_order                     | boolean       | YES      | true
+auto_print_receipt                   | boolean       | YES      | true
+require_customer                     | boolean       | YES      | false
+allow_negative_stock                 | boolean       | YES      | false
+service_fee_enabled                  | boolean       | YES      | false                    *
+service_fee_rate                     | numeric       | YES      | 10                       *
+tip_enabled                          | boolean       | YES      | true
+updated_at                           | timestamptz   | YES      | now()
+prompt_people_count_on_table_open    | boolean       | YES      | false
+service_fee_on_zone                  | boolean       | NO       | true                     *
+service_fee_on_manual                | boolean       | NO       | true                     *
+service_fee_on_quick                 | boolean       | NO       | false                    *
+service_fee_on_delivery              | boolean       | YES      | false                    *
+agent_url                            | text          | YES      | (none)
+
+(*) = columnas que PRD 2 va a dejar de leer. PRD 3 las elimina.
+
+Columnas a deprecar (deja de leer, no se borra hasta PRD 3):
+  default_tax_rate
+  service_fee_enabled
+  service_fee_rate
+  service_fee_on_zone
+  service_fee_on_manual
+  service_fee_on_quick
+  service_fee_on_delivery
+
+Las demás columnas (timezone, language, auto_print_*, etc) NO son tocadas
+por PRD 2 ni PRD 3.

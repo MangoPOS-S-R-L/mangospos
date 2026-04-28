@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../datasources/queries/sales_queries.dart';
+import '../models/order_item_tax_line.dart';
 import '../models/sales_models.dart';
 import '../utils/business_id_resolver.dart';
 import '../utils/payment_amount_utils.dart';
@@ -15,6 +16,33 @@ class SalesRepository {
 
   static const _itemFields =
       'id,order_id,product_id,product_name,sku,quantity,qty,unit_price,subtotal,discounts,tax,total,check_id,is_takeout,status,notes,tax_mode,tax_rate,original_tax_rate,print_area_code,created_at';
+
+  /// Carga las `order_item_tax_lines` de una lista de items en una sola query
+  /// y las devuelve agrupadas por `order_item_id`. Producto del PRD 2: la
+  /// fuente del desglose de impuestos en pantalla pasa de heurística a
+  /// snapshot inmutable persistido por el motor backend.
+  Future<Map<String, List<OrderItemTaxLine>>> _loadTaxLinesByItem(
+    List<String> itemIds,
+  ) async {
+    if (itemIds.isEmpty) return const {};
+
+    final raw = await _client
+        .from('order_item_tax_lines')
+        .select('id, order_item_id, tax_id, tax_name, tax_rate, amount, created_at')
+        .inFilter('order_item_id', itemIds)
+        .order('created_at', ascending: true);
+
+    final grouped = <String, List<OrderItemTaxLine>>{};
+    for (final row in (raw as List)) {
+      final line = OrderItemTaxLine.fromMap(
+        Map<String, dynamic>.from(row as Map),
+      );
+      grouped
+          .putIfAbsent(line.orderItemId, () => <OrderItemTaxLine>[])
+          .add(line);
+    }
+    return grouped;
+  }
 
   Future<void> _assertOrderInBusinessScope(
     String orderId, {
@@ -822,6 +850,7 @@ class SalesRepository {
           .toList(growable: false);
 
       Map<String, List<OrderItemModifier>> modifiersByItem = const {};
+      Map<String, List<OrderItemTaxLine>> taxLinesByItem = const {};
       if (itemIds.isNotEmpty) {
         final rawModifiers = await _client
             .from('order_item_modifiers')
@@ -839,6 +868,7 @@ class SalesRepository {
               .add(modifier);
         }
         modifiersByItem = grouped;
+        taxLinesByItem = await _loadTaxLinesByItem(itemIds);
       }
 
       final items = baseItems
@@ -846,6 +876,8 @@ class SalesRepository {
             (item) => item.copyWith(
               modifiers:
                   modifiersByItem[item.id] ?? const <OrderItemModifier>[],
+              taxLines:
+                  taxLinesByItem[item.id] ?? const <OrderItemTaxLine>[],
             ),
           )
           .toList(growable: false);
@@ -927,11 +959,15 @@ class SalesRepository {
             .add(modifier);
       }
 
+      final taxLinesByItem = await _loadTaxLinesByItem(itemIds);
+
       return items
           .map(
             (item) => item.copyWith(
               modifiers:
                   modifiersByItem[item.id] ?? const <OrderItemModifier>[],
+              taxLines:
+                  taxLinesByItem[item.id] ?? const <OrderItemTaxLine>[],
             ),
           )
           .toList(growable: false);

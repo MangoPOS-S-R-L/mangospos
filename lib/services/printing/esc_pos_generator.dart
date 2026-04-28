@@ -283,11 +283,23 @@ class EscPosGenerator {
   }
 
   /// Resumen de totales
+  ///
+  /// PRD 2: el desglose de impuestos viene como [taxBreakdown] (lista de
+  /// `(label, amount)`), no como campos separados ITBIS/Servicio. Cada
+  /// línea se imprime tal cual viene del breakdown, lo que permite
+  /// soportar cualquier impuesto configurado en el negocio (ITBIS,
+  /// Propina Ley, ITC, etc.) sin tocar este código.
+  ///
+  /// Para compat con call-sites legacy (pre-PRD-2) que aún pasan `tax` y
+  /// `serviceFee`, se acepta también esa firma; en ese caso se construye
+  /// un breakdown ad-hoc con los valores recibidos.
   void totals({
     required double subtotal,
     double? discounts,
+    List<({String label, double amount})>? taxBreakdown,
+    // Legacy: usar `taxBreakdown` en su lugar.
     double? serviceFee,
-    required double tax,
+    double? tax,
     required double total,
   }) {
     separator();
@@ -298,11 +310,22 @@ class EscPosGenerator {
       textRow('Descuentos:', '-RD\$ ${discounts.toStringAsFixed(2)}');
     }
 
-    if (serviceFee != null && serviceFee > 0) {
-      textRow('Servicio:', 'RD\$ ${serviceFee.toStringAsFixed(2)}');
+    // Desglose nuevo (post-PRD-2): cada impuesto como línea propia.
+    if (taxBreakdown != null && taxBreakdown.isNotEmpty) {
+      for (final line in taxBreakdown) {
+        if (line.amount.abs() < 0.005) continue;
+        textRow('${line.label}:', 'RD\$ ${line.amount.toStringAsFixed(2)}');
+      }
+    } else {
+      // Fallback legacy: mantener layout viejo (Servicio + ITBIS) cuando el
+      // caller no provee breakdown estructurado.
+      if (serviceFee != null && serviceFee > 0) {
+        textRow('Servicio:', 'RD\$ ${serviceFee.toStringAsFixed(2)}');
+      }
+      if (tax != null) {
+        textRow('ITBIS (18%):', 'RD\$ ${tax.toStringAsFixed(2)}');
+      }
     }
-
-    textRow('ITBIS (18%):', 'RD\$ ${tax.toStringAsFixed(2)}');
 
     doubleSeparator();
 

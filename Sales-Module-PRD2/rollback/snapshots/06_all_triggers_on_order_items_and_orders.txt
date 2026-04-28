@@ -1,0 +1,49 @@
+Captured from production on 2026-04-28 (PRD 2 F2.2 pre-step).
+
+Triggers de usuario activos en order_items, orders, order_checks:
+
+table_name    | trigger_name                  | enabled | function
+--------------+-------------------------------+---------+----------------------------------------
+order_checks  | trg_check_max_checks          | O       | fn_check_max_checks
+order_items   | order_items_totals_trigger    | O       | trigger_update_order_totals
+order_items   | trg_compute_item_totals       | O       | fn_compute_item_totals
+order_items   | trg_oi_sync_qty_quantity      | O       | fn_oi_sync_qty_quantity
+orders        | trg_inventory_on_sent         | O       | trigger_inventory_on_order_sent
+
+Definiciones:
+
+CREATE TRIGGER trg_check_max_checks
+  BEFORE INSERT ON public.order_checks
+  FOR EACH ROW EXECUTE FUNCTION fn_check_max_checks();
+
+CREATE TRIGGER order_items_totals_trigger
+  AFTER INSERT OR DELETE OR UPDATE ON public.order_items
+  FOR EACH ROW EXECUTE FUNCTION trigger_update_order_totals();
+
+CREATE TRIGGER trg_compute_item_totals
+  BEFORE INSERT OR UPDATE ON public.order_items
+  FOR EACH ROW EXECUTE FUNCTION fn_compute_item_totals();
+
+CREATE TRIGGER trg_oi_sync_qty_quantity
+  BEFORE INSERT OR UPDATE ON public.order_items
+  FOR EACH ROW EXECUTE FUNCTION fn_oi_sync_qty_quantity();
+
+CREATE TRIGGER trg_inventory_on_sent
+  AFTER UPDATE ON public.orders
+  FOR EACH ROW EXECUTE FUNCTION trigger_inventory_on_order_sent();
+
+Notas relevantes para PRD 2:
+
+- `trg_compute_item_totals` (BEFORE) se ejecuta primero y setea
+  `subtotal`, `tax`, `total` en NEW.
+- Luego `order_items_totals_trigger` (AFTER) propaga los totales
+  agregados a `orders` y `order_checks` vía calculate_order_totals
+  y calculate_check_totals.
+- `trg_oi_sync_qty_quantity` mantiene `qty` y `quantity` sincronizadas
+  (no se toca en PRD 2).
+- `trg_inventory_on_sent` baja stock cuando una orden pasa a 'sent'
+  (no se toca en PRD 2).
+- En PRD 2 vamos a AGREGAR un nuevo trigger AFTER INSERT OR UPDATE
+  en order_items que poble `order_item_tax_lines`. No se mezcla con
+  `fn_compute_item_totals` (que es BEFORE) porque AFTER garantiza
+  que NEW.id ya está persistido.

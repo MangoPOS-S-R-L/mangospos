@@ -140,7 +140,6 @@ class InvoiceModal extends StatelessWidget {
 
     final pricingSummary = summarizeOrderPricing(order, filteredItems);
     final subtotal = pricingSummary.subtotal;
-    final tax = pricingSummary.tax;
     final total = pricingSummary.total;
 
     return Dialog(
@@ -298,14 +297,15 @@ class InvoiceModal extends StatelessWidget {
 
                     const Divider(height: 32),
 
-                    // Financial Breakdown (filtrado al check si aplica)
+                    // Financial Breakdown (filtrado al check si aplica).
+                    // PRD 2: cada impuesto sale como línea separada (ITBIS,
+                    // Propina Ley, etc.) leído desde `order_item_tax_lines`.
+                    // Para órdenes pre-PRD-2 cae al path heurístico viejo
+                    // que también devuelve líneas individuales.
                     _SummaryRow('Subtotal', subtotal),
-                    _SummaryRow('ITBIS (18%)', tax),
-                    if (pricingSummary.serviceFee > 0)
-                      _SummaryRow(
-                        'Propina Ley (10%)',
-                        pricingSummary.serviceFee,
-                      ),
+                    ...buildOrderTaxBreakdown(order, filteredItems).map(
+                      (line) => _SummaryRow(line.label, line.amount),
+                    ),
                     const SizedBox(height: 8),
                     _SummaryRow('TOTAL', total, isBold: true, fontSize: 18),
 

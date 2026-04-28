@@ -1,5 +1,7 @@
 import 'package:equatable/equatable.dart';
 
+import 'order_item_tax_line.dart';
+
 /// 🧾 Sesión de mesa
 class TableSession extends Equatable {
   final String id;
@@ -210,6 +212,11 @@ class OrderItem extends Equatable {
   final DateTime createdAt;
   final List<OrderItemModifier> modifiers;
 
+  /// Snapshot de impuestos cobrados a este item (PRD 2 §6.1).
+  /// Se llena desde la tabla `order_item_tax_lines` cuando el repository
+  /// las carga; en `fromMap` queda vacío y el repo la popla aparte.
+  final List<OrderItemTaxLine> taxLines;
+
   const OrderItem({
     required this.id,
     required this.orderId,
@@ -232,6 +239,7 @@ class OrderItem extends Equatable {
     this.printAreaCode,
     required this.createdAt,
     this.modifiers = const [],
+    this.taxLines = const [],
   });
 
 
@@ -316,6 +324,7 @@ class OrderItem extends Equatable {
     String? printAreaCode,
     DateTime? createdAt,
     List<OrderItemModifier>? modifiers,
+    List<OrderItemTaxLine>? taxLines,
   }) {
 
     return OrderItem(
@@ -340,6 +349,7 @@ class OrderItem extends Equatable {
       printAreaCode: printAreaCode ?? this.printAreaCode,
       createdAt: createdAt ?? this.createdAt,
       modifiers: modifiers ?? this.modifiers,
+      taxLines: taxLines ?? this.taxLines,
     );
   }
 
@@ -366,6 +376,7 @@ class OrderItem extends Equatable {
     printAreaCode,
     createdAt,
     modifiers,
+    taxLines,
   ];
 }
 

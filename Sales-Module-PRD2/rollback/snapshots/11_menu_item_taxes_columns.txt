@@ -1,0 +1,17 @@
+Captured from production on 2026-04-28 (PRD 2 F2.2 pre-step).
+Schema de public.menu_item_taxes:
+
+column_name | data_type | nullable | default
+------------+-----------+----------+---------
+item_id     | uuid      | NO       | (none)
+tax_id      | uuid      | NO       | (none)
+
+Notas:
+- Tabla M-N pura. Sólo dos FK.
+- No tiene PK propia (probablemente PK compuesta (item_id, tax_id) — se
+  puede confirmar más adelante si hace falta).
+- Sin `created_at` (OQ2-4 cerrada como fuera de scope: la regla
+  "no tocar historia" no es "diferirla").
+- 76 productos NO tienen ninguna fila acá (query F2.1 §7.2). Después del
+  PRD 2 esos productos cobran 0 impuestos. Auditoría operativa post-deploy
+  decide cuáles deben asociarse a ITBIS y cuáles son legítimamente exentos.

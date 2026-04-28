@@ -1,0 +1,41 @@
+Captured from production on 2026-04-28 (PRD 2 F2.2 pre-step).
+Schemas relevantes:
+
+──────────────────────── public.orders ────────────────────────
+column_name      | data_type      | nullable | default
+-----------------+----------------+----------+--------------------------
+id               | uuid           | NO       | gen_random_uuid()
+session_id       | uuid           | NO       | (none)
+status           | text           | NO       | 'open'
+status_ext       | order_status   | NO       | 'open'
+subtotal         | numeric        | NO       | 0
+discounts        | numeric        | NO       | 0
+tax              | numeric        | NO       | 0
+service_fee      | numeric        | NO       | 0           (*)
+total            | numeric        | NO       | 0
+total_amount     | numeric        | YES      | 0
+created_at       | timestamptz    | YES      | now()
+closed_at        | timestamptz    | YES      | (none)
+
+──────────────────── public.order_checks ──────────────────────
+column_name      | data_type      | nullable | default
+-----------------+----------------+----------+--------------------------
+id               | uuid           | NO       | gen_random_uuid()
+order_id         | uuid           | NO       | (none)
+label            | text           | NO       | 'C1'
+position         | integer        | NO       | 1
+subtotal         | numeric        | NO       | 0
+discounts        | numeric        | NO       | 0
+tax              | numeric        | NO       | 0
+service_fee      | numeric        | NO       | 0           (*)
+total            | numeric        | NO       | 0
+is_closed        | boolean        | NO       | false
+closed_at        | timestamptz    | YES      | (none)
+customer_id      | uuid           | YES      | (none)
+customer_name    | text           | YES      | (none)
+
+(*) = columnas que PRD 2 deja en 0 (modelo unificado: el service fee se
+      incluye dentro de `tax`). PRD 3 las elimina.
+
+Nota: `orders.total_amount` parece columna duplicada de `total`. Investigar
+en PRD 3 si se elimina, o si tiene un uso específico.

@@ -59,11 +59,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   DateTime? _lastTaxLoad;
   String? _fiscalSettingsBusinessId;
   DateTime? _lastFiscalSettingsLoad;
-  // PRD 1: sin defaults numéricos. Si la config fiscal no carga, estos
-  // quedan en 0 y `state.taxConfigError` se setea para bloquear pagos.
+  // PRD 2 §G2/G6: la única fuente de verdad para impuestos es la tabla
+  // `taxes` (cargada en `_cachedBusinessTaxes`). El motor backend ya
+  // consolida todos los impuestos (incluida la propina) en `oi.tax`, así
+  // que el frontend NO calcula service_fee por separado.
+  //
+  // `_cachedTaxRatePct` se conserva como tasa de fallback para el camino
+  // optimista de `addItem`/`updateItem` cuando el menu_browser no provee
+  // un `productTaxRate` explícito. Si la config no carga, queda en 0 y
+  // `state.taxConfigError` bloquea pagos (PRD 1).
   double _cachedTaxRatePct = 0.0;
-  double _cachedServiceFeeRatePct = 0.0;
-  bool _cachedServiceFeeEnabled = false;
   String _cachedDefaultFiscalType = '';
   List<Map<String, dynamic>> _cachedBusinessTaxes = const [];
   bool _hasManualFiscalTypeSelection = false;
@@ -225,8 +230,6 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       // No es un error per se: dejamos las tasas en 0 y limpiamos error previo.
       _taxSettingsBusinessId = null;
       _cachedTaxRatePct = 0.0;
-      _cachedServiceFeeRatePct = 0.0;
-      _cachedServiceFeeEnabled = false;
       _cachedBusinessTaxes = const [];
       _setTaxConfigError(null);
       return;
@@ -239,47 +242,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
 
     try {
-      final row = await Supabase.instance.client
-          .from('business_settings')
-          .select(
-            'default_tax_rate,service_fee_enabled,service_fee_rate,'
-            'service_fee_on_zone,service_fee_on_manual,service_fee_on_quick,service_fee_on_delivery',
-          )
-          .eq('business_id', businessId)
-          .maybeSingle();
-
-      // PRD 1: sin defaults silenciosos. Si falta business_settings o
-      // default_tax_rate, marcamos error fiscal y dejamos las tasas en 0.
-      if (row == null) {
-        throw TaxConfigException(
-          'No existe business_settings para este negocio. '
-          'Contactá al administrador para configurar la fiscalidad.',
-        );
-      }
-
-      final defaultTaxRate = (row['default_tax_rate'] as num?)?.toDouble();
-      if (defaultTaxRate == null) {
-        throw TaxConfigException(
-          'default_tax_rate no configurado en business_settings.',
-        );
-      }
-      _cachedTaxRatePct = defaultTaxRate;
-
-      _cachedServiceFeeEnabled = row['service_fee_enabled'] == true;
-
-      if (_cachedServiceFeeEnabled) {
-        final sfRate = (row['service_fee_rate'] as num?)?.toDouble();
-        if (sfRate == null) {
-          throw TaxConfigException(
-            'service_fee_rate no configurado pero service_fee_enabled = true.',
-          );
-        }
-        _cachedServiceFeeRatePct = sfRate;
-      } else {
-        _cachedServiceFeeRatePct = 0.0;
-      }
-
-      // Cargar TODOS los impuestos activos del negocio.
+      // PRD 2 §G2: la tabla `taxes` es la única fuente de verdad para
+      // impuestos. Eliminamos la lectura de `business_settings.service_fee_*`
+      // y `default_tax_rate` (deprecados; PRD 3 los borra del schema).
       try {
         final taxRows = await Supabase.instance.client
             .from('taxes')
@@ -289,24 +254,27 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             .eq('business_id', businessId)
             .eq('is_active', true);
         _cachedBusinessTaxes = List<Map<String, dynamic>>.from(taxRows);
-
-        // Si hay un impuesto marcado explícitamente como service fee, usar su tasa.
-        final serviceTax = _cachedBusinessTaxes
-            .cast<Map<String, dynamic>?>()
-            .firstWhere(
-              (tx) => TaxDef.fromMap(tx ?? const {}).effectiveIsServiceFee,
-              orElse: () => null,
-            );
-        if (serviceTax != null) {
-          _cachedServiceFeeEnabled = true;
-          _cachedServiceFeeRatePct = (serviceTax['rate'] as num).toDouble();
-        }
       } catch (e) {
         // Si falla la carga de `taxes`, no asumimos nada: lista vacía + error.
         _cachedBusinessTaxes = const [];
         throw TaxConfigException(
           'No se pudieron cargar los impuestos del negocio: $e',
         );
+      }
+
+      // PRD 2: la propina ya no se trata como concepto separado. El motor
+      // backend la consolida en `oi.tax`. `_cachedTaxRatePct` se mantiene
+      // sólo como fallback para los cálculos OPTIMISTAS del frontend (preview
+      // antes de que el backend responda) cuando el menu_browser no envía
+      // un `productTaxRate` explícito. Tomamos el primer tax no-service-fee
+      // activo del negocio como fallback razonable.
+      _cachedTaxRatePct = 0.0;
+      for (final tx in _cachedBusinessTaxes) {
+        final def = TaxDef.fromMap(tx);
+        if (!def.isActive || def.rate <= 0) continue;
+        if (def.effectiveIsServiceFee) continue;
+        _cachedTaxRatePct = def.rate;
+        break; // primer tax no-service activo
       }
 
       _taxSettingsBusinessId = businessId;
@@ -317,8 +285,6 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       // No relanzamos: los flujos de venta no deben crashear; el bloqueo
       // efectivo lo hace processPayment al ver state.taxConfigError.
       _cachedTaxRatePct = 0.0;
-      _cachedServiceFeeRatePct = 0.0;
-      _cachedServiceFeeEnabled = false;
       _cachedBusinessTaxes = const [];
       _taxSettingsBusinessId = businessId;
       _lastTaxLoad = DateTime.now();
@@ -344,13 +310,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     await _ensureBusinessTaxSettingsLoaded();
   }
 
-  /// Determina si el service fee (propina de ley) aplica para el origin actual.
-  bool _isServiceFeeActiveForOrigin([String? originOverride]) {
-    if (!_cachedServiceFeeEnabled) return false;
-    return _resolveRatesForOrigin(originOverride).serviceFeeActive;
-  }
-
-  /// Fuerza recarga de las configuraciones de impuestos/service fee.
+  /// Fuerza recarga de las configuraciones de impuestos.
   void invalidateTaxSettings() {
     _taxSettingsBusinessId = null;
   }
@@ -359,16 +319,21 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   ResolvedTaxRates resolveCurrentRates() => _resolveRatesForOrigin();
 
   /// Returns a per-tax breakdown for display in the order summary.
-  /// Each entry has a label (e.g. "ITBIS (18%)") and the computed amount.
-  /// Service fee is returned as a separate entry.
-  /// [subtotal] is the base amount to apply rates against.
+  ///
+  /// PRD 2: la propina ya no es un caso especial. Itera todos los taxes
+  /// activos del negocio que aplican al origin actual (incluyendo
+  /// is_service_fee=true como un tax más) y devuelve una entrada por cada uno.
+  ///
+  /// Esto se usa SÓLO como preview/predicción cuando todavía no hay items
+  /// reales en la orden. Para órdenes ya cargadas, la UI debe preferir
+  /// `buildBreakdownFromTaxLines(items)` (de `order_pricing_utils.dart`),
+  /// que lee los snapshots reales persistidos.
   List<({String label, double amount})> getTaxBreakdown(double subtotal) {
     final origin = parseSaleOrigin(state.origin);
     final result = <({String label, double amount})>[];
 
     for (final tx in _taxDefs) {
       if (!tx.isActive || tx.rate <= 0) continue;
-      if (tx.effectiveIsServiceFee) continue; // handled separately
       if (!tx.appliesTo(origin)) continue;
 
       final pctLabel = tx.rate.truncateToDouble() == tx.rate
@@ -378,62 +343,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       result.add((label: '${tx.name} ($pctLabel)', amount: amount));
     }
 
-    // Service fee
-    if (_isServiceFeeActiveForOrigin()) {
-      final sfRate = _cachedServiceFeeRatePct;
-      final pctLabel = sfRate.truncateToDouble() == sfRate
-          ? '${sfRate.toInt()}%'
-          : '$sfRate%';
-      final amount = _roundMoney(subtotal * (sfRate / 100.0));
-      result.add((label: 'Propina Ley ($pctLabel)', amount: amount));
-    }
-
     return result;
-  }
-
-  double _sanitizeProductTaxRatePct({
-    required double? rawTaxRatePct,
-    required String taxMode,
-    required bool takeout,
-  }) {
-    final resolvedRawTaxRate = (rawTaxRatePct ?? _cachedTaxRatePct)
-        .clamp(0, 100)
-        .toDouble();
-
-    if (taxMode != 'inclusive' || takeout || !_isServiceFeeActiveForOrigin()) {
-      return resolvedRawTaxRate;
-    }
-
-    final combinedRate = _cachedTaxRatePct + _cachedServiceFeeRatePct;
-    if ((resolvedRawTaxRate - combinedRate).abs() <= 0.01) {
-      return _cachedTaxRatePct;
-    }
-
-    return resolvedRawTaxRate;
-  }
-
-  Order _pricingOrderContext(Order order, List<OrderItem> items) {
-    if (!_isServiceFeeActiveForOrigin()) {
-      return order.copyWith(serviceFee: 0);
-    }
-
-    final serviceableSubtotal = items
-        .where((item) => item.status != 'void' && !item.isTakeout)
-        .fold<double>(0, (sum, item) => sum + item.subtotal);
-    final normalizedServiceableSubtotal = _roundMoney(serviceableSubtotal);
-
-    if (normalizedServiceableSubtotal <= 0) {
-      return order.copyWith(serviceFee: 0);
-    }
-
-    final serviceFee = _roundMoney(
-      normalizedServiceableSubtotal * (_cachedServiceFeeRatePct / 100.0),
-    );
-
-    return order.copyWith(
-      subtotal: normalizedServiceableSubtotal,
-      serviceFee: serviceFee,
-    );
   }
 
   CurrentOrderState _normalizeHydratedState(CurrentOrderState source) {
@@ -464,20 +374,31 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // La DB debe ser la fuente de verdad para items ya guardados.
     final normalizedItems = activeItems;
 
-    // 4. Calcular Pricing con contexto de Service Fee.
-    // PRD 1: Eliminada la heurística de emergencia que estimaba propina
-    // dividiendo `tax` cuando el backend devolvía service_fee=0. Si el
-    // backend persiste 0, ahora confiamos en ese 0 y dejamos que el operador
-    // vea el problema real en lugar de inventar un valor.
-    final pricingOrder = _pricingOrderContext(order, normalizedItems);
+    // 4. Calcular pricing.
+    // PRD 2: el motor backend consolida la propina dentro de `oi.tax`, así
+    // que el frontend no necesita un "contexto" especial para service fee.
+    // `summarizeOrderPricing` lee `item.taxLines` (PRD 2) o cae al path
+    // heurístico viejo si la orden es pre-PRD-2.
+    final pricingOrder = order.copyWith(serviceFee: 0);
 
     final orderSummary = summarizeOrderPricing(pricingOrder, normalizedItems);
+    // PRD 2 (motor unificado): persistir SIEMPRE serviceFee=0 en el state
+    // local. Si dejamos el `orderSummary.serviceFee` derivado (que separa
+    // la propina inclusive en otra columna), `resolveOrderServiceRate` lo
+    // lee como tasa efectiva en la próxima llamada y aplica una propina
+    // fantasma a items exclusive (caso reproducido 2026-04-28: total
+    // 568.43 vs 564.00 esperado).
+    //
+    // El total persistido también se recalcula sin esa columna falsa.
     final normalizedOrder = order.copyWith(
       subtotal: orderSummary.subtotal,
       discounts: orderSummary.discounts,
-      serviceFee: orderSummary.serviceFee,
+      serviceFee: 0,
       tax: orderSummary.tax,
-      total: orderSummary.total,
+      total: orderSummary.subtotal +
+          orderSummary.tax +
+          orderSummary.serviceFee -
+          orderSummary.discounts,
     );
 
     final normalizedChecks = source.checks
@@ -490,19 +411,19 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           }
 
           final checkSummary = summarizeOrderPricing(
-            _pricingOrderContext(
-              check.toOrder(createdAt: order.createdAt),
-              checkItems,
-            ),
+            check.toOrder(createdAt: order.createdAt).copyWith(serviceFee: 0),
             checkItems,
           );
 
           return check.copyWith(
             subtotal: checkSummary.subtotal,
             discounts: checkSummary.discounts,
-            serviceFee: checkSummary.serviceFee,
+            serviceFee: 0, // PRD 2: motor unificado
             tax: checkSummary.tax,
-            total: checkSummary.total,
+            total: checkSummary.subtotal +
+                checkSummary.tax +
+                checkSummary.serviceFee -
+                checkSummary.discounts,
           );
         })
         .toList(growable: false);
@@ -850,23 +771,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
     await _ensureBusinessTaxSettingsLoaded();
 
-    // Los impuestos son globales en configuración, pero se activan por producto.
-    // Si el navegador de menú envía 0%, respetamos ese 0% y no caemos al impuesto
-    // global del negocio.
+    // PRD 2: el motor backend asigna `tax_rate` ya consolidado (incluye
+    // propina si aplica). El frontend optimista usa el rate provisto por
+    // el menu_browser tal cual; si no viene, fallback a `_cachedTaxRatePct`.
+    // No hay path separado para service_fee.
     final resolvedTaxRate = productTaxRate ?? _cachedTaxRatePct;
-    final productFullTaxOnly =
+    final resolvedFullTaxRate =
         productFullTaxRate ?? productTaxRate ?? _cachedTaxRatePct;
-    final serviceFeeForInclusiveBase =
-        takeout || !_isServiceFeeActiveForOrigin()
-        ? 0.0
-        : _cachedServiceFeeRatePct;
-    final resolvedFullTaxRate = productFullTaxOnly + serviceFeeForInclusiveBase;
-
-    final effectiveTaxRatePct = _sanitizeProductTaxRatePct(
-      rawTaxRatePct: resolvedTaxRate,
-      taxMode: productTaxMode,
-      takeout: takeout,
-    );
 
     // Optimistic: solo si tenemos datos del producto y un order cargado
     OrderItem? optimisticItem;
@@ -881,24 +792,17 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       );
       final grossAmount = (productPrice * qty) + modifiersGross;
 
-      // El estimador recibe la tasa como fracción decimal (0.18 = 18%)
-
-      final taxRateDecimal = effectiveTaxRatePct / 100.0;
+      // El estimador recibe la tasa como fracción decimal (0.18 = 18%).
+      final taxRateDecimal = resolvedTaxRate / 100.0;
       final fullTaxRateDecimal = resolvedFullTaxRate / 100.0;
-      final optimisticServiceRate = takeout || !_isServiceFeeActiveForOrigin()
-          ? 0.0
-          : (_cachedServiceFeeRatePct / 100.0);
       final optimisticAmounts = _estimateOptimisticItemAmounts(
         grossAmount: grossAmount,
         taxMode: productTaxMode,
         taxRate: taxRateDecimal,
         fullTaxRate: fullTaxRateDecimal,
-        serviceRate: optimisticServiceRate,
-        includeServiceInInclusivePrice: !takeout,
+        serviceRate: 0.0, // PRD 2: motor unificado, sin path separado
+        includeServiceInInclusivePrice: false,
       );
-      final addService = optimisticServiceRate > 0
-          ? (optimisticAmounts.subtotal * optimisticServiceRate)
-          : 0.0;
 
       optimisticItem = OrderItem(
         id: tempId,
@@ -917,7 +821,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         status: 'draft',
         notes: notes,
         taxMode: productTaxMode,
-        taxRate: effectiveTaxRatePct,
+        taxRate: resolvedTaxRate,
         originalTaxRate: resolvedFullTaxRate,
         createdAt: DateTime.now(),
         modifiers: selectedModifiers
@@ -934,33 +838,17 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       );
 
       final optimisticItems = [...state.items, optimisticItem];
-      // Use _pricingOrderContext so summarizeItemPricing sees the correct
-      // service fee rate even when the DB hasn't recalculated yet.
-      final pricingOrder = _pricingOrderContext(previousOrder, optimisticItems);
       final updatedSummary = summarizeOrderPricing(
-        pricingOrder,
+        previousOrder.copyWith(serviceFee: 0),
         optimisticItems,
       );
-      // Respect origin-based service fee toggle for optimistic update
-      final sfActiveForOrigin = _isServiceFeeActiveForOrigin();
-      final resolvedServiceFee = sfActiveForOrigin
-          ? (updatedSummary.serviceFee > 0
-                ? updatedSummary.serviceFee
-                : addService)
-          : 0.0;
-      final resolvedTotal = sfActiveForOrigin
-          ? (updatedSummary.serviceFee > 0
-                ? updatedSummary.total
-                : updatedSummary.total +
-                      (productTaxMode == 'inclusive' ? 0 : addService))
-          : updatedSummary.subtotal +
-                updatedSummary.tax -
-                updatedSummary.discounts;
       final updatedOrder = previousOrder.copyWith(
         subtotal: updatedSummary.subtotal,
         tax: updatedSummary.tax,
-        serviceFee: resolvedServiceFee,
-        total: resolvedTotal,
+        serviceFee: 0,
+        total: updatedSummary.subtotal +
+            updatedSummary.tax -
+            updatedSummary.discounts,
       );
 
       state = state.copyWith(
@@ -1216,19 +1104,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     final previousItems = state.items;
     final previousOrder = state.order;
     if (targetItem != null) {
+      // PRD 2: el item.tax ya viene consolidado del motor backend (incluye
+      // propina si aplicaba). El frontend optimista derive la tasa total
+      // del propio item y no agrega service fee separado.
       final taxRate = targetItem.subtotal > 0
           ? (targetItem.tax / targetItem.subtotal)
           : 0.0;
-      final serviceRate =
-          targetItem.isTakeout || !_isServiceFeeActiveForOrigin()
-          ? 0.0
-          : (_cachedServiceFeeRatePct / 100.0);
       final optimisticAmounts = _estimateOptimisticItemAmounts(
         grossAmount: targetItem.unitPrice * quantity,
         taxMode: targetItem.taxMode,
         taxRate: taxRate,
-        serviceRate: serviceRate,
-        includeServiceInInclusivePrice: !targetItem.isTakeout,
+        serviceRate: 0.0,
+        includeServiceInInclusivePrice: false,
       );
       final optimisticItems = state.items
           .map(
@@ -1271,19 +1158,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         final updatedItems = state.items
             .map((item) {
               if (item.id != itemId) return item;
+              // PRD 2: el motor backend consolida toda la fiscalidad en
+              // `item.tax`. Optimismo offline deriva la tasa total del item
+              // sin agregar service fee separado.
               final taxRate = item.subtotal > 0
                   ? (item.tax / item.subtotal)
                   : 0.0;
-              final serviceRate =
-                  item.isTakeout || !_isServiceFeeActiveForOrigin()
-                  ? 0.0
-                  : (_cachedServiceFeeRatePct / 100.0);
               final optimisticAmounts = _estimateOptimisticItemAmounts(
                 grossAmount: item.unitPrice * quantity,
                 taxMode: item.taxMode,
                 taxRate: taxRate,
-                serviceRate: serviceRate,
-                includeServiceInInclusivePrice: !item.isTakeout,
+                serviceRate: 0.0,
+                includeServiceInInclusivePrice: false,
               );
               return item.copyWith(
                 quantity: quantity,

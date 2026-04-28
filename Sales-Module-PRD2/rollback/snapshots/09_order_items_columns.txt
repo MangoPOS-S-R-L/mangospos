@@ -1,0 +1,46 @@
+Captured from production on 2026-04-28 (PRD 2 F2.2 pre-step).
+Schema de public.order_items:
+
+column_name        | data_type      | nullable | default
+-------------------+----------------+----------+--------------------------
+id                 | uuid           | NO       | gen_random_uuid()
+order_id           | uuid           | YES      | (none)
+product_id         | uuid           | YES      | (none)
+quantity           | numeric        | NO       | 1
+unit_price         | numeric        | NO       | (none)
+check_id           | uuid           | YES      | (none)
+product_name       | text           | YES      | (none)
+sku                | text           | YES      | (none)
+qty                | numeric        | YES      | 1
+is_takeout         | boolean        | NO       | false
+status             | item_status    | YES      | 'draft'::item_status
+notes              | text           | YES      | (none)
+subtotal           | numeric        | YES      | 0
+discounts          | numeric        | YES      | 0
+tax                | numeric        | YES      | 0
+created_at         | timestamptz    | YES      | now()
+started_at         | timestamptz    | YES      | (none)
+ready_at           | timestamptz    | YES      | (none)
+tax_mode           | text           | NO       | 'exclusive'
+tax_rate           | numeric        | NO       | 0
+added_by           | uuid           | YES      | (none)
+original_tax_rate  | numeric        | YES      | (none)
+print_area_code    | text           | NO       | 'kitchen_hot'
+total              | numeric        | YES      | 0
+
+Notas para PRD 2:
+
+- `tax_rate` es la tasa que se aplica al ítem (puede ser ITBIS solo o
+  ITBIS+propina, según cómo lo asigna `fn_add_item_from_menu` hoy).
+- `original_tax_rate` es la tasa con la que se compuso el precio (solo
+  relevante en modo inclusive para extraer base estable).
+- En PRD 2 vamos a redefinir el contrato:
+  * `tax_rate` = SUMA de todas las tasas que aplican a este item para
+    este origin (ITBIS si aplica + Propina si aplica + cualquier otro).
+  * `original_tax_rate` = SUMA de todas las tasas asociadas al producto
+    (no filtradas por origin) — para que el cálculo inclusive con base
+    estable siga funcionando aunque el origin desactive un impuesto.
+  * `tax` = subtotal × tax_rate / 100 (consolidado, ya no hay
+    service_fee separado por línea).
+- Sin columna `service_fee` por línea: PRD 2 mantiene esto. La propina
+  se incluye dentro de `tax` cuando aplica.
