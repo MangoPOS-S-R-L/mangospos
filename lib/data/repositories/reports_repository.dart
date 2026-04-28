@@ -414,6 +414,22 @@ class ReportsRepository {
       bucket['amount'] = _toDouble(bucket['amount']) + amount;
       bucket['quantity'] = _toDouble(bucket['quantity']) + qty;
       bucket['count'] = (bucket['count'] as int) + 1;
+
+      // Attribute the modifier amount to the parent item's category so the
+      // category breakdown reflects what was actually charged on each ticket.
+      final parentProductId = item['product_id']?.toString() ?? '';
+      final parentCategoryName =
+          categoryByProductId[parentProductId] ?? 'Sin categoría';
+      final catBucket = byCategory.putIfAbsent(
+        parentCategoryName,
+        () => {
+          'label': parentCategoryName,
+          'amount': 0.0,
+          'quantity': 0.0,
+          'count': 0,
+        },
+      );
+      catBucket['amount'] = _toDouble(catBucket['amount']) + amount;
     }
 
     final byMethod = <String, Map<String, dynamic>>{};
@@ -590,10 +606,26 @@ class ReportsRepository {
       'sales_by_adjustment': salesByAdjustment,
       'top_products': topProductsList,
       'product_sales': productSalesList,
-      'sales_by_category': byCategory.values.toList(growable: false)
-        ..sort(
-          (a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])),
-        ),
+      'sales_by_category': () {
+        final netSales = totalSales - voidedSales;
+        final categoryTotal = byCategory.values.fold<double>(
+          0,
+          (sum, row) => sum + _toDouble(row['amount']),
+        );
+        final remainder = netSales - categoryTotal;
+        if (remainder > 0.01) {
+          byCategory['Otros cargos'] = {
+            'label': 'Otros cargos',
+            'amount': remainder,
+            'quantity': 0.0,
+            'count': 0,
+          };
+        }
+        return byCategory.values.toList(growable: false)
+          ..sort(
+            (a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])),
+          );
+      }(),
       'sales_by_employee': byEmployee.values.toList(growable: false)
         ..sort(
           (a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])),

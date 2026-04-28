@@ -17,7 +17,7 @@
 
 | PRD | Estado | Notas |
 |---|---|---|
-| PRD 1 — Stop-the-Bleeding | **FRONTEND COMPLETO — pendiente staging + backend SQL** | Iniciado y completado en frontend el 2026-04-27. Cambios en `main` sin commitear. Pendientes: drop trigger duplicado en Supabase, UAT en staging, deploy a prod. |
+| PRD 1 — Stop-the-Bleeding | **COMPLETO** | Frontend commiteado en `21cef1a` (branch `prd/01-stop-the-bleeding-frontend-wip`). Backend SQL desestimado: el "trigger duplicado" del inventario original era falso positivo (verificado 2026-04-28). |
 | PRD 2 — Refactor del motor | Pendiente | Bloqueado por PRD 1 + 1 semana de observación. |
 | PRD 3 — Reportes y migración | Pendiente | Bloqueado por PRD 2 + 1 semana de observación. |
 
@@ -51,7 +51,7 @@
 
 | Item | Estado |
 |---|---|
-| Trigger duplicado `tr_compute_item_totals` vs `trg_compute_item_totals` en `order_items` | **Pendiente verificación + DROP en staging primero** |
+| Trigger duplicado `tr_compute_item_totals` vs `trg_compute_item_totals` en `order_items` | **DESESTIMADO 2026-04-28.** Verificación en producción mostró que sólo existe `trg_compute_item_totals` (con función `fn_compute_item_totals`, BEFORE INSERT/UPDATE, no interno, no constraint). El "duplicado" del inventario original fue falso positivo. |
 
 ---
 
@@ -186,6 +186,7 @@ UAT-1 a UAT-5 según PRD §5.2. Crítico: UAT-2 (borrar `business_settings` y ve
 | Fail-loud rompe negocios sin `business_settings` configurado | Banner UI + bloqueo de pago da feedback visible al operador. Validar UAT-2 en staging. |
 | Eliminar heurística por nombre cambia comportamiento de negocios con propina marcada solo por nombre | Cualquier negocio con propina debe tener `is_service_fee=true` en DB. Auditar antes de deploy. |
 | Eliminar heurística de emergencia muestra `service_fee=0` en órdenes históricas mal guardadas | Los reportes leen del DB, no del front. Impacto sólo visual al rehidratar. |
+| **Propina fantasma a nivel línea (NO arreglado en PRD 1)**: un producto con todos los impuestos apagados (toggle "Impuestos" off + ITBIS off + 10% De Ley off) **sigue cobrando propina** porque `_pricingOrderContext` calcula service fee a nivel orden sin consultar `menu_item_taxes` del producto. Reproducido 2026-04-27 con "Agua Dasany" RD$50 → cobra Propina 10% RD$5. | **Decisión: esperar PRD 2.** El refactor del motor (G2 + G6 + sección 6.4 del PRD 2) elimina `_pricingOrderContext`/`resolveOrderServiceRate`/`_isServiceFeeActiveForOrigin` y obliga a que toda propina pase por `menu_item_taxes` por producto. Validar este caso explícitamente como primera prueba al arrancar PRD 2. |
 
 ---
 
@@ -195,3 +196,5 @@ UAT-1 a UAT-5 según PRD §5.2. Crítico: UAT-2 (borrar `business_settings` y ve
 |---|---|
 | 2026-04-27 | Documento creado. Inicio del trabajo PRD 1 frontend. |
 | 2026-04-27 | PRD 1 frontend completo: defaults eliminados, fail-loud activo, banner UI insertado, golden tests pasan. Sin commit. Pendiente deploy a staging y backend SQL. |
+| 2026-04-27 | Reproducido bug de propina fantasma a nivel línea (Agua Dasany sin impuestos cobra Propina 10%). Decisión: NO se ataca en PRD 1. Queda registrado en §7 como riesgo vivo a resolver en PRD 2. |
+| 2026-04-28 | Verificación del "trigger duplicado" en producción: sólo existe `trg_compute_item_totals`. PRD 1 backend desestimado. PRD 1 declarado COMPLETO. |

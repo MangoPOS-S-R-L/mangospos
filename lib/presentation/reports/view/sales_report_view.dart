@@ -274,7 +274,7 @@ class _SalesReportBody extends StatelessWidget {
             emptyText: 'No hay ventas por categoría en el rango.',
             showQuantity: true,
             amountLabel: 'Ventas',
-            countLabel: 'Tickets',
+            countLabel: 'Líneas',
             onViewAll: () => viewModel.setSalesSubReport(SalesSubReport.byCategory),
           ),
           const SizedBox(height: AppSpacing.sectionGap),
