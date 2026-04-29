@@ -28,5 +28,9 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>MangoPOS necesita Bluetooth para detectar e imprimir en impresoras térmicas inalámbricas.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>MangoPOS necesita Bluetooth para detectar e imprimir en impresoras térmicas inalámbricas.</string>
 </dict>
 </plist>

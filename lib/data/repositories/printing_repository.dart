@@ -5,6 +5,7 @@ import 'dart:io';
 import 'dart:async';
 import 'package:flutter/foundation.dart' show kIsWeb;
 
+import 'package:mangopos/core/printing/bluetooth_print_service.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
 import 'package:mangopos/core/services/local_print_service.dart';
 
@@ -893,14 +894,20 @@ class PrintingRepository {
           rethrow;
         }
       case PrinterType.bluetooth:
-        // Bluetooth printing always goes through the local agent (MobilePrintAgent on mobile)
-        final up = await isAgentUp();
-        if (!up) {
+        // PRD 5 F3: impresión BT directa via flutter_blue_plus (Mac/iOS/Android).
+        // Evita depender del agente Node.js que no maneja BT.
+        if (kIsWeb) {
           throw Exception(
-            'Para imprimir por Bluetooth necesitas que el Agente de Impresión esté activo.',
+            'La impresión Bluetooth no está disponible desde la Web.',
           );
         }
-        await printRawViaAgentToPrinter(printer: printer, data: data);
+        final btId = (printer.mac ?? printer.devicePath ?? '').trim();
+        if (btId.isEmpty) {
+          throw Exception(
+            'La impresora Bluetooth no tiene identificador para conectarse.',
+          );
+        }
+        await BluetoothPrintService.printRaw(remoteId: btId, data: data);
         return;
     }
   }

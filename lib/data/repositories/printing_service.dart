@@ -5,6 +5,7 @@ import '../models/printing_models.dart';
 import '../models/sales_models.dart';
 import '../../core/offline/offline_pos_service.dart';
 import '../../core/storage/storage_service.dart';
+import '../../core/printing/bluetooth_print_service.dart';
 import '../../services/printing/print_ticket_service.dart';
 import '../../presentation/sales/state/sales_state.dart';
 import 'pos_settings_repository.dart';
@@ -276,19 +277,21 @@ class PrintingService {
         return;
       case 'bluetooth':
         debugPrint(
-          '🖨️ Ruta seleccionada -> BLUETOOTH assigned printer ${printer.name} (${printer.id})',
+          '🖨️ Ruta seleccionada -> BLUETOOTH direct GATT ${printer.name} (${printer.id})',
         );
-        // Bluetooth printing always goes through the local agent (MobilePrintAgent on Android/iOS)
-        if (!await _printingRepo.isAgentUp()) {
+        // PRD 5 F3: impresión BT directa via flutter_blue_plus.
+        if (kIsWeb) {
           throw Exception(
-            'Para imprimir por Bluetooth necesitas que el Agente de Impresión esté activo.',
+            'La impresión Bluetooth no está disponible desde la Web.',
           );
         }
-        await _printingRepo.printRawViaAgentToPrinter(
-          printer: printer,
-          data: bytes,
-          meta: const {'source': 'kitchen_order'},
-        );
+        final btId = (printer.mac ?? printer.devicePath ?? '').trim();
+        if (btId.isEmpty) {
+          throw Exception(
+            'La impresora Bluetooth no tiene identificador para conectarse.',
+          );
+        }
+        await BluetoothPrintService.printRaw(remoteId: btId, data: bytes);
         return;
       default:
         throw Exception('Tipo de impresora no soportado: ${printer.type}.');

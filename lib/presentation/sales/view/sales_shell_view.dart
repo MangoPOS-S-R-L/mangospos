@@ -26,12 +26,14 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
       final cashierVm = ref.read(cashierViewModelProvider);
       if (cashierVm.currentRegisterId == null || cashierVm.businessId == null) {
         await cashierVm.init();
       } else {
         await cashierVm.refreshSilently();
       }
+      if (!mounted) return;
       // PRD 5 F1.2: arrancar el scheduler de heartbeat de impresoras.
       // El provider se queda activo mientras el shell de ventas esté montado;
       // se autodestruye al hacer dispose (ver onDispose en el provider).

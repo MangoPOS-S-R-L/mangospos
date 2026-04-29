@@ -1025,11 +1025,26 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         throw Exception('Permisos de Bluetooth denegados o no disponibles.');
       }
 
-      BluetoothAdapterState adapterState;
+      // PRD 5 F3: en macOS/iOS el adapter puede reportar `unknown` durante
+      // los primeros ms al arrancar. Esperamos hasta 3s a que sea `on` antes
+      // de fallar — evita el falso "Enciende el Bluetooth" en cold-start.
+      BluetoothAdapterState adapterState = BluetoothAdapterState.unknown;
       try {
-        adapterState = await FlutterBluePlus.adapterState.first;
+        adapterState = await FlutterBluePlus.adapterState
+            .firstWhere(
+              (s) =>
+                  s == BluetoothAdapterState.on ||
+                  s == BluetoothAdapterState.off ||
+                  s == BluetoothAdapterState.unauthorized,
+            )
+            .timeout(const Duration(seconds: 3));
       } catch (_) {
-        adapterState = BluetoothAdapterState.on;
+        // Si timeout u otra falla, seguimos con el último valor conocido.
+      }
+      if (adapterState == BluetoothAdapterState.unauthorized) {
+        throw Exception(
+          'Otorga permiso de Bluetooth a la app en preferencias del sistema.',
+        );
       }
       if (adapterState != BluetoothAdapterState.on) {
         throw Exception('Enciende el Bluetooth para escanear dispositivos.');
@@ -1040,6 +1055,28 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       } catch (_) {}
 
       final found = <BluetoothDevice>{};
+
+      // PRD 5 F3: incluir dispositivos ya emparejados en el sistema.
+      // Muchas impresoras térmicas usan Bluetooth clásico (SPP) y solo
+      // son visibles si fueron emparejadas previamente desde Ajustes
+      // del sistema. flutter_blue_plus solo descubre BLE en advertising,
+      // así que sin esto se pierden las térmicas BT clásicas.
+      try {
+        if (Platform.isAndroid) {
+          final bonded = await FlutterBluePlus.bondedDevices;
+          for (final d in bonded) {
+            found.add(d);
+          }
+        }
+        // En todas las plataformas: dispositivos ya conectados al sistema.
+        final system = await FlutterBluePlus.systemDevices(<Guid>[]);
+        for (final d in system) {
+          found.add(d);
+        }
+      } catch (e) {
+        _log('scanBluetooth() systemDevices/bondedDevices warn: $e');
+      }
+
       final sub = FlutterBluePlus.scanResults.listen((results) {
         for (final r in results) {
           found.add(r.device);
