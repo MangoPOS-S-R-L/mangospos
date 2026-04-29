@@ -1430,6 +1430,79 @@ finally {
     _clearLookupCaches();
   }
 
+  // PRD 5 F4.2 — Bulk asignación de productos a áreas de impresión.
+  // Carga categorías + items del business para que la UI ofrezca selección
+  // masiva por categoría.
+
+  /// Devuelve las categorías activas del business ordenadas por position.
+  Future<List<Map<String, dynamic>>> getCategoriesForBusiness(
+    String businessId,
+  ) async {
+    final data = await _client
+        .from('categories')
+        .select('id, name, position, is_active')
+        .eq('business_id', businessId)
+        .eq('is_active', true)
+        .order('position', ascending: true)
+        .order('name', ascending: true);
+    return List<Map<String, dynamic>>.from(data as List);
+  }
+
+  /// Devuelve menu_items mínimos del business (id, name, category_id,
+  /// print_area_code) para el bulk picker. Solo activos.
+  Future<List<Map<String, dynamic>>> getMenuItemsMinimal(
+    String businessId,
+  ) async {
+    final data = await _client
+        .from('menu_items')
+        .select('id, name, category_id, print_area_code, is_active')
+        .eq('business_id', businessId)
+        .eq('is_active', true)
+        .order('name', ascending: true);
+    return List<Map<String, dynamic>>.from(data as List);
+  }
+
+  /// Asigna [areaCode] a TODOS los menu_items en [itemIds] en una sola
+  /// query batch. Idempotente — vuelve a llamar con el mismo set no
+  /// genera side effects.
+  Future<void> bulkUpdateMenuItemsPrintArea({
+    required List<String> itemIds,
+    required String areaCode,
+  }) async {
+    if (itemIds.isEmpty) return;
+    await _client
+        .from('menu_items')
+        .update({'print_area_code': areaCode})
+        .inFilter('id', itemIds);
+  }
+
+  /// PRD 5 F4.1: actualizar nombre y/o código de un área existente.
+  Future<PrintArea> updateArea({
+    required String areaId,
+    String? name,
+    String? code,
+    bool? isActive,
+  }) async {
+    final patch = <String, dynamic>{};
+    if (name != null) patch['name'] = name.trim();
+    if (code != null) patch['code'] = code.trim().toLowerCase();
+    if (isActive != null) patch['is_active'] = isActive;
+
+    if (patch.isEmpty) {
+      throw Exception('No hay cambios para guardar.');
+    }
+
+    final data = await _client
+        .from('print_areas')
+        .update(patch)
+        .eq('id', areaId)
+        .select()
+        .single();
+
+    _clearLookupCaches();
+    return PrintArea.fromMap(data);
+  }
+
   /// Vincular area a impresora con configuracion de tipos de impresion
   Future<void> linkAreaToPrinter({
     required String businessId,

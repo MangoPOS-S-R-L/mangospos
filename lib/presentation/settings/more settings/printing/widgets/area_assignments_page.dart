@@ -120,6 +120,77 @@ class _PrintingAreaAssignmentsPageState
     }
   }
 
+  Future<void> _showRenameAreaDialog(PrintArea area) async {
+    final ctrl = TextEditingController(text: area.name);
+    final areasCtrl = ref.read(printingAreasViewModelProvider.notifier);
+    final updated = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Renombrar área'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'Nombre del área'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              final ok = await areasCtrl.updateArea(
+                areaId: area.id,
+                name: ctrl.text,
+              );
+              if (dialogContext.mounted) {
+                Navigator.of(dialogContext).pop(ok);
+              }
+            },
+            child: const Text('Guardar'),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (updated == true) {
+      await _bootstrap();
+    }
+  }
+
+  Future<void> _confirmDeleteArea(PrintArea area) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Eliminar área'),
+        content: Text(
+          '¿Seguro que quieres eliminar el área "${area.name}"? '
+          'Las impresoras asignadas dejarán de recibir trabajos de esta área.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFEF4444),
+            ),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    final areasCtrl = ref.read(printingAreasViewModelProvider.notifier);
+    final ok = await areasCtrl.deleteArea(area.id);
+    if (ok && mounted) {
+      await _bootstrap();
+    }
+  }
+
   Future<void> _selectPrinterForArea(PrintArea area) async {
     final areasCtrl = ref.read(printingAreasViewModelProvider.notifier);
     final printersCtrl = ref.read(printingPrintersViewModelProvider.notifier);
@@ -289,13 +360,64 @@ class _PrintingAreaAssignmentsPageState
                                 color: MangoColors.darkGray,
                               ),
                               title: area.name,
-                              trailing: Text(
-                                widget.areaMetaBuilder(area, assignedPrinters),
-                                style: const TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
-                                  color: MangoColors.darkGray,
-                                ),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    widget.areaMetaBuilder(
+                                      area,
+                                      assignedPrinters,
+                                    ),
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                      color: MangoColors.darkGray,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  PopupMenuButton<String>(
+                                    tooltip: 'Opciones del área',
+                                    icon: const Icon(
+                                      Icons.more_vert,
+                                      color: MangoColors.darkGray,
+                                    ),
+                                    onSelected: (value) async {
+                                      if (value == 'rename') {
+                                        await _showRenameAreaDialog(area);
+                                      } else if (value == 'delete') {
+                                        await _confirmDeleteArea(area);
+                                      }
+                                    },
+                                    itemBuilder: (_) => const [
+                                      PopupMenuItem(
+                                        value: 'rename',
+                                        child: ListTile(
+                                          dense: true,
+                                          contentPadding: EdgeInsets.zero,
+                                          leading: Icon(Icons.edit_outlined),
+                                          title: Text('Renombrar'),
+                                        ),
+                                      ),
+                                      PopupMenuItem(
+                                        value: 'delete',
+                                        child: ListTile(
+                                          dense: true,
+                                          contentPadding: EdgeInsets.zero,
+                                          leading: Icon(
+                                            Icons.delete_outline,
+                                            color: Color(0xFFEF4444),
+                                          ),
+                                          title: Text(
+                                            'Eliminar',
+                                            style: TextStyle(
+                                              color: Color(0xFFEF4444),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
                               ),
                             ),
                             const SizedBox(height: 12),

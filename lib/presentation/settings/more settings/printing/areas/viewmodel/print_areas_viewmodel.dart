@@ -80,7 +80,7 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
     await load(businessId: b, force: true);
   }
 
-  Future<bool> createArea({required String name}) async {
+  Future<bool> createArea({required String name, String? code}) async {
     final trimmed = name.trim();
     if (trimmed.isEmpty) {
       state = state.copyWith(
@@ -92,14 +92,96 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
       state = state.copyWith(isLoading: true, errorMessage: null);
       final b = await _ensureBusiness();
 
-      final code = trimmed.toUpperCase().replaceAll(' ', '_');
-      await _repo.createArea(businessId: b, name: trimmed, code: code);
+      // PRD 5 F4.1: code consistente con áreas existentes (lowercase
+      // + underscore + sufijo numérico si hay duplicados).
+      final baseCode = (code != null && code.trim().isNotEmpty)
+          ? _slugify(code)
+          : _slugify(trimmed);
+      final finalCode = await _ensureUniqueCode(b, baseCode);
+
+      await _repo.createArea(businessId: b, name: trimmed, code: finalCode);
       await load(businessId: b, force: true);
       return true;
     } catch (e) {
       state = state.copyWith(isLoading: false, errorMessage: e.toString());
       return false;
     }
+  }
+
+  Future<bool> updateArea({
+    required String areaId,
+    String? name,
+    String? code,
+    bool? isActive,
+  }) async {
+    final trimmedName = name?.trim();
+    if (trimmedName != null && trimmedName.isEmpty) {
+      state = state.copyWith(
+        errorMessage: 'El nombre del área no puede estar vacío.',
+      );
+      return false;
+    }
+    try {
+      state = state.copyWith(isLoading: true, errorMessage: null);
+      final b = await _ensureBusiness();
+
+      String? finalCode;
+      if (code != null && code.trim().isNotEmpty) {
+        final slug = _slugify(code);
+        // Si el code está siendo cambiado, validar unicidad excluyendo
+        // el área actual (para que pueda mantener su propio code).
+        finalCode = await _ensureUniqueCode(b, slug, excludeAreaId: areaId);
+      }
+
+      await _repo.updateArea(
+        areaId: areaId,
+        name: trimmedName,
+        code: finalCode,
+        isActive: isActive,
+      );
+      await load(businessId: b, force: true);
+      return true;
+    } catch (e) {
+      state = state.copyWith(isLoading: false, errorMessage: e.toString());
+      return false;
+    }
+  }
+
+  /// PRD 5 F4.1: convierte "Bar 2do piso" → "bar_2do_piso", removiendo
+  /// tildes y caracteres no alfanuméricos.
+  String _slugify(String input) {
+    final lowered = input.toLowerCase().trim();
+    final stripped = lowered
+        .replaceAll(RegExp('[áàä]'), 'a')
+        .replaceAll(RegExp('[éèë]'), 'e')
+        .replaceAll(RegExp('[íìï]'), 'i')
+        .replaceAll(RegExp('[óòö]'), 'o')
+        .replaceAll(RegExp('[úùü]'), 'u')
+        .replaceAll('ñ', 'n');
+    final slug = stripped
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
+        .replaceAll(RegExp(r'^_+|_+$'), '');
+    return slug.isEmpty ? 'area' : slug;
+  }
+
+  /// PRD 5 F4.1: si [base] ya existe en otra área del business, agrega
+  /// un sufijo numérico (`bar`, `bar_2`, `bar_3`...) hasta encontrar libre.
+  Future<String> _ensureUniqueCode(
+    String businessId,
+    String base, {
+    String? excludeAreaId,
+  }) async {
+    final existing = await _repo.getPrintAreas(businessId);
+    final taken = existing
+        .where((a) => excludeAreaId == null || a.id != excludeAreaId)
+        .map((a) => a.code)
+        .toSet();
+    if (!taken.contains(base)) return base;
+    var suffix = 2;
+    while (taken.contains('${base}_$suffix')) {
+      suffix++;
+    }
+    return '${base}_$suffix';
   }
 
   Future<bool> deleteArea(String areaId) async {
