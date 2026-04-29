@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
+import 'package:mangopos/core/printing/printer_heartbeat_scheduler.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/presentation/sales/state/sales_state.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
@@ -31,6 +32,10 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
       } else {
         await cashierVm.refreshSilently();
       }
+      // PRD 5 F1.2: arrancar el scheduler de heartbeat de impresoras.
+      // El provider se queda activo mientras el shell de ventas esté montado;
+      // se autodestruye al hacer dispose (ver onDispose en el provider).
+      ref.read(printerHeartbeatSchedulerProvider).start();
     });
   }
 

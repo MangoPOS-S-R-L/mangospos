@@ -914,6 +914,12 @@ class PrintingRepository {
     if (Platform.isWindows) {
       return _discoverLocalUsbPrintersWindows();
     }
+    if (Platform.isMacOS) {
+      return _discoverLocalUsbPrintersMacOS();
+    }
+    if (Platform.isLinux) {
+      return _discoverLocalUsbPrintersLinux();
+    }
     return const [];
   }
 
@@ -971,6 +977,165 @@ if ($items.Count -eq 0) {
       return [Map<String, dynamic>.from(decoded)];
     }
     return const [];
+  }
+
+  // PRD 5 F2.1 — descubrimiento USB en macOS via system_profiler.
+  // Devuelve devices USB con vendor/product IDs filtrados a un set conocido
+  // de fabricantes de impresoras térmicas (Epson, Star, Bixolon, genéricos).
+  // Sin filtro devolvería decenas de devices irrelevantes (teclados, hubs, etc.).
+  Future<List<Map<String, dynamic>>> _discoverLocalUsbPrintersMacOS() async {
+    if (kIsWeb) return const [];
+    try {
+      final result = await Process.run(
+        'system_profiler',
+        const ['SPUSBDataType', '-json'],
+      ).timeout(const Duration(seconds: 8));
+
+      if (result.exitCode != 0) {
+        return const [];
+      }
+
+      final stdout = result.stdout.toString().trim();
+      if (stdout.isEmpty) return const [];
+
+      final decoded = jsonDecode(stdout);
+      if (decoded is! Map<String, dynamic>) return const [];
+
+      final list = decoded['SPUSBDataType'];
+      if (list is! List) return const [];
+
+      final printers = <Map<String, dynamic>>[];
+      _walkMacUsbTree(list, printers);
+      return printers;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  // Recursive walker: SPUSBDataType es un árbol (host controller → hub → device).
+  // Identificamos como impresora si:
+  //   - vendor_id matchea fabricante térmico conocido, O
+  //   - device_class matchea clase USB Printer (07h), O
+  //   - product_id contiene "thermal"/"printer" en el _name.
+  void _walkMacUsbTree(
+    List<dynamic> nodes,
+    List<Map<String, dynamic>> out,
+  ) {
+    const knownThermalVendors = {
+      // VID hex (sin 0x), normalizado a uppercase.
+      '04B8': 'Epson',
+      '0519': 'Star Micronics',
+      '1504': 'Bixolon',
+      '0FE6': 'ICS Advent / Generic 80mm',
+      '0416': 'Winbond / Generic',
+      '067B': 'Prolific (a veces usado por chinas genéricas)',
+      '154F': 'SNBC',
+      '0AA7': 'WinUsb / Generic POS',
+      '20D1': 'Rongta',
+      '0DD4': 'POS Generic',
+    };
+
+    for (final raw in nodes) {
+      if (raw is! Map<String, dynamic>) continue;
+
+      final children = raw['_items'];
+      if (children is List) {
+        _walkMacUsbTree(children, out);
+      }
+
+      final vendorIdRaw = raw['vendor_id']?.toString() ?? '';
+      final productIdRaw = raw['product_id']?.toString() ?? '';
+      final name = (raw['_name']?.toString() ?? 'USB device').trim();
+      final manufacturer = raw['manufacturer']?.toString().trim() ?? '';
+      final serial = raw['serial_num']?.toString().trim();
+      final locationId = raw['location_id']?.toString().trim();
+
+      if (vendorIdRaw.isEmpty && productIdRaw.isEmpty) continue;
+
+      // vendor_id viene como '0x04b8 (Seiko Epson)' o '0x04b8'.
+      final vidHex = _extractHexFromMacUsbField(vendorIdRaw);
+      final pidHex = _extractHexFromMacUsbField(productIdRaw);
+      if (vidHex == null) continue;
+
+      final isThermalVendor = knownThermalVendors.containsKey(vidHex);
+      final nameMatchesPrinter = name.toLowerCase().contains('printer') ||
+          name.toLowerCase().contains('thermal') ||
+          name.toLowerCase().contains('pos');
+
+      if (!isThermalVendor && !nameMatchesPrinter) continue;
+
+      out.add({
+        'name': name.isNotEmpty ? name : 'USB Printer',
+        'type': 'usb',
+        'vid': vidHex,
+        'pid': pidHex,
+        'manufacturer': manufacturer.isNotEmpty
+            ? manufacturer
+            : (knownThermalVendors[vidHex] ?? ''),
+        'devicePath': serial?.isNotEmpty == true ? 'usb://$vidHex:$pidHex/$serial' : 'usb://$vidHex:${pidHex ?? '*'}',
+        'serial': serial,
+        'locationId': locationId,
+        'mac': '$vidHex:${pidHex ?? '0000'}',
+      });
+    }
+  }
+
+  // Convierte '0x04b8 (Seiko Epson)' o '0x04b8' a '04B8'.
+  String? _extractHexFromMacUsbField(String raw) {
+    if (raw.isEmpty) return null;
+    final match = RegExp(r'0x([0-9a-fA-F]{1,4})').firstMatch(raw);
+    if (match == null) return null;
+    return match.group(1)!.toUpperCase().padLeft(4, '0');
+  }
+
+  // PRD 5 F2.1 — descubrimiento USB en Linux via lsusb.
+  // Output de lsusb tipo: "Bus 002 Device 003: ID 04b8:0202 Seiko Epson Corp."
+  Future<List<Map<String, dynamic>>> _discoverLocalUsbPrintersLinux() async {
+    if (kIsWeb) return const [];
+    try {
+      final result = await Process.run('lsusb', const [])
+          .timeout(const Duration(seconds: 5));
+      if (result.exitCode != 0) return const [];
+
+      final stdout = result.stdout.toString();
+      const knownThermalVendors = {
+        '04b8', '0519', '1504', '0fe6', '0416', '067b',
+        '154f', '0aa7', '20d1', '0dd4',
+      };
+
+      final printers = <Map<String, dynamic>>[];
+      final lineRe = RegExp(
+        r'^Bus\s+\d+\s+Device\s+\d+:\s+ID\s+([0-9a-fA-F]{4}):([0-9a-fA-F]{4})\s*(.*)$',
+        multiLine: true,
+      );
+
+      for (final match in lineRe.allMatches(stdout)) {
+        final vid = match.group(1)!.toLowerCase();
+        final pid = match.group(2)!.toLowerCase();
+        final name = (match.group(3) ?? 'USB device').trim();
+
+        final isThermalVendor = knownThermalVendors.contains(vid);
+        final nameMatchesPrinter = name.toLowerCase().contains('printer') ||
+            name.toLowerCase().contains('thermal') ||
+            name.toLowerCase().contains('pos');
+
+        if (!isThermalVendor && !nameMatchesPrinter) continue;
+
+        printers.add({
+          'name': name.isNotEmpty ? name : 'USB Printer',
+          'type': 'usb',
+          'vid': vid.toUpperCase(),
+          'pid': pid.toUpperCase(),
+          'manufacturer': name,
+          'devicePath': 'usb://${vid.toUpperCase()}:${pid.toUpperCase()}',
+          'mac': '${vid.toUpperCase()}:${pid.toUpperCase()}',
+        });
+      }
+
+      return printers;
+    } catch (_) {
+      return const [];
+    }
   }
 
   Future<void> _printRawDirectUsbWindows({

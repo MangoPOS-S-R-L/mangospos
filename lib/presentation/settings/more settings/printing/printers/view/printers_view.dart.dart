@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -411,12 +412,139 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
   List<Map<String, dynamic>> _foundPrinters = [];
   Map<String, dynamic>? _selectedPrinter;
 
+  // PRD 5 F2 — escaneo extensivo (120s) con resultados en streaming.
+  StreamSubscription? _intensiveSub;
+  Timer? _intensiveCountdown;
+  bool _isIntensiveSearching = false;
+  int _intensiveSecondsLeft = 0;
+
   @override
   void dispose() {
+    _intensiveSub?.cancel();
+    _intensiveCountdown?.cancel();
     _nameCtrl.dispose();
     _ipCtrl.dispose();
     _macCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _searchNetworkIntensive() async {
+    await _intensiveSub?.cancel();
+    _intensiveCountdown?.cancel();
+
+    setState(() {
+      _isIntensiveSearching = true;
+      _intensiveSecondsLeft = 120;
+    });
+
+    _intensiveCountdown = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      setState(() {
+        _intensiveSecondsLeft = _intensiveSecondsLeft > 0
+            ? _intensiveSecondsLeft - 1
+            : 0;
+      });
+      if (_intensiveSecondsLeft <= 0) t.cancel();
+    });
+
+    _intensiveSub = widget.vmCtrl
+        .scanIntensiveStream(duration: const Duration(seconds: 120))
+        .listen(
+      (d) {
+        if (!mounted) return;
+        final ip = d.ip;
+        final id = d.idHint;
+        // Dedupe contra los ya encontrados.
+        final isDup = _foundPrinters.any((p) {
+          if (ip != null && p['ip'] == ip) return true;
+          if (id != null && p['id'] == id) return true;
+          return false;
+        });
+        if (isDup) return;
+        setState(() {
+          _foundPrinters.add({
+            'ip': ip,
+            'mac': d.mac,
+            'name': d.name,
+            'id': id,
+            'type': d.type.name,
+            'devicePath': id,
+          });
+        });
+      },
+      onDone: _stopIntensive,
+      onError: (_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No se pudo completar la búsqueda.')),
+          );
+        }
+        _stopIntensive();
+      },
+    );
+  }
+
+  void _stopIntensive() {
+    _intensiveSub?.cancel();
+    _intensiveSub = null;
+    _intensiveCountdown?.cancel();
+    if (mounted) {
+      setState(() {
+        _isIntensiveSearching = false;
+        _intensiveSecondsLeft = 0;
+      });
+    }
+  }
+
+  Widget _buildIntensiveScanButton() {
+    if (_isIntensiveSearching) {
+      final mm = (_intensiveSecondsLeft ~/ 60).toString().padLeft(1, '0');
+      final ss = (_intensiveSecondsLeft % 60).toString().padLeft(2, '0');
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Buscando impresoras... quedan $mm:$ss',
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: MangoColors.muted,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          TextButton.icon(
+            onPressed: _stopIntensive,
+            icon: const Icon(Icons.stop_circle_outlined, size: 18),
+            label: const Text('Detener búsqueda'),
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFFEF4444),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return TextButton.icon(
+      onPressed: _isSearching ? null : _searchNetworkIntensive,
+      icon: const Icon(Icons.travel_explore, size: 18),
+      label: const Text('Búsqueda más completa (2 min)'),
+      style: TextButton.styleFrom(
+        foregroundColor: const Color(0xFF22C55E),
+      ),
+    );
   }
 
   Future<void> _searchNetwork() async {
@@ -720,6 +848,10 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
                 : _searchNetwork,
             child: const Text('Buscar nuevamente'),
           ),
+          if (_selectedType != 'bluetooth') ...[
+            const SizedBox(height: 8),
+            _buildIntensiveScanButton(),
+          ],
         ] else ...[
           const Text(
             'Impresoras encontradas',
@@ -753,6 +885,16 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
               },
             ),
           ),
+          if (_selectedType != 'bluetooth') ...[
+            const SizedBox(height: 12),
+            const Text(
+              '¿No ves tu impresora? Probá una búsqueda más completa.',
+              style: TextStyle(fontSize: 12, color: MangoColors.muted),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            _buildIntensiveScanButton(),
+          ],
         ],
       ],
     );

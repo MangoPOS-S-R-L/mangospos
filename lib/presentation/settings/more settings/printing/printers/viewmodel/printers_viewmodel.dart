@@ -5,6 +5,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:multicast_dns/multicast_dns.dart';
 import 'package:network_info_plus/network_info_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -424,7 +425,9 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
   // ============================================================
   // ============= ESCANEOS (NO PERSISTENTES) ===================
   // ============================================================
-  Future<List<DiscoveredPrinter>> scanOnLANUnified() async {
+  Future<List<DiscoveredPrinter>> scanOnLANUnified({
+    List<String> extraSubnets = const [],
+  }) async {
     if (kIsWeb) {
       final sw = Stopwatch()..start();
       try {
@@ -457,16 +460,43 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
           .toList();
     }
 
-    final lanResults = await scanOnLAN();
-    final usbResults = await scanUSB();
+    // PRD 5 F2: 3 fuentes paralelas: mDNS (cross-subnet con reflector) +
+    // subnet scan (subnet propia + extras manuales) + USB local. Mergeamos
+    // y deduplicamos por (ip || idHint).
+    final futures = <Future<List<DiscoveredPrinter>>>[
+      scanViaMulticastDns().catchError((e) {
+        _log('scanOnLANUnified mDNS error: $e');
+        return <DiscoveredPrinter>[];
+      }),
+      scanOnLAN(extraSubnets: extraSubnets).catchError((e) {
+        _log('scanOnLANUnified subnet error: $e');
+        return <DiscoveredPrinter>[];
+      }),
+      scanUSB().catchError((e) {
+        _log('scanOnLANUnified USB error: $e');
+        return <DiscoveredPrinter>[];
+      }),
+    ];
+    final batches = await Future.wait(futures);
 
-    return [...lanResults, ...usbResults];
+    final merged = <DiscoveredPrinter>[];
+    final seenKeys = <String>{};
+    for (final batch in batches) {
+      for (final p in batch) {
+        final key = (p.ip ?? p.idHint ?? '${p.type.name}:${p.name}').trim();
+        if (key.isEmpty || seenKeys.contains(key)) continue;
+        seenKeys.add(key);
+        merged.add(p);
+      }
+    }
+    return merged;
   }
 
   Future<List<DiscoveredPrinter>> scanOnLAN({
     List<int> ports = const [9100, 631, 515],
     Duration timeout = const Duration(seconds: 1),
     int maxConcurrent = 96,
+    List<String> extraSubnets = const [],
   }) async {
     state = state.copyWith(isDiscovering: true, errorMessage: null);
 
@@ -475,11 +505,28 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       final gateways = await _getGatewayLastOctets();
       final localIps = await _getLocalIPv4Candidates();
 
-      if (localIps.isEmpty) {
+      if (localIps.isEmpty && extraSubnets.isEmpty) {
         throw Exception('No hay IP local válida. Conéctate a la red.');
       }
 
-      final subnets = localIps.map(_subnetBaseFromIp).toSet().toList()..sort();
+      // PRD 5 F2: extraSubnets permite escanear redes que NO son la propia
+      // de la Mac (ej. Mac en 192.168.0.x, impresora en 192.168.100.x con
+      // routing inter-subnet). Aceptamos formatos: "192.168.100" o
+      // "192.168.100.0" o "192.168.100.0/24". Solo el prefijo /24 importa.
+      final extraBases = <String>{};
+      for (final raw in extraSubnets) {
+        final cleaned = raw.trim().split('/').first;
+        if (cleaned.isEmpty) continue;
+        final parts = cleaned.split('.').where((p) => p.isNotEmpty).toList();
+        if (parts.length < 3) continue;
+        extraBases.add('${parts[0]}.${parts[1]}.${parts[2]}');
+      }
+
+      final subnets = <String>{
+        ...localIps.map(_subnetBaseFromIp),
+        ...extraBases,
+      }.toList()
+        ..sort();
       final ownLastOctets = localIps
           .map((ip) => int.tryParse(ip.split('.').last))
           .whereType<int>()
@@ -565,6 +612,287 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       state = state.copyWith(isDiscovering: false);
     }
     return results;
+  }
+
+  /// PRD 5 F2 — Descubrimiento vía mDNS / Bonjour.
+  ///
+  /// Busca tres service types comunes en impresoras térmicas IP:
+  ///   - `_pdl-datastream._tcp` → raw 9100 (la mayoría de Epson/Star/Bixolon)
+  ///   - `_ipp._tcp`           → IPP / AirPrint
+  ///   - `_printer._tcp`       → LPR / LPD
+  ///
+  /// Funciona **cross-subnet** si tu router tiene mDNS reflector activo
+  /// (común en routers de oficina). Sin reflector, solo subnet propia.
+  /// Es complemento — NO reemplazo — del subnet scan TCP de [scanOnLAN].
+  Future<List<DiscoveredPrinter>> scanViaMulticastDns({
+    Duration timeout = const Duration(seconds: 4),
+  }) async {
+    if (kIsWeb) return const [];
+
+    final out = <DiscoveredPrinter>[];
+    final seenIps = <String>{};
+    final client = MDnsClient();
+    try {
+      await client.start();
+
+      const serviceTypes = [
+        '_pdl-datastream._tcp.local',
+        '_ipp._tcp.local',
+        '_printer._tcp.local',
+      ];
+
+      for (final service in serviceTypes) {
+        try {
+          await for (final ptr in client
+              .lookup<PtrResourceRecord>(
+                ResourceRecordQuery.serverPointer(service),
+              )
+              .timeout(timeout, onTimeout: (sink) => sink.close())) {
+            await for (final srv in client
+                .lookup<SrvResourceRecord>(
+                  ResourceRecordQuery.service(ptr.domainName),
+                )
+                .timeout(timeout, onTimeout: (sink) => sink.close())) {
+              await for (final ip in client
+                  .lookup<IPAddressResourceRecord>(
+                    ResourceRecordQuery.addressIPv4(srv.target),
+                  )
+                  .timeout(timeout, onTimeout: (sink) => sink.close())) {
+                final addr = ip.address.address;
+                if (seenIps.contains(addr)) continue;
+                seenIps.add(addr);
+
+                // Nombre legible: `Epson TM-T20II._pdl...` → `Epson TM-T20II`.
+                final friendlyName =
+                    ptr.domainName.split('.').first.replaceAll('\\032', ' ');
+
+                out.add(
+                  DiscoveredPrinter(
+                    name: friendlyName.isNotEmpty
+                        ? friendlyName
+                        : 'Network Printer',
+                    type: PrinterType.network,
+                    ip: addr,
+                    idHint: addr,
+                  ),
+                );
+              }
+            }
+          }
+        } catch (e) {
+          _log('scanViaMulticastDns() $service error: $e');
+        }
+      }
+    } catch (e) {
+      _log('scanViaMulticastDns() global error: $e');
+    } finally {
+      client.stop();
+    }
+    return out;
+  }
+
+  /// PRD 5 F2 — Escaneo EXTENSIVO con resultados en streaming.
+  ///
+  /// Emite cada impresora encontrada en cuanto se descubre (vía Stream),
+  /// para que la UI pueda mostrar resultados incrementales sin esperar
+  /// al timeout total. Pensado para descubrimiento cross-subnet donde
+  /// la búsqueda puede tardar ~120s.
+  ///
+  /// Tres mecanismos en paralelo:
+  ///   1. mDNS continuo durante toda la duración (atrapa announcements
+  ///      tardíos que el scan rápido pierde).
+  ///   2. TCP subnet scan en subnet propia + [extraSubnets] custom.
+  ///   3. USB local (instantáneo, una sola pasada).
+  ///
+  /// El stream se cierra al cumplirse [duration] o si el caller cancela
+  /// la suscripción. Cada IP se reporta una sola vez (dedupe interno).
+  Stream<DiscoveredPrinter> scanIntensiveStream({
+    Duration duration = const Duration(seconds: 120),
+    List<String> extraSubnets = const [],
+    List<int> tcpPorts = const [9100, 631, 515],
+  }) {
+    final controller = StreamController<DiscoveredPrinter>();
+    final seen = <String>{};
+
+    void emit(DiscoveredPrinter p) {
+      final key = p.ip ?? p.idHint ?? '${p.type.name}:${p.name}';
+      if (key.isEmpty || seen.contains(key)) return;
+      seen.add(key);
+      if (!controller.isClosed) controller.add(p);
+    }
+
+    // Cancelación cooperativa: cuando el controller cierra, los workers
+    // chequean este flag y abortan.
+    var cancelled = false;
+    controller.onCancel = () {
+      cancelled = true;
+    };
+
+    final deadline = DateTime.now().add(duration);
+    bool timeLeft() => !cancelled && DateTime.now().isBefore(deadline);
+
+    // Worker 1: USB instantáneo.
+    final usbFuture = scanUSB().then((list) {
+      for (final p in list) {
+        if (cancelled) break;
+        emit(p);
+      }
+    }).catchError((e) {
+      _log('scanIntensive USB error: $e');
+    });
+
+    // Worker 2: mDNS continuo. Re-lanzamos cada lookup hasta que se acabe
+    // el tiempo, para atrapar devices que tarden en anunciarse.
+    Future<void> mdnsLoop() async {
+      const services = [
+        '_pdl-datastream._tcp.local',
+        '_ipp._tcp.local',
+        '_printer._tcp.local',
+      ];
+      while (timeLeft()) {
+        final remaining = deadline.difference(DateTime.now());
+        if (remaining <= Duration.zero) break;
+        final tickTimeout = remaining > const Duration(seconds: 6)
+            ? const Duration(seconds: 6)
+            : remaining;
+        final client = MDnsClient();
+        try {
+          await client.start();
+          for (final svc in services) {
+            if (!timeLeft()) break;
+            try {
+              await for (final ptr in client
+                  .lookup<PtrResourceRecord>(
+                    ResourceRecordQuery.serverPointer(svc),
+                  )
+                  .timeout(tickTimeout, onTimeout: (s) => s.close())) {
+                if (!timeLeft()) break;
+                await for (final srv in client
+                    .lookup<SrvResourceRecord>(
+                      ResourceRecordQuery.service(ptr.domainName),
+                    )
+                    .timeout(tickTimeout, onTimeout: (s) => s.close())) {
+                  if (!timeLeft()) break;
+                  await for (final ip in client
+                      .lookup<IPAddressResourceRecord>(
+                        ResourceRecordQuery.addressIPv4(srv.target),
+                      )
+                      .timeout(tickTimeout, onTimeout: (s) => s.close())) {
+                    if (!timeLeft()) break;
+                    final addr = ip.address.address;
+                    final friendly = ptr.domainName
+                        .split('.')
+                        .first
+                        .replaceAll('\\032', ' ');
+                    emit(DiscoveredPrinter(
+                      name: friendly.isNotEmpty ? friendly : 'Network Printer',
+                      type: PrinterType.network,
+                      ip: addr,
+                      idHint: addr,
+                    ));
+                  }
+                }
+              }
+            } catch (e) {
+              _log('scanIntensive mDNS $svc error: $e');
+            }
+          }
+        } catch (e) {
+          _log('scanIntensive mDNS client error: $e');
+        } finally {
+          client.stop();
+        }
+        // Pequeña pausa antes de re-loop para no spamear la red.
+        if (timeLeft()) {
+          await Future.delayed(const Duration(seconds: 2));
+        }
+      }
+    }
+
+    final mdnsFuture = mdnsLoop().catchError((e) {
+      _log('scanIntensive mDNS loop fatal: $e');
+    });
+
+    // Worker 3: TCP subnet scan, una pasada agresiva al inicio + retries.
+    Future<void> tcpScan() async {
+      try {
+        final localIps = await _getLocalIPv4Candidates();
+        final extraBases = <String>{};
+        for (final raw in extraSubnets) {
+          final cleaned = raw.trim().split('/').first;
+          if (cleaned.isEmpty) continue;
+          final parts = cleaned.split('.').where((p) => p.isNotEmpty).toList();
+          if (parts.length < 3) continue;
+          extraBases.add('${parts[0]}.${parts[1]}.${parts[2]}');
+        }
+        final bases = <String>{
+          ...localIps.map(_subnetBaseFromIp),
+          ...extraBases,
+        }.toList();
+        if (bases.isEmpty) return;
+
+        final ownLastOctets = localIps
+            .map((ip) => int.tryParse(ip.split('.').last))
+            .whereType<int>()
+            .toSet();
+
+        final hosts = <String>[];
+        for (final base in bases) {
+          for (int i = 1; i <= 254; i++) {
+            if (ownLastOctets.contains(i)) continue;
+            hosts.add('$base.$i');
+          }
+        }
+
+        // Concurrencia controlada para no saturar la red. Timeout más generoso
+        // que el scan rápido (3s vs 1s) — algunas impresoras responden lento.
+        const slotSize = 64;
+        const perHostTimeout = Duration(seconds: 3);
+
+        for (var i = 0; i < hosts.length && timeLeft(); i += slotSize) {
+          final slice = hosts.skip(i).take(slotSize).toList();
+          await Future.wait(slice.map((host) async {
+            if (!timeLeft()) return;
+            for (final port in tcpPorts) {
+              if (!timeLeft()) return;
+              try {
+                final socket = await Socket.connect(
+                  host,
+                  port,
+                  timeout: perHostTimeout,
+                );
+                socket.destroy();
+                emit(DiscoveredPrinter(
+                  name: 'Network Printer ($host)',
+                  type: PrinterType.network,
+                  ip: host,
+                  idHint: host,
+                ));
+                return; // Un puerto basta, no probamos los otros.
+              } catch (_) {
+                // Puerto cerrado o timeout. Probar siguiente puerto.
+              }
+            }
+          }));
+        }
+      } catch (e) {
+        _log('scanIntensive TCP error: $e');
+      }
+    }
+
+    final tcpFuture = tcpScan();
+
+    // Cierre coordinado: cuando todos los workers terminen O se cumpla el
+    // tiempo total, cerramos el stream.
+    Future<void>.delayed(duration).then((_) {
+      cancelled = true;
+      if (!controller.isClosed) controller.close();
+    });
+    Future.wait([usbFuture, mdnsFuture, tcpFuture]).then((_) {
+      if (!controller.isClosed) controller.close();
+    });
+
+    return controller.stream;
   }
 
   /// Escaneo vía Agente local. Acepta respuesta `PrinterDevice` **o** `Map`.
@@ -782,8 +1110,16 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         }
       }
 
-      // 2. Escaneo local en Windows sin depender del agente.
-      if (!kIsWeb && Platform.isWindows) {
+      // 2. Escaneo local desktop sin depender del agente:
+      //    - Windows: PowerShell + Win32_Printer
+      //    - macOS: system_profiler SPUSBDataType
+      //    - Linux: lsusb
+      // PRD 5 F2.1 agregó Mac/Linux. discoverLocalUsbPrinters() ya hace el
+      // dispatch interno por Platform.
+      final supportsLocalUsb = !kIsWeb &&
+          (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
+
+      if (supportsLocalUsb) {
         try {
           final devices = await _repo.discoverLocalUsbPrinters();
           for (final device in devices) {
@@ -806,12 +1142,12 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
             }
           }
         } catch (e) {
-          _log('scanUSB() Windows local error: $e');
+          _log('scanUSB() local desktop error: $e');
         }
       } else if (kIsWeb) {
-        // 3. En Web solo existe agente para red; USB local no está disponible.
+        // En Web no hay USB local; queda solo agente para red.
       } else {
-        // 3. Fallback por agente solo en plataformas donde aún no existe escaneo local USB.
+        // Fallback por agente para plataformas sin escaneo local soportado.
         try {
           final agentUp = await _repo.isAgentUp();
           if (agentUp) {
