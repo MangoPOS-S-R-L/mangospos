@@ -100,20 +100,25 @@ class PrinterHeartbeatScheduler {
     // Sino otros devices verían un host "online" pero sin manera real de
     // alcanzarlo, lo que rompería el flujo de routing.
     if (await isAgentReachable() && agentUrl != null) {
+      // PRD 5 F2.5 fix: el detector retorna http://127.0.0.1:<port> que solo
+      // funciona dentro del mismo device. Para que otros devices del business
+      // puedan rutear jobs hacia este host, sustituimos por la IP LAN.
+      final shareableUrl = await _toShareableUrl(agentUrl!);
+
       try {
         if (!_deviceAgentRegistered) {
           await supabase.rpc('fn_register_device_agent', params: {
             'p_id': deviceId,
             'p_business_id': businessId,
             'p_device_name': deviceName,
-            'p_agent_url': agentUrl,
+            'p_agent_url': shareableUrl,
             'p_platform': DeviceIdentity.currentPlatform(),
           });
           _deviceAgentRegistered = true;
         } else {
           await supabase.rpc('fn_device_agent_heartbeat', params: {
             'p_id': deviceId,
-            'p_agent_url': agentUrl,
+            'p_agent_url': shareableUrl,
           });
         }
       } catch (e) {
@@ -224,6 +229,31 @@ class PrinterHeartbeatScheduler {
     } catch (_) {
       return false;
     }
+  }
+
+  /// Convierte `http://127.0.0.1:PORT` en `http://LAN_IP:PORT` para que el
+  /// URL sea alcanzable desde otros devices del business. Si no se puede
+  /// resolver la IP LAN, retorna el original (mejor algo que nada).
+  Future<String> _toShareableUrl(String url) async {
+    if (!url.contains('127.0.0.1') && !url.contains('localhost')) return url;
+    try {
+      final detector = PrintAgentDetector();
+      final subnet = await detector.subnetFromConnectivity();
+      if (subnet == null) return url;
+
+      final ifaces = await NetworkInterface.list();
+      for (final iface in ifaces) {
+        for (final addr in iface.addresses) {
+          if (addr.type != InternetAddressType.IPv4) continue;
+          if (addr.address.startsWith('$subnet.')) {
+            return url
+                .replaceFirst('127.0.0.1', addr.address)
+                .replaceFirst('localhost', addr.address);
+          }
+        }
+      }
+    } catch (_) {}
+    return url;
   }
 }
 
