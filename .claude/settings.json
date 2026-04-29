@@ -29,7 +29,8 @@
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
       "Bash(git push *)",
-      "Bash(grep -rn \"1 x\\\\|x RD\\\\\\\\\\\\$\\\\|item.*x .*RD\\\\|qty.*x.*price\" /Users/cristiangomez/dev/mangospos/lib/services/printing /Users/cristiangomez/dev/mangospos/lib/data/repositories)"
+      "Bash(grep -rn \"1 x\\\\|x RD\\\\\\\\\\\\$\\\\|item.*x .*RD\\\\|qty.*x.*price\" /Users/cristiangomez/dev/mangospos/lib/services/printing /Users/cristiangomez/dev/mangospos/lib/data/repositories)",
+      "Bash(git merge *)"
     ],
     "additionalDirectories": [
       "/Users/cristiangomez"
