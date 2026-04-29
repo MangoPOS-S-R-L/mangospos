@@ -237,22 +237,35 @@ class PrinterHeartbeatScheduler {
   Future<String> _toShareableUrl(String url) async {
     if (!url.contains('127.0.0.1') && !url.contains('localhost')) return url;
     try {
-      final detector = PrintAgentDetector();
-      final subnet = await detector.subnetFromConnectivity();
-      if (subnet == null) return url;
-
-      final ifaces = await NetworkInterface.list();
+      // Enumeramos interfaces directamente (sin connectivity_plus) porque
+      // en macOS el check puede no devolver wifi/ethernet aunque haya red.
+      final ifaces = await NetworkInterface.list(
+        includeLoopback: false,
+        includeLinkLocal: false,
+        type: InternetAddressType.IPv4,
+      );
       for (final iface in ifaces) {
         for (final addr in iface.addresses) {
-          if (addr.type != InternetAddressType.IPv4) continue;
-          if (addr.address.startsWith('$subnet.')) {
-            return url
-                .replaceFirst('127.0.0.1', addr.address)
-                .replaceFirst('localhost', addr.address);
+          final ip = addr.address;
+          if (ip.startsWith('192.') ||
+              ip.startsWith('10.') ||
+              ip.startsWith('172.')) {
+            final shareable = url
+                .replaceFirst('127.0.0.1', ip)
+                .replaceFirst('localhost', ip);
+            debugPrint(
+              '[Heartbeat] agent_url shareable: $url → $shareable (iface ${iface.name})',
+            );
+            return shareable;
           }
         }
       }
-    } catch (_) {}
+      debugPrint(
+        '[Heartbeat] no LAN IPv4 found, registering localhost (impresoras compartidas no funcionarán)',
+      );
+    } catch (e) {
+      debugPrint('[Heartbeat] _toShareableUrl error: $e');
+    }
     return url;
   }
 }
