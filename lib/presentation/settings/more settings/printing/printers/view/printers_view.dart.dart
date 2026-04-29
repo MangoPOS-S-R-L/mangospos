@@ -499,6 +499,15 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
     }
   }
 
+  /// PRD 5 F2.5: ¿Esta impresora se compartirá desde este dispositivo?
+  /// Verdadero para Bluetooth (siempre) y para una USB descubierta.
+  bool _isLocalSharedPrinter() {
+    if (_selectedType == 'bluetooth') return true;
+    final type = (_selectedPrinter?['type'] as String?)?.toLowerCase();
+    if (type == 'usb' || type == 'bluetooth') return true;
+    return false;
+  }
+
   Widget _buildIntensiveScanButton() {
     if (_isIntensiveSearching) {
       final mm = (_intensiveSecondsLeft ~/ 60).toString().padLeft(1, '0');
@@ -978,6 +987,40 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
               ),
             ),
             keyboardType: TextInputType.number,
+          ),
+        ],
+        if (_isLocalSharedPrinter()) ...[
+          const SizedBox(height: 20),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFFEFF6FF),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFBFDBFE)),
+            ),
+            child: const Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.devices_other,
+                  color: Color(0xFF1D4ED8),
+                  size: 20,
+                ),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Esta impresora se compartirá desde este dispositivo. '
+                    'Otros equipos del negocio podrán usarla cuando este equipo '
+                    'esté encendido y conectado a la red.',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Color(0xFF1E40AF),
+                      height: 1.4,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
         if (_selectedType == 'bluetooth') ...[

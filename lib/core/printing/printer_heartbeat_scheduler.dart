@@ -26,6 +26,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../data/models/printing.dart';
 import '../../services/print_agent_detector.dart';
+import 'device_identity.dart';
 import 'package:mangopos/presentation/settings/more settings/printing/printers/viewmodel/printers_viewmodel.dart';
 
 class PrinterHeartbeatScheduler {
@@ -34,6 +35,9 @@ class PrinterHeartbeatScheduler {
   final Ref _ref;
   Timer? _timer;
   bool _tickInFlight = false;
+  // PRD 5 F2.5: tracking si ya hicimos el register full este ciclo.
+  // Reset en cada error para que el próximo tick reintente completo.
+  bool _deviceAgentRegistered = false;
 
   static const Duration _interval = Duration(seconds: 30);
   static const Duration _pingTimeout = Duration(seconds: 2);
@@ -71,6 +75,54 @@ class PrinterHeartbeatScheduler {
     final businessId = await _resolveBusinessId(supabase, user.id);
     if (businessId == null) return;
 
+    // PRD 5 F2.5: registrar / actualizar este device como agent host del
+    // business. Permite que otros devices del business lo usen como proxy
+    // para imprimir a sus impresoras locales (USB/BT).
+    final deviceId = await DeviceIdentity.getOrCreateId(businessId);
+    final deviceName = await DeviceIdentity.getDisplayName();
+
+    // Ping una sola vez al agent local; reusamos el resultado para todas
+    // las impresoras USB/BT que dependen de él.
+    bool? agentReachable;
+    String? agentUrl;
+    Future<bool> isAgentReachable() async {
+      if (agentReachable != null) return agentReachable!;
+      agentUrl ??= await _resolveAgentUrl();
+      if (agentUrl == null) {
+        agentReachable = false;
+        return false;
+      }
+      agentReachable = await _pingAgent(agentUrl!);
+      return agentReachable!;
+    }
+
+    // Solo registramos el device como host si su agent local está activo.
+    // Sino otros devices verían un host "online" pero sin manera real de
+    // alcanzarlo, lo que rompería el flujo de routing.
+    if (await isAgentReachable() && agentUrl != null) {
+      try {
+        if (!_deviceAgentRegistered) {
+          await supabase.rpc('fn_register_device_agent', params: {
+            'p_id': deviceId,
+            'p_business_id': businessId,
+            'p_device_name': deviceName,
+            'p_agent_url': agentUrl,
+            'p_platform': DeviceIdentity.currentPlatform(),
+          });
+          _deviceAgentRegistered = true;
+        } else {
+          await supabase.rpc('fn_device_agent_heartbeat', params: {
+            'p_id': deviceId,
+            'p_agent_url': agentUrl,
+          });
+        }
+      } catch (e) {
+        debugPrint('Device agent heartbeat failed: $e');
+        // Reset flag para que el próximo tick reintente register completo.
+        _deviceAgentRegistered = false;
+      }
+    }
+
     final repo = _ref.read(printingPrintersRepositoryProvider);
     final List<PrinterConfig> printers;
     try {
@@ -81,24 +133,10 @@ class PrinterHeartbeatScheduler {
     }
     if (printers.isEmpty) return;
 
-    // Ping una sola vez al agent local; reusamos el resultado para todas
-    // las impresoras USB/BT que dependen de él.
-    bool? agentReachable;
-    String? agentUrl;
-
     for (final printer in printers) {
       final reachable = await _ping(
         printer,
-        agentReachable: () async {
-          if (agentReachable != null) return agentReachable!;
-          agentUrl ??= await _resolveAgentUrl();
-          if (agentUrl == null) {
-            agentReachable = false;
-            return false;
-          }
-          agentReachable = await _pingAgent(agentUrl!);
-          return agentReachable!;
-        },
+        agentReachable: isAgentReachable,
       );
       if (reachable) {
         try {
@@ -114,15 +152,19 @@ class PrinterHeartbeatScheduler {
       }
     }
 
-    // PRD 5 F1: invocar la limpieza de stale printers en cada tick.
+    // PRD 5 F1+F2.5: invocar la limpieza de stale en cada tick.
     // Reemplaza la dependencia de pg_cron cuando la extensión no está
-    // habilitada. Costo: una RPC extra por tick (~50ms). Si pg_cron
-    // está activo, esta llamada es idempotente (la peor consecuencia es
-    // que un printer stale se marca offline 1 tick antes).
+    // habilitada. Costo: 2 RPCs extra por tick (~100ms). Si pg_cron está
+    // activo, las llamadas son idempotentes.
     try {
       await supabase.rpc('fn_mark_stale_printers_offline');
     } catch (e) {
-      debugPrint('Stale offline cleanup failed: $e');
+      debugPrint('Stale printer cleanup failed: $e');
+    }
+    try {
+      await supabase.rpc('fn_mark_stale_device_agents_offline');
+    } catch (e) {
+      debugPrint('Stale device agent cleanup failed: $e');
     }
   }
 

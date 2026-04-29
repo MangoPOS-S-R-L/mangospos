@@ -268,6 +268,12 @@ class PrinterConfig {
   final DateTime? lastSeen;
   final DateTime createdAt;
 
+  /// PRD 5 F2.5: si la impresora es USB/BT, este es el UUID del device
+  /// (de `device_agents.id`) que la tiene físicamente conectada. NULL para
+  /// impresoras de red. Cuando otro device del business quiere imprimir,
+  /// el frontend lookups `device_agents.agent_url` y rutea via HTTP.
+  final String? hostDeviceId;
+
   const PrinterConfig({
     required this.id,
     required this.businessId,
@@ -282,6 +288,7 @@ class PrinterConfig {
     this.encoding = 'CP437',
     this.lastSeen,
     required this.createdAt,
+    this.hostDeviceId,
   });
 
   factory PrinterConfig.fromMap(Map<String, dynamic> map) {
@@ -300,6 +307,7 @@ class PrinterConfig {
       encoding: normalized['encoding'] as String,
       lastSeen: normalized['last_seen'] as DateTime?,
       createdAt: normalized['created_at'] as DateTime,
+      hostDeviceId: map['host_device_id'] as String?,
     );
   }
 
@@ -329,6 +337,7 @@ class PrinterConfig {
       'encoding': encoding,
       'last_seen': lastSeen?.toIso8601String(),
       'created_at': createdAt.toIso8601String(),
+      'host_device_id': hostDeviceId,
     };
   }
 }

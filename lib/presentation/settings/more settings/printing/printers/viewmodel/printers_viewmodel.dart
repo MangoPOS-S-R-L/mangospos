@@ -17,6 +17,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_usb_printer/flutter_usb_printer.dart';
 
 import 'package:mangopos/core/business/business_resolver.dart';
+import 'package:mangopos/core/printing/device_identity.dart';
 import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
 
@@ -180,6 +181,14 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       final b = await _ensureOrResolveBusiness();
       final PrinterType t = _toPrinterType(type);
 
+      // PRD 5 F2.5: si la impresora es USB o Bluetooth, autoasignar este
+      // device como host. Permite que otros dispositivos del negocio
+      // impriman a esta impresora vía el agent local de este device.
+      String? hostDeviceId;
+      if (t == PrinterType.usb || t == PrinterType.bluetooth) {
+        hostDeviceId = await DeviceIdentity.getOrCreateId(b);
+      }
+
       await _repo.createPrinter(
         businessId: b,
         name: trimmed,
@@ -189,6 +198,7 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
             ? null
             : (devicePath ?? '').trim(),
         type: t.name,
+        hostDeviceId: hostDeviceId,
       );
 
       await load(businessId: b, force: true);

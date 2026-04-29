@@ -259,6 +259,65 @@ WHERE last_seen < now() - interval '60 seconds';
 
 **Nota v1.1:** macOS puede requerir entitlements de Apple Developer. Si bloquea, plan B = mediar USB Mac vía agent Node.js (que ya tiene acceso al filesystem). Documentar en F2.1.
 
+#### F2.5 — Compartir impresoras locales entre dispositivos (2-3 días)
+
+**Problema:** las impresoras USB y Bluetooth son conexiones físicas. Sin esta fase, una USB conectada al Mac de caja solo es usable desde ese Mac. iPad del mesero, iPhone de delivery, etc. no la ven. Mismo issue con BT pareada en un device específico.
+
+**Solución:** cada device del business expone un agent local HTTP que actúa como proxy a sus impresoras locales. Cuando otro device necesita imprimir a una USB/BT que no es propia, busca el agent del device "host" en la LAN y le envía el job.
+
+**Backend:**
+
+```sql
+-- Tabla de devices del business que actúan como hosts de impresoras locales.
+CREATE TABLE public.device_agents (
+  id uuid PRIMARY KEY,            -- UUID generado por la app, persistido localmente
+  business_id uuid NOT NULL,
+  device_name text,                -- "Mac de Caja", "iPad Mesero", etc.
+  agent_url text,                  -- ej. "http://192.168.0.251:4000"
+  platform text,                   -- 'macos','windows','linux','android','ios'
+  online boolean DEFAULT false,
+  last_heartbeat_at timestamptz,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+-- Vincular impresora a su device host (NULL para impresoras de red puras).
+ALTER TABLE public.printers
+  ADD COLUMN host_device_id uuid REFERENCES public.device_agents(id);
+
+-- RPCs:
+-- - fn_register_device_agent(p_id, p_business_id, p_name, p_url, p_platform): upsert
+-- - fn_device_agent_heartbeat(p_id, p_url): bump last_heartbeat_at + online=true
+-- - fn_mark_stale_device_agents_offline(): cleanup tras 90s sin heartbeat
+```
+
+**Frontend:**
+
+- Service nuevo `DeviceIdentity` que persiste un UUID v4 local en `SharedPreferences` (key: `device_id_<business_id>`). Generado al primer arranque.
+- `PrinterHeartbeatScheduler` extendido: además de impresoras, reporta heartbeat del device_agent (con su agent_url detectado).
+- `PrintingService.sendJob`:
+  - Si `printer.host_device_id IS NULL` o `== self_device_id` o `printer.type == network` → flujo actual (TCP directo o agent local).
+  - Si `host_device_id != self`: lookup `device_agents` row → leer `agent_url` → POST `/print` al agent remoto.
+  - Si remote agent offline (last_heartbeat_at > 90s) → throw `RemotePrinterHostOfflineException`.
+
+**UI (wizard "Agregar impresora"):**
+
+- Cuando el operador elige tipo USB o Bluetooth, mostrar mensaje:
+  > "Esta impresora se compartirá desde este dispositivo. Otros dispositivos del negocio podrán usarla cuando este equipo esté encendido y conectado a la red."
+- Al guardar, escribir `host_device_id = self_device_id` automáticamente.
+- Al editar, mostrar (read-only) qué device es el host actual.
+
+**Definition of Done F2.5:**
+- [ ] Tabla + RPCs + columna aplicada en producción
+- [ ] DeviceIdentity service genera + persiste UUID local
+- [ ] Heartbeat extendido reporta device_agent
+- [ ] PrintingService routea correctamente según `host_device_id`
+- [ ] Test manual exitoso: agregar USB en device A, imprimir desde device B
+- [ ] Test manual exitoso: device A apagado → device B ve printer offline en <90s
+- [ ] Mensaje UI claro al agregar USB/BT sobre el sharing
+
+**Riesgo F2.5:** medio. Requiere LAN routable entre devices del business. Mitigación: documentar requirement de red común; fallback a agregar la printer separada en cada device si LAN multi-segmento no está rutado.
+
 ---
 
 ### Fase 3 — Bluetooth desktop + UI (1 semana)

@@ -1,9 +1,11 @@
 import 'dart:convert';
+import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:io';
 import 'dart:async';
 import 'package:flutter/foundation.dart' show kIsWeb;
 
+import 'package:mangopos/core/printing/device_identity.dart';
 import 'package:mangopos/core/services/local_print_service.dart';
 
 import '../models/printing_models.dart';
@@ -107,6 +109,7 @@ class PrintingRepository {
     String? devicePath,
     String? mac,
     int paperWidth = 80,
+    String? hostDeviceId,
   }) async {
     try {
       final data = await _client
@@ -121,6 +124,8 @@ class PrintingRepository {
             'mac': mac,
             'paper_width': paperWidth,
             'online': false,
+            if (hostDeviceId != null && hostDeviceId.isNotEmpty)
+              'host_device_id': hostDeviceId,
           })
           .select()
           .single();
@@ -804,6 +809,24 @@ class PrintingRepository {
     required List<int> data,
     Duration timeout = const Duration(seconds: 5),
   }) async {
+    // PRD 5 F2.5: routing por host_device_id.
+    // Si la impresora está vinculada a un device físico (USB/BT) que NO es
+    // este device, mandamos el job al agent remoto del host vía LAN.
+    final hostId = printer.hostDeviceId?.trim();
+    if (hostId != null && hostId.isNotEmpty) {
+      final selfId =
+          await DeviceIdentity.getOrCreateId(printer.businessId);
+      if (hostId != selfId) {
+        await _printViaRemoteHost(
+          printer: printer,
+          data: data,
+          hostDeviceId: hostId,
+          timeout: timeout,
+        );
+        return;
+      }
+    }
+
     switch (printer.printerType) {
       case PrinterType.network:
         final ip = printer.ipAddress?.trim();
@@ -879,6 +902,77 @@ class PrintingRepository {
         }
         await printRawViaAgentToPrinter(printer: printer, data: data);
         return;
+    }
+  }
+
+  /// PRD 5 F2.5: rutear job a impresora hosteada por OTRO device del business.
+  ///
+  /// Lookup `device_agents.agent_url` del host → POST `/print` con el payload
+  /// que el agent local sabe procesar (mismo formato que el agent procesa
+  /// para sus printers locales).
+  ///
+  /// Si el host está offline (last_heartbeat_at > 90s), throw — el caller
+  /// puede mostrar mensaje amigable al operador.
+  Future<void> _printViaRemoteHost({
+    required PrinterConfig printer,
+    required List<int> data,
+    required String hostDeviceId,
+    Duration timeout = const Duration(seconds: 8),
+  }) async {
+    final row = await _client
+        .from('device_agents')
+        .select('agent_url, online, last_heartbeat_at, device_name')
+        .eq('id', hostDeviceId)
+        .maybeSingle();
+
+    if (row == null) {
+      throw Exception(
+        'Esta impresora no está disponible. El dispositivo asociado no está registrado.',
+      );
+    }
+
+    final online = row['online'] == true;
+    final agentUrl = (row['agent_url'] as String?)?.trim();
+    final hostName = (row['device_name'] as String?) ?? 'otro dispositivo';
+
+    if (!online || agentUrl == null || agentUrl.isEmpty) {
+      throw Exception(
+        'No se puede imprimir: $hostName está fuera de línea.',
+      );
+    }
+
+    // El agent local de Node.js expone POST /print con payload compatible.
+    // Reusamos el mismo formato del Socket.io job para no fragmentar.
+    final base64Data = base64Encode(data);
+    final payload = <String, dynamic>{
+      'id': 'REMOTE-${DateTime.now().millisecondsSinceEpoch}',
+      'printer': {
+        'id': printer.id,
+        'type': printer.printerType.name,
+        'name': printer.name,
+        'ip': printer.ipAddress,
+        'port': printer.port,
+        'devicePath': printer.devicePath,
+        'mac': printer.mac,
+      },
+      'content': {
+        'type': 'raw_base64',
+        'dataBase64': base64Data,
+      },
+    };
+
+    final response = await http
+        .post(
+          Uri.parse('$agentUrl/print'),
+          headers: const {'Content-Type': 'application/json'},
+          body: jsonEncode(payload),
+        )
+        .timeout(timeout);
+
+    if (response.statusCode != 200) {
+      throw Exception(
+        'No se pudo imprimir desde $hostName (código ${response.statusCode}).',
+      );
     }
   }
 
