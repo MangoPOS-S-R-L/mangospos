@@ -6,9 +6,9 @@
 
 | Campo | Valor |
 |---|---|
-| Última actualización | 2026-04-28 (sesión 2) |
-| PRD activo | **PRD 2 — Refactor del Motor (F2.1: Diseño)** |
-| Branch | `prd/01-stop-the-bleeding-frontend-wip` (PRD 1 ahí; PRD 2 idealmente arranca branch nuevo `prd/02-refactor-motor` cuando se merge PRD 1 a main) |
+| Última actualización | 2026-04-28 (sesión 3) |
+| PRD activo | **PRD 4 — Unificación de Modos de Venta (F4.1: Investigación)** |
+| Branch | `main` (PRD 1 + PRD 2 ya mergeados) — pendiente crear `prd/04-modulos-venta` |
 | DRI | Cristian |
 
 ---
@@ -17,9 +17,10 @@
 
 | PRD | Estado | Notas |
 |---|---|---|
-| PRD 1 — Stop-the-Bleeding | **COMPLETO** | Frontend commiteado en `21cef1a` (branch `prd/01-stop-the-bleeding-frontend-wip`). Backend SQL desestimado: el "trigger duplicado" del inventario original era falso positivo (verificado 2026-04-28). |
-| PRD 2 — Refactor del motor | **COMPLETO en código** (2026-04-28). Backend en producción + frontend refactor pleno + 3 bugs residuales del frontend descubiertos en validación visual y cerrados. 5/5 parity backend + 24/24 golden tests frontend PASS. Bug "Agua Dasany cobra propina fantasma" cerrado de raíz. **Pendiente: commit + 1 semana de observación antes de PRD 3.** |
-| PRD 3 — Reportes y migración | Pendiente | Bloqueado por PRD 2 + 1 semana de observación. |
+| PRD 1 — Stop-the-Bleeding | **COMPLETO** | Frontend commiteado en `21cef1a` (branch `prd/01-stop-the-bleeding-frontend-wip`). Backend SQL desestimado: el "trigger duplicado" del inventario original era falso positivo. |
+| PRD 2 — Refactor del motor | **COMPLETO** | Backend unificado en producción + frontend refactor pleno + 4 bugs residuales cerrados. 5/5 parity backend + 24/24 golden tests frontend PASS. Motor unificado vivo en mesas (zona). **Deuda conocida que se cierra en PRD 4**: bugs visuales en venta rápida y manual porque esos modos usan paths del frontend que no enganchan bien con el motor nuevo. |
+| PRD 3 — Reportes y migración | Pendiente | Puede ir en paralelo o después de PRD 4. Drop de columnas deprecadas + reportes refactor + decisión sobre `is_service_fee` → `apply_on_takeout`. |
+| PRD 4 — Unificación de Modos de Venta | **EN F4.1 (Investigación)** desde 2026-04-28. Construir las features faltantes de Quick y Manual usando el motor unificado del PRD 2. Documento: `PRD_04_modulos_venta.md`. Trabajo en `Sales-Module-PRD4/`. |
 
 ---
 

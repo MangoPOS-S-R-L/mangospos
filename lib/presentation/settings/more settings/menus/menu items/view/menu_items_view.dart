@@ -10,6 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../viewmodel/menu_items_viewmodel.dart';
 import '../../../../../../data/models/menu_item.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 class MenuItemsView extends ConsumerStatefulWidget {
   final String businessId; // puede ser 'auto'
@@ -404,10 +405,10 @@ class _ItemThumb extends StatelessWidget {
     if (direct != null && direct.isNotEmpty) {
       return _ThumbBox(
         size: size,
-        child: Image.network(
-          direct,
+        child: CachedNetworkImage(
+          imageUrl: direct.replaceAll('sqdwjjewdqzxglvqerqt.supabase.co', 'supabase.mangopos.do'),
           fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) =>
+          errorWidget: (context, url, error) =>
               const Icon(Icons.broken_image, color: MangoColors.muted),
         ),
       );
@@ -443,10 +444,10 @@ class _ItemThumb extends StatelessWidget {
         }
         return _ThumbBox(
           size: size,
-          child: Image.network(
-            url,
+          child: CachedNetworkImage(
+            imageUrl: url.replaceAll('sqdwjjewdqzxglvqerqt.supabase.co', 'supabase.mangopos.do'),
             fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) =>
+            errorWidget: (context, url, error) =>
                 const Icon(Icons.broken_image, color: MangoColors.muted),
           ),
         );

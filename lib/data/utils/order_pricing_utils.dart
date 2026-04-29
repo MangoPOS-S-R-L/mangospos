@@ -79,28 +79,49 @@ OrderItemPricingSummary summarizeItemPricing(Order? order, OrderItem item, {Stri
   // fallback en ese caso (solo para exclusive — para inclusive el gross
   // incluye tax y rompería la math).
   final grossWithModifiers = _itemGross(item);
-  final dbTax = _r(item.tax);
   final dbDiscounts = _r(item.discounts);
+  final fullRate = (item.originalTaxRate ?? item.taxRate) / 100.0;
+
+  // Detectar si los modifiers en draft aún no fueron procesados por el
+  // backend (oi.subtotal/oi.tax persistidos no incluyen el modifier nuevo).
+  // En ese caso recomputamos en frontend para que el total mostrado en
+  // draft coincida con el confirmado y no haya cambio de precio sorpresa
+  // al enviar a cocina.
+  final persistedGross = item.taxMode == 'inclusive'
+      ? _r(item.subtotal + item.tax)
+      : _r(item.subtotal);
+  final modifiersOutOfSync = item.modifiers.isNotEmpty &&
+      grossWithModifiers > persistedGross + 0.01;
 
   final double dbSubtotal;
-  if (item.taxMode == 'inclusive') {
-    // Inclusive: confiar en oi.subtotal (ya extraído por trigger backend con
-    // tasa consolidada). Si está en 0 (optimistic), fallback a extraer del
-    // gross usando tax_rate.
-    if (item.subtotal > 0) {
-      dbSubtotal = _r(item.subtotal);
-    } else {
-      final fullRate = (item.originalTaxRate ?? item.taxRate) / 100.0;
+  final double dbTax;
+  if (modifiersOutOfSync) {
+    if (item.taxMode == 'inclusive') {
       dbSubtotal = fullRate > 0
           ? _r(grossWithModifiers / (1 + fullRate))
           : _r(grossWithModifiers);
+      dbTax = _r(grossWithModifiers - dbSubtotal);
+    } else {
+      dbSubtotal = _r(grossWithModifiers);
+      dbTax = _r(dbSubtotal * fullRate);
     }
   } else {
-    // Exclusive: oi.subtotal es la base (sin tax). Si tiene modifiers en
-    // draft y el backend no los incluyó aún, usar gross calculado.
-    dbSubtotal = item.modifiers.isNotEmpty
-        ? _r(grossWithModifiers > item.subtotal ? grossWithModifiers : item.subtotal)
-        : _r(item.subtotal > 0 ? item.subtotal : grossWithModifiers);
+    dbTax = _r(item.tax);
+    if (item.taxMode == 'inclusive') {
+      // Inclusive: confiar en oi.subtotal (ya extraído por trigger backend con
+      // tasa consolidada). Si está en 0 (optimistic), fallback a extraer del
+      // gross usando tax_rate.
+      if (item.subtotal > 0) {
+        dbSubtotal = _r(item.subtotal);
+      } else {
+        dbSubtotal = fullRate > 0
+            ? _r(grossWithModifiers / (1 + fullRate))
+            : _r(grossWithModifiers);
+      }
+    } else {
+      // Exclusive: oi.subtotal es la base (sin tax).
+      dbSubtotal = _r(item.subtotal > 0 ? item.subtotal : grossWithModifiers);
+    }
   }
 
   // Compatibilidad legacy: order.serviceFee > 0 solo aparece en órdenes
@@ -137,6 +158,18 @@ double itemDisplayTotal(Order? order, OrderItem item) {
 double itemDisplayUnitPrice(Order? order, OrderItem item) {
   final qty = item.quantity <= 0 ? 1.0 : item.quantity;
   return _r(itemDisplayTotal(order, item) / qty);
+}
+
+/// Total base de la línea (sin impuestos), usado en tickets/facturas para que
+/// la suma de líneas coincida con el SUBTOTAL y el desglose de impuestos
+/// aparezca solo en el footer (evita doble visualización en items inclusive).
+double itemDisplayBaseTotal(Order? order, OrderItem item) {
+  return summarizeItemPricing(order, item).subtotal;
+}
+
+double itemDisplayBaseUnitPrice(Order? order, OrderItem item) {
+  final qty = item.quantity <= 0 ? 1.0 : item.quantity;
+  return _r(itemDisplayBaseTotal(order, item) / qty);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

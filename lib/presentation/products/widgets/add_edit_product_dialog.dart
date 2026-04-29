@@ -9,7 +9,8 @@ import 'package:mangopos/core/theme/app_radius.dart';
 import 'package:mangopos/core/theme/app_shadows.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/state/taxes_state.dart';
-import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/viewmodel/taxes_viewmodel.dart';
+import 'package:mangopos/presentation/settings/more settings/system settings/tax/viewmodel/taxes_viewmodel.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 class AddEditProductDialog extends ConsumerStatefulWidget {
   final Map<String, dynamic>? product;
@@ -1075,10 +1076,10 @@ class _ImagePickerArea extends StatelessWidget {
     } else if (file != null) {
       content = Image.file(file!, fit: BoxFit.cover);
     } else if (existingUrl != null && existingUrl!.isNotEmpty) {
-      content = Image.network(
-        existingUrl!,
+      content = CachedNetworkImage(
+        imageUrl: existingUrl!.replaceAll('sqdwjjewdqzxglvqerqt.supabase.co', 'supabase.mangopos.do'),
         fit: BoxFit.cover,
-        errorBuilder: (_, _, _) =>
+        errorWidget: (_, __, ___) =>
             Icon(Icons.broken_image, size: 50, color: AppColors.mutedForeground),
       );
     } else {

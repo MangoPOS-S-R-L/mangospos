@@ -7,6 +7,7 @@ import 'package:mangopos/presentation/settings/more%20settings/system%20settings
 import 'package:mangopos/services/session/session_controller.dart';
 import '../viewmodel/products_viewmodel.dart';
 import '../widgets/add_edit_product_dialog.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 class ProductsView extends ConsumerStatefulWidget {
   const ProductsView({super.key});
@@ -513,7 +514,7 @@ class _ProductsTable extends StatelessWidget {
                                 color: AppColors.muted,
                                 image: imageUrl != null && imageUrl.isNotEmpty
                                     ? DecorationImage(
-                                        image: NetworkImage(imageUrl),
+                                        image: CachedNetworkImageProvider(imageUrl.replaceAll('sqdwjjewdqzxglvqerqt.supabase.co', 'supabase.mangopos.do')),
                                         fit: BoxFit.cover,
                                       )
                                     : null,
