@@ -66,67 +66,60 @@ double _itemGross(OrderItem item) {
 }
 
 OrderItemPricingSummary summarizeItemPricing(Order? order, OrderItem item, {String? forcedOrigin}) {
-  final dbSubtotal = _r(item.subtotal > 0 ? item.subtotal : _itemGross(item));
+  // PRD 2.5: modelo unificado. oi.tax ya incluye TODOS los impuestos aplicables
+  // (ITBIS + Ley + cualquier otro), filtrados por apply_on_<origin> en el motor
+  // backend. Ya no hay distinción tax vs service_fee a nivel item.
+  //
+  // Para items inclusive: el trigger backend fn_compute_item_totals extrae
+  // oi.subtotal y oi.tax usando la rate consolidada (ej. 28%). Confiamos en
+  // esos valores y NO recalculamos en el frontend.
+  //
+  // Para items con modifiers en draft: oi.subtotal puede no incluir modifiers
+  // hasta que el motor backend recalcule. Usamos el gross calculado como
+  // fallback en ese caso (solo para exclusive — para inclusive el gross
+  // incluye tax y rompería la math).
+  final grossWithModifiers = _itemGross(item);
   final dbTax = _r(item.tax);
   final dbDiscounts = _r(item.discounts);
 
-  final displayTotal = itemDisplayTotal(order, item);
-
+  final double dbSubtotal;
   if (item.taxMode == 'inclusive') {
-    final origin = parseSaleOrigin(forcedOrigin ?? 'zone');
-    final orderServicePct = resolveOrderServiceRate(order) * 100.0;
-    
-    double effectiveTaxPct = item.taxRate;
-    double fullTaxPct = item.originalTaxRate ?? (effectiveTaxPct + (item.isTakeout ? 0.0 : orderServicePct));
-    
-    // Si el ITBIS llegó como 28% camuflado, lo corregimos a 18% para el desglose
-    if (effectiveTaxPct >= 27.9) {
-       effectiveTaxPct = 18.0;
-       fullTaxPct = 28.0;
+    // Inclusive: confiar en oi.subtotal (ya extraído por trigger backend con
+    // tasa consolidada). Si está en 0 (optimistic), fallback a extraer del
+    // gross usando tax_rate.
+    if (item.subtotal > 0) {
+      dbSubtotal = _r(item.subtotal);
+    } else {
+      final fullRate = (item.originalTaxRate ?? item.taxRate) / 100.0;
+      dbSubtotal = fullRate > 0
+          ? _r(grossWithModifiers / (1 + fullRate))
+          : _r(grossWithModifiers);
     }
-
-    // Calculamos SIEMPRE con la tasa completa (28%) para extraer la base real (39.06)
-    final serviceFeePct = (fullTaxPct - effectiveTaxPct).abs() > 0.01 
-        ? (fullTaxPct - effectiveTaxPct) 
-        : (item.isTakeout ? 0.0 : orderServicePct);
-
-    final inclusiveResult = calculateItemTax(
-      grossAmount: _r(displayTotal + dbDiscounts),
-      taxMode: 'inclusive',
-      effectiveTaxPct: effectiveTaxPct,
-      fullTaxPct: fullTaxPct,
-      serviceFeePct: serviceFeePct,
-      isTakeout: item.isTakeout,
-      discounts: dbDiscounts,
-    );
-
-    // Ahora decidimos si mostramos/cobramos la ley según el origen
-    bool shouldShowServiceFee = !item.isTakeout && origin != SaleOrigin.quick && origin != SaleOrigin.delivery;
-    
-    final finalServiceFee = shouldShowServiceFee ? inclusiveResult.serviceFee : 0.0;
-    final finalTotal = _r(inclusiveResult.baseAmount + inclusiveResult.taxAmount + finalServiceFee);
-
-    return OrderItemPricingSummary(
-      subtotal: _r(inclusiveResult.baseAmount),
-      tax: _r(inclusiveResult.taxAmount),
-      discounts: dbDiscounts,
-      serviceFee: _r(finalServiceFee),
-      extraServiceFee: 0,
-      total: finalTotal,
-    );
+  } else {
+    // Exclusive: oi.subtotal es la base (sin tax). Si tiene modifiers en
+    // draft y el backend no los incluyó aún, usar gross calculado.
+    dbSubtotal = item.modifiers.isNotEmpty
+        ? _r(grossWithModifiers > item.subtotal ? grossWithModifiers : item.subtotal)
+        : _r(item.subtotal > 0 ? item.subtotal : grossWithModifiers);
   }
 
-  final serviceRate = resolveOrderServiceRate(order);
-  final serviceFee =
-      (serviceRate > 0 && !item.isTakeout) ? _r(dbSubtotal * serviceRate) : 0.0;
+  // Compatibilidad legacy: order.serviceFee > 0 solo aparece en órdenes
+  // históricas pre-PRD-2.5. Para esas, mantenemos el cálculo proporcional
+  // para no romper su display. Para órdenes nuevas (post-PRD-2.5),
+  // order.serviceFee = 0 y este path no aplica.
+  final orderServiceFee = order?.serviceFee ?? 0;
+  final orderSubtotal = order?.subtotal ?? 0;
+  final legacyServiceFee = (orderServiceFee > 0.004 && orderSubtotal > 0)
+      ? _r((orderServiceFee / orderSubtotal) * dbSubtotal)
+      : 0.0;
 
   return OrderItemPricingSummary(
     subtotal: dbSubtotal,
     tax: dbTax,
     discounts: dbDiscounts,
-    serviceFee: serviceFee,
+    serviceFee: legacyServiceFee,
     extraServiceFee: 0,
-    total: _r(dbSubtotal + dbTax + serviceFee - dbDiscounts),
+    total: _r(dbSubtotal + dbTax + legacyServiceFee - dbDiscounts),
   );
 }
 
@@ -328,10 +321,13 @@ OrderPricingSummary summarizeOrderPricing(
     }
   }
 
-  // Universal total formula: Base + Taxes + Service Fee.
-  // Discounts are already included in the base/tax/service components of each item
-  // so we don't subtract them again here.
-  final finalTotal = _r(subtotal + tax + serviceFee + extraServiceFee);
+  // PRD 2.5: Total = Base + Taxes + Service Fee - Discounts.
+  // (El comentario anterior decía que discounts ya estaban en base/tax/service
+  // pero eso era falso después del refactor de summarizeItemPricing — los
+  // descuentos solo se restan en el total per-item. A nivel orden hay que
+  // restar explícitamente. Sin esto, cart muestra Total inconsistente con
+  // la línea "Descuento" que renderea OrderSummaryPanel/cart.)
+  final finalTotal = _r(subtotal + tax + serviceFee + extraServiceFee - discounts);
 
   return OrderPricingSummary(
     subtotal: _r(subtotal),

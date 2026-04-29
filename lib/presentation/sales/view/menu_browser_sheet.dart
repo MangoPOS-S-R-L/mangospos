@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 class MenuBrowserSheet extends ConsumerStatefulWidget {
   const MenuBrowserSheet({super.key});
@@ -570,7 +571,10 @@ class _ProductCard extends ConsumerWidget {
                             size: 48,
                             color: MangoColors.muted,
                           )
-                        : Image.network(item.imageUrl!, fit: BoxFit.cover),
+                        : CachedNetworkImage(
+                            imageUrl: item.imageUrl!.replaceAll('sqdwjjewdqzxglvqerqt.supabase.co', 'supabase.mangopos.do'),
+                            fit: BoxFit.cover,
+                          ),
                   ),
                 ),
               ),

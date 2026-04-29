@@ -559,12 +559,26 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       _openManualOrQuick('quick', forceReset: forceRestart);
 
   Future<void> ensureManualOrder() async {
-    if (state.origin == 'manual' && state.order != null) return;
+    // Reusar solo si la orden está abierta. Si fue paid/voided/sent y el
+    // usuario vuelve al tab, se abre una nueva sesión Manual limpia.
+    final current = state.order;
+    if (state.origin == 'manual' &&
+        current != null &&
+        current.status == 'open') {
+      return;
+    }
     await openManual(forceRestart: true);
   }
 
   Future<void> ensureQuickOrder() async {
-    if (state.origin == 'quick' && state.order != null) return;
+    // Reusar solo si la orden está abierta. Si fue paid/voided/sent y el
+    // usuario vuelve al tab, se abre una nueva sesión Quick limpia.
+    final current = state.order;
+    if (state.origin == 'quick' &&
+        current != null &&
+        current.status == 'open') {
+      return;
+    }
     await openQuick(forceRestart: true);
   }
 
@@ -704,32 +718,27 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       await _loadOrderDetail(res['order_id'] as String, origin: origin);
     } catch (e) {
       final businessId = _activeBusinessId;
+      // PRD 2.5: ignoramos completamente el cache offline para Quick/Manual.
+      // Cada sesión Quick/Manual es fresca por definición — recuperar state
+      // viejo solo causa contaminación (orders zombie, items que se asignan
+      // a sesiones equivocadas). Si el RPC falla, surfaceamos el error real
+      // para que el operador entienda qué pasa en vez de ver una venta vieja
+      // como si fuera nueva.
+      //
+      // Limpiamos también el slot del cache para prevenir contaminación futura.
       if (businessId != null && businessId.isNotEmpty) {
-        final cached = await _offlinePos.loadSnapshot(
+        await _offlinePos.saveSnapshot(
           businessId: businessId,
           slotId: origin,
-        );
-        if (cached != null) {
-          state = _normalizeHydratedState(
-            cached.copyWith(
-              loading: false,
-              error: 'Modo offline: usando venta local persistida.',
-              origin: origin,
-            ),
-          );
-          return;
-        }
-
-        final localDraft = await _offlinePos.createLocalDraft(
-          businessId: businessId,
           origin: origin,
+          state: const CurrentOrderState(),
+          localOnly: true,
         );
-        state = localDraft.copyWith(
-          error: 'Modo offline: venta local creada. Se sincroniza luego.',
-        );
-        return;
       }
-      state = state.copyWith(loading: false, error: e.toString());
+      state = state.copyWith(
+        loading: false,
+        error: 'No se pudo abrir Venta ${origin == 'quick' ? 'Rápida' : 'Manual'}: $e',
+      );
     }
   }
 
@@ -749,6 +758,25 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     final orderId = state.order?.id;
     if (orderId == null) {
       state = state.copyWith(error: 'Orden no disponible. Reintenta.');
+      return;
+    }
+
+    // PRD 4: bloqueo defensivo. Si la orden activa ya fue cobrada o anulada,
+    // el state está stale — no podemos agregar items a una orden cerrada.
+    // Forzamos re-apertura según origin para que el próximo add vaya a una
+    // orden fresca. Solo rechazamos en estados terminales conocidos
+    // (paid/void); cualquier otro estado pasa y deja seguir el flujo normal.
+    final currentStatus = state.order?.status;
+    if (currentStatus == 'paid' || currentStatus == 'void') {
+      final origin = state.origin;
+      state = state.copyWith(
+        error: 'La orden anterior ya fue cerrada. Iniciando una nueva.',
+      );
+      if (origin == 'quick') {
+        await openQuick(forceRestart: true);
+      } else if (origin == 'manual') {
+        await openManual(forceRestart: true);
+      }
       return;
     }
 
@@ -1980,13 +2008,17 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             fiscalSequences.any(
               (sequence) => sequence.businessId != activeBusinessId,
             ));
+    String? fiscalSequencesLoadError;
+    bool clearFiscalSequencesLoadError = false;
     if (shouldReloadFiscalSequences) {
       try {
         fiscalSequences = await ref
             .read(fiscalServiceProvider)
             .getSequences(activeBusinessId);
+        clearFiscalSequencesLoadError = true;
       } catch (e) {
         debugPrint('Error loading fiscal sequences: $e');
+        fiscalSequencesLoadError = e.toString();
       }
     }
 
@@ -2014,6 +2046,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         fiscalType: resolvedFiscalType,
         fiscalDefaultType: _cachedDefaultFiscalType,
         fiscalSequences: fiscalSequences,
+        fiscalSequencesLoadError: fiscalSequencesLoadError,
+        clearFiscalSequencesLoadError: clearFiscalSequencesLoadError,
       ),
     );
 

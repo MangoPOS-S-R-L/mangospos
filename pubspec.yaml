@@ -79,6 +79,7 @@ dependencies:
   auto_updater: ^1.0.0
   shelf: ^1.4.2
   shelf_router: ^1.1.4
+  cached_network_image: ^3.4.1
 
 
 dev_dependencies:

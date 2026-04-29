@@ -121,7 +121,11 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
                         locked: !sessionCtrl.hasPermission(
                           'ventas.mesas.abrir',
                         ),
-                        disabled: !isCashOpen,
+                        // PRD 4 F4.4: Venta Manual temporalmente bloqueada
+                        // hasta completar TableSelectorModal + flujo de
+                        // asignación post-cobro. Reactivar removiendo el
+                        // `|| true` cuando esté listo.
+                        disabled: !isCashOpen || true,
                         onTap: () => _handleNavTap(
                           context,
                           ref,

@@ -30,6 +30,10 @@ class CurrentOrderState extends Equatable {
   /// Cuando es != null, los pagos deben bloquearse (PRD 1).
   final String? taxConfigError;
 
+  /// Error real al cargar `ncf_sequences`. Si != null, distingue
+  /// "no hay secuencias configuradas" de "fallo de red/RLS/auth".
+  final String? fiscalSequencesLoadError;
+
   const CurrentOrderState({
     this.loading = false,
     this.error,
@@ -54,6 +58,7 @@ class CurrentOrderState extends Equatable {
     this.fiscalSequences = const [],
     this.customerTaxId,
     this.taxConfigError,
+    this.fiscalSequencesLoadError,
   });
 
   CurrentOrderState copyWith({
@@ -86,6 +91,8 @@ class CurrentOrderState extends Equatable {
     String? customerTaxId,
     String? taxConfigError,
     bool clearTaxConfigError = false,
+    String? fiscalSequencesLoadError,
+    bool clearFiscalSequencesLoadError = false,
   }) {
     return CurrentOrderState(
       loading: loading ?? this.loading,
@@ -122,6 +129,9 @@ class CurrentOrderState extends Equatable {
       taxConfigError: clearTaxConfigError
           ? null
           : (taxConfigError ?? this.taxConfigError),
+      fiscalSequencesLoadError: clearFiscalSequencesLoadError
+          ? null
+          : (fiscalSequencesLoadError ?? this.fiscalSequencesLoadError),
     );
   }
 
@@ -150,5 +160,6 @@ class CurrentOrderState extends Equatable {
     fiscalSequences,
     customerTaxId,
     taxConfigError,
+    fiscalSequencesLoadError,
   ];
 }

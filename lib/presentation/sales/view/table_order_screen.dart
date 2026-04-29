@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:cached_network_image/cached_network_image.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -28,6 +29,7 @@ import 'package:mangopos/data/models/table_status.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:mangopos/presentation/sales/view/widgets/product_detail_modal.dart';
+import 'package:mangopos/presentation/sales/view/table_selector_modal.dart';
 import 'payment_split_screen.dart';
 
 const Color _salesSurface = Color(0xFFFFFFFF);
@@ -1108,7 +1110,38 @@ class _CartView extends ConsumerWidget {
           // Define completion logic
           void onFinish() {
             if (checkId == null) {
-              if (context.mounted) context.go(AppRoutes.salesByZone);
+              // PRD 4: en Quick/Manual cerramos la orden de forma MANDATORIA,
+              // reseteamos el state, y abrimos UNA SESIÓN NUEVA en el mismo
+              // modo para que el operador pueda agregar productos
+              // inmediatamente sin tener que navegar. Sin el openQuick/Manual
+              // final, el cart queda vacío con state.order=null y los taps
+              // de producto fallan con "no hay orden activa".
+              if (origin == OrderOrigin.quick ||
+                  origin == OrderOrigin.manual) {
+                () async {
+                  try {
+                    await ref
+                        .read(salesRepositoryProvider)
+                        .closeOrder(orderId: order.id, status: 'paid');
+                  } catch (_) {
+                    // Si ya estaba cerrada, processPayment lo hizo. OK.
+                  }
+                  await ref
+                      .read(currentOrderProvider.notifier)
+                      .refreshOrder(clearIfPaid: true);
+                  if (origin == OrderOrigin.quick) {
+                    await ref
+                        .read(currentOrderProvider.notifier)
+                        .openQuick(forceRestart: true);
+                  } else {
+                    await ref
+                        .read(currentOrderProvider.notifier)
+                        .openManual(forceRestart: true);
+                  }
+                }();
+              } else {
+                if (context.mounted) context.go(AppRoutes.salesByZone);
+              }
             } else {
               ref.read(currentOrderProvider.notifier).refreshOrder();
             }
@@ -1161,6 +1194,29 @@ class _CartView extends ConsumerWidget {
           // Refrescar la orden actual
           ref.read(currentOrderProvider.notifier).refreshOrder();
         },
+      ),
+    );
+  }
+
+  // PRD 4: abre el selector de mesas en flujo Manual.
+  // El modal llama internamente a `assignManualOrderToTable`, que convierte
+  // la orden a origin=table y refresca el state. OrderScreen reacciona solo.
+  void _openTableSelector(
+    BuildContext context,
+    WidgetRef ref,
+    String orderId,
+  ) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => FractionallySizedBox(
+        heightFactor: 0.85,
+        child: TableSelectorModal(orderId: orderId),
       ),
     );
   }
@@ -2046,6 +2102,22 @@ class _CartView extends ConsumerWidget {
               if (allItems.isNotEmpty) ...[
                 // Use allItems check to keep buttons visible even if view is empty? No prefer items check.
                 const SizedBox(height: 16),
+                // PRD 4: en Venta Manual ofrecer asignar mesa al final del flujo.
+                if (origin == OrderOrigin.manual &&
+                    orderState.order != null) ...[
+                  _SecondaryActionButton(
+                    label: 'Asignar a Mesa',
+                    icon: Icons.table_restaurant_outlined,
+                    onPressed: orderState.loading
+                        ? null
+                        : () => _openTableSelector(
+                            context,
+                            ref,
+                            orderState.order!.id,
+                          ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
                 if (draftItems.isNotEmpty) ...[
                   // BOTON ENVIAR A COCINA (Show if there are DRAFT items in CURRENT view? Or global?
                   // Spec says: "Enviar a Cocina: Comportamiento NO cambia. Envía productos pendientes."
@@ -2656,6 +2728,10 @@ class _CartView extends ConsumerWidget {
         .toList(growable: false);
 
     if (activeSequences.isEmpty) {
+      final loadError = orderState.fiscalSequencesLoadError;
+      if (loadError != null && loadError.isNotEmpty) {
+        return 'No se pudieron cargar las secuencias fiscales: $loadError. Reintenta o revisa la conexión y permisos.';
+      }
       return 'Este negocio no tiene secuencias fiscales activas configuradas. Revisa Ajustes > Fiscal antes de cobrar.';
     }
 
@@ -5393,7 +5469,9 @@ class _ProductAvatar extends StatelessWidget {
         color: _salesTabActiveBg,
         shape: BoxShape.circle,
         image: imageUrl != null
-            ? DecorationImage(image: NetworkImage(imageUrl!), fit: BoxFit.cover)
+            ? DecorationImage(
+                image: CachedNetworkImageProvider(imageUrl!.replaceAll('sqdwjjewdqzxglvqerqt.supabase.co', 'supabase.mangopos.do')), 
+                fit: BoxFit.cover)
             : null,
       ),
       child: imageUrl == null

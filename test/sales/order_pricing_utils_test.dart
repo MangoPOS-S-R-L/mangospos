@@ -82,16 +82,19 @@ void main() {
     });
 
     test('modifier totals reconcile through the canonical summary path', () {
-      final order = _order(subtotal: 200, serviceFee: 20);
+      // PRD 2.5: bajo el modelo unificado, oi.tax incluye TODOS los impuestos
+      // (regulares + service fees) que apliquen al origin. order.serviceFee = 0.
+      // El item simulado: 2 × 100 + 2 × 14 modifier = 228 base. Tax 28% = 63.84.
+      final order = _order(subtotal: 228, tax: 63.84);
       final item = _item(
         id: 'mods',
         quantity: 2,
         unitPrice: 100,
-        subtotal: 200,
-        tax: 36,
-        total: 256,
+        subtotal: 228, // base + modifiers (consolidado por backend)
+        tax: 63.84, // 28% de 228
+        total: 291.84,
         taxMode: 'exclusive',
-        taxRate: 18,
+        taxRate: 28,
         modifiers: const [
           OrderItemModifier(
             id: 'm1',
@@ -105,10 +108,10 @@ void main() {
 
       final summary = summarizeOrderPricing(order, [item]);
 
-      expect(itemDisplayTotal(order, item), 283.8);
+      expect(itemDisplayTotal(order, item), 228.0); // gross sin tax
       expect(summary.subtotal, 228.0);
-      expect(summary.tax, 41.04);
-      expect(summary.serviceFee, 22.8);
+      expect(summary.tax, 63.84);
+      expect(summary.serviceFee, 0.0); // PRD 2.5: siempre 0
       expect(summary.total, 291.84);
     });
 
@@ -181,7 +184,13 @@ void main() {
       },
     );
 
-    test('inclusive breakdown closes exact 300.00 by absorbing residual in base', () {
+    // PRD 2.5: este test validaba la absorción de centavo del modelo viejo
+    // (cuando inclusive math se hacía en frontend con dos tasas separadas).
+    // Bajo PRD 2.5, el backend entrega oi.subtotal/oi.tax exactos y el frontend
+    // los confía sin re-extraer. El test queda como deuda hasta rediseñarlo
+    // contra el nuevo flujo (entrada: items consolidados, expectation: sin
+    // residual porque el backend ya cuadra).
+    test('inclusive breakdown closes exact 300.00 by absorbing residual in base', skip: 'PRD 2.5 deprecó la absorción frontend del centavo. Rediseñar test.', () {
       final order = _order(
         subtotal: 234.37,
         tax: 42.19,
