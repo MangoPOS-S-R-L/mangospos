@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/breakpoints.dart';
+import 'package:mangopos/app/theme/sizes.dart';
 import 'package:mangopos/core/utils/display_name_utils.dart';
 import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/data/models/sales_models.dart';
@@ -2067,16 +2068,13 @@ class _CartView extends ConsumerWidget {
                 ),
         ),
         Container(height: 1, color: _salesDivider),
-        // PRD 6 F2.1: en compact (<1366) el espacio vertical es justo
-        // (1366×768 deja ~720 px tras chrome), por lo que tightening de
-        // padding y scroll aseguran que los botones de acción siempre
-        // sean alcanzables aunque el resumen tenga muchos breakdowns.
-        Flexible(
-          child: SingleChildScrollView(
-            padding: EdgeInsets.all(
-              isStacked || Breakpoints.isCompact(context) ? 12 : 24,
-            ),
-            child: Column(
+        // PRD 6 F2.1: padding adaptativo en compact para ganar espacio
+        // vertical sin perder el pin al bottom (panel sigue al pie del cart).
+        Padding(
+          padding: EdgeInsets.all(
+            isStacked || Breakpoints.isCompact(context) ? 12 : 24,
+          ),
+          child: Column(
             children: [
               _SummaryRow(
                 label: 'Subtotal',
@@ -2492,7 +2490,6 @@ class _CartView extends ConsumerWidget {
                 ],
               ],
             ],
-          ),
           ),
         ),
       ],
@@ -3478,9 +3475,8 @@ class _ActionButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      constraints: const BoxConstraints(
-        minHeight: 54,
-      ), // Altura mínima para consistencia
+      // PRD 6 § 4.5 — primary touch target.
+      constraints: const BoxConstraints(minHeight: TouchTargets.primary),
       child: ElevatedButton(
         onPressed: onPressed,
         style:
@@ -3489,9 +3485,9 @@ class _ActionButton extends StatelessWidget {
               disabledBackgroundColor: background.withValues(alpha: 0.35),
               elevation: 0,
               padding: const EdgeInsets.symmetric(
-                horizontal: 12,
-                vertical: 8,
-              ), // Padding interno para multi-línea
+                horizontal: Insets.md,
+                vertical: Insets.sm,
+              ),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(_salesRadiusButton),
               ),
@@ -3504,17 +3500,16 @@ class _ActionButton extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(icon, size: 20, color: Colors.white),
-            const SizedBox(width: 8),
+            const SizedBox(width: Insets.sm),
             Flexible(
               child: Text(
                 label,
-                textAlign: TextAlign.center, // Texto centrado
+                textAlign: TextAlign.center,
                 style: const TextStyle(
-                  fontSize:
-                      14, // Ligeramente más pequeño para optimizar espacio
+                  fontSize: FontSizes.body,
                   fontWeight: FontWeight.w700,
                   color: Colors.white,
-                  height: 1.1, // Altura de línea compacta
+                  height: 1.1,
                 ),
               ),
             ),
@@ -3540,7 +3535,9 @@ class _SecondaryActionButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      constraints: const BoxConstraints(minHeight: 54),
+      // PRD 6 § 4.5 — primary touch target (mismo que _ActionButton para
+      // mantener altura visual consistente al alinearse en una Row).
+      constraints: const BoxConstraints(minHeight: TouchTargets.primary),
       child: OutlinedButton(
         onPressed: onPressed,
         style: OutlinedButton.styleFrom(
@@ -3553,7 +3550,10 @@ class _SecondaryActionButton extends StatelessWidget {
                 : _salesDivider,
           ),
           disabledForegroundColor: _salesTextPrimary.withValues(alpha: 0.45),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          padding: const EdgeInsets.symmetric(
+            horizontal: Insets.md,
+            vertical: Insets.sm,
+          ),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(_salesRadiusButton),
           ),
@@ -3568,13 +3568,13 @@ class _SecondaryActionButton extends StatelessWidget {
                   ? _salesTextPrimary.withValues(alpha: 0.45)
                   : _salesTextPrimary,
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: Insets.sm),
             Flexible(
               child: Text(
                 label,
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  fontSize: 14,
+                  fontSize: FontSizes.body,
                   fontWeight: FontWeight.w700,
                   color: onPressed == null
                       ? _salesTextPrimary.withValues(alpha: 0.45)

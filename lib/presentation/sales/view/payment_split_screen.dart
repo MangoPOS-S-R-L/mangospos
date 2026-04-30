@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:mangopos/app/widgets/mango_modal.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -74,8 +75,16 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-    final isMobile = size.width < 920;
+    // PRD 6 F2.2a: el sizing del contenedor (insetPadding, max width/height
+    // y comportamiento fullscreen en compact) lo maneja MangoModal.wrap.
+    // La anatomía interna (header, body en columnas, footer) se mantiene
+    // idéntica entre breakpoints — el cajero entrenado en 1366 reconoce
+    // todo en 1280.
+    // Layout interno (mobile vertical vs desktop columnas) sigue su propia
+    // regla: width <920 muestra layout vertical optimizado para celular.
+    // Esto NO depende del breakpoint del modal; es la anatomía interna
+    // que se preserva entre breakpoints (ver PRD 6 § 4.4).
+    final isMobile = MediaQuery.sizeOf(context).width < 920;
 
     final provider = paymentSplitProvider((
       widget.orderId,
@@ -94,30 +103,22 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
         _handleKeyEvent(event, vm);
         return KeyEventResult.handled;
       },
-      child: Dialog(
-        insetPadding: EdgeInsets.symmetric(
-          horizontal: isMobile ? 12 : 36,
-          vertical: isMobile ? 16 : 36,
-        ),
-        backgroundColor: Colors.transparent,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxWidth: 1150,
-            maxHeight: isMobile ? double.infinity : 820,
+      child: MangoModal.wrap(
+        context: context,
+        type: MangoModalType.form,
+        child: Container(
+          decoration: BoxDecoration(
+            color: _kSurface,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x22000000),
+                blurRadius: 20,
+                offset: Offset(0, 12),
+              ),
+            ],
           ),
-          child: Container(
-            decoration: BoxDecoration(
-              color: _kSurface,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0x22000000),
-                  blurRadius: 20,
-                  offset: Offset(0, 12),
-                ),
-              ],
-            ),
-            child: Column(
+          child: Column(
               children: [
                 _buildHeader(context),
                 const Divider(height: 1, color: _kBorder),
@@ -157,7 +158,6 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
                   ),
               ],
             ),
-          ),
         ),
       ),
     );
@@ -263,15 +263,24 @@ class _LeftPanel extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 16),
-        _InputDisplay(state: state),
-        const SizedBox(height: 16),
+        // PRD 6 § 4.7 — atajos de denominación ARRIBA del input. Exacto
+        // primero (acción más usada en cobros que cuadran). Las
+        // denominaciones siguen el set real de billetes DR (RD$ 50, 100,
+        // 200, 500, 1000, 2000). El cajero tappea uno → setea el campo
+        // Monto recibido y ya puede confirmar.
         Center(
           child: Wrap(
             alignment: WrapAlignment.center,
             spacing: 8,
             runSpacing: 8,
             children: [
-              for (final amount in const [100, 200, 500, 1000, 2000, 5000])
+              if (state.remaining > 0)
+                _QuickAmountChip(
+                  label: 'Exacto',
+                  primary: true,
+                  onTap: () => vm.setExactAmount(),
+                ),
+              for (final amount in const [200, 500, 1000, 2000])
                 _QuickAmountChip(
                   label: 'RD\$ ${amount.toStringAsFixed(0)}',
                   onTap: () => vm.setQuickAmount(amount.toDouble()),
@@ -280,31 +289,7 @@ class _LeftPanel extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 12),
-        if (state.remaining > 0)
-          Center(
-            child: OutlinedButton.icon(
-              onPressed: () => vm.setExactAmount(),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: _kPrimary,
-                side: const BorderSide(color: _kBorder),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 8,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(20),
-                ),
-              ),
-              icon: const Icon(Icons.bolt, size: 16),
-              label: Text(
-                'Monto exacto (RD\$ ${state.remaining.toStringAsFixed(2)})',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 13,
-                ),
-              ),
-            ),
-          ),
+        _InputDisplay(state: state),
         const SizedBox(height: 12),
         compact
             ? Column(
@@ -364,12 +349,30 @@ class _RightPanel extends StatelessWidget {
     required this.onClose,
   });
 
+  /// PRD 6 § 4.7 — explica al cajero por qué "Confirmar pago" está disabled.
+  /// Si está procesando, no mostramos nada (el botón ya muestra "Procesando…").
+  /// Si está habilitado, retorna null.
+  static String? _resolveDisabledReason(PaymentSplitState state) {
+    if (state.isProcessing) return null;
+    if (state.transactions.isEmpty) {
+      return 'Agrega al menos un pago para confirmar';
+    }
+    if (!state.isComplete) {
+      return 'Falta RD\$ ${state.remaining.toStringAsFixed(2)} por pagar';
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final canConfirm =
         state.transactions.isNotEmpty &&
         state.isComplete &&
         !state.isProcessing;
+
+    // PRD 6 § 4.7 — razón por la que el botón está disabled, mostrada
+    // inline al lado para que el cajero sepa qué falta sin adivinar.
+    final disabledReason = _resolveDisabledReason(state);
 
     return Padding(
       padding: const EdgeInsets.only(left: 24),
@@ -427,6 +430,29 @@ class _RightPanel extends StatelessWidget {
               ),
             ),
           ),
+          if (disabledReason != null) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                const Icon(
+                  Icons.info_outline,
+                  size: 14,
+                  color: Color(0xFF6B7280),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    disabledReason,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xFF6B7280),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: 10),
           SizedBox(
             width: double.infinity,
@@ -535,6 +561,29 @@ class _MobileLayout extends StatelessWidget {
             ),
           ),
         ),
+        if (_RightPanel._resolveDisabledReason(state) != null) ...[
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              const Icon(
+                Icons.info_outline,
+                size: 14,
+                color: Color(0xFF6B7280),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  _RightPanel._resolveDisabledReason(state)!,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: Color(0xFF6B7280),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
         const SizedBox(height: 10),
         SizedBox(
           width: double.infinity,
@@ -735,22 +784,43 @@ class _MethodCard extends StatelessWidget {
 class _QuickAmountChip extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
-  const _QuickAmountChip({required this.label, required this.onTap});
+  /// PRD 6 § 4.7 — chip "Exacto" se distingue visualmente del resto:
+  /// fill con primary color y texto blanco. No solo color, también peso.
+  final bool primary;
+
+  const _QuickAmountChip({
+    required this.label,
+    required this.onTap,
+    this.primary = false,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(20),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          border: Border.all(color: Colors.grey[300]!),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Text(
-          label,
-          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          // PRD 6 § 4.5 — touch target ≥44 px.
+          constraints: const BoxConstraints(minHeight: 44),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          decoration: BoxDecoration(
+            color: primary ? _kPrimary : Colors.transparent,
+            border: Border.all(
+              color: primary ? _kPrimary : Colors.grey[300]!,
+            ),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            label,
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 14,
+              color: primary ? Colors.white : Colors.black87,
+            ),
+          ),
         ),
       ),
     );
