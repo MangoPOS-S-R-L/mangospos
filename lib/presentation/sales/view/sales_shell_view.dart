@@ -1,8 +1,15 @@
 // lib/presentation/sales/view/sales_shell_view.dart
+//
+// PRD 6 — comportamiento responsive del shell:
+//   - Compact (<1366 px): sidebar 64 px icon-only con Tooltip por item.
+//   - Regular/Wide (≥1366 px): sidebar 224 px expandido (label + icon).
+//   - Touch targets ≥44 px en cualquier breakpoint.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
+import 'package:mangopos/app/theme/breakpoints.dart';
+import 'package:mangopos/app/theme/sizes.dart';
 import 'package:mangopos/core/printing/printer_heartbeat_scheduler.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/presentation/sales/state/sales_state.dart';
@@ -57,13 +64,20 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
     final guardNavigation = _shouldGuardNavigation(route, orderState);
     final sessionCtrl = ref.read(sessionProvider.notifier);
 
+    // PRD 6 § 4.3 — sidebar colapsa a icon-only en compact.
+    final compact = Breakpoints.isCompact(context);
+    final sidebarWidth = compact ? 64.0 : 224.0;
+    final navPadding = compact
+        ? const EdgeInsets.symmetric(horizontal: 8, vertical: 12)
+        : const EdgeInsets.all(12);
+
     return Scaffold(
       backgroundColor: SalesTheme.background,
       body: Row(
         children: [
-          // 📂 SIDEBAR IZQUIERDO (FIJO – 224px)
+          // 📂 SIDEBAR IZQUIERDO (responsive)
           Container(
-            width: 224,
+            width: sidebarWidth,
             decoration: const BoxDecoration(
               color: SalesTheme.cardBackground,
               border: Border(
@@ -72,42 +86,17 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
             ),
             child: Column(
               children: [
-                // Espacio superior o Header
                 const SizedBox(height: 24),
                 if (!isCashOpen)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.red.withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: Colors.red.withValues(alpha: 0.25),
-                        ),
-                      ),
-                      child: const Text(
-                        'Caja cerrada: no se pueden abrir ventas',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.red,
-                        ),
-                      ),
-                    ),
-                  ),
-
+                  _CashClosedBanner(compact: compact),
                 Expanded(
                   child: ListView(
-                    padding: const EdgeInsets.all(12),
+                    padding: navPadding,
                     children: [
                       _SalesNavItem(
                         icon: Icons.grid_view_rounded,
                         label: 'Por zona',
+                        compact: compact,
                         selected: selected == SalesTab.byZone,
                         locked: !sessionCtrl.hasPermission(
                           'ventas.mesas.acceso',
@@ -124,6 +113,7 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
                       _SalesNavItem(
                         icon: Icons.description_outlined, // FileText
                         label: 'Venta manual',
+                        compact: compact,
                         selected: selected == SalesTab.manual,
                         locked: !sessionCtrl.hasPermission(
                           'ventas.mesas.abrir',
@@ -148,6 +138,7 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
                       _SalesNavItem(
                         icon: Icons.bolt_rounded, // Zap
                         label: 'Venta rápida',
+                        compact: compact,
                         selected: selected == SalesTab.quick,
                         locked: !sessionCtrl.hasPermission(
                           'ventas_rapida.acceso',
@@ -168,6 +159,7 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
                       _SalesNavItem(
                         icon: Icons.local_shipping_outlined, // Truck
                         label: 'Delivery',
+                        compact: compact,
                         selected: selected == SalesTab.delivery,
                         locked: !sessionCtrl.hasPermission(
                           'delivery.crear_orden',
@@ -188,6 +180,7 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
                       _SalesNavItem(
                         icon: Icons.smartphone_rounded, // Smartphone
                         label: 'Self service',
+                        compact: compact,
                         selected: selected == SalesTab.selfService,
                         onTap: () => _handleNavTap(
                           context,
@@ -429,6 +422,7 @@ class _SalesNavItem extends StatelessWidget {
   final VoidCallback onTap;
   final bool disabled;
   final bool locked;
+  final bool compact;
 
   const _SalesNavItem({
     required this.icon,
@@ -437,6 +431,7 @@ class _SalesNavItem extends StatelessWidget {
     required this.onTap,
     this.disabled = false,
     this.locked = false,
+    this.compact = false,
   });
 
   @override
@@ -446,42 +441,109 @@ class _SalesNavItem extends StatelessWidget {
     final fg = blocked
         ? SalesTheme.mutedForeground
         : (selected ? SalesTheme.primaryForeground : SalesTheme.foreground);
-    // Opacidad para items deshabilitados
     final double opacity = blocked ? 0.55 : 1.0;
+
+    // PRD 6 § 4.5 — touch target ≥44 px en cualquier breakpoint.
+    final inner = AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      constraints: const BoxConstraints(
+        minHeight: TouchTargets.minSize,
+      ),
+      padding: compact
+          ? const EdgeInsets.symmetric(horizontal: 8, vertical: 10)
+          : const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: compact
+          ? Center(child: Icon(icon, color: fg, size: 22))
+          : Row(
+              children: [
+                Icon(icon, color: fg, size: 20),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    label,
+                    style: SalesTheme.textTheme.bodyMedium?.copyWith(
+                      color: fg,
+                      fontWeight: FontWeight.w500,
+                      fontSize: FontSizes.body,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (locked) Icon(Icons.lock_outline, size: 16, color: fg),
+              ],
+            ),
+    );
+
+    final tooltipMessage = compact
+        ? (locked ? '$label (sin permiso)' : label)
+        : '';
 
     return Opacity(
       opacity: opacity,
       child: Material(
         color: Colors.transparent,
-        child: InkWell(
-          onTap: blocked ? null : onTap,
+        child: Tooltip(
+          message: tooltipMessage,
+          waitDuration: const Duration(milliseconds: 350),
+          child: InkWell(
+            onTap: blocked ? null : onTap,
+            borderRadius: BorderRadius.circular(8),
+            hoverColor: SalesTheme.primary.withValues(alpha: 0.05),
+            child: inner,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// PRD 6 — banner "Caja cerrada" responsive.
+/// Regular/Wide: card con texto completo.
+/// Compact: icono centrado con tooltip que preserva el mensaje.
+class _CashClosedBanner extends StatelessWidget {
+  final bool compact;
+  const _CashClosedBanner({required this.compact});
+
+  static const _message = 'Caja cerrada: no se pueden abrir ventas';
+
+  @override
+  Widget build(BuildContext context) {
+    final red = Colors.red;
+    if (compact) {
+      return Tooltip(
+        message: _message,
+        child: Container(
+          margin: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+          height: TouchTargets.minSize,
+          decoration: BoxDecoration(
+            color: red.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: red.withValues(alpha: 0.25)),
+          ),
+          child: Icon(Icons.lock_outline, size: 20, color: red),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: red.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(8),
-          hoverColor: SalesTheme.primary.withValues(alpha: 0.05),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              color: bg,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              children: [
-                Icon(icon, color: fg, size: 20),
-                const SizedBox(width: 12),
-                Text(
-                  label,
-                  style: SalesTheme.textTheme.bodyMedium?.copyWith(
-                    color: fg,
-                    fontWeight: FontWeight.w500, // Medium
-                    fontSize: 14,
-                  ),
-                ),
-                if (locked) ...[
-                  const Spacer(),
-                  Icon(Icons.lock_outline, size: 16, color: fg),
-                ],
-              ],
-            ),
+          border: Border.all(color: red.withValues(alpha: 0.25)),
+        ),
+        child: const Text(
+          _message,
+          style: TextStyle(
+            fontSize: FontSizes.caption,
+            fontWeight: FontWeight.w600,
+            color: Colors.red,
           ),
         ),
       ),
