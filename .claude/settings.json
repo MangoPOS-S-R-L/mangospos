@@ -30,7 +30,16 @@
       "Bash(git commit -m ' *)",
       "Bash(git push *)",
       "Bash(grep -rn \"1 x\\\\|x RD\\\\\\\\\\\\$\\\\|item.*x .*RD\\\\|qty.*x.*price\" /Users/cristiangomez/dev/mangospos/lib/services/printing /Users/cristiangomez/dev/mangospos/lib/data/repositories)",
-      "Bash(git merge *)"
+      "Bash(git merge *)",
+      "Bash(chmod +x /Users/cristiangomez/dev/mangospos/scripts/check_responsive_rules.sh)",
+      "Bash(bash /Users/cristiangomez/dev/mangospos/scripts/check_responsive_rules.sh)",
+      "Bash(awk '/_openPaymentModal/,/^  void [a-z]/' /Users/cristiangomez/dev/mangospos/lib/presentation/sales/view/table_order_screen.dart)",
+      "Bash(awk 'NR>=949 && NR<=1205 && /PaymentModal|showDialog|return show/' /Users/cristiangomez/dev/mangospos/lib/presentation/sales/view/table_order_screen.dart)",
+      "Bash(awk 'NR>=1100 && NR<=1200 && /showDialog|PaymentModal|builder/' /Users/cristiangomez/dev/mangospos/lib/presentation/sales/view/table_order_screen.dart)",
+      "Bash(grep -n \"MediaQuery\\\\|Row\\(\\\\|Column\\(\\\\|width:\\\\s*[0-9]\\\\{3,\\\\}\\\\|Wrap\\\\|GridView\\\\|isDesktop\\\\|isMobile\" /Users/cristiangomez/dev/mangospos/lib/presentation/reports/view/reports_view.dart)",
+      "Bash(grep -n \"MediaQuery\\\\|crossAxisCount\\\\|width:\\\\s*[0-9]\\\\{3,\\\\}\\\\|GridView\\\\|Wrap\\\\|3.*columnas\\\\|_buildSidebar\" /Users/cristiangomez/dev/mangospos/lib/presentation/settings/view/settings_view.dart)",
+      "Bash(grep -n \"MediaQuery\\\\|crossAxisCount\\\\|width:\\\\s*[0-9]\\\\{3,\\\\}\\\\|GridView\\\\|maxCrossAxisExtent\\\\|isDesktop\\\\|isMobile\\\\|width >=\\\\|width <\" /Users/cristiangomez/dev/mangospos/lib/presentation/products/view/products_view.dart)",
+      "Bash(node -c src/index.js)"
     ],
     "additionalDirectories": [
       "/Users/cristiangomez"
