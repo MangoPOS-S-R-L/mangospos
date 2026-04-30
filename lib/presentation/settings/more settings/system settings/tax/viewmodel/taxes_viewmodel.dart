@@ -40,6 +40,7 @@ class TaxesVm extends Notifier<TaxesState> {
     bool applyOnManual = true,
     bool applyOnQuick = true,
     bool applyOnDelivery = true,
+    bool applyOnTakeout = true,
     bool isServiceFee = false,
   }) async {
     await _repo.create(
@@ -51,6 +52,7 @@ class TaxesVm extends Notifier<TaxesState> {
       applyOnManual: applyOnManual,
       applyOnQuick: applyOnQuick,
       applyOnDelivery: applyOnDelivery,
+      applyOnTakeout: applyOnTakeout,
       isServiceFee: isServiceFee,
     );
     await refresh();
@@ -66,6 +68,7 @@ class TaxesVm extends Notifier<TaxesState> {
     bool? applyOnManual,
     bool? applyOnQuick,
     bool? applyOnDelivery,
+    bool? applyOnTakeout,
     bool? isServiceFee,
   }) async {
     final patch = <String, dynamic>{
@@ -76,6 +79,7 @@ class TaxesVm extends Notifier<TaxesState> {
       if (applyOnManual != null) 'apply_on_manual': applyOnManual,
       if (applyOnQuick != null) 'apply_on_quick': applyOnQuick,
       if (applyOnDelivery != null) 'apply_on_delivery': applyOnDelivery,
+      if (applyOnTakeout != null) 'apply_on_takeout': applyOnTakeout,
       if (isServiceFee != null) 'is_service_fee': isServiceFee,
     };
     await _repo.update(id, patch);

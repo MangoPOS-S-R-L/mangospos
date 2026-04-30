@@ -22,6 +22,7 @@ class TaxRepository {
     bool applyOnManual = true,
     bool applyOnQuick = true,
     bool applyOnDelivery = true,
+    bool applyOnTakeout = true,
     bool isServiceFee = false,
   }) async {
     final bid = await BusinessResolver.ensure(businessId);
@@ -34,6 +35,7 @@ class TaxRepository {
       'apply_on_manual': applyOnManual,
       'apply_on_quick': applyOnQuick,
       'apply_on_delivery': applyOnDelivery,
+      'apply_on_takeout': applyOnTakeout,
       'is_service_fee': isServiceFee,
     }).select().single();
     return Tax.fromMap(row);

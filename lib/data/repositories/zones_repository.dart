@@ -1,6 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mangopos/core/utils/display_name_utils.dart';
 
+import '../models/order_item_tax_line.dart';
 import '../models/sales_models.dart';
 import '../models/zone.dart';
 import '../models/table_status.dart';
@@ -255,17 +256,38 @@ class ZonesRepository {
 
       final itemIds = itemsRows.map((r) => r['id'] as String).toList();
       final modifiersMap = <String, List<OrderItemModifier>>{};
-      
+      // PRD 6: cargar también tax_lines (snapshot per-tax filtrado por
+      // takeout/origin) para que summarizeOrderPricing prefiera esa fuente
+      // sobre `oi.tax` que puede estar stale tras un toggle. Sin esto, el
+      // total del card de mesa quedaba inconsistente con la pantalla del
+      // pedido (afuera mostraba 64, adentro 59).
+      final taxLinesMap = <String, List<OrderItemTaxLine>>{};
+
       if (itemIds.isNotEmpty) {
         final modsRows = await sb
             .from('order_item_modifiers')
             .select()
             .inFilter('item_id', itemIds) as List;
-            
+
         for (final row in modsRows) {
           final itemId = row['item_id'] as String;
           final mod = OrderItemModifier.fromMap(row);
           modifiersMap[itemId] = [...(modifiersMap[itemId] ?? []), mod];
+        }
+
+        final taxLinesRows = await sb
+            .from('order_item_tax_lines')
+            .select(
+              'id, order_item_id, tax_id, tax_name, tax_rate, amount, created_at',
+            )
+            .inFilter('order_item_id', itemIds) as List;
+        for (final row in taxLinesRows) {
+          final line = OrderItemTaxLine.fromMap(
+            Map<String, dynamic>.from(row as Map),
+          );
+          taxLinesMap
+              .putIfAbsent(line.orderItemId, () => <OrderItemTaxLine>[])
+              .add(line);
         }
       }
 
@@ -274,6 +296,7 @@ class ZonesRepository {
         final itemId = row['id'] as String;
         final item = OrderItem.fromMap(row).copyWith(
           modifiers: modifiersMap[itemId] ?? [],
+          taxLines: taxLinesMap[itemId] ?? const <OrderItemTaxLine>[],
         );
         itemsMap[orderId] = [...(itemsMap[orderId] ?? []), item];
       }

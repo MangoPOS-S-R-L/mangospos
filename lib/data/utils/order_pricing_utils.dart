@@ -82,6 +82,16 @@ OrderItemPricingSummary summarizeItemPricing(Order? order, OrderItem item, {Stri
   final dbDiscounts = _r(item.discounts);
   final fullRate = (item.originalTaxRate ?? item.taxRate) / 100.0;
 
+  // PRD 6: si el item tiene tax_lines (snapshot per-tax desde backend), esa
+  // es la fuente de verdad del impuesto efectivo — ya respeta filtros
+  // takeout/origin/etc. `oi.tax` puede quedar stale tras un toggle
+  // (la columna se recomputa por trigger pero las fórmulas históricas no
+  // siempre cubren todos los casos). Preferimos siempre la suma de
+  // tax_lines cuando existen.
+  final taxLinesSum = item.taxLines.isEmpty
+      ? null
+      : _r(item.taxLines.fold<double>(0, (s, line) => s + line.amount));
+
   // Detectar si los modifiers en draft aún no fueron procesados por el
   // backend (oi.subtotal/oi.tax persistidos no incluyen el modifier nuevo).
   // En ese caso recomputamos en frontend para que el total mostrado en
@@ -106,7 +116,9 @@ OrderItemPricingSummary summarizeItemPricing(Order? order, OrderItem item, {Stri
       dbTax = _r(dbSubtotal * fullRate);
     }
   } else {
-    dbTax = _r(item.tax);
+    // Preferir suma de tax_lines (filtrada por takeout/origin) sobre
+    // el oi.tax que puede estar desincronizado.
+    dbTax = taxLinesSum ?? _r(item.tax);
     if (item.taxMode == 'inclusive') {
       // Inclusive: confiar en oi.subtotal (ya extraído por trigger backend con
       // tasa consolidada). Si está en 0 (optimistic), fallback a extraer del

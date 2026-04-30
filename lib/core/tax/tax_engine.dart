@@ -52,6 +52,10 @@ class TaxDef {
   final bool applyOnManual;
   final bool applyOnQuick;
   final bool applyOnDelivery;
+  /// PRD 6: si false, este tax NO aplica para items con is_takeout=true.
+  /// Default true para taxes regulares; backfill en SQL setea a false para
+  /// is_service_fee=true (preserva el skip hardcodeado).
+  final bool applyOnTakeout;
 
   const TaxDef({
     required this.name,
@@ -62,6 +66,7 @@ class TaxDef {
     this.applyOnManual = true,
     this.applyOnQuick = true,
     this.applyOnDelivery = true,
+    this.applyOnTakeout = true,
   });
 
   factory TaxDef.fromMap(Map<String, dynamic> m) => TaxDef(
@@ -73,6 +78,7 @@ class TaxDef {
         applyOnManual: m['apply_on_manual'] as bool? ?? true,
         applyOnQuick: m['apply_on_quick'] as bool? ?? true,
         applyOnDelivery: m['apply_on_delivery'] as bool? ?? true,
+        applyOnTakeout: m['apply_on_takeout'] as bool? ?? true,
       );
 
   double get rateDecimal => rate / 100.0;

@@ -350,6 +350,7 @@ class _TaxFormDialogState extends ConsumerState<_TaxFormDialog> {
   bool _applyOnManual = true;
   bool _applyOnQuick = true;
   bool _applyOnDelivery = true;
+  bool _applyOnTakeout = true;
 
 
   @override
@@ -364,6 +365,7 @@ class _TaxFormDialogState extends ConsumerState<_TaxFormDialog> {
       _applyOnManual = e.applyOnManual;
       _applyOnQuick = e.applyOnQuick;
       _applyOnDelivery = e.applyOnDelivery;
+      _applyOnTakeout = e.applyOnTakeout;
     }
 
   }
@@ -553,6 +555,36 @@ class _TaxFormDialogState extends ConsumerState<_TaxFormDialog> {
                       ],
                     ),
                   ),
+                  // PRD 6 — toggle "Aplicar para llevar".
+                  // Color azul (infoBlue) para distinguirlo visualmente de los
+                  // toggles de "área de venta" (verde): es un criterio
+                  // distinto — atributo del item, no canal de venta.
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Tipo de pedido',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: MangoColors.darkGray,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: MangoColors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: MangoColors.cardBorder),
+                    ),
+                    child: _dialogToggleCard(
+                      label: 'Aplicar para llevar',
+                      subtitle:
+                          'Si lo apagás, este impuesto NO se cobra a items marcados como "para llevar".',
+                      value: _applyOnTakeout,
+                      onChanged: (v) =>
+                          setState(() => _applyOnTakeout = v),
+                      activeColor: MangoColors.infoBlue,
+                      borderless: true,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -620,6 +652,7 @@ class _TaxFormDialogState extends ConsumerState<_TaxFormDialog> {
                             applyOnManual: _applyOnManual,
                             applyOnQuick: _applyOnQuick,
                             applyOnDelivery: _applyOnDelivery,
+                            applyOnTakeout: _applyOnTakeout,
                           );
                         } else {
                           await vm.create(
@@ -630,6 +663,7 @@ class _TaxFormDialogState extends ConsumerState<_TaxFormDialog> {
                             applyOnManual: _applyOnManual,
                             applyOnQuick: _applyOnQuick,
                             applyOnDelivery: _applyOnDelivery,
+                            applyOnTakeout: _applyOnTakeout,
                           );
                         }
 

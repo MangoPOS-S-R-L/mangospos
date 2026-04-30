@@ -54,21 +54,87 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
     super.dispose();
   }
 
-  void _handleKeyEvent(KeyEvent event, PaymentSplitViewModel vm) {
-    if (event is KeyDownEvent) {
-      final logicalKey = event.logicalKey;
+  /// Handler de teclado del modal de cobro.
+  ///
+  /// Shortcuts (PRD 6 § 4.7 — patrones POS profesional):
+  ///   - Dígitos / `.` / Backspace → input de monto.
+  ///   - **Enter**: Si hay monto en input → agrega transacción.
+  ///                Si input vacío y la orden ya cuadra → confirma pago.
+  ///   - **Esc** → cancela y cierra el modal.
+  ///   - **F1** o tecla `*` → atajo "Exacto" (setea monto restante).
+  ///   - **e** → método Efectivo, **t** → Tarjeta, **r** → Transferencia.
+  ///   - **+** → agrega transacción (alias de Enter cuando hay monto).
+  Future<void> _handleKeyEvent(
+    KeyEvent event,
+    PaymentSplitViewModel vm,
+    PaymentSplitState state,
+  ) async {
+    if (event is! KeyDownEvent) return;
+    final logicalKey = event.logicalKey;
+    final char = event.character?.toLowerCase();
 
-      if (logicalKey == LogicalKeyboardKey.backspace) {
-        vm.backspace();
-      } else if (logicalKey == LogicalKeyboardKey.enter ||
-          logicalKey == LogicalKeyboardKey.numpadEnter) {
+    if (logicalKey == LogicalKeyboardKey.escape) {
+      if (mounted) Navigator.pop(context, false);
+      return;
+    }
+
+    if (logicalKey == LogicalKeyboardKey.f1 || char == '*') {
+      if (state.remaining > 0) vm.setExactAmount();
+      return;
+    }
+
+    if (logicalKey == LogicalKeyboardKey.backspace) {
+      vm.backspace();
+      return;
+    }
+
+    if (logicalKey == LogicalKeyboardKey.enter ||
+        logicalKey == LogicalKeyboardKey.numpadEnter ||
+        char == '+') {
+      // Enter inteligente: si hay monto pendiente lo agrega como
+      // transacción; si no hay monto y la orden ya cuadra, confirma.
+      if (state.currentInput.isNotEmpty && state.inputAmount > 0) {
         vm.addTransaction();
-      } else if (logicalKey == LogicalKeyboardKey.period ||
-          logicalKey == LogicalKeyboardKey.numpadDecimal) {
-        vm.appendInput('.');
-      } else if (event.character != null &&
-          RegExp(r'[0-9]').hasMatch(event.character!)) {
-        vm.appendInput(event.character!);
+        return;
+      }
+      final canConfirm = state.transactions.isNotEmpty &&
+          state.isComplete &&
+          !state.isProcessing;
+      if (canConfirm) {
+        final List<Payment>? payments = await vm.confirmPayment(context);
+        if (payments != null && mounted) {
+          Navigator.pop(context, payments);
+        }
+      }
+      return;
+    }
+
+    if (logicalKey == LogicalKeyboardKey.period ||
+        logicalKey == LogicalKeyboardKey.numpadDecimal) {
+      vm.appendInput('.');
+      return;
+    }
+
+    // Dígitos directos al input.
+    if (event.character != null &&
+        RegExp(r'[0-9]').hasMatch(event.character!)) {
+      vm.appendInput(event.character!);
+      return;
+    }
+
+    // Letra de método de pago. Solo aplica si el input está vacío para no
+    // bloquear posibles caracteres no esperados durante captura de monto.
+    if (state.currentInput.isEmpty && char != null) {
+      switch (char) {
+        case 'e':
+          vm.setMethod(PaymentMethodType.cash);
+          return;
+        case 't':
+          vm.setMethod(PaymentMethodType.card);
+          return;
+        case 'r':
+          vm.setMethod(PaymentMethodType.transfer);
+          return;
       }
     }
   }
@@ -100,7 +166,7 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
       focusNode: _focusNode,
       autofocus: true,
       onKeyEvent: (node, event) {
-        _handleKeyEvent(event, vm);
+        _handleKeyEvent(event, vm, state);
         return KeyEventResult.handled;
       },
       child: MangoModal.wrap(
@@ -131,14 +197,22 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
                           ),
                         )
                       : Padding(
-                          padding: const EdgeInsets.all(28),
+                          // Padding interno reducido para que el modal se sienta
+                          // menos vacío y el contenido respire sin desperdiciar
+                          // tantos píxeles en márgenes.
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 20,
+                            vertical: 16,
+                          ),
                           child: Row(
                             children: [
                               Expanded(
                                 flex: 3,
                                 child: _LeftPanel(state: state, vm: vm),
                               ),
+                              const SizedBox(width: 16),
                               Container(width: 1, color: _kBorder),
+                              const SizedBox(width: 16),
                               Expanded(
                                 flex: 2,
                                 child: _RightPanel(
@@ -263,30 +337,33 @@ class _LeftPanel extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 16),
-        // PRD 6 § 4.7 — atajos de denominación ARRIBA del input. Exacto
-        // primero (acción más usada en cobros que cuadran). Las
-        // denominaciones siguen el set real de billetes DR (RD$ 50, 100,
-        // 200, 500, 1000, 2000). El cajero tappea uno → setea el campo
-        // Monto recibido y ya puede confirmar.
-        Center(
-          child: Wrap(
-            alignment: WrapAlignment.center,
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              if (state.remaining > 0)
-                _QuickAmountChip(
+        // PRD 6 § 4.7 — atajos de denominación ARRIBA del input.
+        // Una fila de 5 chips (Exacto + 4 billetes) que se distribuyen
+        // proporcionalmente al ancho disponible. Exacto recibe flex 2 para
+        // destacarse (es la acción más usada en cobros que cuadran).
+        Row(
+          children: [
+            if (state.remaining > 0) ...[
+              Expanded(
+                flex: 2,
+                child: _QuickAmountChip(
                   label: 'Exacto',
                   primary: true,
                   onTap: () => vm.setExactAmount(),
                 ),
-              for (final amount in const [200, 500, 1000, 2000])
-                _QuickAmountChip(
+              ),
+              const SizedBox(width: 6),
+            ],
+            for (final amount in const [200, 500, 1000, 2000]) ...[
+              Expanded(
+                child: _QuickAmountChip(
                   label: 'RD\$ ${amount.toStringAsFixed(0)}',
                   onTap: () => vm.setQuickAmount(amount.toDouble()),
                 ),
+              ),
+              if (amount != 2000) const SizedBox(width: 6),
             ],
-          ),
+          ],
         ),
         const SizedBox(height: 12),
         _InputDisplay(state: state),
@@ -375,7 +452,9 @@ class _RightPanel extends StatelessWidget {
     final disabledReason = _resolveDisabledReason(state);
 
     return Padding(
-      padding: const EdgeInsets.only(left: 24),
+      // Sin padding lateral — el modal ya tiene padding general y la
+      // separación con el panel izquierdo viene del Container divider.
+      padding: EdgeInsets.zero,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

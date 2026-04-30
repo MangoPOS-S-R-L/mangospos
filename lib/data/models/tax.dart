@@ -9,6 +9,11 @@ class Tax {
   final bool applyOnManual;
   final bool applyOnQuick;
   final bool applyOnDelivery;
+  /// PRD 6: si false, este impuesto NO se aplica a items con
+  /// is_takeout=true. Default true para taxes regulares (ITBIS); para
+  /// service fees el backfill setea a false (preserva el skip
+  /// hardcodeado pre-migración).
+  final bool applyOnTakeout;
   final bool isServiceFee;
 
   const Tax({
@@ -21,6 +26,7 @@ class Tax {
     this.applyOnManual = true,
     this.applyOnQuick = true,
     this.applyOnDelivery = true,
+    this.applyOnTakeout = true,
     this.isServiceFee = false,
   });
 
@@ -34,6 +40,7 @@ class Tax {
         applyOnManual: (m['apply_on_manual'] as bool?) ?? true,
         applyOnQuick: (m['apply_on_quick'] as bool?) ?? true,
         applyOnDelivery: (m['apply_on_delivery'] as bool?) ?? true,
+        applyOnTakeout: (m['apply_on_takeout'] as bool?) ?? true,
         isServiceFee: (m['is_service_fee'] as bool?) ?? false,
       );
 }
