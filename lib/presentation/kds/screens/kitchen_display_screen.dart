@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../app/theme/breakpoints.dart';
 import '../viewmodel/kds_viewmodel.dart';
 import '../widgets/order_card.dart';
 import '../widgets/kds_stats_bar.dart';
@@ -203,10 +204,14 @@ class _KitchenDisplayScreenState extends ConsumerState<KitchenDisplayScreen>
       );
     }
 
+    // PRD 6 § 4.3 — en compact (<1366) las cards se hacen más estrechas
+    // (340 max) para caber 3 columnas cómodas en 1280-1366 px sin
+    // comprimir contenido. En regular/wide mantenemos 400 (4 cols+).
+    final maxCardWidth = Breakpoints.isCompact(context) ? 340.0 : 400.0;
     return GridView.builder(
       padding: const EdgeInsets.all(16),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 400,
+      gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: maxCardWidth,
         childAspectRatio: 0.8,
         crossAxisSpacing: 16,
         mainAxisSpacing: 16,

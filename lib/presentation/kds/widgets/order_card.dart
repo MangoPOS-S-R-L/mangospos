@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../app/theme/sizes.dart';
 import '../../../data/models/kitchen_models.dart';
 import 'timer_widget.dart';
 
@@ -143,16 +144,25 @@ class OrderCard extends StatelessWidget {
                   bottomRight: Radius.circular(16),
                 ),
               ),
+              // PRD 6 § 4.5 — touch primary 56 px. En cocina el chef
+              // tappea con prisa y a veces con guantes; necesita target
+              // generoso para evitar mistaps.
               child: SizedBox(
                 width: double.infinity,
+                height: TouchTargets.primary,
                 child: ElevatedButton.icon(
                   onPressed: onMarkAllReady,
                   icon: const Icon(Icons.check_circle),
-                  label: const Text('Marcar Todo Listo'),
+                  label: const Text(
+                    'Marcar Todo Listo',
+                    style: TextStyle(
+                      fontSize: FontSizes.button,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF22C55E),
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
                 ),
               ),
@@ -283,48 +293,67 @@ class _ItemCard extends StatelessWidget {
             ),
           ],
 
-          // Action buttons
+          // PRD 6 § 4.5 — botones de transición de estado (Iniciar/Listo/
+          // Servido) con touch comfortable. El chef los presiona muchas
+          // veces por orden, target generoso = menos errores en cocina.
           const SizedBox(height: 12),
-          Row(
-            children: [
-              if (item.isPending)
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () => onStatusChange('preparing'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFF97316),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 8),
+          SizedBox(
+            height: TouchTargets.comfortable,
+            child: Row(
+              children: [
+                if (item.isPending)
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () => onStatusChange('preparing'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFF97316),
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text(
+                        'Iniciar',
+                        style: TextStyle(
+                          fontSize: FontSizes.body,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
                     ),
-                    child: const Text('Iniciar'),
                   ),
-                ),
-              if (item.isPreparing) ...[
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () => onStatusChange('ready'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF22C55E),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 8),
+                if (item.isPreparing)
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () => onStatusChange('ready'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF22C55E),
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text(
+                        'Listo',
+                        style: TextStyle(
+                          fontSize: FontSizes.body,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
                     ),
-                    child: const Text('Listo'),
                   ),
-                ),
+                if (item.isReady)
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () => onStatusChange('served'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text(
+                        'Servido',
+                        style: TextStyle(
+                          fontSize: FontSizes.body,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
               ],
-              if (item.isReady)
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () => onStatusChange('served'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blue,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                    ),
-                    child: const Text('Servido'),
-                  ),
-                ),
-            ],
+            ),
           ),
         ],
       ),
