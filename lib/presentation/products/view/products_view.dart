@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mangopos/app/theme/breakpoints.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_radius.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
@@ -67,52 +68,13 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                     ),
                   ),
                   const SizedBox(height: AppSpacing.sm),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Elementos del men\u00fa',
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.foreground,
-                        ),
-                      ),
-                      Row(
-                        children: [
-                          IconButton(
-                            onPressed: () => viewModel.init(
-                              businessId: session.activeBusinessId,
-                            ),
-                            icon: Icon(
-                              Icons.refresh,
-                              color: AppColors.mutedForeground,
-                            ),
-                          ),
-                          const SizedBox(width: AppSpacing.lg),
-                          ElevatedButton.icon(
-                            onPressed: () =>
-                                _showAddEditDialog(context, viewModel),
-                            icon: const Icon(Icons.add, size: 18),
-                            label: const Text('Agregar elemento de men\u00fa'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.primary,
-                              foregroundColor: AppColors.card,
-                              elevation: 0,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: AppSpacing.xl,
-                                vertical: AppSpacing.lg,
-                              ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(
-                                  AppRadius.button,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
+                  // PRD 6 \u00a7 4.3 \u2014 header se apila vertical en compact para
+                  // que el t\u00edtulo y el CTA "Agregar" no compitan por ancho
+                  // y se trunquen.
+                  _ProductsHeader(
+                    onRefresh: () =>
+                        viewModel.init(businessId: session.activeBusinessId),
+                    onAdd: () => _showAddEditDialog(context, viewModel),
                   ),
                   const SizedBox(height: AppSpacing.xxl),
                   if (viewModel.error != null) ...[
@@ -387,6 +349,72 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _ProductsHeader extends StatelessWidget {
+  final VoidCallback onRefresh;
+  final VoidCallback onAdd;
+
+  const _ProductsHeader({required this.onRefresh, required this.onAdd});
+
+  @override
+  Widget build(BuildContext context) {
+    final compact = Breakpoints.isCompact(context);
+
+    final title = Text(
+      'Elementos del menú',
+      style: TextStyle(
+        fontSize: 24,
+        fontWeight: FontWeight.bold,
+        color: AppColors.foreground,
+      ),
+    );
+
+    final actions = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          onPressed: onRefresh,
+          icon: Icon(Icons.refresh, color: AppColors.mutedForeground),
+        ),
+        const SizedBox(width: AppSpacing.lg),
+        ElevatedButton.icon(
+          onPressed: onAdd,
+          icon: const Icon(Icons.add, size: 18),
+          label: Text(
+            compact ? 'Agregar' : 'Agregar elemento de menú',
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.primary,
+            foregroundColor: AppColors.card,
+            elevation: 0,
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.xl,
+              vertical: AppSpacing.lg,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppRadius.button),
+            ),
+          ),
+        ),
+      ],
+    );
+
+    if (compact) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          title,
+          const SizedBox(height: AppSpacing.md),
+          Align(alignment: Alignment.centerRight, child: actions),
+        ],
+      );
+    }
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [title, actions],
     );
   }
 }
