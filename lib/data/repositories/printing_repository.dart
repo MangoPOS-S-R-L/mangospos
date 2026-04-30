@@ -818,11 +818,13 @@ class PrintingRepository {
       final selfId =
           await DeviceIdentity.getOrCreateId(printer.businessId);
       if (hostId != selfId) {
+        // No propagamos `timeout` (5s default) — el remoto necesita más
+        // tiempo para abrir USB e imprimir físicamente. Usar el default
+        // generoso de _printViaRemoteHost.
         await _printViaRemoteHost(
           printer: printer,
           data: data,
           hostDeviceId: hostId,
-          timeout: timeout,
         );
         return;
       }
@@ -924,7 +926,10 @@ class PrintingRepository {
     required PrinterConfig printer,
     required List<int> data,
     required String hostDeviceId,
-    Duration timeout = const Duration(seconds: 8),
+    // El agente remoto debe abrir USB, escribir payload, feed y cut antes
+    // de responder. En impresoras lentas/cargadas eso supera 5s fácil.
+    // 30s es generoso pero sigue acotado para no colgar la UI.
+    Duration timeout = const Duration(seconds: 30),
   }) async {
     final row = await _client
         .from('device_agents')
@@ -977,8 +982,17 @@ class PrintingRepository {
         .timeout(timeout);
 
     if (response.statusCode != 200) {
+      String detail = response.body.trim();
+      try {
+        final parsed = jsonDecode(response.body);
+        if (parsed is Map && parsed['error'] is String) {
+          detail = parsed['error'] as String;
+        }
+      } catch (_) {}
+      if (detail.length > 200) detail = '${detail.substring(0, 200)}…';
       throw Exception(
-        'No se pudo imprimir desde $hostName (código ${response.statusCode}).',
+        'No se pudo imprimir desde $hostName (código ${response.statusCode})'
+        '${detail.isEmpty ? '' : ': $detail'}.',
       );
     }
   }
