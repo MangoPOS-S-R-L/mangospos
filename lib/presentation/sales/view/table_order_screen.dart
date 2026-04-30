@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
+import 'package:mangopos/app/theme/breakpoints.dart';
 import 'package:mangopos/core/utils/display_name_utils.dart';
 import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/data/models/sales_models.dart';
@@ -2066,9 +2067,16 @@ class _CartView extends ConsumerWidget {
                 ),
         ),
         Container(height: 1, color: _salesDivider),
-        Padding(
-          padding: EdgeInsets.all(isStacked ? 12 : 24),
-          child: Column(
+        // PRD 6 F2.1: en compact (<1366) el espacio vertical es justo
+        // (1366×768 deja ~720 px tras chrome), por lo que tightening de
+        // padding y scroll aseguran que los botones de acción siempre
+        // sean alcanzables aunque el resumen tenga muchos breakdowns.
+        Flexible(
+          child: SingleChildScrollView(
+            padding: EdgeInsets.all(
+              isStacked || Breakpoints.isCompact(context) ? 12 : 24,
+            ),
+            child: Column(
             children: [
               _SummaryRow(
                 label: 'Subtotal',
@@ -2484,6 +2492,7 @@ class _CartView extends ConsumerWidget {
                 ],
               ],
             ],
+          ),
           ),
         ),
       ],
