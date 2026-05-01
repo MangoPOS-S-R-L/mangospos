@@ -336,8 +336,17 @@ class PrintTicketService {
     // con lo que ve el cajero en pantalla. Los items consolidados se usan solo
     // para el render de las lineas del ticket.
     final printableSummary = summarizeOrderPricing(order, items);
-    final printableSubtotal = printableSummary.subtotal;
     final printableDiscounts = printableSummary.discounts;
+    // FIX 2026-05-01: el trigger backend `fn_compute_item_totals` guarda
+    // `oi.subtotal := base - discounts` (post-descuento). Pero el receipt
+    // muestra "SUBTOTAL: X / DESCUENTO: -Y / TOTAL: X+tax-Y" donde Y se
+    // resta una vez. Si X ya tenía Y restado, el TOTAL queda short por Y
+    // (caso usuario 30/4: 500 catalog → 10% desc → printed 400, esperado 450).
+    // Para que el ticket lea naturalmente (catalog - descuento + tax = total)
+    // mostramos SUBTOTAL pre-descuento sumando los descuentos de vuelta.
+    final printableSubtotal = double.parse(
+      (printableSummary.subtotal + printableDiscounts).toStringAsFixed(2),
+    );
 
     // Subtotal
     gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(printableSubtotal)}');
@@ -603,8 +612,12 @@ class PrintTicketService {
       items: items,
       preferStoredOrderTotals: preferStoredOrderTotals,
     );
-    final effectiveSubtotal = effectiveTotals.subtotal;
     final effectiveDiscounts = effectiveTotals.discounts;
+    // FIX 2026-05-01: ver comentario en generatePrecheck. Sumamos
+    // descuentos al subtotal para mostrar pre-descuento en el receipt.
+    final effectiveSubtotal = double.parse(
+      (effectiveTotals.subtotal + effectiveDiscounts).toStringAsFixed(2),
+    );
 
     gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(effectiveSubtotal)}');
     if (effectiveDiscounts > 0) {

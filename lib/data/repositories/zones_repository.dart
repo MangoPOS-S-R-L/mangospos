@@ -306,10 +306,13 @@ class ZonesRepository {
         if (sessionId == null || sessionId.isEmpty) continue;
         final order = ordersById[orderId];
         final items = itemsMap[orderId] ?? [];
-        
+
+        // FIX 2026-05-01: usar summary.total directamente — ahora se
+        // ancla al gross catálogo para órdenes 100% inclusive (limpio,
+        // sin drift de centavos ni doble-cuenta de serviceFee legacy).
         final summary = summarizeOrderPricing(
-          order, 
-          items, 
+          order,
+          items,
           forcedOrigin: 'table',
         );
 

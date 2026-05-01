@@ -172,11 +172,18 @@ double itemDisplayUnitPrice(Order? order, OrderItem item) {
   return _r(itemDisplayTotal(order, item) / qty);
 }
 
-/// Total base de la línea (sin impuestos), usado en tickets/facturas para que
-/// la suma de líneas coincida con el SUBTOTAL y el desglose de impuestos
-/// aparezca solo en el footer (evita doble visualización en items inclusive).
+/// Total base de la línea (sin impuestos, **pre-descuento**), usado en
+/// tickets/facturas para que la suma de líneas coincida con el SUBTOTAL
+/// y el desglose de impuestos + descuento aparezca solo en el footer
+/// (evita doble visualización y double-counting de descuento).
+///
+/// FIX 2026-05-01: el trigger backend guarda `oi.subtotal := base - discounts`
+/// (post-descuento). Para que el ticket lea naturalmente
+/// (catalog - descuento + tax = total) sumamos el descuento de vuelta y
+/// devolvemos la base catalog pre-descuento.
 double itemDisplayBaseTotal(Order? order, OrderItem item) {
-  return summarizeItemPricing(order, item).subtotal;
+  final s = summarizeItemPricing(order, item);
+  return _r(s.subtotal + s.discounts);
 }
 
 double itemDisplayBaseUnitPrice(Order? order, OrderItem item) {
@@ -349,17 +356,29 @@ OrderPricingSummary summarizeOrderPricing(
   double extraServiceFee = 0;
 
   final Map<double, double> taxGroups = {};
+  // FIX 2026-05-01: para items inclusive el catalog gross es la fuente
+  // de verdad del total (ej: 2 frappes × RD$ 300 = RD$ 600 exactos). El
+  // sumar `s.subtotal + s.tax` per-item arrastra error de redondeo del
+  // trigger backend (300/1.28 = 234.375 ≈ 234.38, tax 65.63 → total
+  // 300.01 vs catalog 300). Acumulamos gross aparte para que el TOTAL
+  // de la orden coincida con el precio de menú visto por el cajero.
+  double inclusiveGrossNet = 0;
 
   for (final item in items) {
     if (item.status == 'void') continue;
     final s = summarizeItemPricing(order, item, forcedOrigin: forcedOrigin);
-    
+
     subtotal += s.subtotal;
     tax += s.tax;
     serviceFee += s.serviceFee;
     discounts += s.discounts;
     extraServiceFee += s.extraServiceFee;
-    
+
+    if (item.taxMode == 'inclusive') {
+      final gross = _itemGross(item);
+      inclusiveGrossNet += (gross - item.discounts).clamp(0, double.infinity);
+    }
+
     final rate = item.taxRate.toDouble();
     if (rate > 0) {
       taxGroups[rate] = (taxGroups[rate] ?? 0) + s.tax;
@@ -367,12 +386,16 @@ OrderPricingSummary summarizeOrderPricing(
   }
 
   // PRD 2.5: Total = Base + Taxes + Service Fee - Discounts.
-  // (El comentario anterior decía que discounts ya estaban en base/tax/service
-  // pero eso era falso después del refactor de summarizeItemPricing — los
-  // descuentos solo se restan en el total per-item. A nivel orden hay que
-  // restar explícitamente. Sin esto, cart muestra Total inconsistente con
-  // la línea "Descuento" que renderea OrderSummaryPanel/cart.)
-  final finalTotal = _r(subtotal + tax + serviceFee + extraServiceFee - discounts);
+  // Para órdenes 100% inclusive, el total se ancla al gross catálogo
+  // (sin drift por redondeo de tasas consolidadas y SIN sumar
+  // serviceFee aparte porque ya está baked en el catálogo). Para
+  // órdenes mixtas o 100% exclusive, sumamos componentes.
+  final hasOnlyInclusive = items.every(
+    (i) => i.status == 'void' || i.taxMode == 'inclusive',
+  );
+  final double finalTotal = hasOnlyInclusive && items.isNotEmpty
+      ? _r(inclusiveGrossNet)
+      : _r(subtotal + tax + serviceFee + extraServiceFee - discounts);
 
   return OrderPricingSummary(
     subtotal: _r(subtotal),

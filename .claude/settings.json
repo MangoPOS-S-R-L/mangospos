@@ -45,7 +45,11 @@
       "Bash(awk 'NR>=1090 && NR<=1132' /Users/cristiangomez/dev/mangospos/agent/src/index.js)",
       "Bash(python3 -)",
       "Bash(node -c MangoPOS-Agent/src/index.js)",
-      "Bash(git -C /Users/cristiangomez/dev/mangospos status -s)"
+      "Bash(git -C /Users/cristiangomez/dev/mangospos status -s)",
+      "Bash(node -e ' *)",
+      "Bash(python3 -c \"import json,sys; pkg=json.load\\(sys.stdin\\); print\\('deps:'\\); [print\\(' ',k,v\\) for k,v in pkg.get\\('dependencies',{}\\).items\\(\\)]\")",
+      "Bash(npm install *)",
+      "Bash(node -e \"const db = require\\('better-sqlite3'\\)\\(':memory:'\\); db.exec\\('create table t\\(x int\\)'\\); db.prepare\\('insert into t values \\(?\\)'\\).run\\(42\\); console.log\\('OK', db.prepare\\('select x from t'\\).get\\(\\)\\);\")"
     ],
     "additionalDirectories": [
       "/Users/cristiangomez"

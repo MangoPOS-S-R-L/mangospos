@@ -12,13 +12,14 @@
 // idempotencia + worker async, en vez de procesar inline.
 
 const path = require('path');
+const { randomUUID } = require('crypto');
 const express = require('express');
 const cors = require('cors');
 
 const { logger, baseDir, AGENT_ID, LOCAL_PORT } = require('../config');
 const { stopExistingAgentOnLocalPort } = require('../platform/windows');
-const { processPrintJob } = require('../print/job_processor');
 const { sendRawTcp, checkPrinterStatus } = require('../network/tcp');
+const queue = require('../queue/store');
 const discoveryService = require('../core/discovery');
 
 const buildApp = () => {
@@ -68,17 +69,79 @@ const buildApp = () => {
     });
 
     // ── Encolar job de impresión (path principal) ───────────────────
+    // Encola en SQLite con idempotencia por ticket_id; el worker
+    // secuencial procesa FIFO (PRD 7 Fase 1.1).
     app.post('/print', async (req, res) => {
-        const job = req.body;
-        if (!job.id) job.id = `LOCAL-${Date.now()}`;
+        const body = req.body || {};
+        // Acepta `ticket_id` (PRD 7 contract), `ticketId` (camelCase) o
+        // el legacy `id` que el cliente Flutter actual envía.
+        const ticketId = body.ticket_id || body.ticketId || body.id || `local_${randomUUID()}`;
         try {
-            logger.info(`Recibida peticion local de impresion: ${job.id}`);
-            await processPrintJob(job);
-            res.json({ success: true, jobId: job.id });
+            const { job, duplicate } = queue.enqueue({
+                ticketId,
+                deviceId: body.device_id || body.deviceId || null,
+                type: body.type || body.printer?.type || 'unknown',
+                priority: body.priority || 'normal',
+                payload: {
+                    printer: body.printer,
+                    content: body.content,
+                    // Legacy: algunos callers mandaban dataBase64 al root.
+                    dataBase64: body.dataBase64,
+                },
+            });
+
+            if (duplicate) {
+                logger.info(`Print duplicate ticket=${ticketId} → job=${job.jobId} (status=${job.status})`);
+                return res.status(200).json({
+                    job_id: job.jobId,
+                    ticket_id: job.ticketId,
+                    status: job.status,
+                    duplicate: true,
+                    printed_at: job.finishedAt
+                        ? new Date(job.finishedAt).toISOString()
+                        : null,
+                });
+            }
+
+            logger.info(`Print encolado ticket=${ticketId} → job=${job.jobId}`);
+            res.status(202).json({
+                job_id: job.jobId,
+                ticket_id: job.ticketId,
+                status: job.status,
+                // Compat legacy con clientes actuales.
+                success: true,
+                jobId: job.jobId,
+            });
         } catch (error) {
-            logger.error(`Error en impresion local: ${error.message}`);
+            logger.error(`Error encolando impresion: ${error.message}`);
             res.status(500).json({ success: false, error: error.message });
         }
+    });
+
+    // ── Estado de un job específico ─────────────────────────────────
+    app.get('/v1/jobs/:jobId', (req, res) => {
+        const job = queue.get(req.params.jobId);
+        if (!job) return res.status(404).json({ error: 'job not found' });
+        res.json({
+            job_id: job.jobId,
+            ticket_id: job.ticketId,
+            status: job.status,
+            attempts: job.attempts,
+            last_error: job.lastError,
+            enqueued_at: job.enqueuedAt && new Date(job.enqueuedAt).toISOString(),
+            started_at: job.startedAt && new Date(job.startedAt).toISOString(),
+            printed_at: job.finishedAt && new Date(job.finishedAt).toISOString(),
+        });
+    });
+
+    // ── Info / métricas del agente ──────────────────────────────────
+    app.get('/v1/info', (_req, res) => {
+        res.json({
+            agent_id: AGENT_ID,
+            agent_version: '1.0.0',
+            queue: queue.stats(),
+            uptime_seconds: Math.round(process.uptime()),
+        });
     });
 
     // ── UI estática (si existe public/) ─────────────────────────────

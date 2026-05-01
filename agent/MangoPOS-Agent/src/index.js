@@ -17,8 +17,13 @@
 const { logger, AGENT_ID } = require('./config');
 const { startCloudSocket } = require('./socket/cloud');
 const { startLocalApiServer } = require('./http/server');
+const queueWorker = require('./queue/worker');
 
 logger.info(`Iniciando MangoPOS Print Agent [${AGENT_ID}]`);
+
+// Worker de la cola SQLite (Fase 1.1) — arranca antes que cualquier
+// path que encole, así no perdemos jobs si llegan inmediatamente.
+queueWorker.start();
 
 // Cliente Socket.IO al backend (legacy, dormido si no hay BACKEND_URL).
 startCloudSocket();
@@ -39,8 +44,13 @@ process.on('unhandledRejection', (reason) => {
 });
 
 // Shutdown gracioso ante SIGTERM/SIGINT (PRD 7 Fase 1.0).
-const handleShutdown = (signal) => {
+const handleShutdown = async (signal) => {
     logger.info(`Recibido ${signal}. Cerrando agente...`);
+    try {
+        await queueWorker.stop();
+    } catch (e) {
+        logger.warn(`Error cerrando worker: ${e.message}`);
+    }
     process.exit(0);
 };
 process.on('SIGTERM', () => handleShutdown('SIGTERM'));
