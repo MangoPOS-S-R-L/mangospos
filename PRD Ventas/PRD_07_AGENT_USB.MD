@@ -5,7 +5,7 @@
 | **Producto**     | MangoPOS                               |
 | **Componente**   | Agente LAN (servicio de impresión)     |
 | **Autor**        | Cristian                               |
-| **Versión**      | 0.2 — Borrador                         |
+| **Versión**      | 0.3 — Sec 2.1 + Open Questions respondidas |
 | **Fecha**        | 2026-04-30                             |
 | **Estado**       | En revisión                            |
 | **Stakeholders** | Equipo de desarrollo MangoPOS, clientes piloto |
@@ -22,16 +22,16 @@ El caso de uso disparador es el escenario típico de operación: **4 meseros con
 
 ## 2. Contexto y problema
 
-### 2.1 Estado actual `[POR CONFIRMAR CON CRISTIAN]`
+### 2.1 Estado actual (verificado contra `agent/src/index.js` 2026-04-30)
 
-> Esta sección debe completarse con el comportamiento real del agente LAN actual antes de avanzar.
-
-- ¿Qué expone el agente hoy? (HTTP, sockets crudos, IPC interno)
-- ¿Cómo lo descubren los clientes Android? (IP manual, broadcast, configuración hardcoded)
-- ¿Cómo está acoplado a MangoPOS Desktop? (mismo proceso, proceso aparte, servicio de Windows)
-- ¿Qué librería usa para hablar con la impresora USB? (`flutter_pos_printer_platform_image_3`, `esc_pos_utils_plus`, etc.)
-- ¿Tiene cola? ¿Es persistente o en memoria?
-- ¿Maneja autenticación entre clientes y agente?
+| Pregunta | Estado actual |
+|---|---|
+| **¿Qué expone el agente?** | Servidor HTTP **Express** local en `0.0.0.0:4000`. Endpoints: `GET /health`, `GET /status`, `POST /check-connectivity`, `POST /print` (encola directo, sin queue), `POST /api/printers/raw` (envía bytes a IP+puerto arbitrario), `GET /api/printers/discover`. Adicional: cliente **Socket.IO** que se conecta a `BACKEND_URL` (default `http://localhost:3000`) para recibir jobs cloud (no usado en deploy actual). |
+| **¿Cómo lo descubren los Android?** | **No existe descubrimiento desde Android nativo.** El cliente Flutter **del Desktop** corre `PrintAgentDetector.scanLocalFirst()` que prueba `127.0.0.1:4000-4001`, luego scan LAN secuencial 1-254 en la subnet local. La IP detectada se guarda en `device_agents.agent_url` en Supabase (PRD 5 F2.5) y otros devices del business consultan ahí. **No hay mDNS, no hay UDP broadcast.** Si la IP de la PC cambia, el cliente Flutter (heartbeat scheduler PRD 5 F2.5) la re-publica en Supabase ≤30s; otros devices ven el cambio al refrescar. |
+| **¿Cómo se acopla a MangoPOS Desktop?** | **Proceso aparte**: el agente es un binario Node.js standalone (`src/index.js`, ~1121 líneas) empacado con `pkg` → `dist/mangopos-agent.exe` (Windows-only build target). Se distribuye como bundle `MangoPOS-Agent/` (con `node.exe` + `node_modules` + `setup_pos.bat`). Hay `install_service.js` con `node-windows` para correrlo como **servicio de Windows**, pero en pruebas el operador suele lanzarlo manualmente con `setup_pos.bat`. No comparte proceso, memoria ni socket con el binario Flutter Desktop. |
+| **¿Librería USB?** | En Windows actual: **`escpos-usb`** (libusb wrapper) — requiere driver Zadig instalado. **PRD 5 F3+winspool path (2026-04-30)**: el agente ahora prefiere `Win32_Printer` + `winspool.drv` (`OpenPrinter`/`WritePrinter` vía PowerShell P/Invoke) cuando corre en Windows + USB + raw_base64, cayendo a `escpos-usb` solo si winspool falla. **Sin Zadig requerido en el path nuevo.** |
+| **¿Cola?** | **No existe cola formal.** `POST /print` invoca `processPrintJob(job)` directamente. Si llegan dos requests concurrentes, ambas abren el USB en paralelo → bytes ESC/POS entrelazados. Sin persistencia: si la PC cae con un job procesando, se pierde. |
+| **¿Auth?** | **Ninguna en el HTTP local.** CORS configurado con `origin: true, credentials: true` (cualquier origen). Cualquier device en la LAN puede mandar jobs sin token. El cliente Socket.IO (cloud) sí lleva `auth.token = process.env.AUTH_TOKEN` pero ese path está dormido en deploy actual. |
 
 ### 2.2 Problemas observados
 
@@ -406,7 +406,7 @@ CREATE TABLE print_jobs (
 - **HTTP:** `shelf` + `shelf_router`.
 - **Persistencia:** `sqlite3` (paquete oficial Dart) o `drift`.
 - **mDNS:** `bonsoir` o `multicast_dns`.
-- **USB ESC/POS:** la librería actual usada por MangoPOS Desktop (`[POR CONFIRMAR]`).
+- **USB ESC/POS:** Windows: `winspool.drv` vía PowerShell P/Invoke (path principal, sin Zadig). Mac/Linux: `escpos-usb` (libusb). Stack actual del agente, validado 2026-04-30.
 - **Realtime:** `supabase_flutter` (mismo cliente que el resto del sistema).
 - **Servicio Windows:** envoltorio con `nssm` o instalación nativa vía MSIX con tarea programada al login.
 
@@ -462,15 +462,28 @@ CREATE TABLE print_jobs (
 
 ---
 
-## 11. Preguntas abiertas
+## 11. Preguntas abiertas (con respuestas tentativas 2026-04-30)
 
-1. ¿El agente LAN se distribuye **separado** de MangoPOS Desktop o queda **embebido**? (Recomendación del PRD: separado, mismo MSIX-bundle.)
-2. ¿La librería actual de impresión USB soporta polling de estado (DLE EOT) en Windows? Si no, requiere reemplazo o capa adicional.
-3. ¿El JWT que usan los Android es el del usuario mesero o uno de "device"? Si es de usuario, ¿qué pasa con tickets generados al cambiar de turno?
-4. ¿Necesitamos soportar simultáneamente la versión vieja del agente y la nueva durante el rollout, o se puede hacer corte limpio?
-5. ¿El cliente piloto tiene política de red restrictiva (firewall corporativo, VLAN separada para Android)? Esto afecta mDNS.
-6. ¿Hay requisitos legales/fiscales (DGII, comprobante fiscal) que afecten el contenido o ruteo de los tickets en la versión nueva?
-7. Para V2: ¿múltiples impresoras por agente (cocina + caja + bar)? Si sí, hay que reservar `printer_id` en el contrato desde ya.
+1. **¿Agente separado o embebido en MangoPOS Desktop?**
+   → **Separado.** Ya está separado hoy (`agent/` es proyecto Node.js independiente del Flutter Desktop). Mantener así. Distribución: `dist/mangopos-agent.exe` empacado con `pkg`, opcional MSIX bundle si se quiere instalación firmada.
+
+2. **¿Polling de estado USB (DLE EOT) en Windows?**
+   → **`escpos-usb` lo soporta vía libusb pero requiere Zadig.** El path nuevo `winspool.drv` no expone DLE EOT; solo escribe RAW. Para polling de estado en winspool path hay 2 caminos: (a) usar `Get-PrinterProperty` PowerShell para queue/online/offline, (b) abrir handle USB raw paralelo solo para status (no escritura). **Recomendación**: status básico (online/offline/jobs en cola) vía Win32_Printer; status físico (papel/tapa) queda en V2.
+
+3. **¿JWT Android = usuario o device?**
+   → **Usuario hoy.** El JWT viene del login de Supabase del mesero. Cambio de turno = nuevo JWT. Para el agente esto es OK porque solo valida `restaurant_id` (=`business_id`), no `user_id`. Tickets en cola al cambiar turno se imprimen igual (firmados por el JWT viejo, válido hasta su expiración natural). **Decisión**: mantener usuario; el agente no necesita identidad personal.
+
+4. **¿Coexistencia versión vieja/nueva durante rollout?**
+   → **Corte limpio recomendado.** El agente actual y el nuevo escuchan en `:4000`. Convivir requiere puerto distinto (`:4001`), config dual en clientes, y duplicar tickets durante migración. Mejor: feature flag por business → cuando se activa, el cliente Flutter se conecta al agente nuevo y reporta éxito; rollback = desactivar flag, volver al agente viejo. Migración por business, no global.
+
+5. **¿Política de red del cliente piloto?**
+   → **Sin restricción conocida.** Routers ISP residenciales típicos del DR (Claro, Altice, Tigo) permiten multicast en LAN local. Sin firewall corporativo en pilotos actuales. **Riesgo bajo** para mDNS. UDP broadcast como fallback cubre el edge case si aparece. Confirmar antes de Fase 3 con el primer cliente piloto del rollout.
+
+6. **¿Requisitos DGII/fiscales para tickets?**
+   → **Sí, ya implementados en el frontend.** Generación de NCF, validación de RNC, secuencia fiscal y regeneración de pre-cuenta vs factura están en `lib/services/printing/print_ticket_service.dart` (no en el agente). El agente solo recibe el ESC/POS ya generado vía `raw_base64` y lo manda a la térmica. **Ningún cambio fiscal afecta al agente nuevo** — sigue siendo dumb pipe.
+
+7. **¿Múltiples impresoras por agente (cocina + caja + bar)?**
+   → **Sí, V2.** Hoy un agente sirve N impresoras (USB local + N por red), identificadas por `printerConfig.id`/`name` en el payload. El contrato actual ya pasa el printer en cada job. Para V2 con múltiples USB conectadas al mismo PC, agregar `printer_id` al routing es trivial — ya está en el modelo. **Sin cambios al contrato.**
 
 ---
 
