@@ -32,8 +32,8 @@ const SERVER_URL = process.env.BACKEND_URL || 'http://localhost:3000';
 const AGENT_ID = process.env.AGENT_ID || 'unknown-agent';
 
 
-logger.info(`?? Iniciando MangoPOS Print Agent [${AGENT_ID}]`);
-logger.info(`?? Conectando a ${SERVER_URL}...`);
+logger.info(`Iniciando MangoPOS Print Agent [${AGENT_ID}]`);
+logger.info(`Conectando a ${SERVER_URL}...`);
 
 
 // Conexión Socket.IO
@@ -50,24 +50,24 @@ const socket = io(SERVER_URL, {
 
 // Manejo de Eventos de Conexión
 socket.on('connect', () => {
-    logger.info('? Conectado al servidor Cloud');
+    logger.info('Conectado al servidor Cloud');
     registerAgent();
 });
 
 
 socket.on('disconnect', (reason) => {
-    logger.warn(`? Desconectado: ${reason}`);
+    logger.warn(`Desconectado: ${reason}`);
 });
 
 
 socket.on('connect_error', (error) => {
-    logger.error(`?? Error de conexión: ${error.message}`);
+    logger.error(`Error de conexión: ${error.message}`);
 });
 
 
 // Manejo de Trabajos de Impresión
 socket.on('print-job', async (job, ack) => {
-    logger.info(`??? Recibido trabajo de impresión: ${job.id}`);
+    logger.info(`Recibido trabajo de impresión: ${job.id}`);
 
 
     try {
@@ -76,11 +76,11 @@ socket.on('print-job', async (job, ack) => {
 
         // Confirmar éxito al servidor
         if (ack) ack({ status: 'success', jobId: job.id });
-        logger.info(`? Trabajo ${job.id} completado`);
+        logger.info(`Trabajo ${job.id} completado`);
 
 
     } catch (error) {
-        logger.error(`?? Error imprimiendo trabajo ${job.id}: ${error.message}`);
+        logger.error(`Error imprimiendo trabajo ${job.id}: ${error.message}`);
 
 
         // Reportar error
@@ -432,7 +432,7 @@ finally {
 
 async function processPrintJob(job) {
     return new Promise(async (resolve, reject) => {
-        logger.info(`?? Procesando job ${job.id} tipo: ${job.printer?.type || 'unknown'} - Contenido: ${job.content?.type}`);
+        logger.info(`Procesando job ${job.id} tipo: ${job.printer?.type || 'unknown'} - Contenido: ${job.content?.type}`);
 
 
         const content = job.content;
@@ -441,7 +441,7 @@ async function processPrintJob(job) {
 
         if (!printerConfig) return reject(new Error("No printer configuration provided in job"));
 
-        logger.info(`?? Printer payload ${describePrinter(printerConfig)}`);
+        logger.info(`Printer payload ${describePrinter(printerConfig)}`);
 
         // ===========================================================
         // Fast path: Windows + USB + raw_base64 → winspool (sin Zadig).
@@ -459,11 +459,11 @@ async function processPrintJob(job) {
                 return reject(new Error('Missing dataBase64 in raw job'));
             }
             try {
-                logger.info(`?? Winspool path para USB ${printerConfig.name || ''} (sin Zadig)`);
+                logger.info(`Winspool path para USB ${printerConfig.name || ''} (sin Zadig)`);
                 await printRawViaWinspoolWindows(printerConfig, dataBase64);
                 return resolve();
             } catch (err) {
-                logger.error(`? Winspool failed: ${err.message}. Cayendo a libusb fallback.`);
+                logger.error(`Winspool failed: ${err.message}. Cayendo a libusb fallback.`);
                 // Fallback a escpos.USB() si winspool falla por algún motivo
                 // (ej. impresora no instalada en Windows). Si Zadig está OK,
                 // este fallback funciona; sino, ambos fallan y el caller
@@ -476,20 +476,20 @@ async function processPrintJob(job) {
             if (printerConfig.type === 'network') {
                 if (!printerConfig.ip) throw new Error("IP Address missing for network printer");
                 const sanitizedIp = printerConfig.ip.split('/')[0];
-                logger.info(`?? Conectando a impresora de red: ${sanitizedIp}:${printerConfig.port || 9100}`);
+                logger.info(`Conectando a impresora de red: ${sanitizedIp}:${printerConfig.port || 9100}`);
                 device = new escpos.Network(sanitizedIp, printerConfig.port || 9100);
             } else if (printerConfig.type === 'usb') {
                 const usbSelection = resolveUsbSelection(printerConfig);
                 if (usbSelection.vid !== null && usbSelection.pid !== null) {
-                    logger.info(`?? Conectando a impresora USB ${printerConfig.name || ''} por VID/PID ${usbSelection.vid.toString(16)}:${usbSelection.pid.toString(16)} (${usbSelection.source})`);
+                    logger.info(`Conectando a impresora USB ${printerConfig.name || ''} por VID/PID ${usbSelection.vid.toString(16)}:${usbSelection.pid.toString(16)} (${usbSelection.source})`);
                     device = new escpos.USB(usbSelection.vid, usbSelection.pid);
                 } else {
-                    logger.warn(`?? Impresora USB sin VID/PID resoluble. Intentando auto-detect. payload=${describePrinter(printerConfig)}`);
+                    logger.warn(`Impresora USB sin VID/PID resoluble. Intentando auto-detect. payload=${describePrinter(printerConfig)}`);
                     device = new escpos.USB();
                 }
             } else {
-                logger.info("?? Usando Consola (Printer Type no reconocido o 'test')");
-                device = new escpos.Console();
+                logger.info("Usando Consola (Printer Type no reconocido o 'test')");
+                throw new Error('Tipo de impresora no soportado: ' + printerConfig.type);
             }
 
 
@@ -499,11 +499,11 @@ async function processPrintJob(job) {
             device.open(async function (error) {
                 if (error) {
                     const message = error?.message || String(error);
-                    logger.error(`? Error abriendo conexion con impresora: ${message} payload=${describePrinter(printerConfig)}`);
+                    logger.error(`Error abriendo conexion con impresora: ${message} payload=${describePrinter(printerConfig)}`);
                     return reject(new Error(`No se pudo abrir la impresora ${printerConfig.name || ''}. ${message}`.trim()));
                 }
                 if (false && error) {
-                    logger.error(`? Error abriendo conexión con impresora: ${error}`);
+                    logger.error(`Error abriendo conexión con impresora: ${error}`);
                     return reject(error);
                 }
 
@@ -892,11 +892,11 @@ app.post('/print', async (req, res) => {
 
 
     try {
-        logger.info(`?? Recibida petición local de impresión: ${job.id}`);
+        logger.info(`Recibida peticion local de impresión: ${job.id}`);
         await processPrintJob(job);
         res.json({ success: true, jobId: job.id });
     } catch (error) {
-        logger.error(`? Error en impresión local: ${error.message}`);
+        logger.error(`Error en impresion local: ${error.message}`);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -1092,31 +1092,21 @@ async function stopExistingAgentOnLocalPort() {
 async function startLocalApiServer() {
     await stopExistingAgentOnLocalPort();
 
-    app.listen(LOCAL_PORT, () => {
-        logger.info(`ðŸš€ Local API escuchando en http://localhost:${LOCAL_PORT}`);
+    // Bind explicito a 0.0.0.0 para garantizar accesibilidad desde otros
+    // devices del LAN (sharing de impresoras USB/BT entre dispositivos).
+    app.listen(LOCAL_PORT, '0.0.0.0', () => {
+        logger.info(`Local API escuchando en http://0.0.0.0:${LOCAL_PORT}`);
     }).on('error', (err) => {
         if (err.code === 'EADDRINUSE') {
-            logger.error(`âŒ El puerto ${LOCAL_PORT} ya estÃ¡ en uso. El agente seguirÃ¡ operando vÃ­a Socket.io si es posible.`);
+            logger.error(`El puerto ${LOCAL_PORT} ya esta en uso. El agente seguira operando via Socket.io si es posible.`);
         } else {
-            logger.error(`âŒ Error iniciando servidor API: ${err.message}`);
+            logger.error(`Error iniciando servidor API: ${err.message}`);
         }
     });
 }
 
 
 startLocalApiServer();
-
-// Iniciar Servidor HTTP
-if (false) app.listen(LOCAL_PORT, () => {
-    logger.info(`🚀 Local API escuchando en http://localhost:${LOCAL_PORT}`);
-}).on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-        logger.error(`❌ El puerto ${LOCAL_PORT} ya está en uso. El agente seguirá operando vía Socket.io si es posible.`);
-    } else {
-        logger.error(`❌ Error iniciando servidor API: ${err.message}`);
-    }
-});
-
 
 
 // ==========================================

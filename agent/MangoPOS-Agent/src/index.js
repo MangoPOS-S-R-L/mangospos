@@ -1,9 +1,13 @@
-﻿const path = require('path');
+const path = require('path');
 const io = require('socket.io-client');
 const winston = require('winston');
+const { exec, spawn } = require('child_process');
+const discoveryService = require('./core/discovery');
 
-// Cargar .env desde la carpeta del agente (no desde C:\Windows\System32 del servicio)
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+// Cargar .env: detectar si corremos como script o como binario pkg
+const isPkg = typeof process.pkg !== 'undefined';
+const baseDir = isPkg ? path.dirname(process.execPath) : path.join(__dirname, '..');
+require('dotenv').config({ path: path.join(baseDir, '.env') });
 
 
 // Configuración de Logging
@@ -17,8 +21,8 @@ const logger = winston.createLogger({
         new winston.transports.Console({
             format: winston.format.simple(),
         }),
-        // Guardar el log junto al agente, no en el directorio del servicio
-        new winston.transports.File({ filename: path.join(__dirname, '..', 'agent.log') }),
+        // Guardar el log junto al ejecutable o en la raiz del agente
+        new winston.transports.File({ filename: path.join(baseDir, 'agent.log') }),
     ],
 });
 
@@ -28,8 +32,8 @@ const SERVER_URL = process.env.BACKEND_URL || 'http://localhost:3000';
 const AGENT_ID = process.env.AGENT_ID || 'unknown-agent';
 
 
-logger.info(`?? Iniciando MangoPOS Print Agent [${AGENT_ID}]`);
-logger.info(`?? Conectando a ${SERVER_URL}...`);
+logger.info(`Iniciando MangoPOS Print Agent [${AGENT_ID}]`);
+logger.info(`Conectando a ${SERVER_URL}...`);
 
 
 // Conexión Socket.IO
@@ -46,24 +50,24 @@ const socket = io(SERVER_URL, {
 
 // Manejo de Eventos de Conexión
 socket.on('connect', () => {
-    logger.info('? Conectado al servidor Cloud');
+    logger.info('Conectado al servidor Cloud');
     registerAgent();
 });
 
 
 socket.on('disconnect', (reason) => {
-    logger.warn(`? Desconectado: ${reason}`);
+    logger.warn(`Desconectado: ${reason}`);
 });
 
 
 socket.on('connect_error', (error) => {
-    logger.error(`?? Error de conexión: ${error.message}`);
+    logger.error(`Error de conexión: ${error.message}`);
 });
 
 
 // Manejo de Trabajos de Impresión
 socket.on('print-job', async (job, ack) => {
-    logger.info(`??? Recibido trabajo de impresión: ${job.id}`);
+    logger.info(`Recibido trabajo de impresión: ${job.id}`);
 
 
     try {
@@ -72,11 +76,11 @@ socket.on('print-job', async (job, ack) => {
 
         // Confirmar éxito al servidor
         if (ack) ack({ status: 'success', jobId: job.id });
-        logger.info(`? Trabajo ${job.id} completado`);
+        logger.info(`Trabajo ${job.id} completado`);
 
 
     } catch (error) {
-        logger.error(`?? Error imprimiendo trabajo ${job.id}: ${error.message}`);
+        logger.error(`Error imprimiendo trabajo ${job.id}: ${error.message}`);
 
 
         // Reportar error
@@ -195,10 +199,240 @@ const getSafeDate = () => {
     return `${d}/${m}/${y} ${h}:${min} ${ampm}`;
 };
 
+const parseUsbNumber = (value) => {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+
+    const raw = String(value).trim();
+    if (!raw) return null;
+    if (/^0x[0-9a-f]+$/i.test(raw)) return parseInt(raw, 16);
+    if (/^[0-9a-f]{4}$/i.test(raw)) return parseInt(raw, 16);
+    if (/^\d+$/.test(raw)) return parseInt(raw, 10);
+    return null;
+};
+
+const extractUsbIdsFromText = (value) => {
+    if (!value) return { vid: null, pid: null };
+    const raw = String(value);
+    const vidMatch = raw.match(/VID[_:= -]?([0-9A-F]{4})/i);
+    const pidMatch = raw.match(/PID[_:= -]?([0-9A-F]{4})/i);
+    return {
+        vid: vidMatch ? parseInt(vidMatch[1], 16) : null,
+        pid: pidMatch ? parseInt(pidMatch[1], 16) : null,
+    };
+};
+
+const describePrinter = (printerConfig = {}) => JSON.stringify({
+    id: printerConfig.id || null,
+    name: printerConfig.name || null,
+    type: printerConfig.type || null,
+    ip: printerConfig.ip || null,
+    port: printerConfig.port || null,
+    endpoint: printerConfig.endpoint || null,
+    devicePath: printerConfig.devicePath || null,
+    path: printerConfig.path || null,
+    deviceId: printerConfig.deviceId || null,
+    vid: printerConfig.vid || null,
+    pid: printerConfig.pid || null,
+});
+
+const resolveUsbSelection = (printerConfig = {}) => {
+    const directVid = parseUsbNumber(printerConfig.vid);
+    const directPid = parseUsbNumber(printerConfig.pid);
+    if (directVid !== null && directPid !== null) {
+        return { vid: directVid, pid: directPid, source: 'printerConfig.vid/pid' };
+    }
+
+    const candidates = [
+        ['printerConfig.endpoint', printerConfig.endpoint],
+        ['printerConfig.devicePath', printerConfig.devicePath],
+        ['printerConfig.path', printerConfig.path],
+        ['printerConfig.deviceId', printerConfig.deviceId],
+        ['printerConfig.mac', printerConfig.mac],
+    ];
+
+    for (const [source, value] of candidates) {
+        const parsed = extractUsbIdsFromText(value);
+        if (parsed.vid !== null && parsed.pid !== null) {
+            return { vid: parsed.vid, pid: parsed.pid, source };
+        }
+    }
+
+    return { vid: null, pid: null, source: null };
+};
+
+
+// =============================================================
+// Windows winspool path (no libusb / no Zadig)
+// Misma lógica que `_printRawDirectUsbWindows` en Flutter:
+// abre la impresora vía OpenPrinter de winspool.drv, escribe los bytes
+// RAW y cierra. Funciona con cualquier impresora térmica instalada como
+// impresora estándar de Windows — sin necesidad de Zadig ni libusb.
+// =============================================================
+function escapePsSingleQuoted(value) {
+    return String(value || '').replace(/'/g, "''");
+}
+
+async function printRawViaWinspoolWindows(printerConfig, base64Payload) {
+    const printerName = escapePsSingleQuoted(printerConfig.name);
+    const devicePath = escapePsSingleQuoted(printerConfig.devicePath);
+    const portHint = escapePsSingleQuoted(printerConfig.mac);
+
+    const script = `
+$ErrorActionPreference = 'Stop'
+$printerName = '${printerName}'
+$devicePath = '${devicePath}'
+$portHint = '${portHint}'
+$payload = '${base64Payload}'
+$bytes = [Convert]::FromBase64String($payload)
+
+$target = Get-CimInstance Win32_Printer |
+  Where-Object {
+    ($printerName -and $_.Name -eq $printerName) -or
+    ($devicePath -and ($_.Name -eq $devicePath -or $_.DeviceID -eq $devicePath)) -or
+    ($portHint -and $_.PortName -eq $portHint)
+  } |
+  Select-Object -First 1
+
+if (-not $target) {
+  $target = Get-CimInstance Win32_Printer |
+    Where-Object {
+      $_.Local -eq $true -and $_.PortName -match '^USB' -and (
+        ($printerName -and $_.Name -like "*$printerName*") -or
+        ($devicePath -and ($_.Name -like "*$devicePath*" -or $_.DeviceID -like "*$devicePath*")) -or
+        ($portHint -and $_.PortName -like "*$portHint*")
+      )
+    } |
+    Select-Object -First 1
+}
+
+if (-not $target) {
+  throw "USB_PRINTER_NOT_FOUND name=$printerName devicePath=$devicePath port=$portHint"
+}
+
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class RawPrinterHelper
+{
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+    public class DOCINFOA
+    {
+        [MarshalAs(UnmanagedType.LPStr)]
+        public string pDocName;
+        [MarshalAs(UnmanagedType.LPStr)]
+        public string pOutputFile;
+        [MarshalAs(UnmanagedType.LPStr)]
+        public string pDataType;
+    }
+
+    [DllImport("Winspool.drv", EntryPoint = "OpenPrinterA", SetLastError = true, CharSet = CharSet.Ansi, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool OpenPrinter(string szPrinter, out IntPtr hPrinter, IntPtr pd);
+
+    [DllImport("Winspool.drv", EntryPoint = "ClosePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool ClosePrinter(IntPtr hPrinter);
+
+    [DllImport("Winspool.drv", EntryPoint = "StartDocPrinterA", SetLastError = true, CharSet = CharSet.Ansi, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool StartDocPrinter(IntPtr hPrinter, int level, [In, MarshalAs(UnmanagedType.LPStruct)] DOCINFOA di);
+
+    [DllImport("Winspool.drv", EntryPoint = "EndDocPrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool EndDocPrinter(IntPtr hPrinter);
+
+    [DllImport("Winspool.drv", EntryPoint = "StartPagePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool StartPagePrinter(IntPtr hPrinter);
+
+    [DllImport("Winspool.drv", EntryPoint = "EndPagePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool EndPagePrinter(IntPtr hPrinter);
+
+    [DllImport("Winspool.drv", EntryPoint = "WritePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool WritePrinter(IntPtr hPrinter, byte[] pBytes, int dwCount, out int dwWritten);
+}
+"@
+
+$handle = [IntPtr]::Zero
+$docStarted = $false
+$pageStarted = $false
+
+if (-not [RawPrinterHelper]::OpenPrinter($target.Name, [ref]$handle, [IntPtr]::Zero)) {
+  $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+  throw "OPEN_PRINTER_FAILED $err ($($target.Name))"
+}
+
+try {
+  $doc = New-Object RawPrinterHelper+DOCINFOA
+  $doc.pDocName = 'MangoPOS'
+  $doc.pDataType = 'RAW'
+
+  if (-not [RawPrinterHelper]::StartDocPrinter($handle, 1, $doc)) {
+    $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    throw "START_DOC_FAILED $err"
+  }
+  $docStarted = $true
+
+  if (-not [RawPrinterHelper]::StartPagePrinter($handle)) {
+    $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    throw "START_PAGE_FAILED $err"
+  }
+  $pageStarted = $true
+
+  $written = 0
+  if (-not [RawPrinterHelper]::WritePrinter($handle, $bytes, $bytes.Length, [ref]$written)) {
+    $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    throw "WRITE_PRINTER_FAILED $err"
+  }
+
+  if ($written -ne $bytes.Length) {
+    throw "WRITE_PRINTER_INCOMPLETE $written/$($bytes.Length)"
+  }
+}
+finally {
+  if ($pageStarted) { [void][RawPrinterHelper]::EndPagePrinter($handle) }
+  if ($docStarted) { [void][RawPrinterHelper]::EndDocPrinter($handle) }
+  if ($handle -ne [IntPtr]::Zero) { [void][RawPrinterHelper]::ClosePrinter($handle) }
+}
+`;
+
+    return new Promise((resolve, reject) => {
+        const child = spawn('powershell', [
+            '-NoProfile',
+            '-ExecutionPolicy', 'Bypass',
+            '-Command', '-',
+        ], { windowsHide: true });
+
+        let stderr = '';
+        let stdout = '';
+        child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+        child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+
+        const timer = setTimeout(() => {
+            try { child.kill(); } catch (_) {}
+            reject(new Error('WINSPOOL_TIMEOUT (30s)'));
+        }, 30000);
+
+        child.on('error', (err) => {
+            clearTimeout(timer);
+            reject(err);
+        });
+
+        child.on('close', (code) => {
+            clearTimeout(timer);
+            if (code === 0) {
+                resolve();
+            } else {
+                const msg = stderr.trim() || stdout.trim() || `winspool exit code ${code}`;
+                reject(new Error(msg));
+            }
+        });
+
+        child.stdin.write(script);
+        child.stdin.end();
+    });
+}
 
 async function processPrintJob(job) {
     return new Promise(async (resolve, reject) => {
-        logger.info(`?? Procesando job ${job.id} tipo: ${job.printer?.type || 'unknown'} - Contenido: ${job.content?.type}`);
+        logger.info(`Procesando job ${job.id} tipo: ${job.printer?.type || 'unknown'} - Contenido: ${job.content?.type}`);
 
 
         const content = job.content;
@@ -207,19 +441,55 @@ async function processPrintJob(job) {
 
         if (!printerConfig) return reject(new Error("No printer configuration provided in job"));
 
+        logger.info(`Printer payload ${describePrinter(printerConfig)}`);
+
+        // ===========================================================
+        // Fast path: Windows + USB + raw_base64 → winspool (sin Zadig).
+        // Evita escpos.USB() que requiere libusb (driver Zadig). Usa
+        // OpenPrinter / WritePrinter contra el spooler de Windows con
+        // el driver estándar instalado por el OEM o uno genérico RAW.
+        // ===========================================================
+        if (
+            process.platform === 'win32' &&
+            printerConfig.type === 'usb' &&
+            content && content.type === 'raw_base64'
+        ) {
+            const dataBase64 = content.dataBase64 || job.dataBase64;
+            if (!dataBase64) {
+                return reject(new Error('Missing dataBase64 in raw job'));
+            }
+            try {
+                logger.info(`Winspool path para USB ${printerConfig.name || ''} (sin Zadig)`);
+                await printRawViaWinspoolWindows(printerConfig, dataBase64);
+                return resolve();
+            } catch (err) {
+                logger.error(`Winspool failed: ${err.message}. Cayendo a libusb fallback.`);
+                // Fallback a escpos.USB() si winspool falla por algún motivo
+                // (ej. impresora no instalada en Windows). Si Zadig está OK,
+                // este fallback funciona; sino, ambos fallan y el caller
+                // verá el error original de winspool.
+            }
+        }
 
         try {
             let device;
             if (printerConfig.type === 'network') {
                 if (!printerConfig.ip) throw new Error("IP Address missing for network printer");
                 const sanitizedIp = printerConfig.ip.split('/')[0];
-                logger.info(`?? Conectando a impresora de red: ${sanitizedIp}:${printerConfig.port || 9100}`);
+                logger.info(`Conectando a impresora de red: ${sanitizedIp}:${printerConfig.port || 9100}`);
                 device = new escpos.Network(sanitizedIp, printerConfig.port || 9100);
             } else if (printerConfig.type === 'usb') {
-                device = new escpos.USB();
+                const usbSelection = resolveUsbSelection(printerConfig);
+                if (usbSelection.vid !== null && usbSelection.pid !== null) {
+                    logger.info(`Conectando a impresora USB ${printerConfig.name || ''} por VID/PID ${usbSelection.vid.toString(16)}:${usbSelection.pid.toString(16)} (${usbSelection.source})`);
+                    device = new escpos.USB(usbSelection.vid, usbSelection.pid);
+                } else {
+                    logger.warn(`Impresora USB sin VID/PID resoluble. Intentando auto-detect. payload=${describePrinter(printerConfig)}`);
+                    device = new escpos.USB();
+                }
             } else {
-                logger.info("?? Usando Consola (Printer Type no reconocido o 'test')");
-                device = new escpos.Console();
+                logger.info("Usando Consola (Printer Type no reconocido o 'test')");
+                throw new Error('Tipo de impresora no soportado: ' + printerConfig.type);
             }
 
 
@@ -228,7 +498,12 @@ async function processPrintJob(job) {
 
             device.open(async function (error) {
                 if (error) {
-                    logger.error(`? Error abriendo conexión con impresora: ${error}`);
+                    const message = error?.message || String(error);
+                    logger.error(`Error abriendo conexion con impresora: ${message} payload=${describePrinter(printerConfig)}`);
+                    return reject(new Error(`No se pudo abrir la impresora ${printerConfig.name || ''}. ${message}`.trim()));
+                }
+                if (false && error) {
+                    logger.error(`Error abriendo conexión con impresora: ${error}`);
                     return reject(error);
                 }
 
@@ -249,7 +524,15 @@ async function processPrintJob(job) {
 
 
                     // 2. PRINTING
-                    if (content.type === 'precheck') {
+                    if (content.type === 'raw_base64') {
+                        const dataBase64 = content.dataBase64 || job.dataBase64;
+                        if (!dataBase64) {
+                            throw new Error('Missing dataBase64 in raw job');
+                        }
+                        const payload = Buffer.from(dataBase64, 'base64');
+                        device.write(payload);
+                        printer.feed(3).cut().close();
+                    } else if (content.type === 'precheck') {
                         await printPreCheck(device, printer, content.data);
                     } else if (content.type === 'invoice') {
                         await printInvoice(device, printer, content.data);
@@ -560,6 +843,14 @@ app.use(express.json());
 
 
 // 1. Endpoint de Estado (Health Check)
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        agent: AGENT_ID,
+        version: '1.0.0'
+    });
+});
+
 app.get('/status', (req, res) => {
     res.json({
         status: 'online',
@@ -601,14 +892,17 @@ app.post('/print', async (req, res) => {
 
 
     try {
-        logger.info(`?? Recibida petición local de impresión: ${job.id}`);
+        logger.info(`Recibida peticion local de impresión: ${job.id}`);
         await processPrintJob(job);
         res.json({ success: true, jobId: job.id });
     } catch (error) {
-        logger.error(`? Error en impresión local: ${error.message}`);
+        logger.error(`Error en impresion local: ${error.message}`);
         res.status(500).json({ success: false, error: error.message });
     }
 });
+
+// Endpoint para servir la UI estática (si existe)
+app.use(express.static(path.join(baseDir, 'public')));
 
 // 4. Endpoint de impresión RAW (base64/hex)
 // body: { ip, port=9100, dataBase64?, dataHex? }
@@ -635,6 +929,26 @@ app.post('/api/printers/raw', async (req, res) => {
     } catch (error) {
         logger.error(`Error RAW print: ${error.message}`);
         return res.status(500).json({ ok: false, error: error.message });
+    }
+});
+
+app.get('/api/printers/discover', async (req, res) => {
+    try {
+        const devices = await discoveryService.scan();
+        const items = devices.map((device) => ({
+            type: device.type || 'network',
+            name: device.name || 'Printer',
+            ip: device.address && device.type === 'network' ? device.address : null,
+            port: device.port || 9100,
+            mac: device.deviceId || null,
+            deviceId: device.deviceId || device.address || null,
+            vid: device.vid || null,
+            pid: device.pid || null,
+        }));
+        res.json({ items });
+    } catch (error) {
+        logger.error(`Discovery error: ${error.message}`);
+        res.status(500).json({ items: [], error: error.message });
     }
 });
 
@@ -701,11 +1015,98 @@ function checkPrinterStatus(ip, port, timeout = 1500) {
     });
 }
 
+function runPowerShell(script) {
+    return new Promise((resolve, reject) => {
+        const escaped = script.replace(/"/g, '\\"');
+        exec(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${escaped}"`, {
+            windowsHide: true,
+        }, (error, stdout, stderr) => {
+            if (error) {
+                reject(new Error((stderr || error.message || '').trim()));
+                return;
+            }
+            resolve((stdout || '').trim());
+        });
+    });
+}
 
-// Iniciar Servidor HTTP
-app.listen(LOCAL_PORT, () => {
-    logger.info(`?? Local API escuchando en http://localhost:${LOCAL_PORT}`);
-});
+async function getLocalApiListener() {
+    if (process.platform !== 'win32') return null;
+
+    const script = [
+        `$conn = Get-NetTCPConnection -LocalPort ${LOCAL_PORT} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1`,
+        'if (-not $conn) { return }',
+        '$proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue',
+        '[pscustomobject]@{ pid = $conn.OwningProcess; name = if ($proc) { $proc.ProcessName } else { $null } } | ConvertTo-Json -Compress',
+    ].join('; ');
+
+    try {
+        const raw = await runPowerShell(script);
+        if (!raw) return null;
+        return JSON.parse(raw);
+    } catch (error) {
+        logger.warn(`No se pudo inspeccionar el puerto ${LOCAL_PORT}: ${error.message}`);
+        return null;
+    }
+}
+
+async function stopExistingAgentOnLocalPort() {
+    const listener = await getLocalApiListener();
+    if (!listener || !listener.pid || listener.pid === process.pid) {
+        return false;
+    }
+
+    const processName = String(listener.name || '').toLowerCase();
+    const looksLikeAgent =
+        processName.includes('mangopos-agent') ||
+        processName === 'node' ||
+        processName === 'node.exe';
+
+    if (!looksLikeAgent) {
+        logger.warn(`El puerto ${LOCAL_PORT} esta ocupado por ${listener.name || 'otro proceso'} (PID ${listener.pid}). No se detendra automaticamente.`);
+        return false;
+    }
+
+    logger.warn(`Se detecto una instancia previa del agente en el puerto ${LOCAL_PORT} (PID ${listener.pid}, ${listener.name}). Se intentara reiniciar.`);
+
+    try {
+        await runPowerShell(`Stop-Process -Id ${listener.pid} -Force -ErrorAction Stop`);
+    } catch (error) {
+        logger.error(`No se pudo detener la instancia previa del agente (PID ${listener.pid}): ${error.message}`);
+        return false;
+    }
+
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        const current = await getLocalApiListener();
+        if (!current || current.pid === process.pid) {
+            logger.info(`Puerto ${LOCAL_PORT} liberado correctamente.`);
+            return true;
+        }
+    }
+
+    logger.error(`La instancia previa del agente no libero el puerto ${LOCAL_PORT} a tiempo.`);
+    return false;
+}
+
+async function startLocalApiServer() {
+    await stopExistingAgentOnLocalPort();
+
+    // Bind explicito a 0.0.0.0 para garantizar accesibilidad desde otros
+    // devices del LAN (sharing de impresoras USB/BT entre dispositivos).
+    app.listen(LOCAL_PORT, '0.0.0.0', () => {
+        logger.info(`Local API escuchando en http://0.0.0.0:${LOCAL_PORT}`);
+    }).on('error', (err) => {
+        if (err.code === 'EADDRINUSE') {
+            logger.error(`El puerto ${LOCAL_PORT} ya esta en uso. El agente seguira operando via Socket.io si es posible.`);
+        } else {
+            logger.error(`Error iniciando servidor API: ${err.message}`);
+        }
+    });
+}
+
+
+startLocalApiServer();
 
 
 // ==========================================
@@ -714,7 +1115,6 @@ app.listen(LOCAL_PORT, () => {
 process.on('uncaughtException', (err) => {
     logger.error('CRITICAL ERROR:', err);
 });
-
 
 
 
