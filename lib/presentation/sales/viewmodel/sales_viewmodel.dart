@@ -50,6 +50,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   final OfflinePosService _offlinePos = OfflinePosService();
   final ConnectivityService _connectivity = ConnectivityService();
   Timer? _refreshOrderDebounceTimer;
+  /// Watchdog: si `state.loading` queda en true más de [_loadingMaxAge]
+  /// (típicamente porque un `await` HTTP nunca resolvió) lo forzamos a
+  /// false. Sin esto, todos los botones que dependen de orderState.loading
+  /// quedaban inservibles hasta cerrar la app. Ver bug del 30/4/26 con el
+  /// botón "Enviar a Cocina" gris persistente.
+  Timer? _loadingWatchdogTimer;
+  static const Duration _loadingMaxAge = Duration(seconds: 45);
   StreamSubscription<bool>? _connectivitySubscription;
   String? _queuedRefreshOrderId;
   bool _queuedClearIfPaid = false;
@@ -127,12 +134,37 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
     });
 
+    // Watchdog del flag `loading`. Cualquier transición false→true arma
+    // un timer que lo fuerza a false tras `_loadingMaxAge` si nunca volvió
+    // por las vías normales (catch/finally). Sin esto, un await HTTP que
+    // se cuelga deja todos los botones inservibles hasta cerrar la app.
+    listenSelf((previous, next) {
+      final wasLoading = previous?.loading ?? false;
+      if (next.loading && !wasLoading) {
+        _loadingWatchdogTimer?.cancel();
+        _loadingWatchdogTimer = Timer(_loadingMaxAge, () {
+          if (state.loading) {
+            debugPrint(
+              '[SalesVM] watchdog: loading=true por más de '
+              '${_loadingMaxAge.inSeconds}s sin completar — forzando false.',
+            );
+            state = state.copyWith(loading: false);
+          }
+        });
+      } else if (!next.loading && wasLoading) {
+        _loadingWatchdogTimer?.cancel();
+        _loadingWatchdogTimer = null;
+      }
+    });
+
     ref.onDispose(() {
       _realtimeChannel?.unsubscribe();
       _realtimeChannel = null;
       _subscribedOrderId = null;
       _refreshOrderDebounceTimer?.cancel();
       _refreshOrderDebounceTimer = null;
+      _loadingWatchdogTimer?.cancel();
+      _loadingWatchdogTimer = null;
       _connectivitySubscription?.cancel();
       _connectivitySubscription = null;
     });

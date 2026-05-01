@@ -49,9 +49,18 @@ const double _salesRadiusButton = 12; // botones pill
 const double _salesRadiusField = 14;
 const double _salesRadiusTab = 12;
 
-final _salesActionLocksProvider = StateProvider<Set<String>>(
-  (ref) => <String>{},
+/// Locks de acciones por orden (envío a cocina, impresión, etc.) — el
+/// valor es el timestamp en ms cuando se adquirió el lock. Permite que
+/// `_isActionLocked` ignore locks expirados aunque el timer failsafe no
+/// haya llegado a correr (ej: app en background, frame skip).
+final _salesActionLocksProvider = StateProvider<Map<String, int>>(
+  (ref) => const {},
 );
+
+/// Vida máxima de un lock antes de considerarse stale y permitir
+/// reintento. Si la acción legítimamente puede tomar más tiempo, hay que
+/// pasar `failsafeTimeout` mayor en `_runLockedAction`.
+const Duration _kLockMaxAge = Duration(seconds: 60);
 
 const List<BoxShadow> _salesSoftShadow = [
   BoxShadow(color: Color(0x10000000), blurRadius: 6, offset: Offset(0, 2)),
@@ -920,29 +929,59 @@ class _CartView extends ConsumerWidget {
 
   bool _isActionLocked(WidgetRef ref, String key) {
     return ref.watch(
-      _salesActionLocksProvider.select(
-        (activeLocks) => activeLocks.contains(key),
-      ),
+      _salesActionLocksProvider.select((locks) {
+        final ts = locks[key];
+        if (ts == null) return false;
+        // Lock expirado por edad → ignorado. Permite reintento aunque el
+        // timer failsafe no haya corrido (app suspendida, frame skip).
+        final age = DateTime.now().millisecondsSinceEpoch - ts;
+        return age < _kLockMaxAge.inMilliseconds;
+      }),
     );
   }
 
   Future<void> _runLockedAction(
     WidgetRef ref,
     String key,
-    Future<void> Function() action,
-  ) async {
-    final activeLocks = ref.read(_salesActionLocksProvider);
-    if (activeLocks.contains(key)) return;
-
+    Future<void> Function() action, {
+    Duration failsafeTimeout = _kLockMaxAge,
+  }) async {
     final notifier = ref.read(_salesActionLocksProvider.notifier);
-    notifier.state = {...activeLocks, key};
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    // Si ya hay un lock fresco para esta key, ignorar la nueva invocación.
+    // Si el lock está expirado, lo sobrescribimos (timer anterior nunca
+    // limpió por algún motivo).
+    final current = ref.read(_salesActionLocksProvider);
+    final existingTs = current[key];
+    if (existingTs != null &&
+        now - existingTs < failsafeTimeout.inMilliseconds) {
+      return;
+    }
+    notifier.state = {...current, key: now};
+
+    // Failsafe: si la acción se cuelga, libera el lock tras
+    // [failsafeTimeout] para que el botón vuelva a habilitarse. La acción
+    // puede seguir corriendo en background — el `finally` también limpia
+    // (idempotente).
+    final failsafe = Timer(failsafeTimeout, () {
+      final state = ref.read(_salesActionLocksProvider);
+      if (!state.containsKey(key)) return;
+      final next = {...state}..remove(key);
+      notifier.state = next;
+      debugPrint(
+        '[SalesLocks] failsafe release: "$key" liberado tras '
+        '${failsafeTimeout.inSeconds}s sin completar.',
+      );
+    });
 
     try {
       await action();
     } finally {
-      final nextLocks = {...ref.read(_salesActionLocksProvider)};
-      nextLocks.remove(key);
-      notifier.state = nextLocks;
+      failsafe.cancel();
+      final next = {...ref.read(_salesActionLocksProvider)};
+      next.remove(key);
+      notifier.state = next;
     }
   }
 
@@ -1360,9 +1399,14 @@ class _CartView extends ConsumerWidget {
                   order.id,
                   itemsToReprint,
                 );
-                if (ref
-                    .read(_salesActionLocksProvider)
-                    .contains(reprintLockKey)) {
+                // El lock está vivo si tiene timestamp dentro de la
+                // ventana _kLockMaxAge. Locks expirados se ignoran y el
+                // _runLockedAction posterior los va a sobrescribir.
+                final now = DateTime.now().millisecondsSinceEpoch;
+                final ts = ref
+                    .read(_salesActionLocksProvider)[reprintLockKey];
+                if (ts != null &&
+                    now - ts < _kLockMaxAge.inMilliseconds) {
                   return;
                 }
 
@@ -1534,8 +1578,12 @@ class _CartView extends ConsumerWidget {
       orderId: currentOrderId,
       checkId: selectedCheckId,
     );
-    final sendKitchenLocked =
-        orderState.loading || _isActionLocked(ref, sendKitchenLockKey);
+    // Solo bloqueamos por el lock TTL específico de la acción. Antes
+    // también dependíamos de `orderState.loading`, pero ese flag puede
+    // quedar pegado si un fetch/persist HTTP se cuelga, y dejaba el
+    // botón inservible aún cuando la operación de envío a cocina sí
+    // podía proceder. El lock TTL (60s) es la única gate confiable.
+    final sendKitchenLocked = _isActionLocked(ref, sendKitchenLockKey);
     final precheckLocked = _isActionLocked(ref, precheckLockKey);
 
     return Column(
@@ -2865,9 +2913,11 @@ class _CartView extends ConsumerWidget {
                   Expanded(
                     child: FilledButton(
                       onPressed: () async {
-                        if (ref
-                            .read(_salesActionLocksProvider)
-                            .contains(retryPrintLockKey)) {
+                        final now = DateTime.now().millisecondsSinceEpoch;
+                        final ts = ref
+                            .read(_salesActionLocksProvider)[retryPrintLockKey];
+                        if (ts != null &&
+                            now - ts < _kLockMaxAge.inMilliseconds) {
                           return;
                         }
                         Navigator.pop(ctx);

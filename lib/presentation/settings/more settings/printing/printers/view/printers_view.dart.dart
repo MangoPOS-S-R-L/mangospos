@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/business/business_resolver.dart';
+import 'package:mangopos/core/printing/device_identity.dart';
 import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/widgets/printer_configuration_dialog.dart';
@@ -155,19 +157,29 @@ class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
                 : () => _showAddPrinterDialog(context, vmCtrl),
           ),
           child: vm.items.isEmpty
-              ? const PrintingEmptyState(
-                  label:
-                      'No hay impresoras vinculadas todavia.\nAgrega una para comenzar.',
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: const [
+                    _HardwareIdBanner(),
+                    PrintingEmptyState(
+                      label:
+                          'No hay impresoras vinculadas todavia.\nAgrega una para comenzar.',
+                    ),
+                  ],
                 )
               : LayoutBuilder(
                   builder: (context, constraints) {
                     final cardWidth = constraints.maxWidth < 480
                         ? constraints.maxWidth
                         : 380.0;
-                    return Wrap(
-                      spacing: 20,
-                      runSpacing: 20,
-                      children: vm.items.map((printer) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const _HardwareIdBanner(),
+                        Wrap(
+                          spacing: 20,
+                          runSpacing: 20,
+                          children: vm.items.map((printer) {
                         final summary =
                             _usageSummaries[printer.id] ??
                             const PrinterUsageSummary();
@@ -203,7 +215,9 @@ class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
                             ),
                           ),
                         );
-                      }).toList(),
+                          }).toList(),
+                        ),
+                      ],
                     );
                   },
                 ),
@@ -1242,6 +1256,149 @@ class _PrinterFoundCard extends StatelessWidget {
               const Icon(Icons.check_circle, color: Color(0xFF22C55E)),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// PRD 5 F5.2 — banner que detecta si el device está usando un UUID v4
+/// aleatorio en lugar del UUID hardware del OS y ofrece adoptarlo.
+///
+/// El UUID hardware sobrevive reinstalaciones/rebuilds del binario, por
+/// lo que adoptarlo evita que `printers.host_device_id` quede huérfano
+/// la próxima vez que el cajero actualice la app.
+class _HardwareIdBanner extends ConsumerStatefulWidget {
+  const _HardwareIdBanner();
+
+  @override
+  ConsumerState<_HardwareIdBanner> createState() => _HardwareIdBannerState();
+}
+
+class _HardwareIdBannerState extends ConsumerState<_HardwareIdBanner> {
+  bool _checked = false;
+  bool _shouldShow = false;
+  bool _adopting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(_check);
+  }
+
+  Future<void> _check() async {
+    try {
+      final businessId = await BusinessResolver.ensure('auto');
+      final hw = await DeviceIdentity.readHardwareId();
+      final adopted = await DeviceIdentity.isUsingHardwareId(businessId);
+      final currentId = await DeviceIdentity.getOrCreateId(businessId);
+      if (!mounted) return;
+      setState(() {
+        _checked = true;
+        _shouldShow =
+            hw != null && !adopted && currentId.toLowerCase() != hw.toLowerCase();
+      });
+    } catch (_) {
+      if (mounted) setState(() => _checked = true);
+    }
+  }
+
+  Future<void> _adopt() async {
+    setState(() => _adopting = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final businessId = await BusinessResolver.ensure('auto');
+      final result = await DeviceIdentity.adoptHardwareId(businessId);
+      if (!mounted) return;
+      if (result == null) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Este dispositivo no expone identidad de hardware o ya está adoptada.',
+            ),
+          ),
+        );
+      } else {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Identidad adoptada. Las impresoras siguen vinculadas tras reinstalaciones.',
+            ),
+            backgroundColor: Color(0xFF22C55E),
+          ),
+        );
+        setState(() => _shouldShow = false);
+      }
+    } catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('No se pudo adoptar la identidad: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _adopting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_checked || !_shouldShow) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEFF6FF),
+        border: Border.all(color: const Color(0xFFBFDBFE)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.shield_outlined, color: Color(0xFF3C83F6)),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Vincula este dispositivo de forma permanente',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: MangoColors.darkGray,
+                  ),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  'Adoptar la identidad del hardware evita que las impresoras se desvinculen tras reinstalar o actualizar la app.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: MangoColors.muted,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          ElevatedButton(
+            onPressed: _adopting ? null : _adopt,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF3C83F6),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+            child: _adopting
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Text('Adoptar', style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
+        ],
       ),
     );
   }
