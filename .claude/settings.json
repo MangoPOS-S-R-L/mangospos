@@ -39,7 +39,13 @@
       "Bash(grep -n \"MediaQuery\\\\|Row\\(\\\\|Column\\(\\\\|width:\\\\s*[0-9]\\\\{3,\\\\}\\\\|Wrap\\\\|GridView\\\\|isDesktop\\\\|isMobile\" /Users/cristiangomez/dev/mangospos/lib/presentation/reports/view/reports_view.dart)",
       "Bash(grep -n \"MediaQuery\\\\|crossAxisCount\\\\|width:\\\\s*[0-9]\\\\{3,\\\\}\\\\|GridView\\\\|Wrap\\\\|3.*columnas\\\\|_buildSidebar\" /Users/cristiangomez/dev/mangospos/lib/presentation/settings/view/settings_view.dart)",
       "Bash(grep -n \"MediaQuery\\\\|crossAxisCount\\\\|width:\\\\s*[0-9]\\\\{3,\\\\}\\\\|GridView\\\\|maxCrossAxisExtent\\\\|isDesktop\\\\|isMobile\\\\|width >=\\\\|width <\" /Users/cristiangomez/dev/mangospos/lib/presentation/products/view/products_view.dart)",
-      "Bash(node -c src/index.js)"
+      "Bash(node -c src/index.js)",
+      "Bash(git check-ignore *)",
+      "Bash(awk 'NR>=1430 && NR<=1545 && /state.copyWith.*loading|catch|finally/' /Users/cristiangomez/dev/mangospos/lib/presentation/sales/viewmodel/sales_viewmodel.dart)",
+      "Bash(awk 'NR>=1090 && NR<=1132' /Users/cristiangomez/dev/mangospos/agent/src/index.js)",
+      "Bash(python3 -)",
+      "Bash(node -c MangoPOS-Agent/src/index.js)",
+      "Bash(git -C /Users/cristiangomez/dev/mangospos status -s)"
     ],
     "additionalDirectories": [
       "/Users/cristiangomez"
