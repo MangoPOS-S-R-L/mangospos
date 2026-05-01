@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import '../../core/printing/print_driver.dart';
 import '../../core/printing/print_job.dart';
+import '../../core/services/agent_auth.dart';
 
 /// Driver that communicates with the MangoPOS LAN Print Agent
 class AgentPrintDriver implements PrintDriver {
@@ -16,10 +17,15 @@ class AgentPrintDriver implements PrintDriver {
   @override
   String get id => 'agent';
 
-  Map<String, String> get _headers => {
-    'Content-Type': 'application/json',
-    if (apiToken != null) 'Authorization': 'Bearer $apiToken',
-  };
+  // PRD 7 Fase 1.2: Bearer resuelto en cada request — usa el JWT vivo
+  // de Supabase si hay sesión activa; si no, cae al apiToken inyectado.
+  Map<String, String> get _headers {
+    final token = resolveAgentBearerToken(explicitToken: apiToken);
+    return {
+      'Content-Type': 'application/json',
+      if (token.isNotEmpty) 'Authorization': 'Bearer $token',
+    };
+  }
 
   @override
   Future<bool> isAvailable() async {

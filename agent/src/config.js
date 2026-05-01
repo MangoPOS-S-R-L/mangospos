@@ -63,6 +63,19 @@ try {
     logger.error(`Error loading config.yaml: ${e}`);
 }
 
+// PRD 7 Fase 1.2 — auth JWT.
+// JWT_SECRET: shared secret HS256 con Supabase (env JWT_SECRET o
+// SUPABASE_JWT_SECRET).
+// RESTAURANT_ID: id del business al que sirve este agente. El claim
+// `restaurant_id` (o `business_id`) del JWT debe coincidir con éste,
+// o devolvemos 403.
+// Si JWT_SECRET no está configurado, el agente loguea WARN al arrancar
+// y deja pasar todo (modo legacy/dev). Esto permite rollout gradual:
+// configurar JWT_SECRET cuando los clientes ya envían el header.
+const JWT_SECRET = process.env.JWT_SECRET || process.env.SUPABASE_JWT_SECRET || null;
+const RESTAURANT_ID = process.env.RESTAURANT_ID || process.env.BUSINESS_ID || null;
+const AUTH_ENABLED = !!JWT_SECRET;
+
 module.exports = {
     // Nuevos exports (PRD 7).
     isPkg,
@@ -72,6 +85,9 @@ module.exports = {
     AGENT_ID: process.env.AGENT_ID || 'unknown-agent',
     AGENT_NAME: process.env.AGENT_NAME,
     AUTH_TOKEN: process.env.AUTH_TOKEN,
+    JWT_SECRET,
+    RESTAURANT_ID,
+    AUTH_ENABLED,
     LOCAL_PORT: 4000,
     PRINTER_WIDTH: 48,
     // Legacy export (consumers en core/*).

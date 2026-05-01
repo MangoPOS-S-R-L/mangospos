@@ -1,15 +1,17 @@
-// PRD 7 Fase 1.0 — Servidor HTTP local (Express) del agente.
+// PRD 7 Fase 1.0/1.1/1.2 — Servidor HTTP local (Express) del agente.
 //
 // Endpoints:
-//   GET  /health                  — health check sin auth
-//   GET  /status                  — alias de /health
+//   GET  /health                  — health check (SIN auth, RF-14)
+//   GET  /status                  — alias de /health (sin auth)
 //   POST /check-connectivity      — TCP ping a un set de impresoras
-//   POST /print                   — encolar job (hoy: invoca processPrintJob directo)
+//   POST /print                   — encola job en SQLite (FIFO, Fase 1.1)
+//   GET  /v1/jobs/:jobId          — estado del job
+//   GET  /v1/info                 — métricas del agente
 //   POST /api/printers/raw        — escribir bytes RAW a IP:puerto
 //   GET  /api/printers/discover   — escaneo de red local
 //
-// PRD 7 Fase 1.1 cambiará POST /print para encolar en SQLite con
-// idempotencia + worker async, en vez de procesar inline.
+// Fase 1.2: todos los endpoints excepto /health y /status pasan por
+// `requireAuth` (Bearer JWT, validación HS256, claim restaurant_id).
 
 const path = require('path');
 const { randomUUID } = require('crypto');
@@ -21,6 +23,7 @@ const { stopExistingAgentOnLocalPort } = require('../platform/windows');
 const { sendRawTcp, checkPrinterStatus } = require('../network/tcp');
 const queue = require('../queue/store');
 const discoveryService = require('../core/discovery');
+const { requireAuth, logStartupMode: logAuthStartupMode } = require('./auth');
 
 const buildApp = () => {
     const app = express();
@@ -52,6 +55,11 @@ const buildApp = () => {
     });
     app.get('/health', (_req, res) => res.json(healthPayload()));
     app.get('/status', (_req, res) => res.json({ ...healthPayload(), status: 'online' }));
+
+    // ── Auth gate (Fase 1.2) ────────────────────────────────────────
+    // A partir de aquí, todos los endpoints requieren JWT válido
+    // (no-op si JWT_SECRET no está configurado — modo legacy).
+    app.use(requireAuth);
 
     // ── TCP ping a impresoras (batch) ───────────────────────────────
     app.post('/check-connectivity', async (req, res) => {
@@ -198,6 +206,7 @@ const buildApp = () => {
 
 const startLocalApiServer = async () => {
     await stopExistingAgentOnLocalPort();
+    logAuthStartupMode();
 
     const app = buildApp();
 
