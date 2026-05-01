@@ -29,7 +29,7 @@ class ModifiersRepository {
         .from('modifier_groups')
         .select('id, name, min_select, max_select, is_active, created_at')
         .eq('business_id', businessId)
-        .order('created_at', ascending: false);
+        .order('name', ascending: true);
 
     return List<Map<String, dynamic>>.from(
       response,
@@ -41,7 +41,7 @@ class ModifiersRepository {
         .from('modifiers')
         .select('id, group_id, name, price_delta, is_active, created_at')
         .eq('business_id', businessId)
-        .order('created_at', ascending: false);
+        .order('name', ascending: true);
 
     return List<Map<String, dynamic>>.from(
       response,

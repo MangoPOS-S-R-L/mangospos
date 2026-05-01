@@ -558,14 +558,29 @@ class SalesRepository {
           .eq('menu_item_id', menuItemId)
           .eq('modifier_groups.is_active', true)
           .order(
-            'sort_order',
+            'name',
             referencedTable: 'modifier_groups',
             ascending: true,
           );
 
-      return List<Map<String, dynamic>>.from(
+      final rows = List<Map<String, dynamic>>.from(
         data as List,
       ).map((row) => Map<String, dynamic>.from(row)).toList(growable: false);
+
+      for (final row in rows) {
+        final group = row['modifier_groups'];
+        if (group is Map && group['modifiers'] is List) {
+          final modifiers = List<dynamic>.from(group['modifiers'] as List);
+          modifiers.sort((a, b) {
+            final an = (a is Map ? a['name'] : '')?.toString().toLowerCase() ?? '';
+            final bn = (b is Map ? b['name'] : '')?.toString().toLowerCase() ?? '';
+            return an.compareTo(bn);
+          });
+          group['modifiers'] = modifiers;
+        }
+      }
+
+      return rows;
     } catch (e) {
       throw Exception('Error al obtener modificadores del producto: $e');
     }

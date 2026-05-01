@@ -172,17 +172,24 @@ double itemDisplayUnitPrice(Order? order, OrderItem item) {
   return _r(itemDisplayTotal(order, item) / qty);
 }
 
-/// Total base de la línea (sin impuestos, **pre-descuento**), usado en
-/// tickets/facturas para que la suma de líneas coincida con el SUBTOTAL
-/// y el desglose de impuestos + descuento aparezca solo en el footer
-/// (evita doble visualización y double-counting de descuento).
+/// Total base de la línea (sin impuestos), usado en tickets/facturas para
+/// que la suma de líneas coincida con el SUBTOTAL del ticket.
 ///
-/// FIX 2026-05-01: el trigger backend guarda `oi.subtotal := base - discounts`
-/// (post-descuento). Para que el ticket lea naturalmente
-/// (catalog - descuento + tax = total) sumamos el descuento de vuelta y
-/// devolvemos la base catalog pre-descuento.
+/// Comportamiento por modo de impuesto (alineado con cómo el trigger backend
+/// guarda `oi.subtotal`):
+/// - **Inclusive**: el trigger guarda `oi.subtotal` como base pre-tax sin
+///   restar el descuento (los descuentos viajan separados en `oi.discounts`).
+///   Devolvemos `s.subtotal` directo. Suma de líneas = `summary.subtotal` =
+///   SUBTOTAL del ticket = subtotal de la UI.
+/// - **Exclusive**: el trigger guarda `oi.subtotal := base - discounts`
+///   (post-descuento). Sumamos el descuento de vuelta para devolver la base
+///   catalog pre-descuento (= precio neto del menú). Esto preserva el FIX
+///   2026-05-01 (caso 30/4: 500 catalog → 10% desc → SUBTOTAL 500 / TOTAL 450).
 double itemDisplayBaseTotal(Order? order, OrderItem item) {
   final s = summarizeItemPricing(order, item);
+  if (item.taxMode == 'inclusive') {
+    return _r(s.subtotal);
+  }
   return _r(s.subtotal + s.discounts);
 }
 
