@@ -433,18 +433,21 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
       backgroundColor: Colors.white,
       surfaceTintColor: Colors.white,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      insetPadding: const EdgeInsets.all(16),
       child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: 950,
-          maxHeight: MediaQuery.of(context).size.height * 0.95,
-        ),
-        child: Container(
-          width: double.maxFinite,
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+        constraints: const BoxConstraints(maxWidth: 950),
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.center,
+          child: SizedBox(
+            width: 950,
+            child: Container(
+              width: double.maxFinite,
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
               // Header
               Row(
                 children: [
@@ -979,6 +982,8 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                 ),
               ),
             ],
+          ),
+        ),
           ),
         ),
       ),

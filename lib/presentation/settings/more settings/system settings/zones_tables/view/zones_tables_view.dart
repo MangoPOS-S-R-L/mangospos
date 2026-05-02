@@ -213,6 +213,53 @@ class _ZonesTablesViewState extends ConsumerState<ZonesTablesView> {
                                         ],
                                       ),
                                     ),
+                                    IconButton(
+                                      tooltip: 'Editar zona',
+                                      onPressed: () async {
+                                        final messenger = ScaffoldMessenger.of(
+                                          context,
+                                        );
+                                        final newName = await _prompt(
+                                          context,
+                                          'Editar nombre de zona',
+                                          initialValue: zone.name,
+                                        );
+                                        final trimmed = newName?.trim() ?? '';
+                                        if (trimmed.isEmpty ||
+                                            trimmed == zone.name) {
+                                          return;
+                                        }
+                                        try {
+                                          await ref
+                                              .read(
+                                                zonesTablesVmProvider.notifier,
+                                              )
+                                              .updateZone(zone.id, trimmed);
+                                          if (!context.mounted) return;
+                                          messenger.showSnackBar(
+                                            const SnackBar(
+                                              content: Text('Zona actualizada'),
+                                              backgroundColor: Color(
+                                                0xFF22C55E,
+                                              ),
+                                            ),
+                                          );
+                                        } catch (e) {
+                                          if (!context.mounted) return;
+                                          messenger.showSnackBar(
+                                            SnackBar(
+                                              content: Text('Error: $e'),
+                                              backgroundColor: Colors.red,
+                                            ),
+                                          );
+                                        }
+                                      },
+                                      icon: const Icon(
+                                        Icons.edit_outlined,
+                                        size: 20,
+                                        color: Colors.black54,
+                                      ),
+                                    ),
                                     const SizedBox(width: 8),
                                     TextButton.icon(
                                       onPressed: () async {
@@ -308,51 +355,105 @@ class _ZonesTablesViewState extends ConsumerState<ZonesTablesView> {
                                             padding: const EdgeInsets.symmetric(
                                               horizontal: 4,
                                             ),
-                                            child: Chip(
-                                              label: Text(
-                                                t.code,
-                                                style: const TextStyle(
-                                                  fontWeight: FontWeight.w600,
-                                                  color: Colors.black87,
-                                                ),
-                                              ),
-                                              backgroundColor: Colors.white,
-                                              shape: RoundedRectangleBorder(
-                                                borderRadius:
-                                                    BorderRadius.circular(8),
-                                                side: BorderSide(
-                                                  color: Colors.grey.withValues(
-                                                    alpha: 0.3,
-                                                  ),
-                                                ),
-                                              ),
-                                              deleteIcon: const Icon(
-                                                Icons.close,
-                                                size: 16,
-                                                color: Colors.redAccent,
-                                              ),
-                                              onDeleted: () async {
-                                                final ok = await _confirm(
+                                            child: GestureDetector(
+                                              onTap: () async {
+                                                final messenger =
+                                                    ScaffoldMessenger.of(
+                                                      context,
+                                                    );
+                                                final newCode = await _prompt(
                                                   context,
-                                                  '¿Eliminar mesa ${t.code}?',
+                                                  'Editar código de mesa',
+                                                  initialValue: t.code,
                                                 );
-                                                if (ok == true) {
+                                                final trimmed =
+                                                    newCode?.trim() ?? '';
+                                                if (trimmed.isEmpty ||
+                                                    trimmed == t.code) {
+                                                  return;
+                                                }
+                                                try {
                                                   await ref
                                                       .read(
                                                         zonesTablesVmProvider
                                                             .notifier,
                                                       )
-                                                      .deleteTable(
+                                                      .updateTable(
                                                         t.id,
+                                                        trimmed,
                                                         zoneId: zone.id,
                                                       );
+                                                  if (!context.mounted) return;
+                                                  messenger.showSnackBar(
+                                                    const SnackBar(
+                                                      content: Text(
+                                                        'Mesa actualizada',
+                                                      ),
+                                                      backgroundColor: Color(
+                                                        0xFF22C55E,
+                                                      ),
+                                                    ),
+                                                  );
+                                                } catch (e) {
+                                                  if (!context.mounted) return;
+                                                  messenger.showSnackBar(
+                                                    SnackBar(
+                                                      content: Text(
+                                                        'Error: $e',
+                                                      ),
+                                                      backgroundColor:
+                                                          Colors.red,
+                                                    ),
+                                                  );
                                                 }
                                               },
-                                              materialTapTargetSize:
-                                                  MaterialTapTargetSize
-                                                      .shrinkWrap,
-                                              visualDensity:
-                                                  VisualDensity.compact,
+                                              child: Chip(
+                                                label: Text(
+                                                  t.code,
+                                                  style: const TextStyle(
+                                                    fontWeight: FontWeight.w600,
+                                                    color: Colors.black87,
+                                                  ),
+                                                ),
+                                                backgroundColor: Colors.white,
+                                                shape: RoundedRectangleBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(8),
+                                                  side: BorderSide(
+                                                    color: Colors.grey
+                                                        .withValues(
+                                                          alpha: 0.3,
+                                                        ),
+                                                  ),
+                                                ),
+                                                deleteIcon: const Icon(
+                                                  Icons.close,
+                                                  size: 16,
+                                                  color: Colors.redAccent,
+                                                ),
+                                                onDeleted: () async {
+                                                  final ok = await _confirm(
+                                                    context,
+                                                    '¿Eliminar mesa ${t.code}?',
+                                                  );
+                                                  if (ok == true) {
+                                                    await ref
+                                                        .read(
+                                                          zonesTablesVmProvider
+                                                              .notifier,
+                                                        )
+                                                        .deleteTable(
+                                                          t.id,
+                                                          zoneId: zone.id,
+                                                        );
+                                                  }
+                                                },
+                                                materialTapTargetSize:
+                                                    MaterialTapTargetSize
+                                                        .shrinkWrap,
+                                                visualDensity:
+                                                    VisualDensity.compact,
+                                              ),
                                             ),
                                           );
                                         }).toList(),

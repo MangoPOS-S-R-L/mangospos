@@ -60,7 +60,7 @@ final _salesActionLocksProvider = StateProvider<Map<String, int>>(
 /// Vida máxima de un lock antes de considerarse stale y permitir
 /// reintento. Si la acción legítimamente puede tomar más tiempo, hay que
 /// pasar `failsafeTimeout` mayor en `_runLockedAction`.
-const Duration _kLockMaxAge = Duration(seconds: 60);
+const Duration _kLockMaxAge = Duration(seconds: 15);
 
 const List<BoxShadow> _salesSoftShadow = [
   BoxShadow(color: Color(0x10000000), blurRadius: 6, offset: Offset(0, 2)),
@@ -956,8 +956,17 @@ class _CartView extends ConsumerWidget {
     final existingTs = current[key];
     if (existingTs != null &&
         now - existingTs < failsafeTimeout.inMilliseconds) {
+      debugPrint(
+        '[SalesLocks] SKIP "$key": lock fresco existente '
+        '(edad ${now - existingTs}ms < TTL ${failsafeTimeout.inMilliseconds}ms). '
+        'Click ignorado.',
+      );
       return;
     }
+    debugPrint(
+      '[SalesLocks] ACQUIRE "$key" en ts=$now '
+      '(${existingTs == null ? "sin lock previo" : "sobrescribiendo lock viejo de hace ${now - existingTs}ms"}).',
+    );
     notifier.state = {...current, key: now};
 
     // Failsafe: si la acción se cuelga, libera el lock tras
@@ -970,7 +979,7 @@ class _CartView extends ConsumerWidget {
       final next = {...state}..remove(key);
       notifier.state = next;
       debugPrint(
-        '[SalesLocks] failsafe release: "$key" liberado tras '
+        '[SalesLocks] FAILSAFE release "$key" tras '
         '${failsafeTimeout.inSeconds}s sin completar.',
       );
     });
@@ -980,8 +989,12 @@ class _CartView extends ConsumerWidget {
     } finally {
       failsafe.cancel();
       final next = {...ref.read(_salesActionLocksProvider)};
-      next.remove(key);
+      final hadKey = next.remove(key) != null;
       notifier.state = next;
+      debugPrint(
+        '[SalesLocks] RELEASE "$key" tras ${DateTime.now().millisecondsSinceEpoch - now}ms '
+        '(finally, ${hadKey ? "lock estaba presente" : "lock ya removido"}).',
+      );
     }
   }
 

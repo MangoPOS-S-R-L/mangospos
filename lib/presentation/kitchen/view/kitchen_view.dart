@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/presentation/kitchen/viewmodel/kitchen_viewmodel.dart';
 import 'package:mangopos/data/models/kitchen_models.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/app/theme/mango_tokens.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_radius.dart';
@@ -753,9 +754,20 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              item.productName,
-                              style: const TextStyle(fontSize: 13),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    item.productName,
+                                    style: const TextStyle(fontSize: 13),
+                                  ),
+                                ),
+                                if (item.isTakeout) ...[
+                                  const SizedBox(width: 8),
+                                  _TakeoutBadge(),
+                                ],
+                              ],
                             ),
                             if (item.notes != null && item.notes!.isNotEmpty)
                               Text(
@@ -772,6 +784,41 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
                   ),
                 );
               }).toList(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TakeoutBadge extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: MangoColors.infoBlue.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(AppRadius.full),
+        border: Border.all(
+          color: MangoColors.infoBlue.withValues(alpha: 0.4),
+        ),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.shopping_bag_outlined,
+            size: 11,
+            color: MangoColors.infoBlue,
+          ),
+          SizedBox(width: 3),
+          Text(
+            'Para llevar',
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              color: MangoColors.infoBlue,
             ),
           ),
         ],

@@ -1428,11 +1428,45 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     final orderId = state.order?.id;
     if (orderId == null) return;
 
+    // Los items optimistas usan ids `tmp_<microsegundos>` que no son UUID
+    // validos en server. Si el modal se abrio con un item recien agregado
+    // antes de que `_loadOrderDetail` corriera, el itemId capturado en el
+    // closure del modal seguira siendo tmp_. Refrescamos para que el state
+    // tenga ids reales y resolvemos por product_id al item recien creado.
+    String resolvedId = itemId;
+    if (resolvedId.startsWith('tmp_')) {
+      await refreshOrder();
+      final productId = updatedItem.productId;
+      final matches = state.items.where((i) {
+        if (productId != null && productId.isNotEmpty) {
+          return i.productId == productId;
+        }
+        return i.productName == updatedItem.productName;
+      }).toList()
+        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+      OrderItem? realCandidate;
+      for (final candidate in matches) {
+        if (!candidate.id.startsWith('tmp_')) {
+          realCandidate = candidate;
+          break;
+        }
+      }
+      if (realCandidate == null) {
+        state = state.copyWith(
+          error:
+              'El producto aun se esta sincronizando. Espera un momento e intenta de nuevo.',
+        );
+        return;
+      }
+      resolvedId = realCandidate.id;
+    }
+
     try {
       await ref
           .read(salesRepositoryProvider)
           .updateItemDetails(
-            itemId: itemId,
+            itemId: resolvedId,
             productName: updatedItem.productName,
             quantity: updatedItem.quantity,
             isTakeout: updatedItem.isTakeout,

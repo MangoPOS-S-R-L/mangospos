@@ -221,11 +221,18 @@ class SettingsView extends ConsumerWidget {
         title: 'Gestión de Productos',
         items: [
           _SettingsOption(
-            title: 'Productos y Categorías',
+            title: 'Productos',
             subtitle: 'Catálogo de productos',
             icon: Icons.inventory_2_rounded,
             color: const Color(0xFFFFE6D5),
             route: AppRoutes.products,
+          ),
+          _SettingsOption(
+            title: 'Categorías',
+            subtitle: 'Crear, renombrar, activar y eliminar categorías',
+            icon: Icons.category_rounded,
+            color: const Color(0xFFFFF7ED),
+            route: AppRoutes.menuCategories,
           ),
           _SettingsOption(
             title: 'Modificadores',

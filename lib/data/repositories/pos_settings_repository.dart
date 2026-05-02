@@ -18,9 +18,9 @@ class PosSettingsRepository {
   Future<bool> getPromptPeopleCountOnTableOpen(String businessId) async {
     try {
       final row = await _client
-          .from('businesses')
+          .from('business_settings')
           .select('prompt_people_count_on_table_open')
-          .eq('id', businessId)
+          .eq('business_id', businessId)
           .maybeSingle();
 
       return row?['prompt_people_count_on_table_open'] == true;
@@ -33,10 +33,10 @@ class PosSettingsRepository {
     required String businessId,
     required bool enabled,
   }) async {
-    await _client
-        .from('businesses')
-        .update({'prompt_people_count_on_table_open': enabled})
-        .eq('id', businessId);
+    await _client.from('business_settings').upsert({
+      'business_id': businessId,
+      'prompt_people_count_on_table_open': enabled,
+    }, onConflict: 'business_id');
   }
 
   Future<String> getReceiptItemDisplayMode(String businessId) async {
@@ -48,9 +48,9 @@ class PosSettingsRepository {
 
     try {
       final row = await _client
-          .from('businesses')
+          .from('business_settings')
           .select('receipt_item_display_mode')
-          .eq('id', businessId)
+          .eq('business_id', businessId)
           .maybeSingle();
 
       final mode = row?['receipt_item_display_mode']?.toString();
@@ -75,10 +75,10 @@ class PosSettingsRepository {
         ? receiptItemsSeparate
         : receiptItemsGrouped;
 
-    await _client
-        .from('businesses')
-        .update({'receipt_item_display_mode': normalized})
-        .eq('id', businessId);
+    await _client.from('business_settings').upsert({
+      'business_id': businessId,
+      'receipt_item_display_mode': normalized,
+    }, onConflict: 'business_id');
     _receiptModeCache[businessId] = _CachedReceiptMode(
       normalized,
       DateTime.now(),

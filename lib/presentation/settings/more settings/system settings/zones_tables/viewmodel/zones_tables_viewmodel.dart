@@ -121,6 +121,40 @@ class ZonesTablesViewModel extends Notifier<ZonesTablesState> {
     }
   }
 
+  Future<void> updateZone(String zoneId, String name) async {
+    state = state.copyWith(error: null);
+    try {
+      await sb.from('zones').update({'name': name}).eq('id', zoneId);
+      final businessId = state.businessId;
+      if (businessId != null && businessId.isNotEmpty) {
+        await load(businessId: businessId);
+      }
+    } catch (e) {
+      state = state.copyWith(error: '$e');
+      rethrow;
+    }
+  }
+
+  Future<void> updateTable(
+    String tableId,
+    String code, {
+    String? zoneId,
+  }) async {
+    state = state.copyWith(error: null);
+    try {
+      await sb
+          .from('dining_tables')
+          .update({'code': code, 'label': code})
+          .eq('id', tableId);
+      if (zoneId != null) {
+        await refreshTables(zoneId);
+      }
+    } catch (e) {
+      state = state.copyWith(error: '$e');
+      rethrow;
+    }
+  }
+
   Future<void> setPromptPeopleCountOnOpen(bool enabled) async {
     final businessId = state.businessId;
     if (businessId == null || businessId.isEmpty) return;
