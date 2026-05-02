@@ -40,17 +40,16 @@ class PrintTicketService {
         order.serviceFee > 0 ||
         order.total > 0 ||
         order.discounts > 0;
-    final summaryDriftsFromStored =
-        (summary.subtotal - order.subtotal).abs() > 0.01 ||
-        (summary.tax - order.tax).abs() > 0.01 ||
-        (summary.serviceFee - order.serviceFee).abs() > 0.01 ||
-        (summary.discounts - order.discounts).abs() > 0.01 ||
-        (summary.total - order.total).abs() > 0.01;
 
-    final useStoredTotals =
-        hasStoredTotals &&
-        ((summary.tax <= 0 && order.tax > 0) ||
-            (preferStoredOrderTotals && summaryDriftsFromStored));
+    // Preferimos `summary` (incluye recomputación takeout-inclusive y la
+    // override `inclusiveGrossNet` → matchea la UI). Caemos a los valores
+    // guardados en DB SOLO cuando `summary` está degenerado (perdió la info
+    // de impuestos pero la orden persistida sí los tiene). Esto hace que
+    // reimpresiones (con `preferStoredOrderTotals=true`) usen la lógica
+    // recomputada y no los valores antiguos del trigger backend, que para
+    // takeout inclusive sobreestimaba el ITBIS y subestimaba el subtotal.
+    final summaryIsDegenerate = summary.tax <= 0 && order.tax > 0;
+    final useStoredTotals = hasStoredTotals && summaryIsDegenerate;
 
     if (!useStoredTotals) {
       return _PrintableReceiptTotals(
