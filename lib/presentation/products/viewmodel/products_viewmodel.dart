@@ -6,6 +6,9 @@ import 'package:mangopos/data/models/category.dart' as model;
 import 'package:mangopos/data/repositories/category_repository.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
+import 'package:excel/excel.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../../data/repositories/products_repository.dart';
 
@@ -417,5 +420,164 @@ class ProductsViewModel extends ChangeNotifier {
     if (p.endsWith('.jpeg')) return 'jpeg';
     if (p.endsWith('.jpg')) return 'jpg';
     return 'jpg';
+  }
+
+  Future<void> downloadTemplate() async {
+    try {
+      final excel = Excel.createExcel();
+      final sheet = excel['Sheet1'];
+      sheet.appendRow([
+        TextCellValue('Nombre'),
+        TextCellValue('Precio'),
+        TextCellValue('Costo'),
+        TextCellValue('SKU'),
+        TextCellValue('Codigo de Barras'),
+        TextCellValue('Descripcion'),
+      ]);
+      
+      var directory = await getDownloadsDirectory();
+      if (directory == null) {
+        directory = await getApplicationDocumentsDirectory();
+      }
+      final filePath = '${directory.path}/plantilla_productos.xlsx';
+      final file = File(filePath);
+      
+      final bytes = excel.encode();
+      if (bytes != null) {
+        await file.writeAsBytes(bytes);
+      }
+      
+      _error = 'Plantilla guardada en: $filePath';
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error downloading template: $e');
+      _error = 'Error descargando plantilla: $e';
+      notifyListeners();
+    }
+  }
+
+  Future<void> exportProductsToExcel() async {
+    try {
+      final excel = Excel.createExcel();
+      final sheet = excel['Sheet1'];
+      sheet.appendRow([
+        TextCellValue('ID'),
+        TextCellValue('Nombre'),
+        TextCellValue('Precio'),
+        TextCellValue('Costo'),
+        TextCellValue('SKU'),
+        TextCellValue('Codigo de Barras'),
+        TextCellValue('Categoria'),
+        TextCellValue('Activo'),
+      ]);
+      
+      for (var product in _products) {
+        final categoryName = _asMap(product['categories'])['name']?.toString() ?? '';
+        sheet.appendRow([
+          TextCellValue(product['id']?.toString() ?? ''),
+          TextCellValue(product['name']?.toString() ?? ''),
+          TextCellValue(product['price']?.toString() ?? '0'),
+          TextCellValue(product['cost']?.toString() ?? '0'),
+          TextCellValue(product['sku']?.toString() ?? ''),
+          TextCellValue(product['barcode']?.toString() ?? ''),
+          TextCellValue(categoryName),
+          TextCellValue(product['is_active'] == true ? 'Si' : 'No'),
+        ]);
+      }
+      
+      var directory = await getDownloadsDirectory();
+      if (directory == null) {
+        directory = await getApplicationDocumentsDirectory();
+      }
+      final filePath = '${directory.path}/productos.xlsx';
+      final file = File(filePath);
+      
+      final bytes = excel.encode();
+      if (bytes != null) {
+        await file.writeAsBytes(bytes);
+      }
+      
+      _error = 'Productos exportados a: $filePath';
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error exporting products: $e');
+      _error = 'Error exportando productos: $e';
+      notifyListeners();
+    }
+  }
+
+  Future<void> importProductsFromExcel() async {
+    if (_businessId == null) return;
+    
+    try {
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['xlsx', 'xls'],
+      );
+
+      if (result != null) {
+        _isLoading = true;
+        notifyListeners();
+
+        final file = File(result.files.single.path!);
+        var bytes = file.readAsBytesSync();
+        var excel = Excel.decodeBytes(bytes);
+
+        for (var table in excel.tables.keys) {
+          final sheet = excel.tables[table];
+          if (sheet == null) continue;
+          
+          bool isHeader = true;
+          for (var row in sheet.rows) {
+            if (isHeader) {
+              isHeader = false;
+              continue;
+            }
+            
+            if (row.isEmpty || row[0] == null) continue;
+            
+            final name = row[0]?.value?.toString() ?? '';
+            if (name.isEmpty) continue;
+            
+            final priceStr = row.length > 1 ? row[1]?.value?.toString() ?? '0' : '0';
+            final price = double.tryParse(priceStr) ?? 0.0;
+            
+            final costStr = row.length > 2 ? row[2]?.value?.toString() ?? '0' : '0';
+            final cost = double.tryParse(costStr) ?? 0.0;
+            
+            final sku = row.length > 3 ? row[3]?.value?.toString() : null;
+            final barcode = row.length > 4 ? row[4]?.value?.toString() : null;
+            final description = row.length > 5 ? row[5]?.value?.toString() : null;
+            
+            await _repository.createProduct(
+              businessId: _businessId!,
+              name: name,
+              price: price,
+              categoryId: null,
+              cost: cost,
+              sku: sku,
+              barcode: barcode,
+              description: description,
+              taxMode: 'exclusive',
+              isActive: true,
+              itemType: 'standard',
+              printAreaCode: 'kitchen_hot',
+              hasVariants: false,
+              taxIds: [],
+            );
+          }
+        }
+        
+        await _fetchProducts();
+        _error = 'Productos importados exitosamente';
+        _isLoading = false;
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('Error importing products: $e');
+      _error = 'Error importando productos: $e';
+      _isLoading = false;
+      notifyListeners();
+    }
   }
 }

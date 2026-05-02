@@ -39,7 +39,11 @@ import '../../presentation/cashier/view/sales_history_view.dart';
 import '../../presentation/kitchen/view/kitchen_view.dart';
 import '../../presentation/customers/view/customers_view.dart';
 import '../../presentation/customers/view/customer_detail_view.dart';
+import '../../presentation/inventory/view/inventory_hub_view.dart';
+import '../../presentation/inventory/view/inventory_items_view.dart';
 import '../../presentation/inventory/view/inventory_outflow_view.dart';
+import '../../presentation/inventory/view/suppliers_view.dart';
+import '../../presentation/inventory/view/warehouses_view.dart';
 import '../../presentation/inventory/view/requirements_view.dart';
 import '../../presentation/inventory/view/stock_reconciliation_view.dart';
 import '../../presentation/purchases/view/purchases_list_view.dart';
@@ -513,6 +517,22 @@ class AppRouter {
           GoRoute(
             path: AppRoutes.settingsRegional,
             builder: (context, state) => const RegionalView(),
+          ),
+          GoRoute(
+            path: AppRoutes.inventoryHome,
+            builder: (context, state) => const InventoryHubView(),
+          ),
+          GoRoute(
+            path: AppRoutes.inventoryItems,
+            builder: (context, state) => const InventoryItemsView(),
+          ),
+          GoRoute(
+            path: AppRoutes.inventoryWarehouses,
+            builder: (context, state) => const WarehousesView(),
+          ),
+          GoRoute(
+            path: AppRoutes.inventorySuppliers,
+            builder: (context, state) => const SuppliersView(),
           ),
           GoRoute(
             path: AppRoutes.inventoryRequirements,

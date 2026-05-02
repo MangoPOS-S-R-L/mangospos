@@ -187,6 +187,35 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       String? hostDeviceId;
       if (t == PrinterType.usb || t == PrinterType.bluetooth) {
         hostDeviceId = await DeviceIdentity.getOrCreateId(b);
+
+        // PRD 5 F5.2 fix (2026-05-01): garantizar que `device_agents`
+        // tenga la fila ANTES del INSERT en `printers`, sino la FK
+        // `printers_host_device_id_fkey` rompe en sucursales nuevas
+        // donde el heartbeat scheduler aún no corrió o el agent local
+        // no está alcanzable. La función es upsert idempotente: si el
+        // heartbeat scheduler corre después, sobreescribe agent_url
+        // con la URL real (vía COALESCE en el ON CONFLICT DO UPDATE).
+        try {
+          final deviceName = await DeviceIdentity.getDisplayName();
+          await Supabase.instance.client.rpc(
+            'fn_register_device_agent',
+            params: {
+              'p_id': hostDeviceId,
+              'p_business_id': b,
+              'p_device_name': deviceName,
+              'p_agent_url': null,
+              'p_platform': DeviceIdentity.currentPlatform(),
+            },
+          );
+        } catch (e, st) {
+          _log('createPrinter() pre-register device_agent failed: $e\n$st');
+          state = state.copyWith(
+            isLoading: false,
+            errorMessage:
+                'No se pudo registrar este equipo como host. ${e.toString()}',
+          );
+          return false;
+        }
       }
 
       await _repo.createPrinter(

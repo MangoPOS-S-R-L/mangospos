@@ -97,6 +97,13 @@ class MainShell extends ConsumerWidget {
                             ),
                             const SizedBox(width: navGap),
                             const _TopNavItem(
+                              label: 'Inventario',
+                              route: AppRoutes.inventoryHome,
+                              asset: 'assets/icons/productos_principal.svg',
+                              permissionCode: 'inventario.acceso',
+                            ),
+                            const SizedBox(width: navGap),
+                            const _TopNavItem(
                               label: 'Reportes',
                               route: AppRoutes.reports,
                               asset: 'assets/icons/reportes_principal.svg',

@@ -22,18 +22,95 @@ class InventoryRepository {
     ).map(InventoryWarehouse.fromMap).toList(growable: false);
   }
 
+  /// PRD 9 Fase 1B: lista todas las bodegas del business (incluye inactivas
+  /// y la virtual `__IN_TRANSIT__`), con dirección y flag is_active para CRUD.
+  Future<List<InventoryWarehouseDetail>> getAllWarehouses(
+    String businessId,
+  ) async {
+    final response = await _client
+        .from(InventoryQueries.tableWarehouses)
+        .select('id, name, address, is_main, is_active, created_at')
+        .eq('business_id', businessId)
+        .order('is_main', ascending: false)
+        .order('name');
+
+    return List<Map<String, dynamic>>.from(response)
+        .map(InventoryWarehouseDetail.fromMap)
+        .toList(growable: false);
+  }
+
+  Future<InventoryWarehouseDetail> createWarehouse({
+    required String businessId,
+    required String name,
+    String? address,
+    bool isMain = false,
+    bool isActive = true,
+  }) async {
+    if (isMain) {
+      // Sólo una bodega principal por business: bajar la marca de la actual.
+      await _client
+          .from(InventoryQueries.tableWarehouses)
+          .update({'is_main': false})
+          .eq('business_id', businessId)
+          .eq('is_main', true);
+    }
+    final response = await _client
+        .from(InventoryQueries.tableWarehouses)
+        .insert({
+          'business_id': businessId,
+          'name': name,
+          'address': address,
+          'is_main': isMain,
+          'is_active': isActive,
+        }..removeWhere((key, value) => value == null))
+        .select('id, name, address, is_main, is_active, created_at')
+        .single();
+    return InventoryWarehouseDetail.fromMap(
+      Map<String, dynamic>.from(response),
+    );
+  }
+
+  Future<void> updateWarehouse({
+    required String businessId,
+    required String warehouseId,
+    required String name,
+    String? address,
+    required bool isMain,
+    required bool isActive,
+  }) async {
+    if (isMain) {
+      await _client
+          .from(InventoryQueries.tableWarehouses)
+          .update({'is_main': false})
+          .eq('business_id', businessId)
+          .eq('is_main', true)
+          .neq('id', warehouseId);
+    }
+    await _client
+        .from(InventoryQueries.tableWarehouses)
+        .update({
+          'name': name,
+          'address': address,
+          'is_main': isMain,
+          'is_active': isActive,
+        })
+        .eq('id', warehouseId);
+  }
+
   Future<List<InventoryItemSummary>> getItems({
     required String businessId,
     required String warehouseId,
     String? query,
   }) async {
+    // PRD 9 Fase 1D: incluir costing_method y barcode (columnas nuevas).
+    const columns =
+        'id, sku, name, description, unit, cost, min_stock, max_stock, '
+        'is_active, costing_method, barcode';
     final normalized = query?.trim();
     final itemsResponse = normalized != null && normalized.isNotEmpty
         ? await _client
               .from(InventoryQueries.tableInventoryItems)
-              .select(
-                'id, sku, name, description, unit, cost, min_stock, max_stock, is_active',
-              )
+              .select(columns)
               .eq('business_id', businessId)
               .or(
                 'name.ilike.%${normalized.replaceAll(',', '')}%,sku.ilike.%${normalized.replaceAll(',', '')}%,description.ilike.%${normalized.replaceAll(',', '')}%',
@@ -41,9 +118,7 @@ class InventoryRepository {
               .order('name')
         : await _client
               .from(InventoryQueries.tableInventoryItems)
-              .select(
-                'id, sku, name, description, unit, cost, min_stock, max_stock, is_active',
-              )
+              .select(columns)
               .eq('business_id', businessId)
               .order('name');
     final itemsRaw = List<Map<String, dynamic>>.from(itemsResponse);
@@ -166,6 +241,8 @@ class InventoryRepository {
     double minStock = 0,
     double? maxStock,
     bool isActive = true,
+    String? costingMethod,
+    String? barcode,
   }) async {
     final response = await _client
         .from(InventoryQueries.tableInventoryItems)
@@ -180,6 +257,8 @@ class InventoryRepository {
             'min_stock': minStock,
             'max_stock': maxStock,
             'is_active': isActive,
+            'costing_method': costingMethod,
+            'barcode': barcode,
           }..removeWhere((key, value) => value == null),
         )
         .select()
@@ -198,21 +277,27 @@ class InventoryRepository {
     required double minStock,
     double? maxStock,
     required bool isActive,
+    String? costingMethod,
+    String? barcode,
   }) async {
+    final payload = <String, dynamic>{
+      'name': name,
+      'sku': sku,
+      'description': description,
+      'unit': unit,
+      'cost': cost,
+      'min_stock': minStock,
+      'max_stock': maxStock,
+      'is_active': isActive,
+    };
+    // costing_method y barcode son extensiones PRD 9 — solo se mandan
+    // si el caller los provee, así no pisamos valores existentes.
+    if (costingMethod != null) payload['costing_method'] = costingMethod;
+    if (barcode != null) payload['barcode'] = barcode;
+    payload.removeWhere((key, value) => value == null);
     await _client
         .from(InventoryQueries.tableInventoryItems)
-        .update(
-          {
-            'name': name,
-            'sku': sku,
-            'description': description,
-            'unit': unit,
-            'cost': cost,
-            'min_stock': minStock,
-            'max_stock': maxStock,
-            'is_active': isActive,
-          }..removeWhere((key, value) => value == null),
-        )
+        .update(payload)
         .eq('id', itemId);
   }
 
@@ -239,5 +324,109 @@ class InventoryRepository {
         'p_reference_type': referenceType,
       },
     );
+  }
+
+  // ── PRD 9 Fase 1C: Proveedores (CRUD completo) ─────────────────────
+
+  Future<List<InventorySupplierDetail>> getAllSuppliers(
+    String businessId,
+  ) async {
+    final response = await _client
+        .from('suppliers')
+        .select(
+          'id, name, rnc, contact_name, phone, email, address, '
+          'payment_terms, notes, is_active, created_at',
+        )
+        .eq('business_id', businessId)
+        .order('name');
+    return List<Map<String, dynamic>>.from(response)
+        .map(InventorySupplierDetail.fromMap)
+        .toList(growable: false);
+  }
+
+  Future<InventorySupplierDetail> createSupplierDetailed({
+    required String businessId,
+    required String name,
+    String? rnc,
+    String? contactName,
+    String? phone,
+    String? email,
+    String? address,
+    String? paymentTerms,
+    String? notes,
+    bool isActive = true,
+  }) async {
+    final response = await _client
+        .from('suppliers')
+        .insert({
+          'business_id': businessId,
+          'name': name,
+          'rnc': rnc,
+          'contact_name': contactName,
+          'phone': phone,
+          'email': email,
+          'address': address,
+          'payment_terms': paymentTerms,
+          'notes': notes,
+          'is_active': isActive,
+        }..removeWhere((key, value) => value == null || value == ''))
+        .select(
+          'id, name, rnc, contact_name, phone, email, address, '
+          'payment_terms, notes, is_active, created_at',
+        )
+        .single();
+    return InventorySupplierDetail.fromMap(
+      Map<String, dynamic>.from(response),
+    );
+  }
+
+  Future<void> updateSupplierDetailed({
+    required String supplierId,
+    required String name,
+    String? rnc,
+    String? contactName,
+    String? phone,
+    String? email,
+    String? address,
+    String? paymentTerms,
+    String? notes,
+    required bool isActive,
+  }) async {
+    await _client
+        .from('suppliers')
+        .update({
+          'name': name,
+          'rnc': rnc,
+          'contact_name': contactName,
+          'phone': phone,
+          'email': email,
+          'address': address,
+          'payment_terms': paymentTerms,
+          'notes': notes,
+          'is_active': isActive,
+        })
+        .eq('id', supplierId);
+  }
+
+  /// PRD 9 Fase 1: invoca la RPC `bootstrap_menu_to_inventory_links` que
+  /// genera, para el business, los `inventory_items` faltantes a partir
+  /// del menú activo y crea las `recipes` + `recipe_ingredients` 1:1
+  /// (qty=1) requeridas para que la integración con ventas resuelva
+  /// menu_item → inventory_item.
+  ///
+  /// Retorna el JSON de la RPC: `{business_id, items_created,
+  /// recipes_created, ingredients_created}`. Lanza si el caller no es
+  /// owner/admin/manager (la RPC enforce backend).
+  Future<Map<String, dynamic>> bootstrapMenuToInventoryLinks(
+    String businessId,
+  ) async {
+    final response = await _client.rpc(
+      'bootstrap_menu_to_inventory_links',
+      params: {'p_business_id': businessId},
+    );
+    if (response is Map) {
+      return Map<String, dynamic>.from(response);
+    }
+    return <String, dynamic>{};
   }
 }
