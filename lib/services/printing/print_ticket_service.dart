@@ -304,6 +304,13 @@ class PrintTicketService {
       final rightPart = 'RD\$ ${_formatMoney(itemDisplayBaseTotal(order, item))}';
       gen.dotRow(leftPart, rightPart);
 
+      // Indicador para llevar (takeout)
+      if (item.isTakeout) {
+        gen.setBold(true);
+        gen.text('  [PARA LLEVAR]');
+        gen.setBold(false);
+      }
+
       // Modificadores con indentación
       if (item.modifiers.isNotEmpty) {
         for (final mod in item.modifiers) {
@@ -335,44 +342,25 @@ class PrintTicketService {
     // subtotal absorba el centavo de redondeo por-item y coincida exactamente
     // con lo que ve el cajero en pantalla. Los items consolidados se usan solo
     // para el render de las lineas del ticket.
-    final activeItems = items.where((i) => i.status != 'void').toList();
-    final isAllInclusive = activeItems.isNotEmpty &&
-        activeItems.every((i) => i.taxMode == 'inclusive');
     final printableSummary = summarizeOrderPricing(order, items);
     final printableDiscounts = printableSummary.discounts;
 
-    // SUBTOTAL: matchea la UI.
-    // - Inclusive: el trigger guarda `oi.subtotal` pre-tax pre-disc. Lo
-    //   mostramos directo (= 429.68 para 2×275 catalog gross con disc 55).
-    // - Exclusive: el trigger guarda `oi.subtotal := base - discounts`
-    //   (post-disc). Sumamos discounts de vuelta para mostrar la base
-    //   catalog pre-discount. Preserva FIX 2026-05-01 (caso 30/4: 500
-    //   catalog → 10% desc → SUBTOTAL 500 / TOTAL 450).
-    final double printableSubtotal;
-    if (isAllInclusive) {
-      printableSubtotal = double.parse(
-        printableSummary.subtotal.toStringAsFixed(2),
-      );
-    } else {
-      printableSubtotal = double.parse(
-        (printableSummary.subtotal + printableDiscounts).toStringAsFixed(2),
-      );
-    }
+    // SUBTOTAL/TOTAL: usamos los valores del summary directo, igual que la UI.
+    // El trigger backend guarda `oi.subtotal` pre-descuento; sumar discounts
+    // de vuelta sobre-infla. `summary.total` ya aplica el override correcto
+    // (inclusiveGrossNet para órdenes 100% inclusive) y la fórmula
+    // base+tax-disc para mixed/exclusive.
+    final double printableSubtotal = printableSummary.subtotal;
 
     // Estructura del bloque de totales (matchea la UI):
     //   SUBTOTAL → impuestos → DESCUENTO → TOTAL
     gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(printableSubtotal)}');
 
-    // Tax breakdown — labels normales en ambos modos. En inclusive estos
-    // impuestos ya están baked en el catalog gross (precio menú); en
-    // exclusive se suman al total. La fórmula del TOTAL más abajo aplica
-    // lo correcto en cada caso.
-    double taxSum = 0;
+    // Tax breakdown — labels normales.
     if (taxBreakdown.isNotEmpty) {
       for (final entry in taxBreakdown) {
         if (entry.amount.abs() < 0.005) continue;
         gen.textRow('${entry.label}:', 'RD\$ ${_formatMoney(entry.amount)}');
-        taxSum += entry.amount;
       }
     } else {
       // Fallback: derivar desde printableSummary.
@@ -388,11 +376,9 @@ class PrintTicketService {
           'SERVICIO ($servicePct%):',
           'RD\$ ${_formatMoney(printableServiceFee)}',
         );
-        taxSum += printableServiceFee;
       }
       if (printableTax > 0.005) {
         gen.textRow('ITBIS:', 'RD\$ ${_formatMoney(printableTax)}');
-        taxSum += printableTax;
       }
     }
 
@@ -401,21 +387,7 @@ class PrintTicketService {
       gen.textRow('DESCUENTO:', '-RD\$ ${_formatMoney(printableDiscounts)}');
     }
 
-    // TOTAL.
-    // - Inclusive: usamos `summary.total` (que aplica `inclusiveGrossNet =
-    //   catalog_gross - disc`, exacto al centavo). Para nuestro caso = 495.
-    // - Exclusive: SUBTOTAL pre-disc + impuestos - descuento. Para 30/4 =
-    //   500 + 0 - 50 = 450.
-    final double printableGrandTotal;
-    if (isAllInclusive) {
-      printableGrandTotal = double.parse(
-        printableSummary.total.toStringAsFixed(2),
-      );
-    } else {
-      printableGrandTotal = double.parse(
-        (printableSubtotal + taxSum - printableDiscounts).toStringAsFixed(2),
-      );
-    }
+    final double printableGrandTotal = printableSummary.total;
 
     gen.lineFeed();
     _thickSeparator(gen);
@@ -611,6 +583,13 @@ class PrintTicketService {
       final rightPart = 'RD\$ ${_formatMoney(lineTotal)}';
       gen.dotRow(leftPart, rightPart);
 
+      // Indicador para llevar (takeout)
+      if (item.isTakeout) {
+        gen.setBold(true);
+        gen.text('  [PARA LLEVAR]');
+        gen.setBold(false);
+      }
+
       if (item.modifiers.isNotEmpty) {
         for (final mod in item.modifiers) {
           gen.text('  + ${mod.name}');
@@ -635,9 +614,6 @@ class PrintTicketService {
     // Ver comentario en generatePrecheck: usamos los items ORIGINALES para
     // que la absorcion del centavo quede en el subtotal y el papel coincida
     // con la pantalla al centavo.
-    final activeItems = items.where((i) => i.status != 'void').toList();
-    final isAllInclusive = activeItems.isNotEmpty &&
-        activeItems.every((i) => i.taxMode == 'inclusive');
     final effectiveTotals = _resolvePrintableTotals(
       order: order,
       items: items,
@@ -645,28 +621,18 @@ class PrintTicketService {
     );
     final effectiveDiscounts = effectiveTotals.discounts;
 
-    // SUBTOTAL: matchea la UI (ver comentario en generatePrecheck).
-    final double effectiveSubtotal;
-    if (isAllInclusive) {
-      effectiveSubtotal = double.parse(
-        effectiveTotals.subtotal.toStringAsFixed(2),
-      );
-    } else {
-      effectiveSubtotal = double.parse(
-        (effectiveTotals.subtotal + effectiveDiscounts).toStringAsFixed(2),
-      );
-    }
+    // SUBTOTAL/TOTAL: usamos el summary directo, igual que la UI.
+    // Ver comentario en generatePrecheck.
+    final double effectiveSubtotal = effectiveTotals.subtotal;
 
     // Estructura: SUBTOTAL → impuestos → DESCUENTO → TOTAL (matchea la UI).
     gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(effectiveSubtotal)}');
 
-    // Tax breakdown — labels normales en ambos modos.
-    double taxSum = 0;
+    // Tax breakdown — labels normales.
     if (taxBreakdown.isNotEmpty) {
       for (final entry in taxBreakdown) {
         if (entry.amount.abs() < 0.005) continue;
         gen.textRow('${entry.label}:', 'RD\$ ${_formatMoney(entry.amount)}');
-        taxSum += entry.amount;
       }
     } else {
       // Fallback: derive from resolved printable totals
@@ -682,14 +648,12 @@ class PrintTicketService {
           'SERVICIO ($servicePct%):',
           'RD\$ ${_formatMoney(effectiveServiceFee)}',
         );
-        taxSum += effectiveServiceFee;
       }
       if (effectiveTax > 0.005) {
         final taxPct = effectiveSubtotal > 0
             ? ((effectiveTax / effectiveSubtotal) * 100).toStringAsFixed(0)
             : '18';
         gen.textRow('ITBIS ($taxPct%):', 'RD\$ ${_formatMoney(effectiveTax)}');
-        taxSum += effectiveTax;
       }
     }
 
@@ -697,19 +661,7 @@ class PrintTicketService {
       gen.textRow('DESCUENTO:', '-RD\$ ${_formatMoney(effectiveDiscounts)}');
     }
 
-    // TOTAL: inclusive usa effectiveTotals.total (= summary.total con override
-    // inclusiveGrossNet, exacto al centavo). Exclusive computa subtotal pre-disc
-    // + impuestos - descuento.
-    final double effectiveTotal;
-    if (isAllInclusive) {
-      effectiveTotal = double.parse(
-        effectiveTotals.total.toStringAsFixed(2),
-      );
-    } else {
-      effectiveTotal = double.parse(
-        (effectiveSubtotal + taxSum - effectiveDiscounts).toStringAsFixed(2),
-      );
-    }
+    final double effectiveTotal = effectiveTotals.total;
 
     gen.lineFeed();
     _thickSeparator(gen);
@@ -1039,36 +991,27 @@ class PrintTicketService {
             )
             .toList(),
       );
+      // Indicador para llevar (takeout)
+      if (item.isTakeout) {
+        gen.setBold(true);
+        gen.text('  [PARA LLEVAR]');
+        gen.setBold(false);
+      }
     }
 
-    final activeItems = items.where((i) => i.status != 'void').toList();
-    final isAllInclusive = activeItems.isNotEmpty &&
-        activeItems.every((i) => i.taxMode == 'inclusive');
-
-    // SUBTOTAL: matchea la UI (ver comentario en generatePrecheck).
-    final double displaySubtotal;
-    if (isAllInclusive) {
-      displaySubtotal = double.parse(
-        effectiveTotals.subtotal.toStringAsFixed(2),
-      );
-    } else {
-      displaySubtotal = double.parse(
-        (effectiveTotals.subtotal + effectiveTotals.discounts)
-            .toStringAsFixed(2),
-      );
-    }
+    // SUBTOTAL/TOTAL: usamos el summary directo, igual que la UI.
+    // Ver comentario en generatePrecheck.
+    final double displaySubtotal = effectiveTotals.subtotal;
 
     gen.separator();
     // Estructura: Subtotal → impuestos → Descuentos → TOTAL (matchea la UI).
     gen.textRow('Subtotal:', 'RD\$ ${_formatMoney(displaySubtotal)}');
 
-    // Tax breakdown — labels normales en ambos modos.
-    double taxSum = 0;
+    // Tax breakdown — labels normales.
     if (taxBreakdown.isNotEmpty) {
       for (final entry in taxBreakdown) {
         if (entry.amount.abs() < 0.005) continue;
         gen.textRow(entry.label, 'RD\$ ${_formatMoney(entry.amount)}');
-        taxSum += entry.amount;
       }
     } else {
       if (effectiveTotals.serviceFee > 0) {
@@ -1080,7 +1023,6 @@ class PrintTicketService {
           'Servicio ($servicePct%):',
           'RD\$ ${_formatMoney(effectiveTotals.serviceFee)}',
         );
-        taxSum += effectiveTotals.serviceFee;
       }
       if (effectiveTotals.tax > 0.005) {
         final taxPct = displaySubtotal > 0
@@ -1090,7 +1032,6 @@ class PrintTicketService {
           'ITBIS ($taxPct%):',
           'RD\$ ${_formatMoney(effectiveTotals.tax)}',
         );
-        taxSum += effectiveTotals.tax;
       }
     }
 
@@ -1101,20 +1042,7 @@ class PrintTicketService {
       );
     }
 
-    // TOTAL: inclusive usa effectiveTotals.total (con override
-    // inclusiveGrossNet, exacto). Exclusive computa subtotal pre-disc
-    // + impuestos - descuento.
-    final double displayTotal;
-    if (isAllInclusive) {
-      displayTotal = double.parse(
-        effectiveTotals.total.toStringAsFixed(2),
-      );
-    } else {
-      displayTotal = double.parse(
-        (displaySubtotal + taxSum - effectiveTotals.discounts)
-            .toStringAsFixed(2),
-      );
-    }
+    final double displayTotal = effectiveTotals.total;
 
     gen.doubleSeparator();
     gen.setBold(true);

@@ -1,6 +1,5 @@
 import 'package:mangopos/core/tax/tax_engine.dart';
 
-import '../models/order_item_tax_line.dart';
 import '../models/sales_models.dart';
 
 double _r(double v) => double.parse(v.toStringAsFixed(2));
@@ -65,6 +64,42 @@ double _itemGross(OrderItem item) {
   );
 }
 
+/// Factor de escala para los `amount` de `tax_lines` en items takeout
+/// inclusive. El trigger backend computa los amounts con la base extraída
+/// a tasa consolidada completa (ej. 28%) aún cuando takeout solo aplica
+/// algunos taxes — el resultado es un rate impreso (18%) inconsistente
+/// con el ratio amount/base recomputado.
+///
+/// Devuelve 1.0 (sin cambio) para items que no son takeout, no inclusive,
+/// sin tax_lines, o sin rate aplicable.
+///
+/// Para takeout inclusive con rate aplicable > 0:
+///   correctTax = gross - gross/(1+rate)        ej. 76.27 = 500 - 423.73
+///   originalSum = sum(line.amount)             ej. 70.31
+///   scale = correctTax / originalSum           ej. 1.0848
+double _takeoutInclusiveScale(OrderItem item) {
+  if (item.taxMode != 'inclusive' || !item.isTakeout) return 1.0;
+  if (item.taxLines.isEmpty) return 1.0;
+
+  final applicableRate = item.taxLines.fold<double>(
+    0,
+    (sum, line) => sum + (line.taxRate / 100.0),
+  );
+  if (applicableRate <= 0) return 1.0;
+
+  final gross = _itemGross(item);
+  if (gross <= 0) return 1.0;
+
+  final correctTax = gross - (gross / (1 + applicableRate));
+  final originalSum = item.taxLines.fold<double>(
+    0,
+    (sum, line) => sum + line.amount,
+  );
+  if (originalSum <= 0) return 1.0;
+
+  return correctTax / originalSum;
+}
+
 OrderItemPricingSummary summarizeItemPricing(Order? order, OrderItem item, {String? forcedOrigin}) {
   // PRD 2.5: modelo unificado. oi.tax ya incluye TODOS los impuestos aplicables
   // (ITBIS + Ley + cualquier otro), filtrados por apply_on_<origin> en el motor
@@ -103,9 +138,38 @@ OrderItemPricingSummary summarizeItemPricing(Order? order, OrderItem item, {Stri
   final modifiersOutOfSync = item.modifiers.isNotEmpty &&
       grossWithModifiers > persistedGross + 0.01;
 
+  // FIX takeout inclusive: el trigger backend extrae `oi.subtotal` a la
+  // tasa consolidada completa (ej. 28% = ITBIS+Ley) y filtra los `tax_lines`
+  // por `apply_on_takeout`. Eso deja inconsistencia: subtotal sale a tasa
+  // completa pero tax solo trae los aplicables, y `subtotal + tax != gross`.
+  // El sistema debe pasar el "ahorro" del impuesto excluido al base
+  // (cliente sigue pagando el precio de menú). Recomputamos:
+  //   applicableRate = sum(tax_lines.taxRate / 100)   ej. 0.18 para takeout
+  //   subtotal = gross / (1 + applicableRate)         ej. 500/1.18 = 423.73
+  //   tax      = gross - subtotal                     ej. 76.27 (= 18% de 423.73)
+  // Math: subtotal + tax == gross == precio menú ✓
+  final double applicableInclusiveRate;
+  if (item.taxMode == 'inclusive' && item.isTakeout && item.taxLines.isNotEmpty) {
+    applicableInclusiveRate = item.taxLines.fold<double>(
+      0,
+      (sum, line) => sum + (line.taxRate / 100.0),
+    );
+  } else {
+    applicableInclusiveRate = -1; // sentinela: no recomputar
+  }
+
   final double dbSubtotal;
   final double dbTax;
-  if (modifiersOutOfSync) {
+  if (item.taxMode == 'inclusive' && applicableInclusiveRate >= 0) {
+    if (applicableInclusiveRate > 0) {
+      dbSubtotal = _r(grossWithModifiers / (1 + applicableInclusiveRate));
+      dbTax = _r(grossWithModifiers - dbSubtotal);
+    } else {
+      // Todos los impuestos excluidos por takeout → base = gross, tax = 0.
+      dbSubtotal = _r(grossWithModifiers);
+      dbTax = 0;
+    }
+  } else if (modifiersOutOfSync) {
     if (item.taxMode == 'inclusive') {
       dbSubtotal = fullRate > 0
           ? _r(grossWithModifiers / (1 + fullRate))
@@ -175,22 +239,13 @@ double itemDisplayUnitPrice(Order? order, OrderItem item) {
 /// Total base de la línea (sin impuestos), usado en tickets/facturas para
 /// que la suma de líneas coincida con el SUBTOTAL del ticket.
 ///
-/// Comportamiento por modo de impuesto (alineado con cómo el trigger backend
-/// guarda `oi.subtotal`):
-/// - **Inclusive**: el trigger guarda `oi.subtotal` como base pre-tax sin
-///   restar el descuento (los descuentos viajan separados en `oi.discounts`).
-///   Devolvemos `s.subtotal` directo. Suma de líneas = `summary.subtotal` =
-///   SUBTOTAL del ticket = subtotal de la UI.
-/// - **Exclusive**: el trigger guarda `oi.subtotal := base - discounts`
-///   (post-descuento). Sumamos el descuento de vuelta para devolver la base
-///   catalog pre-descuento (= precio neto del menú). Esto preserva el FIX
-///   2026-05-01 (caso 30/4: 500 catalog → 10% desc → SUBTOTAL 500 / TOTAL 450).
+/// El trigger backend guarda `oi.subtotal` como base pre-descuento en ambos
+/// modos (los descuentos viajan separados en `oi.discounts`). Devolvemos
+/// `s.subtotal` directo. La suma de líneas coincide con `summary.subtotal`
+/// = SUBTOTAL del ticket = subtotal de la UI.
 double itemDisplayBaseTotal(Order? order, OrderItem item) {
   final s = summarizeItemPricing(order, item);
-  if (item.taxMode == 'inclusive') {
-    return _r(s.subtotal);
-  }
-  return _r(s.subtotal + s.discounts);
+  return _r(s.subtotal);
 }
 
 double itemDisplayBaseUnitPrice(Order? order, OrderItem item) {
@@ -264,30 +319,39 @@ List<({String label, double amount})>? buildBreakdownFromTaxLines(
   final hasAnyLines = taxedItems.any((i) => i.taxLines.isNotEmpty);
   if (!hasAnyLines) return null;
 
-  final allLines = <OrderItemTaxLine>[
-    for (final item in activeItems) ...item.taxLines,
-  ];
-
-  if (allLines.isEmpty) return const [];
-
-  // Agrupar por tax_id. Guardamos también name/rate del primer snapshot.
+  // Agrupar por tax_id, escalando amounts en items takeout inclusive.
+  // El trigger backend computa los `tax_lines.amount` con la base extraída
+  // a tasa consolidada completa (ej. 390.63 = 500/1.28), incluso cuando en
+  // takeout solo aplican algunos taxes. Eso deja una inconsistencia entre
+  // el rate impreso (18%) y el ratio amount/base. Escalamos los amounts
+  // para que reflejen la tasa real aplicada sobre la base recomputada
+  // (ej. 76.27 = 18% de 423.73 cuando el customer paga gross 500 sin Ley).
   final byTaxId = <String, ({String name, double rate, double amount})>{};
-  for (final line in allLines) {
-    final existing = byTaxId[line.taxId];
-    if (existing == null) {
-      byTaxId[line.taxId] = (
-        name: line.taxName,
-        rate: line.taxRate,
-        amount: line.amount,
-      );
-    } else {
-      byTaxId[line.taxId] = (
-        name: existing.name,
-        rate: existing.rate,
-        amount: existing.amount + line.amount,
-      );
+  bool hasAnyLine = false;
+  for (final item in activeItems) {
+    if (item.taxLines.isEmpty) continue;
+    hasAnyLine = true;
+    final scale = _takeoutInclusiveScale(item);
+    for (final line in item.taxLines) {
+      final adjustedAmount = line.amount * scale;
+      final existing = byTaxId[line.taxId];
+      if (existing == null) {
+        byTaxId[line.taxId] = (
+          name: line.taxName,
+          rate: line.taxRate,
+          amount: adjustedAmount,
+        );
+      } else {
+        byTaxId[line.taxId] = (
+          name: existing.name,
+          rate: existing.rate,
+          amount: existing.amount + adjustedAmount,
+        );
+      }
     }
   }
+
+  if (!hasAnyLine) return const [];
 
   final breakdown = <({String label, double amount})>[];
   // Orden estable: por nombre alfabético para que el ticket no varíe entre
