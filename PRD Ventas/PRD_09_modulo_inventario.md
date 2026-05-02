@@ -4,7 +4,7 @@
 |---|---|
 | **Producto** | MangoPOS |
 | **Módulo** | Inventario, Compras, Cuentas por Pagar |
-| **Versión del documento** | 1.0 |
+| **Versión del documento** | 1.1 (alineado con schema real post-audit 2026-05-01) |
 | **Fecha** | 2026-05-01 |
 | **Autor** | Cristian — Innovech Software LLC |
 | **Estado** | Aprobado para desarrollo |
@@ -96,7 +96,7 @@ El encargado de bodega recibe un pedido del proveedor, valida cantidades vs OC, 
 El contador recibe la factura física del proveedor, la asocia a una o más recepciones, registra NCF, ITBIS, fecha de vencimiento. El sistema crea la CxP y, si el costo de factura difiere del costo provisional, ajusta las capas remanentes.
 
 **CU-03 — Vender un item (integración con flujo existente)**
-El cajero factura una venta. El sistema resuelve cada `menu_item` a su `inventory_item` vía `menu_item_links` y descuenta el stock de la bodega configurada para esa venta, usando el método de costeo del item.
+El cajero confirma una orden. Cuando la orden pasa al estado `sent_to_kitchen` (consumo físico), el sistema resuelve cada `menu_item` a su(s) `inventory_item` vía `recipes` + `recipe_ingredients` y descuenta el stock de la bodega principal del business, usando el método de costeo del item.
 
 **CU-04 — Transferir stock entre bodegas**
 El encargado del local A envía 20 botellas de Aperol al local B. Las botellas salen del local A → entran a bodega virtual `__IN_TRANSIT__`. Cuando el local B confirma recepción, salen de tránsito → entran al local B. Las diferencias se registran como merma con razón.
@@ -156,7 +156,9 @@ Estas decisiones están cerradas y forman la base del desarrollo. Cualquier camb
 | D5 | Stock actual es **cache** (`inventory_stock.average_cost` + `quantity_on_hand`); fuente de verdad es el kardex | Permite recalcular si hay corrupción, soporta auditoría temporal |
 | D6 | Costeo configurable **por item** (`costing_method`: `average` o `fifo`) | Algunos productos perecederos requieren FIFO; otros (no perecederos) son más simples con promedio |
 | D7 | `stock_layers` se mantiene siempre, aún en items con costeo `average` | Auditoría uniforme; permite cambiar método sin migración destructiva |
-| D8 | V1 sin recetas: cada `menu_item` enlaza 1:1 a un `inventory_item` con `quantity_consumed = 1` | Modelo ya soporta recetas; V1 simplemente usa cardinalidad 1 |
+| D8 | V1 sin recetas reales: cada `menu_item` tiene una `recipes` con un único `recipe_ingredients` (qty=1, unit del item). El descuento de stock dispara cuando la orden pasa a `sent_to_kitchen` (trigger ya existente, `consume_inventory_from_order`) | Las tablas `recipes` y `recipe_ingredients` ya existen y la integración con ventas también; V1 reutiliza la infraestructura con cardinalidad 1 |
+| D10 | Mantener el descuento de stock vinculado a `sent_to_kitchen`, no a la facturación | Refleja el consumo físico real del ingrediente: sale del stock cuando el bar/cocina lo prepara, no cuando el cliente paga. Preserva semántica del trigger existente. |
+| D11 | Mantener el valor `partial` del enum `purchase_status` (no renombrar a `partial_received`) y solo agregar `closed` | Renombrar valores de enum en Postgres es destructivo y rompe código en producción; el valor existente ya cumple la función |
 | D9 | RLS multi-tenant **activo** desde Fase 0 | Seguridad por defecto, no agregada después |
 
 ---
@@ -171,15 +173,15 @@ Estas decisiones están cerradas y forman la base del desarrollo. Cualquier camb
 
 **RF-MA-03** Gestión de items inventariables (CRUD): nombre, SKU, código de barras, unidad de medida, costo inicial, min/max stock, método de costeo (`average` o `fifo`).
 
-**RF-MA-04** Vincular `menu_items` a `inventory_items` 1:1 mediante `menu_item_links` con `quantity_consumed` (siempre 1 en V1).
+**RF-MA-04** Vincular `menu_items` a `inventory_items` mediante una `recipes` por menu_item y un `recipe_ingredients` por recipe (cardinalidad 1 en V1, con `quantity = 1` y `unit` heredada del item).
 
-**RF-MA-05** Función de bootstrap (`bootstrap_menu_to_inventory_links`) que genera automáticamente los `inventory_items` faltantes a partir de los `menu_items` activos y crea los enlaces 1:1 sin duplicar por SKU/nombre.
+**RF-MA-05** Función de bootstrap (`bootstrap_menu_to_inventory_links`) que: (a) genera automáticamente los `inventory_items` faltantes a partir de los `menu_items` activos sin duplicar por SKU/nombre, (b) crea una `recipes` por cada menu_item sin receta, (c) crea el `recipe_ingredients` correspondiente apuntando al inventory_item con `quantity = 1`. Idempotente: re-ejecutarla no duplica registros.
 
 ### 7.2 Compras
 
 **RF-CO-01** Crear orden de compra con: proveedor, bodega destino, items con cantidad y costo unitario, ITBIS por línea (default 18%), fecha esperada, notas.
 
-**RF-CO-02** Estados de OC: `draft` → `sent` → `partial_received` → `received` → `closed`. También `cancelled`.
+**RF-CO-02** Estados de OC: `draft` → `sent` → `partial` → `received` → `closed`. También `cancelled`. (`partial` se mantiene del enum existente; `closed` se agrega en Fase 0.)
 
 **RF-CO-03** Numeración automática `PO-000001` al crear (vía `next_document_number`).
 
@@ -253,12 +255,14 @@ Estas decisiones están cerradas y forman la base del desarrollo. Cualquier camb
 
 ### 7.8 Integración con ventas
 
-**RF-VE-01** Al confirmar una venta, RPC `sell_items()` itera sobre cada `menu_item_links`:
-- Resuelve `menu_item → inventory_item`
-- Multiplica por `quantity_consumed` (siempre 1 en V1)
-- Consume capas según `costing_method`
-- Actualiza `inventory_stock`
-- Crea `inventory_movements` tipo `sale` con `reference_type = 'sale'` y `reference_id = sale.id`
+**RF-VE-01** El descuento de stock dispara cuando una orden cambia a `status_ext = 'sent_to_kitchen'` (no al facturar). El trigger existente `trg_inventory_on_sent` invoca `consume_inventory_from_order(order_id)`, que itera `recipes` → `recipe_ingredients`:
+- Resuelve `menu_item → inventory_item` vía `recipe_ingredients`
+- Multiplica `quantity` del ingrediente × cantidad vendida del item
+- Consume capas según `costing_method` (extensión de la función actual en Fase 3)
+- Actualiza `inventory_stock` (vía trigger `trg_inventory_stock_sync`)
+- Crea `inventory_movements` tipo `sale` con `reference_type = 'order'` y `reference_id = order.id`
+
+La RPC `sell_items_costed()` que se agrega en Fase 3 NO reemplaza esta lógica — actúa como capa de costeo encima, consumiendo capas FIFO o promedio y emitiendo `cost_per_unit` en cada movement.
 
 **RF-VE-02** Si un `menu_item` no tiene link a `inventory_item`, se ignora (no bloquea la venta). Se loguea para revisión.
 
@@ -339,7 +343,8 @@ Estas decisiones están cerradas y forman la base del desarrollo. Cualquier camb
 | `inventory_stock` | Cache de stock por item × bodega | Existe — extender con `average_cost`, `quantity_reserved` |
 | `inventory_movements` | Kardex inmutable | Existe — agregar enums faltantes |
 | `stock_layers` | Capas de costo por entrada (FIFO + auditoría) | Nueva |
-| `menu_item_links` | Puente menú → inventario | Existe — extender con `quantity_consumed` |
+| `recipes` | Receta por menu_item (1:1 en V1, soporta yield_quantity) | Existe — usar como está |
+| `recipe_ingredients` | Ingredientes de cada receta (item_id, quantity, unit) | Existe — usar como está |
 | `suppliers` | Proveedores | Existe |
 | `purchase_orders` + `_items` | Órdenes de compra | Existen |
 | `goods_receipts` + `_items` | Recepciones | Nuevas |
@@ -514,8 +519,10 @@ Bodega A → transfer_send(items) → Stock A baja, IN_TRANSIT sube
 
 ### 15.3 Bloqueos potenciales
 
-- Si la tabla de membresía no se llama `business_users(user_id, business_id)`, la función `user_belongs_to_business` debe ajustarse antes de Fase 0.
-- Si los enums `inventory_movement_type` y `purchase_status` ya tienen valores con nombres distintos a los propuestos, la migración debe alinearse.
+- La tabla de membresía es `user_businesses(user_id, business_id, role, permissions[])`. Las funciones helper `user_business_role(uuid, uuid) → text` y `user_has_business_access(uuid, uuid) → bool` ya existen y son las que se usan en RLS. **No se introduce** una nueva `user_belongs_to_business`.
+- Enum `movement_type`: existente = `purchase, sale, adjustment, transfer_in, transfer_out, waste, return`. Fase 0 agrega: `receipt_provisional, sale_return, cost_adjustment, adjustment_in, adjustment_out`.
+- Enum `purchase_status`: existente = `draft, sent, partial, received, cancelled`. Fase 0 agrega: `closed`. **No se renombra `partial`** (rompería código existente).
+- Funciones ya existentes que NO se reescriben en Fase 0: `fn_inventory_record_movement`, `fn_receive_purchase_order`, `consume_inventory_from_order`, `fn_confirm_order_to_kitchen`, `fn_sync_inventory_stock_on_movement`. Las extensiones de costeo en Fase 3 las modifican vía `CREATE OR REPLACE` preservando firma.
 
 ---
 
@@ -539,18 +546,24 @@ Bodega A → transfer_send(items) → Stock A baja, IN_TRANSIT sube
 
 ## 17. Anexos
 
-### 17.1 Estado actual del schema (verificado 2026-05-01)
+### 17.1 Estado actual del schema (auditado 2026-05-01)
 
 Tablas ya existentes con su estado:
-- `inventory_items` — extender (Fase 0)
-- `inventory_stock` — extender (Fase 0)
-- `inventory_movements` — completo
-- `menu_item_links` — extender (Fase 0)
+- `inventory_items` — extender (Fase 0): agregar `costing_method`, `barcode`, `updated_at`
+- `inventory_stock` — extender (Fase 0): agregar `average_cost`, `quantity_reserved`
+- `inventory_movements` — completa; solo se extiende el enum `movement_type`
+- `recipes` — usar como está (V1 crea 1 por menu_item)
+- `recipe_ingredients` — usar como está (V1 crea 1 por recipe con qty=1)
 - `warehouses`, `suppliers` — completas
-- `purchase_orders`, `purchase_order_items` — completas
+- `purchase_orders`, `purchase_order_items` — completas; solo se extiende `purchase_status` con `closed`
+- `user_businesses` — completa, helpers RLS ya en uso
 
 Tablas a crear (Fase 0):
 - `stock_layers`, `goods_receipts(_items)`, `supplier_invoices(_lines)`, `accounts_payable`, `supplier_payments(_applications)`, `stock_transfers(_items)`, `inventory_adjustments(_items)`, `document_sequences`.
+
+Funciones ya existentes (no reescribir en Fase 0):
+- `fn_inventory_record_movement`, `fn_receive_purchase_order`, `consume_inventory_from_order`, `fn_confirm_order_to_kitchen`, `fn_sync_inventory_stock_on_movement` (trigger).
+- Helpers RLS: `user_business_role(uuid, uuid)`, `user_has_business_access(uuid, uuid)`.
 
 ### 17.2 Archivo de migración
 
