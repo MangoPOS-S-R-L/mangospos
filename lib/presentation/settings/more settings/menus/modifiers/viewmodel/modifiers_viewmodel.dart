@@ -245,6 +245,107 @@ class ModifiersViewModel extends ChangeNotifier {
     }
   }
 
+  /// Reordena globalmente los grupos del negocio. Persiste sort_order = 1..N
+  /// en modifier_groups. Aplica optimistic update para evitar el glitch de
+  /// "vuelve al lugar viejo" mientras se persiste.
+  Future<void> reorderGroups({
+    required List<String> orderedGroupIds,
+  }) async {
+    final businessId = _state.businessId;
+    if (businessId == null || businessId.isEmpty) return;
+
+    // Optimistic update: aplicar el orden nuevo en memoria antes del await
+    final byId = <String, ModifierGroupSummary>{
+      for (final g in _state.groups) g.id: g,
+    };
+    final reordered = <ModifierGroupSummary>[];
+    for (final id in orderedGroupIds) {
+      final g = byId.remove(id);
+      if (g != null) reordered.add(g);
+    }
+    // Cualquier grupo que no esté en orderedGroupIds queda al final (defensa)
+    reordered.addAll(byId.values);
+
+    _state = _state.copyWith(
+      groups: reordered,
+      saving: true,
+      clearError: true,
+    );
+    notifyListeners();
+
+    try {
+      await _repository.reorderGroupsGlobal(
+        businessId: businessId,
+        orderedGroupIds: orderedGroupIds,
+      );
+      _state = _state.copyWith(saving: false);
+      notifyListeners();
+    } catch (e) {
+      // Rollback: recargar estado real desde BD
+      try {
+        await refresh();
+      } catch (_) {}
+      _state = _state.copyWith(
+        saving: false,
+        error: 'Error reordenando grupos: $e',
+      );
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  /// Reordena los modificadores (opciones) dentro de un grupo persistiendo
+  /// `sort_order = 1..N`. Aplica optimistic update.
+  Future<void> reorderModifiers({
+    required String groupId,
+    required List<String> orderedModifierIds,
+  }) async {
+    // Optimistic update: aplicar el nuevo orden a los modificadores del grupo
+    final byId = <String, ModifierOption>{
+      for (final m in _state.modifiers) m.id: m,
+    };
+    final reorderedInGroup = <ModifierOption>[];
+    for (final id in orderedModifierIds) {
+      final m = byId.remove(id);
+      if (m != null) reorderedInGroup.add(m);
+    }
+    // Mantener intactos los modificadores que NO son del grupo actual,
+    // y agregar al final cualquiera del grupo que no haya sido ordenado.
+    final others = byId.values.toList(growable: false);
+    final newList = <ModifierOption>[
+      ...others.where((m) => m.groupId != groupId),
+      ...reorderedInGroup,
+      ...others.where((m) => m.groupId == groupId),
+    ];
+
+    _state = _state.copyWith(
+      modifiers: newList,
+      saving: true,
+      selectedGroupId: groupId,
+      clearError: true,
+    );
+    notifyListeners();
+
+    try {
+      await _repository.reorderModifiersInGroup(
+        groupId: groupId,
+        orderedModifierIds: orderedModifierIds,
+      );
+      _state = _state.copyWith(saving: false);
+      notifyListeners();
+    } catch (e) {
+      try {
+        await refresh();
+      } catch (_) {}
+      _state = _state.copyWith(
+        saving: false,
+        error: 'Error reordenando modificadores: $e',
+      );
+      notifyListeners();
+      rethrow;
+    }
+  }
+
   Future<void> replaceAssignments({
     required String groupId,
     required List<String> menuItemIds,

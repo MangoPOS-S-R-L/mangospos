@@ -65,6 +65,10 @@ class _SettingsRolesViewState extends ConsumerState<SettingsRolesView> {
       permissions: [
         _PermissionRow('ventas.mesas', 'Mesas (abrir/mover/unir)'),
         _PermissionRow('ventas.orden', 'Orden (agregar/editar/enviar)'),
+        _PermissionRow(
+          'ventas.orden.eliminar',
+          'Orden (eliminar producto de la cuenta)',
+        ),
         _PermissionRow('ventas.cuenta', 'Cuenta (split manual/equitativo)'),
       ],
     ),
@@ -361,6 +365,10 @@ class _PermissionGroupCard extends StatelessWidget {
               (p) => _PermissionRowWidget(
                 row: p,
                 actions: actions,
+                availableActions: {
+                  for (final a in actions)
+                    if ((_codeMap[p.code]?[a] ?? const []).isNotEmpty) a,
+                },
                 selected: grants[p.code] ?? const {},
                 onToggle: onToggle,
               ),
@@ -409,12 +417,14 @@ class _PermissionRowWidget extends StatelessWidget {
   const _PermissionRowWidget({
     required this.row,
     required this.actions,
+    required this.availableActions,
     required this.selected,
     required this.onToggle,
   });
 
   final _PermissionRow row;
   final List<String> actions;
+  final Set<String> availableActions;
   final Set<String> selected;
   final void Function(String code, String action, bool value) onToggle;
 
@@ -434,11 +444,16 @@ class _PermissionRowWidget extends StatelessWidget {
           ...actions.map(
             (a) => Expanded(
               child: Center(
-                child: Checkbox(
-                  value: selected.contains(a),
-                  onChanged: (v) => onToggle(row.code, a, v ?? false),
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
+                child: availableActions.contains(a)
+                    ? Checkbox(
+                        value: selected.contains(a),
+                        onChanged: (v) => onToggle(row.code, a, v ?? false),
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      )
+                    : const Text(
+                        '—',
+                        style: TextStyle(color: Color(0xFFCBD5E1)),
+                      ),
               ),
             ),
           ),
@@ -569,11 +584,13 @@ const Map<String, Map<String, List<String>>> _codeMap = {
     'graba/mod': [
       'ventas.orden.agregar_item',
       'ventas.orden.editar_item',
-      'ventas.orden.eliminar_item',
       'ventas.orden.enviar_cocina',
       'ventas.orden.descuento_aplicar'
     ],
     'anula': ['ventas.orden.anular', 'ventas.orden.reabrir'],
+  },
+  'ventas.orden.eliminar': {
+    'graba/mod': ['ventas.orden.eliminar_item'],
   },
   'ventas.cuenta': {
     'acceso': ['ventas.cuenta.split_manual', 'ventas.cuenta.split_equiv'],

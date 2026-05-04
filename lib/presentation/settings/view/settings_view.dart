@@ -353,6 +353,13 @@ class SettingsView extends ConsumerWidget {
         title: 'Almacenes e Inventario',
         items: const [
           _SettingsOption(
+            title: 'Inventario',
+            subtitle: 'Insumos, recetas, almacenes y proveedores',
+            icon: Icons.inventory_2_rounded,
+            color: Color(0xFFFFE6D5),
+            route: AppRoutes.inventoryHome,
+          ),
+          _SettingsOption(
             title: 'Kardex por Sucursal',
             subtitle: 'Historial de movimientos por ubicación',
             icon: Icons.list_rounded,

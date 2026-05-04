@@ -21,6 +21,7 @@ class ProductDetailModal extends StatefulWidget {
   )?
   onSaveBatch;
   final Future<void> Function(String reason) onDelete;
+  final Future<bool> Function()? onBeforeDelete;
   final Future<void> Function()? onMarkSoldOut;
   final VoidCallback? onReprint;
 
@@ -33,6 +34,7 @@ class ProductDetailModal extends StatefulWidget {
     required this.onSave,
     this.onSaveBatch,
     required this.onDelete,
+    this.onBeforeDelete,
     this.onMarkSoldOut,
     this.onReprint,
   });
@@ -115,6 +117,12 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
   }
 
   Future<void> _handleDelete() async {
+    if (widget.onBeforeDelete != null) {
+      final allowed = await widget.onBeforeDelete!();
+      if (!allowed) return;
+      if (!mounted) return;
+    }
+
     final reasonController = TextEditingController();
 
     final reason = await showDialog<String>(

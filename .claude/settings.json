@@ -51,7 +51,10 @@
       "Bash(npm install *)",
       "Bash(node -e \"const db = require\\('better-sqlite3'\\)\\(':memory:'\\); db.exec\\('create table t\\(x int\\)'\\); db.prepare\\('insert into t values \\(?\\)'\\).run\\(42\\); console.log\\('OK', db.prepare\\('select x from t'\\).get\\(\\)\\);\")",
       "Bash(psql --version)",
-      "Bash(awk 'BEGIN{b=0} /begin;/{b++} /commit;/{c++} END{print \"begin:\", b, \"commit:\", c}' /Users/cristiangomez/dev/mangospos/supabase/PRD09/001_phase0_schema.sql)"
+      "Bash(awk 'BEGIN{b=0} /begin;/{b++} /commit;/{c++} END{print \"begin:\", b, \"commit:\", c}' /Users/cristiangomez/dev/mangospos/supabase/PRD09/001_phase0_schema.sql)",
+      "Bash(git fetch *)",
+      "Bash(git rev-list *)",
+      "Bash(git pull *)"
     ],
     "additionalDirectories": [
       "/Users/cristiangomez"

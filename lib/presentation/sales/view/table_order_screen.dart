@@ -62,6 +62,25 @@ final _salesActionLocksProvider = StateProvider<Map<String, int>>(
 /// pasar `failsafeTimeout` mayor en `_runLockedAction`.
 const Duration _kLockMaxAge = Duration(seconds: 15);
 
+Future<bool> _ensureCanDeleteOrderItem(
+  BuildContext context,
+  WidgetRef ref,
+) async {
+  final sessionCtrl = ref.read(sessionProvider.notifier);
+  if (sessionCtrl.hasPermission('ventas.orden.eliminar_item')) {
+    return true;
+  }
+  final authorized = await showPinVerificationModal(
+    context,
+    ref,
+    level: PinAccessLevel.supervisor,
+    title: 'Autorización para eliminar',
+    subtitle:
+        'Se requiere PIN de Supervisor o Administrador para eliminar este producto.',
+  );
+  return authorized;
+}
+
 const List<BoxShadow> _salesSoftShadow = [
   BoxShadow(color: Color(0x10000000), blurRadius: 6, offset: Offset(0, 2)),
 ];
@@ -1314,6 +1333,11 @@ class _CartView extends ConsumerWidget {
           final targetTotalQty = updatedItem.quantity <= 0
               ? 1.0
               : updatedItem.quantity;
+          if (targetTotalQty < originalTotalQty) {
+            if (!await _ensureCanDeleteOrderItem(context, ref)) {
+              return;
+            }
+          }
           var qtyToDistribute = targetTotalQty;
 
           for (var index = 0; index < items.length; index++) {
@@ -1375,6 +1399,7 @@ class _CartView extends ConsumerWidget {
               .read(currentOrderProvider.notifier)
               .deleteItem(item.id, reason: reason);
         },
+        onBeforeDelete: () => _ensureCanDeleteOrderItem(context, ref),
         onMarkSoldOut: item.productId == null
             ? null
             : () async {
@@ -1551,11 +1576,16 @@ class _CartView extends ConsumerWidget {
 
     final currency = NumberFormat('#,##0.00', 'en_US');
 
-    // Group items for display
-    final sentItems = displayedItems.where((i) => i.status != 'draft').toList();
-    final draftItems = displayedItems
+    // Group items for display.
+    // El orden se invierte para que los productos agregados más recientemente
+    // aparezcan ARRIBA. Items agrupados (mismo nombre/takeout) toman el orden
+    // del más reciente porque la iteración entra primero.
+    final sentItems = displayedItems.reversed
+        .where((i) => i.status != 'draft')
+        .toList(growable: false);
+    final draftItems = displayedItems.reversed
         .where((i) => i.status == 'draft')
-        .toList();
+        .toList(growable: false);
     final itemsCount = _sumItemQty(
       displayedItems,
     ); // Cantidad real, no cantidad de líneas
@@ -1583,7 +1613,17 @@ class _CartView extends ConsumerWidget {
       }
     }
     final groupedSentItems = groupedSent.values.toList();
-    final latestVoidAudit = _extractLatestVoidAudit(orderState.sessionNote);
+    // Solo mostrar el panel "Última anulación" si la orden actual está
+    // anulada/cerrada. Si la orden actual es nueva pero la sesión tiene
+    // historial de anulación, no aplica al momento actual.
+    final currentOrder = orderState.order;
+    final isCurrentOrderVoided = currentOrder != null &&
+        (currentOrder.status == 'void' ||
+            currentOrder.status == 'cancelled' ||
+            currentOrder.closedAt != null);
+    final latestVoidAudit = isCurrentOrderVoided
+        ? _extractLatestVoidAudit(orderState.sessionNote)
+        : null;
     final currentOrderId = orderState.order?.id;
     final sendKitchenLockKey = _sendKitchenActionKey(currentOrderId);
     final precheckLockKey = _printActionKey(
@@ -2117,8 +2157,14 @@ class _CartView extends ConsumerWidget {
                           isDraft: true,
                           onTap: () =>
                               _openProductDetailModal(context, ref, item),
-                          onDelete: () {
-                            ref
+                          onDelete: () async {
+                            if (!await _ensureCanDeleteOrderItem(
+                              context,
+                              ref,
+                            )) {
+                              return;
+                            }
+                            await ref
                                 .read(currentOrderProvider.notifier)
                                 .deleteItem(item.id);
                           },
@@ -5542,8 +5588,10 @@ class _ProductAvatar extends StatelessWidget {
         shape: BoxShape.circle,
         image: imageUrl != null
             ? DecorationImage(
-                image: CachedNetworkImageProvider(imageUrl!.replaceAll('sqdwjjewdqzxglvqerqt.supabase.co', 'supabase.mangopos.do')), 
-                fit: BoxFit.cover)
+                image: CachedNetworkImageProvider(imageUrl!.replaceAll('sqdwjjewdqzxglvqerqt.supabase.co', 'supabase.mangopos.do')),
+                fit: BoxFit.cover,
+                onError: (_, _) {},
+              )
             : null,
       ),
       child: imageUrl == null

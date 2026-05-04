@@ -228,6 +228,24 @@ class CashierRepository {
     return CashRegisterSession.fromMap(data);
   }
 
+  /// Busca la sesión abierta de un cash_register, sin filtrar por user.
+  /// Permite que cualquier empleado del local sepa si la caja del register
+  /// está operativa para vender. El cierre sigue restringido al dueño.
+  Future<CashRegisterSession?> getActiveSessionForRegister(
+    String cashRegisterId,
+  ) async {
+    final data = await _client
+        .from('cash_register_sessions')
+        .select()
+        .eq('cash_register_id', cashRegisterId)
+        .eq('status', 'open')
+        .isFilter('closed_at', null)
+        .maybeSingle();
+
+    if (data == null) return null;
+    return CashRegisterSession.fromMap(data);
+  }
+
   Future<List<CashRegisterSession>> getSessionsByRegister(
     String cashRegisterId, {
     int limit = 20,
