@@ -1576,11 +1576,16 @@ class _CartView extends ConsumerWidget {
 
     final currency = NumberFormat('#,##0.00', 'en_US');
 
-    // Group items for display
-    final sentItems = displayedItems.where((i) => i.status != 'draft').toList();
-    final draftItems = displayedItems
+    // Group items for display.
+    // El orden se invierte para que los productos agregados más recientemente
+    // aparezcan ARRIBA. Items agrupados (mismo nombre/takeout) toman el orden
+    // del más reciente porque la iteración entra primero.
+    final sentItems = displayedItems.reversed
+        .where((i) => i.status != 'draft')
+        .toList(growable: false);
+    final draftItems = displayedItems.reversed
         .where((i) => i.status == 'draft')
-        .toList();
+        .toList(growable: false);
     final itemsCount = _sumItemQty(
       displayedItems,
     ); // Cantidad real, no cantidad de líneas
