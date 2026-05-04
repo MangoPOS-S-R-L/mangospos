@@ -1,22 +1,43 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/security/access_control_catalog.dart';
 import 'package:mangopos/data/repositories/employee_repository.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
+import 'package:mangopos/services/session/session_controller.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-class SettingsUsersView extends StatefulWidget {
+const _roleHierarchy = <String, int>{
+  'owner': 4,
+  'admin': 3,
+  'manager': 2,
+  'cashier': 1,
+  'waiter': 1,
+  'cook': 1,
+  'chef': 1,
+  'delivery': 1,
+};
+
+bool _canAssignRole(String callerRole, String targetRole) {
+  final caller = callerRole.toLowerCase();
+  if (caller == 'owner') return true;
+  final callerRank = _roleHierarchy[caller] ?? 0;
+  final targetRank = _roleHierarchy[targetRole.toLowerCase()] ?? 0;
+  return targetRank < callerRank;
+}
+
+class SettingsUsersView extends ConsumerStatefulWidget {
   final String businessId;
   const SettingsUsersView({super.key, required this.businessId});
 
   @override
-  State<SettingsUsersView> createState() => _SettingsUsersViewState();
+  ConsumerState<SettingsUsersView> createState() => _SettingsUsersViewState();
 }
 
-class _SettingsUsersViewState extends State<SettingsUsersView> {
+class _SettingsUsersViewState extends ConsumerState<SettingsUsersView> {
   final _search = TextEditingController();
   String _filterStatus = 'Todos';
   String _filterRole = 'Todos los roles';
@@ -237,6 +258,19 @@ class _SettingsUsersViewState extends State<SettingsUsersView> {
   }
 
   Future<void> _openUserDialog(BuildContext context, {Employee? user}) async {
+    final session = ref.read(sessionProvider);
+    final activeBusinessId = _businessId ?? widget.businessId;
+    final callerRole = session.availableBusinesses
+        .firstWhere(
+          (b) => b.id == activeBusinessId,
+          orElse: () => const SessionBusiness(
+            id: '',
+            name: '',
+            role: '',
+          ),
+        )
+        .role
+        .toLowerCase();
     final result = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -245,6 +279,7 @@ class _SettingsUsersViewState extends State<SettingsUsersView> {
         businessId: _businessId ?? widget.businessId,
         repo: _repo,
         availableRoles: _availableRoles,
+        callerBusinessRole: callerRole,
       ),
     );
     if (result == true) {
@@ -899,11 +934,13 @@ class _UserDialog extends StatefulWidget {
     required this.businessId,
     required this.repo,
     required this.availableRoles,
+    required this.callerBusinessRole,
   });
   final Employee? user;
   final String businessId;
   final EmployeeRepository repo;
   final List<Map<String, dynamic>> availableRoles;
+  final String callerBusinessRole;
 
   @override
   State<_UserDialog> createState() => _UserDialogState();
@@ -1082,19 +1119,21 @@ class _UserDialogState extends State<_UserDialog> {
   }
 
   List<Map<String, dynamic>> get _systemRoles {
+    const systemRoleNames = {
+      'owner',
+      'admin',
+      'manager',
+      'cashier',
+      'waiter',
+      'cook',
+      'delivery',
+      'chef',
+    };
     return widget.availableRoles
         .where((role) {
-          final name = role['name']?.toString();
-          return {
-            'owner',
-            'admin',
-            'manager',
-            'cashier',
-            'waiter',
-            'cook',
-            'delivery',
-            'chef',
-          }.contains((name ?? '').toLowerCase());
+          final name = (role['name']?.toString() ?? '').toLowerCase();
+          if (!systemRoleNames.contains(name)) return false;
+          return _canAssignRole(widget.callerBusinessRole, name);
         })
         .toList(growable: false);
   }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/presentation/customers/viewmodel/customers_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
+import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
@@ -47,6 +48,21 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
       return normalized.toStringAsFixed(0);
     }
     return normalized.toStringAsFixed(2);
+  }
+
+  Future<bool> _ensureCanDeleteItem() async {
+    final sessionCtrl = ref.read(sessionProvider.notifier);
+    if (sessionCtrl.hasPermission('ventas.orden.eliminar_item')) {
+      return true;
+    }
+    return showPinVerificationModal(
+      context,
+      ref,
+      level: PinAccessLevel.supervisor,
+      title: 'Autorización para eliminar',
+      subtitle:
+          'Se requiere PIN de Supervisor o Administrador para eliminar productos de la cuenta.',
+    );
   }
 
   double _linePrice(Order? order, OrderItem item) {
@@ -904,8 +920,14 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                                 : () => viewModel.clearCustomerFromCheck(
                                     check.id,
                                   ),
-                            onDelete: () => viewModel.deleteCheck(check.id),
-                            onRemoveItem: viewModel.unassignItem,
+                            onDelete: () async {
+                              if (!await _ensureCanDeleteItem()) return;
+                              await viewModel.deleteCheck(check.id);
+                            },
+                            onRemoveItem: (itemId) async {
+                              if (!await _ensureCanDeleteItem()) return;
+                              await viewModel.unassignItem(itemId);
+                            },
                             onPrintPrecheck: () => _printCheckPrecheck(
                               context,
                               ref,

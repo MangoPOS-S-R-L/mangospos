@@ -607,6 +607,7 @@ class _ProductsTable extends StatelessWidget {
                                     ? DecorationImage(
                                         image: CachedNetworkImageProvider(imageUrl.replaceAll('sqdwjjewdqzxglvqerqt.supabase.co', 'supabase.mangopos.do')),
                                         fit: BoxFit.cover,
+                                        onError: (_, _) {},
                                       )
                                     : null,
                               ),

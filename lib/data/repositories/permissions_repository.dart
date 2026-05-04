@@ -53,6 +53,7 @@ class PermissionsRepository {
         .map(
           (p) => {
             'user_id': userId,
+            'employee_id': employeeId,
             'permission_id': p['id'],
             'business_id': businessId,
             'allow': true,

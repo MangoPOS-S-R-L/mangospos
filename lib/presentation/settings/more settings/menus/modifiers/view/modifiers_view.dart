@@ -110,6 +110,9 @@ class _ModifiersViewState extends ConsumerState<ModifiersView> {
                             onDelete: selectedGroup == null
                                 ? null
                                 : () => _confirmDeleteGroup(selectedGroup),
+                            onReorder: (orderedIds) => ref
+                                .read(modifiersViewModelProvider)
+                                .reorderGroups(orderedGroupIds: orderedIds),
                           ),
                           const SizedBox(height: 16),
                           _ModifiersPanel(
@@ -121,6 +124,14 @@ class _ModifiersViewState extends ConsumerState<ModifiersView> {
                                 : () => _openCreateModifierDialog(selectedGroup),
                             onEdit: _openEditModifierDialog,
                             onDelete: _confirmDeleteModifier,
+                            onReorder: selectedGroup == null
+                                ? null
+                                : (orderedIds) => ref
+                                      .read(modifiersViewModelProvider)
+                                      .reorderModifiers(
+                                        groupId: selectedGroup.id,
+                                        orderedModifierIds: orderedIds,
+                                      ),
                           ),
                           const SizedBox(height: 16),
                           _AssignmentsPanel(
@@ -151,6 +162,9 @@ class _ModifiersViewState extends ConsumerState<ModifiersView> {
                             onDelete: selectedGroup == null
                                 ? null
                                 : () => _confirmDeleteGroup(selectedGroup),
+                            onReorder: (orderedIds) => ref
+                                .read(modifiersViewModelProvider)
+                                .reorderGroups(orderedGroupIds: orderedIds),
                           ),
                         ),
                         const SizedBox(width: 16),
@@ -164,6 +178,14 @@ class _ModifiersViewState extends ConsumerState<ModifiersView> {
                                 : () => _openCreateModifierDialog(selectedGroup),
                             onEdit: _openEditModifierDialog,
                             onDelete: _confirmDeleteModifier,
+                            onReorder: selectedGroup == null
+                                ? null
+                                : (orderedIds) => ref
+                                      .read(modifiersViewModelProvider)
+                                      .reorderModifiers(
+                                        groupId: selectedGroup.id,
+                                        orderedModifierIds: orderedIds,
+                                      ),
                           ),
                         ),
                         const SizedBox(width: 16),
@@ -556,12 +578,14 @@ class _GroupsPanel extends StatelessWidget {
   final ValueChanged<String> onSelect;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
+  final ValueChanged<List<String>>? onReorder;
 
   const _GroupsPanel({
     required this.state,
     required this.onSelect,
     required this.onEdit,
     required this.onDelete,
+    this.onReorder,
   });
 
   @override
@@ -576,27 +600,57 @@ class _GroupsPanel extends StatelessWidget {
       ),
       child: state.groups.isEmpty
           ? const _EmptyPanelState(message: 'No hay grupos creados todavía.')
-          : Column(
-              children: state.groups
-                  .map(
-                    (group) => Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: _SelectableCard(
-                        selected: state.selectedGroup?.id == group.id,
-                        onTap: () => onSelect(group.id),
-                        title: group.name,
-                        subtitle:
-                            'Selección mínima ${group.minSelect} · máxima ${group.maxSelect}',
-                        trailing: _StatusBadge(
-                          label: group.isActive ? 'Activo' : 'Inactivo',
-                          color: group.isActive
-                              ? MangoTokens.success
-                              : MangoTokens.warning,
+          : ReorderableListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              buildDefaultDragHandles: false,
+              itemCount: state.groups.length,
+              onReorder: (oldIndex, newIndex) {
+                if (onReorder == null) return;
+                if (newIndex > oldIndex) newIndex -= 1;
+                final reordered = List<ModifierGroupSummary>.from(state.groups);
+                final item = reordered.removeAt(oldIndex);
+                reordered.insert(newIndex, item);
+                onReorder!(
+                  reordered.map((g) => g.id).toList(growable: false),
+                );
+              },
+              itemBuilder: (context, index) {
+                final group = state.groups[index];
+                return Padding(
+                  key: ValueKey(group.id),
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Row(
+                    children: [
+                      ReorderableDragStartListener(
+                        index: index,
+                        child: Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: Icon(
+                            Icons.drag_indicator,
+                            color: MangoTokens.mutedForeground,
+                          ),
                         ),
                       ),
-                    ),
-                  )
-                  .toList(growable: false),
+                      Expanded(
+                        child: _SelectableCard(
+                          selected: state.selectedGroup?.id == group.id,
+                          onTap: () => onSelect(group.id),
+                          title: group.name,
+                          subtitle:
+                              'Selección mínima ${group.minSelect} · máxima ${group.maxSelect}',
+                          trailing: _StatusBadge(
+                            label: group.isActive ? 'Activo' : 'Inactivo',
+                            color: group.isActive
+                                ? MangoTokens.success
+                                : MangoTokens.warning,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
             ),
     );
   }
@@ -609,6 +663,7 @@ class _ModifiersPanel extends StatelessWidget {
   final VoidCallback? onAdd;
   final ValueChanged<ModifierOption> onEdit;
   final ValueChanged<ModifierOption> onDelete;
+  final ValueChanged<List<String>>? onReorder;
 
   const _ModifiersPanel({
     required this.selectedGroup,
@@ -617,6 +672,7 @@ class _ModifiersPanel extends StatelessWidget {
     required this.onAdd,
     required this.onEdit,
     required this.onDelete,
+    this.onReorder,
   });
 
   @override
@@ -638,76 +694,103 @@ class _ModifiersPanel extends StatelessWidget {
           ? const _EmptyPanelState(
               message: 'Este grupo todavía no tiene modificadores.',
             )
-          : Column(
-              children: modifiers
-                  .map(
-                    (modifier) => Container(
-                      margin: const EdgeInsets.only(bottom: 10),
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: MangoTokens.secondary,
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: MangoTokens.border),
+          : ReorderableListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              buildDefaultDragHandles: false,
+              itemCount: modifiers.length,
+              onReorder: (oldIndex, newIndex) {
+                if (onReorder == null) return;
+                if (newIndex > oldIndex) newIndex -= 1;
+                final reordered = List<ModifierOption>.from(modifiers);
+                final item = reordered.removeAt(oldIndex);
+                reordered.insert(newIndex, item);
+                onReorder!(
+                  reordered.map((m) => m.id).toList(growable: false),
+                );
+              },
+              itemBuilder: (context, index) {
+                final modifier = modifiers[index];
+                return Container(
+                  key: ValueKey(modifier.id),
+                  margin: const EdgeInsets.only(bottom: 10),
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: MangoTokens.secondary,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: MangoTokens.border),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ReorderableDragStartListener(
+                        index: index,
+                        child: Padding(
+                          padding: const EdgeInsets.only(
+                            right: 8,
+                            top: 2,
+                          ),
+                          child: Icon(
+                            Icons.drag_indicator,
+                            color: MangoTokens.mutedForeground,
+                          ),
+                        ),
                       ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              modifier.name,
+                              style: MangoTokens.body().copyWith(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Row(
                               children: [
+                                _StatusBadge(
+                                  label: modifier.isActive
+                                      ? 'Activo'
+                                      : 'Inactivo',
+                                  color: modifier.isActive
+                                      ? MangoTokens.success
+                                      : MangoTokens.warning,
+                                ),
+                                const SizedBox(width: 8),
                                 Text(
-                                  modifier.name,
+                                  currency.format(modifier.priceDelta),
                                   style: MangoTokens.body().copyWith(
-                                    fontSize: 15,
+                                    color: MangoTokens.primary,
                                     fontWeight: FontWeight.w700,
                                   ),
                                 ),
-                                const SizedBox(height: 6),
-                                Row(
-                                  children: [
-                                    _StatusBadge(
-                                      label: modifier.isActive
-                                          ? 'Activo'
-                                          : 'Inactivo',
-                                      color: modifier.isActive
-                                          ? MangoTokens.success
-                                          : MangoTokens.warning,
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Text(
-                                      currency.format(modifier.priceDelta),
-                                      style: MangoTokens.body().copyWith(
-                                        color: MangoTokens.primary,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                  ],
-                                ),
                               ],
                             ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            tooltip: 'Editar modificador',
+                            onPressed: () => onEdit(modifier),
+                            icon: const Icon(Icons.edit_outlined),
                           ),
-                          const SizedBox(width: 12),
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                tooltip: 'Editar modificador',
-                                onPressed: () => onEdit(modifier),
-                                icon: const Icon(Icons.edit_outlined),
-                              ),
-                              IconButton(
-                                tooltip: 'Eliminar modificador',
-                                onPressed: () => onDelete(modifier),
-                                icon: const Icon(Icons.delete_outline),
-                              ),
-                            ],
+                          IconButton(
+                            tooltip: 'Eliminar modificador',
+                            onPressed: () => onDelete(modifier),
+                            icon: const Icon(Icons.delete_outline),
                           ),
                         ],
                       ),
-                    ),
-                  )
-                  .toList(growable: false),
+                    ],
+                  ),
+                );
+              },
             ),
     );
   }
