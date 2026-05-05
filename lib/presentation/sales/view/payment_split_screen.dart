@@ -223,18 +223,24 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
       child: MangoModal.wrap(
         context: context,
         type: MangoModalType.form,
-        child: Container(
-          decoration: BoxDecoration(
-            color: _kSurface,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x22000000),
-                blurRadius: 20,
-                offset: Offset(0, 12),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: isMobile ? double.infinity : 880,
+              maxHeight: isMobile ? double.infinity : 640,
+            ),
+            child: Container(
+              decoration: BoxDecoration(
+                color: _kSurface,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x22000000),
+                    blurRadius: 20,
+                    offset: Offset(0, 12),
+                  ),
+                ],
               ),
-            ],
-          ),
           child: Column(
             children: [
               _buildHeader(context),
@@ -290,6 +296,8 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
                   isDanger: state.error != null,
                 ),
             ],
+          ),
+            ),
           ),
         ),
       ),
