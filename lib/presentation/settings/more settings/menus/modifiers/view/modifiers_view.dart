@@ -624,11 +624,15 @@ class _GroupsPanel extends StatelessWidget {
                     children: [
                       ReorderableDragStartListener(
                         index: index,
-                        child: Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: Icon(
-                            Icons.drag_indicator,
-                            color: MangoTokens.mutedForeground,
+                        child: MouseRegion(
+                          cursor: SystemMouseCursors.grab,
+                          child: Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: Icon(
+                              Icons.drag_indicator,
+                              color: const Color(0xFF6B7280),
+                              size: 22,
+                            ),
                           ),
                         ),
                       ),
@@ -725,14 +729,18 @@ class _ModifiersPanel extends StatelessWidget {
                     children: [
                       ReorderableDragStartListener(
                         index: index,
-                        child: Padding(
-                          padding: const EdgeInsets.only(
-                            right: 8,
-                            top: 2,
-                          ),
-                          child: Icon(
-                            Icons.drag_indicator,
-                            color: MangoTokens.mutedForeground,
+                        child: MouseRegion(
+                          cursor: SystemMouseCursors.grab,
+                          child: Padding(
+                            padding: const EdgeInsets.only(
+                              right: 8,
+                              top: 2,
+                            ),
+                            child: Icon(
+                              Icons.drag_indicator,
+                              color: const Color(0xFF6B7280),
+                              size: 22,
+                            ),
                           ),
                         ),
                       ),

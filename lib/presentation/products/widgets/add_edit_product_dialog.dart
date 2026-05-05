@@ -763,9 +763,13 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
                       : null,
                   trailing: ReorderableDragStartListener(
                     index: index,
-                    child: Icon(
-                      Icons.drag_indicator,
-                      color: AppColors.mutedForeground,
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.grab,
+                      child: Icon(
+                        Icons.drag_indicator,
+                        color: const Color(0xFF6B7280),
+                        size: 22,
+                      ),
                     ),
                   ),
                 );
