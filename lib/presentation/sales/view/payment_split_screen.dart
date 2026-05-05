@@ -1150,12 +1150,12 @@ class _MethodCard extends StatelessWidget {
   }
 }
 
-class _QuickAmountChip extends StatelessWidget {
+class _QuickAmountChip extends StatefulWidget {
   final String label;
   final VoidCallback onTap;
 
   /// PRD 6 § 4.7 — chip "Exacto" se distingue visualmente del resto:
-  /// fill con primary color y texto blanco. No solo color, también peso.
+  /// fill con primary color y texto blanco.
   final bool primary;
 
   const _QuickAmountChip({
@@ -1165,30 +1165,58 @@ class _QuickAmountChip extends StatelessWidget {
   });
 
   @override
+  State<_QuickAmountChip> createState() => _QuickAmountChipState();
+}
+
+class _QuickAmountChipState extends State<_QuickAmountChip> {
+  bool _hovering = false;
+  bool _tapping = false;
+
+  @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(20),
-        child: Container(
-          // PRD 6 § 4.5 — touch target ≥44 px.
+    final pressed = _tapping;
+    final Color bg;
+    final Color fg;
+    if (widget.primary) {
+      bg = pressed
+          ? const Color(0xFFE56710)
+          : (_hovering ? const Color(0xFFFB8429) : _kPrimary);
+      fg = Colors.white;
+    } else {
+      bg = pressed
+          ? _kPrimaryTint
+          : (_hovering ? const Color(0xFFEDEEF1) : const Color(0xFFF6F7F9));
+      fg = pressed ? _kPrimary : Colors.black87;
+    }
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovering = true),
+      onExit: (_) => setState(() => _hovering = false),
+      child: GestureDetector(
+        onTapDown: (_) => setState(() => _tapping = true),
+        onTapUp: (_) => setState(() => _tapping = false),
+        onTapCancel: () => setState(() => _tapping = false),
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 90),
+          curve: Curves.easeOut,
           constraints: const BoxConstraints(minHeight: 40),
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
           decoration: BoxDecoration(
-            color: primary ? _kPrimary : const Color(0xFFF6F7F9),
-            borderRadius: BorderRadius.circular(20),
+            color: bg,
+            borderRadius: BorderRadius.circular(10),
           ),
           alignment: Alignment.center,
           child: Text(
-            label,
+            widget.label,
             maxLines: 1,
             overflow: TextOverflow.visible,
             softWrap: false,
             style: TextStyle(
               fontWeight: FontWeight.w700,
               fontSize: 13,
-              color: primary ? Colors.white : Colors.black87,
+              color: fg,
             ),
           ),
         ),
