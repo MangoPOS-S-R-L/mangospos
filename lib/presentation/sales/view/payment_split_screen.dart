@@ -422,19 +422,19 @@ class _LeftPanel extends StatelessWidget {
         // Una fila de 5 chips (Exacto + 4 billetes) que se distribuyen
         // proporcionalmente al ancho disponible. Exacto recibe flex 2 para
         // destacarse (es la acción más usada en cobros que cuadran).
-        if (state.remaining > 0) ...[
-          SizedBox(
-            width: double.infinity,
-            child: _QuickAmountChip(
-              label: 'Monto Exacto',
-              primary: true,
-              onTap: () => vm.setExactAmount(),
-            ),
-          ),
-          const SizedBox(height: 6),
-        ],
         Row(
           children: [
+            if (state.remaining > 0) ...[
+              Expanded(
+                flex: 3,
+                child: _QuickAmountChip(
+                  label: 'Monto Exacto',
+                  primary: true,
+                  onTap: () => vm.setExactAmount(),
+                ),
+              ),
+              const SizedBox(width: 6),
+            ],
             for (final amount in const [100, 200, 500, 1000, 2000]) ...[
               Expanded(
                 child: _QuickAmountChip(
@@ -1173,19 +1173,21 @@ class _QuickAmountChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
         child: Container(
           // PRD 6 § 4.5 — touch target ≥44 px.
-          constraints: const BoxConstraints(minHeight: 44),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          constraints: const BoxConstraints(minHeight: 40),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
           decoration: BoxDecoration(
-            color: primary ? _kPrimary : Colors.transparent,
-            border: Border.all(color: primary ? _kPrimary : Colors.grey[300]!),
+            color: primary ? _kPrimary : const Color(0xFFF6F7F9),
             borderRadius: BorderRadius.circular(20),
           ),
           alignment: Alignment.center,
           child: Text(
             label,
+            maxLines: 1,
+            overflow: TextOverflow.visible,
+            softWrap: false,
             style: TextStyle(
               fontWeight: FontWeight.w700,
-              fontSize: 14,
+              fontSize: 13,
               color: primary ? Colors.white : Colors.black87,
             ),
           ),
