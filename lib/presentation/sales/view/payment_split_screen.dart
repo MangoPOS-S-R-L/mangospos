@@ -449,11 +449,16 @@ class _LeftPanel extends StatelessWidget {
         const SizedBox(height: 8),
         _InputDisplay(state: state),
         const SizedBox(height: 8),
-        SizedBox(
-          height: compact ? _resolveCompactKeypadHeight(context) : 220,
-          child: _NumericKeypad(vm: vm, pressedKey: pressedKey),
-        ),
-        const SizedBox(height: 8),
+        if (compact)
+          SizedBox(
+            height: _resolveCompactKeypadHeight(context),
+            child: _NumericKeypad(vm: vm, pressedKey: pressedKey),
+          )
+        else
+          Expanded(
+            child: _NumericKeypad(vm: vm, pressedKey: pressedKey),
+          ),
+        const SizedBox(height: 20),
         SizedBox(
           width: double.infinity,
           height: compact ? 52 : 48,
@@ -466,15 +471,7 @@ class _LeftPanel extends StatelessWidget {
       ],
     );
 
-    // En desktop el panel va dentro de un SingleChildScrollView para que
-    // si el contenido excede la altura disponible, el usuario pueda scrollear.
-    // En compact (mobile) el padre ya provee scroll, así que devolvemos
-    // el Column directo.
-    if (compact) return content;
-    return SingleChildScrollView(
-      physics: const ClampingScrollPhysics(),
-      child: content,
-    );
+    return content;
   }
 }
 
@@ -937,14 +934,14 @@ class _NumericKeypad extends StatelessWidget {
         final double aspectRatio;
         if (h.isFinite && h > 0) {
           final keyH = (h - spacing * (_rows - 1)) / _rows;
-          aspectRatio = (keyW / keyH).clamp(1.6, 3.0);
+          aspectRatio = (keyW / keyH).clamp(1.85, 3.0);
         } else {
           aspectRatio = 2.0;
         }
 
         // Tipografía e íconos: tamaños reducidos para botones más compactos.
-        final fontSize = (keyW * 0.22).clamp(18.0, 24.0);
-        final iconSize = (keyW * 0.18).clamp(16.0, 22.0);
+        final fontSize = (keyW * 0.22).clamp(16.0, 22.0);
+        final iconSize = (keyW * 0.18).clamp(15.0, 20.0);
 
         return GridView.builder(
           physics: const NeverScrollableScrollPhysics(),
