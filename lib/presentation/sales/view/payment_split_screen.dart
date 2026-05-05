@@ -385,8 +385,9 @@ class _LeftPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final canAdd = state.inputAmount > 0 && !state.isProcessing;
 
-    return Column(
+    final content = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
       children: [
         const Text(
           'Método de pago',
@@ -449,45 +450,31 @@ class _LeftPanel extends StatelessWidget {
         const SizedBox(height: 12),
         _InputDisplay(state: state),
         const SizedBox(height: 12),
-        compact
-            ? Column(
-                children: [
-                  SizedBox(
-                    height: _resolveCompactKeypadHeight(context),
-                    child: _NumericKeypad(vm: vm, pressedKey: pressedKey),
-                  ),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 52,
-                    child: _AddPaymentButton(
-                      enabled: canAdd,
-                      isLoading: state.isProcessing,
-                      onTap: vm.addTransaction,
-                    ),
-                  ),
-                ],
-              )
-            : Expanded(
-                child: Column(
-                  children: [
-                    Expanded(
-                      child: _NumericKeypad(vm: vm, pressedKey: pressedKey),
-                    ),
-                    const SizedBox(height: 12),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 56,
-                      child: _AddPaymentButton(
-                        enabled: canAdd,
-                        isLoading: state.isProcessing,
-                        onTap: vm.addTransaction,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+        SizedBox(
+          height: compact ? _resolveCompactKeypadHeight(context) : 280,
+          child: _NumericKeypad(vm: vm, pressedKey: pressedKey),
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
+          height: compact ? 52 : 56,
+          child: _AddPaymentButton(
+            enabled: canAdd,
+            isLoading: state.isProcessing,
+            onTap: vm.addTransaction,
+          ),
+        ),
       ],
+    );
+
+    // En desktop el panel va dentro de un SingleChildScrollView para que
+    // si el contenido excede la altura disponible, el usuario pueda scrollear.
+    // En compact (mobile) el padre ya provee scroll, así que devolvemos
+    // el Column directo.
+    if (compact) return content;
+    return SingleChildScrollView(
+      physics: const ClampingScrollPhysics(),
+      child: content,
     );
   }
 }
