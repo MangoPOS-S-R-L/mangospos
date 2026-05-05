@@ -258,12 +258,11 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
                         ),
                       )
                     : Padding(
-                        // Padding interno reducido para que el modal se sienta
-                        // menos vacío y el contenido respire sin desperdiciar
-                        // tantos píxeles en márgenes.
+                        // Padding interno reducido para que todo el contenido
+                        // entre sin scroll en el modal de 680px.
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 16,
+                          horizontal: 16,
+                          vertical: 10,
                         ),
                         child: Row(
                           children: [
@@ -306,7 +305,7 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
 
   Widget _buildHeader(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
         children: [
           Container(
@@ -393,7 +392,7 @@ class _LeftPanel extends StatelessWidget {
           'Método de pago',
           style: TextStyle(fontWeight: FontWeight.w700, color: Colors.black87),
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 6),
         Row(
           children: [
             _MethodCard(
@@ -402,14 +401,14 @@ class _LeftPanel extends StatelessWidget {
               isSelected: state.activeMethod == PaymentMethodType.cash,
               onTap: () => vm.setMethod(PaymentMethodType.cash),
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: 8),
             _MethodCard(
               label: 'Tarjeta',
               icon: Icons.credit_card,
               isSelected: state.activeMethod == PaymentMethodType.card,
               onTap: () => vm.setMethod(PaymentMethodType.card),
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: 8),
             _MethodCard(
               label: 'Transferencia',
               icon: Icons.qr_code_2,
@@ -418,7 +417,7 @@ class _LeftPanel extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 10),
         // PRD 6 § 4.7 — atajos de denominación ARRIBA del input.
         // Una fila de 5 chips (Exacto + 4 billetes) que se distribuyen
         // proporcionalmente al ancho disponible. Exacto recibe flex 2 para
@@ -447,17 +446,17 @@ class _LeftPanel extends StatelessWidget {
             ],
           ],
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 8),
         _InputDisplay(state: state),
-        const SizedBox(height: 12),
+        const SizedBox(height: 8),
         SizedBox(
-          height: compact ? _resolveCompactKeypadHeight(context) : 230,
+          height: compact ? _resolveCompactKeypadHeight(context) : 220,
           child: _NumericKeypad(vm: vm, pressedKey: pressedKey),
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 8),
         SizedBox(
           width: double.infinity,
-          height: compact ? 52 : 52,
+          height: compact ? 52 : 48,
           child: _AddPaymentButton(
             enabled: canAdd,
             isLoading: state.isProcessing,
