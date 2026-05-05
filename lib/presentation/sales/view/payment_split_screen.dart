@@ -227,7 +227,7 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
           child: ConstrainedBox(
             constraints: BoxConstraints(
               maxWidth: isMobile ? double.infinity : 880,
-              maxHeight: isMobile ? double.infinity : 640,
+              maxHeight: isMobile ? double.infinity : 720,
             ),
             child: Container(
               decoration: BoxDecoration(
@@ -422,19 +422,19 @@ class _LeftPanel extends StatelessWidget {
         // Una fila de 5 chips (Exacto + 4 billetes) que se distribuyen
         // proporcionalmente al ancho disponible. Exacto recibe flex 2 para
         // destacarse (es la acción más usada en cobros que cuadran).
+        if (state.remaining > 0) ...[
+          SizedBox(
+            width: double.infinity,
+            child: _QuickAmountChip(
+              label: 'Monto Exacto',
+              primary: true,
+              onTap: () => vm.setExactAmount(),
+            ),
+          ),
+          const SizedBox(height: 6),
+        ],
         Row(
           children: [
-            if (state.remaining > 0) ...[
-              Expanded(
-                flex: 2,
-                child: _QuickAmountChip(
-                  label: 'Monto Exacto',
-                  primary: true,
-                  onTap: () => vm.setExactAmount(),
-                ),
-              ),
-              const SizedBox(width: 6),
-            ],
             for (final amount in const [100, 200, 500, 1000, 2000]) ...[
               Expanded(
                 child: _QuickAmountChip(
