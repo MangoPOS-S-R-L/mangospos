@@ -13,7 +13,6 @@ const _kSurface = Colors.white;
 const _kPositive = Color(0xFF22C55E);
 const _kDanger = Color(0xFFE11D48);
 const _kBorder = Color(0xFFEEEEEE);
-const _kHover = Color(0xFFF5F5F5);
 
 class PaymentSplitDialog extends ConsumerStatefulWidget {
   final String orderId;
@@ -419,12 +418,9 @@ class _LeftPanel extends StatelessWidget {
           children: [
             if (state.remaining > 0) ...[
               Expanded(
+                flex: 2,
                 child: _QuickAmountChip(
-                  label: state.remaining
-                      .toStringAsFixed(state.remaining.truncateToDouble() ==
-                              state.remaining
-                          ? 0
-                          : 2),
+                  label: 'Monto Exacto',
                   primary: true,
                   onTap: () => vm.setExactAmount(),
                 ),
@@ -813,10 +809,10 @@ class _InputDisplay extends StatelessWidget {
         const SizedBox(height: 6),
         Container(
           width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           decoration: BoxDecoration(
             color: const Color(0xFFF6F7F9),
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(10),
             border: Border.all(color: _kBorder),
           ),
           child: Row(
@@ -831,19 +827,19 @@ class _InputDisplay extends StatelessWidget {
                       style: const TextStyle(
                         fontWeight: FontWeight.w800,
                         color: Colors.black87,
-                        letterSpacing: -1,
+                        letterSpacing: -0.5,
                       ),
                       children: [
                         const TextSpan(
                           text: 'RD\$ ',
                           style: TextStyle(
-                            fontSize: 20,
+                            fontSize: 16,
                             color: Colors.grey,
                           ),
                         ),
                         TextSpan(
                           text: input,
-                          style: const TextStyle(fontSize: 36),
+                          style: const TextStyle(fontSize: 26),
                         ),
                       ],
                     ),
@@ -851,13 +847,13 @@ class _InputDisplay extends StatelessWidget {
                 ),
               ),
               if (showChange) ...[
-                const SizedBox(width: 12),
+                const SizedBox(width: 10),
                 Text(
                   'Cambio: RD\$ ${preview.toStringAsFixed(2)}',
                   style: const TextStyle(
                     color: _kPositive,
                     fontWeight: FontWeight.w700,
-                    fontSize: 13,
+                    fontSize: 12,
                   ),
                 ),
               ],
@@ -1036,9 +1032,9 @@ class _KeypadKeyState extends State<_KeypadKey> {
     if (highlighted) {
       bg = _kPrimaryTint;
     } else if (_hovering) {
-      bg = _kHover;
+      bg = const Color(0xFFFAFAFA);
     } else {
-      bg = Colors.transparent;
+      bg = Colors.white;
     }
 
     return MouseRegion(
@@ -1055,8 +1051,20 @@ class _KeypadKeyState extends State<_KeypadKey> {
           curve: Curves.easeOut,
           decoration: BoxDecoration(
             color: bg,
-            borderRadius: BorderRadius.circular(12),
-            border: highlighted ? Border.all(color: _kPrimary, width: 1) : null,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: highlighted ? _kPrimary : _kBorder,
+              width: highlighted ? 1.2 : 1,
+            ),
+            boxShadow: _tapping
+                ? null
+                : const [
+                    BoxShadow(
+                      color: Color(0x14000000),
+                      blurRadius: 4,
+                      offset: Offset(0, 2),
+                    ),
+                  ],
           ),
           alignment: Alignment.center,
           child: widget.isBack
@@ -1069,7 +1077,7 @@ class _KeypadKeyState extends State<_KeypadKey> {
                   widget.label,
                   style: TextStyle(
                     fontSize: widget.fontSize,
-                    fontWeight: FontWeight.w400,
+                    fontWeight: FontWeight.w600,
                     color: highlighted ? _kPrimary : Colors.black87,
                   ),
                 ),
@@ -1104,26 +1112,26 @@ class _MethodCard extends StatelessWidget {
         onTap: onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
-          height: 88,
+          height: 64,
           decoration: BoxDecoration(
             color: bgColor,
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(10),
             border: Border.all(
               color: isSelected ? _kPrimary : _kBorder,
-              width: isSelected ? 2 : 1,
+              width: isSelected ? 1.5 : 1,
             ),
           ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, color: fgColor, size: 26),
-              const SizedBox(height: 8),
+              Icon(icon, color: fgColor, size: 20),
+              const SizedBox(height: 4),
               Text(
                 label,
                 style: TextStyle(
                   color: isSelected ? _kPrimary : Colors.black87,
                   fontWeight: FontWeight.w700,
-                  fontSize: 14,
+                  fontSize: 12,
                 ),
               ),
             ],
