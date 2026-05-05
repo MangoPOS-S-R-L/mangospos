@@ -54,7 +54,8 @@
       "Bash(awk 'BEGIN{b=0} /begin;/{b++} /commit;/{c++} END{print \"begin:\", b, \"commit:\", c}' /Users/cristiangomez/dev/mangospos/supabase/PRD09/001_phase0_schema.sql)",
       "Bash(git fetch *)",
       "Bash(git rev-list *)",
-      "Bash(git pull *)"
+      "Bash(git pull *)",
+      "Bash(git reset *)"
     ],
     "additionalDirectories": [
       "/Users/cristiangomez"
