@@ -326,14 +326,14 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
                     ? 'Pago - ${widget.customerName}'
                     : 'Pago - Mesa ${widget.tableName}',
                 style: const TextStyle(
-                  fontSize: 19,
+                  fontSize: 18,
                   fontWeight: FontWeight.w700,
                 ),
               ),
               Text(
                 'Total: RD\$ ${widget.totalAmount.toStringAsFixed(2)}',
                 style: const TextStyle(
-                  fontSize: 13,
+                  fontSize: 12,
                   color: Colors.grey,
                   fontWeight: FontWeight.w600,
                 ),
@@ -568,7 +568,7 @@ class _RightPanel extends StatelessWidget {
                 state.isProcessing ? 'Procesando...' : 'Confirmar pago',
                 style: const TextStyle(
                   fontWeight: FontWeight.w700,
-                  fontSize: 16,
+                  fontSize: 15,
                 ),
               ),
             ),
@@ -587,7 +587,7 @@ class _RightPanel extends StatelessWidget {
                   child: Text(
                     disabledReason,
                     style: const TextStyle(
-                      fontSize: 12,
+                      fontSize: 11,
                       fontWeight: FontWeight.w500,
                       color: Color(0xFF6B7280),
                     ),
@@ -723,7 +723,7 @@ class _MobileLayout extends StatelessWidget {
                 child: Text(
                   _RightPanel._resolveDisabledReason(state)!,
                   style: const TextStyle(
-                    fontSize: 12,
+                    fontSize: 11,
                     fontWeight: FontWeight.w500,
                     color: Color(0xFF6B7280),
                   ),
@@ -797,7 +797,7 @@ class _InputDisplay extends StatelessWidget {
           style: TextStyle(
             color: Colors.grey[600],
             fontWeight: FontWeight.w700,
-            fontSize: 11,
+            fontSize: 10,
             letterSpacing: 1.2,
           ),
         ),
@@ -828,13 +828,13 @@ class _InputDisplay extends StatelessWidget {
                         const TextSpan(
                           text: 'RD\$ ',
                           style: TextStyle(
-                            fontSize: 16,
+                            fontSize: 15,
                             color: Colors.grey,
                           ),
                         ),
                         TextSpan(
                           text: input,
-                          style: const TextStyle(fontSize: 26),
+                          style: const TextStyle(fontSize: 25),
                         ),
                       ],
                     ),
@@ -848,7 +848,7 @@ class _InputDisplay extends StatelessWidget {
                   style: const TextStyle(
                     color: _kPositive,
                     fontWeight: FontWeight.w700,
-                    fontSize: 12,
+                    fontSize: 11,
                   ),
                 ),
               ],
@@ -1126,7 +1126,7 @@ class _MethodCard extends StatelessWidget {
                 style: TextStyle(
                   color: isSelected ? _kPrimary : Colors.black87,
                   fontWeight: FontWeight.w700,
-                  fontSize: 12,
+                  fontSize: 11,
                 ),
               ),
             ],
@@ -1202,7 +1202,7 @@ class _QuickAmountChipState extends State<_QuickAmountChip> {
             softWrap: false,
             style: TextStyle(
               fontWeight: FontWeight.w700,
-              fontSize: 13,
+              fontSize: 12,
               color: fg,
             ),
           ),
@@ -1274,7 +1274,7 @@ class _TotalsCard extends StatelessWidget {
                 style: const TextStyle(
                   color: _kPositive,
                   fontWeight: FontWeight.w700,
-                  fontSize: 13,
+                  fontSize: 12,
                 ),
               ),
               Text(
@@ -1286,7 +1286,7 @@ class _TotalsCard extends StatelessWidget {
                       ? Colors.redAccent
                       : Colors.grey[700],
                   fontWeight: FontWeight.w700,
-                  fontSize: 13,
+                  fontSize: 12,
                 ),
               ),
             ],
@@ -1312,7 +1312,7 @@ class _TotalsCard extends StatelessWidget {
                     child: Text(
                       'Pago parcial. El restante deberá cobrarse con otro método.',
                       style: const TextStyle(
-                        fontSize: 12,
+                        fontSize: 11,
                         color: Color(0xFFF97316),
                         fontWeight: FontWeight.w500,
                       ),
@@ -1362,7 +1362,7 @@ class _PaymentList extends StatelessWidget {
           style: TextStyle(
             color: Colors.grey[600],
             fontWeight: FontWeight.w700,
-            fontSize: 11,
+            fontSize: 10,
             letterSpacing: 1.2,
           ),
         ),
@@ -1430,7 +1430,7 @@ class _PaymentList extends StatelessWidget {
                       tx.methodLabel,
                       style: const TextStyle(
                         fontWeight: FontWeight.w800,
-                        fontSize: 14,
+                        fontSize: 13,
                       ),
                     ),
                     const SizedBox(height: 2),
@@ -1438,7 +1438,7 @@ class _PaymentList extends StatelessWidget {
                       '${tx.timestamp.hour.toString().padLeft(2, '0')}:${tx.timestamp.minute.toString().padLeft(2, '0')}',
                       style: TextStyle(
                         color: Colors.grey[600],
-                        fontSize: 12,
+                        fontSize: 11,
                       ),
                     ),
                   ],
@@ -1449,7 +1449,7 @@ class _PaymentList extends StatelessWidget {
                 'RD\$ ${tx.amount.toStringAsFixed(2)}',
                 style: const TextStyle(
                   fontWeight: FontWeight.w800,
-                  fontSize: 14,
+                  fontSize: 13,
                 ),
               ),
               const SizedBox(width: 4),
@@ -1510,7 +1510,7 @@ class _AddPaymentButton extends StatelessWidget {
             )
           : const Text(
               'Agregar pago',
-              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
             ),
     );
   }
