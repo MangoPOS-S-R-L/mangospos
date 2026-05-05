@@ -227,7 +227,7 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
           child: ConstrainedBox(
             constraints: BoxConstraints(
               maxWidth: isMobile ? double.infinity : 880,
-              maxHeight: isMobile ? double.infinity : 720,
+              maxHeight: isMobile ? double.infinity : 680,
             ),
             child: Container(
               decoration: BoxDecoration(
@@ -944,21 +944,21 @@ class _NumericKeypad extends StatelessWidget {
 
         final keyW = (w - spacing * (_cols - 1)) / _cols;
 
-        // Aspect ratio: si conocemos la altura, llenamos el espacio
-        // exactamente; si no, usamos un valor cómodo para touch.
+        // Aspect ratio: clamp min en 1.6 para que las celdas siempre sean
+        // más anchas que altas (botones rectangulares al estilo POS).
+        // Esto evita que en columnas altas el teclado crezca tanto que
+        // la última fila desborde el modal.
         final double aspectRatio;
         if (h.isFinite && h > 0) {
           final keyH = (h - spacing * (_rows - 1)) / _rows;
-          // Clamp para evitar shapes absurdos cuando los constraints
-          // del padre son extremos (columnas muy altas o muy bajas).
-          aspectRatio = (keyW / keyH).clamp(0.9, 3.0);
+          aspectRatio = (keyW / keyH).clamp(1.6, 3.0);
         } else {
-          aspectRatio = 1.7;
+          aspectRatio = 2.0;
         }
 
-        // Tipografía e íconos también escalan con el ancho de tecla.
-        final fontSize = (keyW * 0.32).clamp(20.0, 32.0);
-        final iconSize = (keyW * 0.28).clamp(18.0, 28.0);
+        // Tipografía e íconos: tamaños reducidos para botones más compactos.
+        final fontSize = (keyW * 0.22).clamp(18.0, 24.0);
+        final iconSize = (keyW * 0.18).clamp(16.0, 22.0);
 
         return GridView.builder(
           physics: const NeverScrollableScrollPhysics(),
