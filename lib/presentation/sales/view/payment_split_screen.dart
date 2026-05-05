@@ -451,13 +451,13 @@ class _LeftPanel extends StatelessWidget {
         _InputDisplay(state: state),
         const SizedBox(height: 12),
         SizedBox(
-          height: compact ? _resolveCompactKeypadHeight(context) : 280,
+          height: compact ? _resolveCompactKeypadHeight(context) : 230,
           child: _NumericKeypad(vm: vm, pressedKey: pressedKey),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         SizedBox(
           width: double.infinity,
-          height: compact ? 52 : 56,
+          height: compact ? 52 : 52,
           child: _AddPaymentButton(
             enabled: canAdd,
             isLoading: state.isProcessing,
