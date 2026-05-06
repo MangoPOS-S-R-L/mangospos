@@ -18,12 +18,18 @@ class ZonesRepository {
   Future<List<Zone>> fetchZones(
     String businessId, {
     bool includeVirtualSalesZones = false,
+    bool includeInactive = false,
   }) async {
-    final rows = await sb
+    var query = sb
         .from('zones')
         .select('id,business_id,name,sort_index,is_active,created_at')
-        .eq('business_id', businessId)
-        .eq('is_active', true)
+        .eq('business_id', businessId);
+
+    if (!includeInactive) {
+      query = query.eq('is_active', true);
+    }
+
+    final rows = await query
         .order('sort_index', ascending: true)
         .order('name', ascending: true);
 
@@ -392,17 +398,24 @@ class ZonesRepository {
   }
 
   // ---- MESAS POR ZONA (para Ajustes → Salones y mesas) ----
-  Future<List<DiningTable>> fetchTablesByZone(String zoneId) async {
-    final rows = await sb
+  Future<List<DiningTable>> fetchTablesByZone(
+    String zoneId, {
+    bool includeInactive = false,
+  }) async {
+    var query = sb
         .from('dining_tables')
         .select(
           'id, zone_id, code, label, shape, capacity, '
           'pos_x, pos_y, width, height, rotation, '
           'state, is_active, created_at',
         )
-        .eq('zone_id', zoneId)
-        .eq('is_active', true)
-        .order('code', ascending: true);
+        .eq('zone_id', zoneId);
+
+    if (!includeInactive) {
+      query = query.eq('is_active', true);
+    }
+
+    final rows = await query.order('code', ascending: true);
 
     return (rows as List)
         .map((e) => DiningTable.fromMap(e as Map<String, dynamic>))

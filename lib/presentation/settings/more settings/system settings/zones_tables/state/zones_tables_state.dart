@@ -12,6 +12,11 @@ class ZonesTablesState {
   final bool promptPeopleCountOnOpen;
   final bool savingOpenTableConfig;
 
+  /// Cuando es `true`, el listado incluye zonas y mesas con `is_active=false`
+  /// (las que se desactivaron via soft-delete). Se usa para "papelera" /
+  /// reactivación.
+  final bool showInactive;
+
   /// Map de mesas por zona (`zoneId -> List<DiningTable>`)
   final Map<String, List<DiningTable>> tablesByZone;
 
@@ -22,6 +27,7 @@ class ZonesTablesState {
     this.zones = const [],
     this.promptPeopleCountOnOpen = false,
     this.savingOpenTableConfig = false,
+    this.showInactive = false,
     this.tablesByZone = const {},
   });
 
@@ -32,6 +38,7 @@ class ZonesTablesState {
     List<Zone>? zones,
     bool? promptPeopleCountOnOpen,
     bool? savingOpenTableConfig,
+    bool? showInactive,
     Map<String, List<DiningTable>>? tablesByZone,
   }) {
     return ZonesTablesState(
@@ -49,6 +56,7 @@ class ZonesTablesState {
           promptPeopleCountOnOpen ?? this.promptPeopleCountOnOpen,
       savingOpenTableConfig:
           savingOpenTableConfig ?? this.savingOpenTableConfig,
+      showInactive: showInactive ?? this.showInactive,
       tablesByZone: tablesByZone ?? this.tablesByZone,
     );
   }
