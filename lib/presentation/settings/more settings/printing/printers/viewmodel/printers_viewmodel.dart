@@ -367,7 +367,19 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         return true;
       }
 
-      // Para BT/otros: encola en backend (si ya lo usas)
+      if (printer.type == PrinterType.bluetooth) {
+        // BT NO pasa por el agent (Node.js no maneja BLE) ni por la queue
+        // de print_jobs (no hay consumer BT). Llamamos printEscPos directo
+        // para que el switch del repo dispatche a BluetoothPrintService,
+        // donde viven los logs detallados de discoverServices/MTU.
+        await _repo.printEscPos(
+          printer: _toPrinterConfig(printer),
+          data: _buildSampleEscPos(printer, detail: 'Conexion BT directa'),
+        );
+        return true;
+      }
+
+      // Tipos no manejados explícitamente: cae al backend job queue.
       await _repo.enqueueTestPrint(printerId);
       return true;
     } catch (e, st) {
