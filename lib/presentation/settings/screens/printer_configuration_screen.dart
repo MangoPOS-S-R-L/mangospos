@@ -1189,17 +1189,484 @@ class _AreaFormDialogState extends State<_AreaFormDialog> {
   }
 }
 
-/// 🔗 Tab de Asignaciones (simplificado)
-class _AssignmentsTab extends StatelessWidget {
+/// 🔗 Tab de Asignaciones — vincula impresoras a áreas con flags por tipo de
+/// trabajo (orders/prebills/receipts).
+class _AssignmentsTab extends StatefulWidget {
   final String businessId;
   final PrintingRepository repo;
 
   const _AssignmentsTab({required this.businessId, required this.repo});
 
   @override
+  State<_AssignmentsTab> createState() => _AssignmentsTabState();
+}
+
+class _AssignmentsTabState extends State<_AssignmentsTab> {
+  Future<_AssignmentsData>? _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  void _load() {
+    setState(() {
+      _future = _fetchData();
+    });
+  }
+
+  // Trae areas + printers + (por area) assignments en paralelo y arma el
+  // bundle que la UI consume. Recarga completa en cada cambio porque el
+  // dataset es chico (pocas areas/impresoras por negocio).
+  Future<_AssignmentsData> _fetchData() async {
+    final areas = await widget.repo.getPrintAreas(widget.businessId);
+    final printers = await widget.repo.getActivePrinters(widget.businessId);
+    final assignments = <String, List<PrintAreaPrinter>>{};
+    for (final a in areas) {
+      assignments[a.id] = await widget.repo.getAreaPrinterAssignments(a.id);
+    }
+    return _AssignmentsData(
+      areas: areas,
+      printers: printers,
+      assignments: assignments,
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return const Center(
-      child: Text('Tab de Asignaciones - Drag & Drop de impresoras a áreas'),
+    return AsyncOperationBuilder<_AssignmentsData>(
+      future: _future!,
+      builder: (context, data) {
+        if (data.areas.isEmpty) {
+          return const _EmptyState(
+            icon: Icons.link_off,
+            title: 'No hay áreas configuradas',
+            message:
+                'Crea al menos un área en la pestaña "Áreas" antes de asignar impresoras.',
+          );
+        }
+        if (data.printers.isEmpty) {
+          return const _EmptyState(
+            icon: Icons.print_disabled,
+            title: 'No hay impresoras configuradas',
+            message:
+                'Agrega al menos una impresora en la pestaña "Impresoras" antes de asignarla a un área.',
+          );
+        }
+        return ListView.builder(
+          padding: const EdgeInsets.all(16),
+          itemCount: data.areas.length,
+          itemBuilder: (context, i) {
+            final area = data.areas[i];
+            final assigned = data.assignments[area.id] ?? const [];
+            return _AreaAssignmentTile(
+              area: area,
+              allPrinters: data.printers,
+              assignments: assigned,
+              onChanged: _load,
+              repo: widget.repo,
+              businessId: widget.businessId,
+            );
+          },
+        );
+      },
+      onRetry: _load,
+    );
+  }
+}
+
+class _AssignmentsData {
+  final List<PrintArea> areas;
+  final List<PrinterConfig> printers;
+  final Map<String, List<PrintAreaPrinter>> assignments;
+
+  _AssignmentsData({
+    required this.areas,
+    required this.printers,
+    required this.assignments,
+  });
+}
+
+class _EmptyState extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String message;
+
+  const _EmptyState({
+    required this.icon,
+    required this.title,
+    required this.message,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 64, color: Colors.grey),
+            const SizedBox(height: 16),
+            Text(
+              title,
+              style: const TextStyle(fontSize: 16, color: Colors.grey),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              message,
+              style: const TextStyle(fontSize: 13, color: Colors.grey),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AreaAssignmentTile extends StatelessWidget {
+  final PrintArea area;
+  final List<PrinterConfig> allPrinters;
+  final List<PrintAreaPrinter> assignments;
+  final VoidCallback onChanged;
+  final PrintingRepository repo;
+  final String businessId;
+
+  const _AreaAssignmentTile({
+    required this.area,
+    required this.allPrinters,
+    required this.assignments,
+    required this.onChanged,
+    required this.repo,
+    required this.businessId,
+  });
+
+  PrinterConfig? _printerById(String id) {
+    for (final p in allPrinters) {
+      if (p.id == id) return p;
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final assignedIds = assignments.map((a) => a.printerId).toSet();
+    final unassigned =
+        allPrinters.where((p) => !assignedIds.contains(p.id)).toList();
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: ExpansionTile(
+        leading: const Icon(Icons.category, color: Color(0xFFF97316)),
+        title: Text(
+          area.name,
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        subtitle: Text(
+          assignments.isEmpty
+              ? 'Sin impresoras asignadas'
+              : '${assignments.length} impresora(s) asignadas',
+          style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+        ),
+        childrenPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        children: [
+          ...assignments.map((a) {
+            final printer = _printerById(a.printerId);
+            if (printer == null) return const SizedBox.shrink();
+            return _AssignmentRow(
+              printer: printer,
+              assignment: a,
+              area: area,
+              repo: repo,
+              businessId: businessId,
+              onChanged: onChanged,
+            );
+          }),
+          if (unassigned.isNotEmpty) ...[
+            const Divider(height: 24),
+            _AddAssignmentRow(
+              area: area,
+              candidates: unassigned,
+              repo: repo,
+              businessId: businessId,
+              onAdded: onChanged,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _AssignmentRow extends StatefulWidget {
+  final PrinterConfig printer;
+  final PrintAreaPrinter assignment;
+  final PrintArea area;
+  final PrintingRepository repo;
+  final String businessId;
+  final VoidCallback onChanged;
+
+  const _AssignmentRow({
+    required this.printer,
+    required this.assignment,
+    required this.area,
+    required this.repo,
+    required this.businessId,
+    required this.onChanged,
+  });
+
+  @override
+  State<_AssignmentRow> createState() => _AssignmentRowState();
+}
+
+class _AssignmentRowState extends State<_AssignmentRow> {
+  bool _busy = false;
+
+  Future<void> _saveFlags({
+    required bool printsOrders,
+    required bool printsPrebills,
+    required bool printsReceipts,
+  }) async {
+    // Si los 3 flags quedan en false, eliminamos la asignación: una row sin
+    // tipo de trabajo es ruido en DB y no aporta informacion al routing.
+    if (!printsOrders && !printsPrebills && !printsReceipts) {
+      await _remove(silent: true);
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      await widget.repo.linkAreaToPrinter(
+        businessId: widget.businessId,
+        areaId: widget.area.id,
+        printerId: widget.printer.id,
+        printsOrders: printsOrders,
+        printsPrebills: printsPrebills,
+        printsReceipts: printsReceipts,
+        priority: widget.assignment.priority,
+      );
+      widget.onChanged();
+    } catch (e) {
+      if (mounted) ErrorSnackBar.show(context, e);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _remove({bool silent = false}) async {
+    if (!silent) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Quitar asignación'),
+          content: Text(
+            '¿Quitar "${widget.printer.name}" del área "${widget.area.name}"?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancelar'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: TextButton.styleFrom(foregroundColor: Colors.red),
+              child: const Text('Quitar'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    setState(() => _busy = true);
+    try {
+      await widget.repo.removePrinterFromArea(
+        areaId: widget.area.id,
+        printerId: widget.printer.id,
+      );
+      widget.onChanged();
+    } catch (e) {
+      if (mounted) ErrorSnackBar.show(context, e);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final a = widget.assignment;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(_iconForType(widget.printer), size: 18, color: Colors.grey[700]),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  widget.printer.name,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+              if (_busy)
+                const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else
+                IconButton(
+                  icon: const Icon(Icons.delete_outline, size: 20, color: Colors.red),
+                  tooltip: 'Quitar del área',
+                  onPressed: _remove,
+                ),
+            ],
+          ),
+          Wrap(
+            spacing: 8,
+            children: [
+              _flagChip(
+                'Comandas',
+                a.printsOrders,
+                (v) => _saveFlags(
+                  printsOrders: v,
+                  printsPrebills: a.printsPrebills,
+                  printsReceipts: a.printsReceipts,
+                ),
+              ),
+              _flagChip(
+                'Pre-cuenta',
+                a.printsPrebills,
+                (v) => _saveFlags(
+                  printsOrders: a.printsOrders,
+                  printsPrebills: v,
+                  printsReceipts: a.printsReceipts,
+                ),
+              ),
+              _flagChip(
+                'Factura',
+                a.printsReceipts,
+                (v) => _saveFlags(
+                  printsOrders: a.printsOrders,
+                  printsPrebills: a.printsPrebills,
+                  printsReceipts: v,
+                ),
+              ),
+            ],
+          ),
+          const Divider(height: 16),
+        ],
+      ),
+    );
+  }
+
+  Widget _flagChip(String label, bool selected, ValueChanged<bool> onChanged) {
+    return FilterChip(
+      label: Text(label, style: const TextStyle(fontSize: 12)),
+      selected: selected,
+      onSelected: _busy ? null : onChanged,
+      selectedColor: const Color(0xFFF97316).withOpacity(0.18),
+      checkmarkColor: const Color(0xFFF97316),
+    );
+  }
+
+  IconData _iconForType(PrinterConfig p) {
+    if (p.isNetwork) return Icons.wifi;
+    if (p.isUSB) return Icons.usb;
+    if (p.isBluetooth) return Icons.bluetooth;
+    return Icons.print;
+  }
+}
+
+class _AddAssignmentRow extends StatefulWidget {
+  final PrintArea area;
+  final List<PrinterConfig> candidates;
+  final PrintingRepository repo;
+  final String businessId;
+  final VoidCallback onAdded;
+
+  const _AddAssignmentRow({
+    required this.area,
+    required this.candidates,
+    required this.repo,
+    required this.businessId,
+    required this.onAdded,
+  });
+
+  @override
+  State<_AddAssignmentRow> createState() => _AddAssignmentRowState();
+}
+
+class _AddAssignmentRowState extends State<_AddAssignmentRow> {
+  String? _selectedPrinterId;
+  bool _busy = false;
+
+  Future<void> _add() async {
+    final id = _selectedPrinterId;
+    if (id == null) return;
+    setState(() => _busy = true);
+    try {
+      // Default razonable: nueva asignacion imprime comandas. El usuario
+      // ajusta los flags en la fila resultante despues. Mas comun es que
+      // se asigne una impresora de cocina/bar (orders) que una de cajero.
+      await widget.repo.linkAreaToPrinter(
+        businessId: widget.businessId,
+        areaId: widget.area.id,
+        printerId: id,
+        printsOrders: true,
+        printsPrebills: false,
+        printsReceipts: false,
+      );
+      widget.onAdded();
+    } catch (e) {
+      if (mounted) ErrorSnackBar.show(context, e);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: DropdownButtonFormField<String>(
+            initialValue: _selectedPrinterId,
+            decoration: const InputDecoration(
+              labelText: 'Asignar impresora',
+              prefixIcon: Icon(Icons.add),
+              isDense: true,
+            ),
+            items: widget.candidates
+                .map(
+                  (p) => DropdownMenuItem(
+                    value: p.id,
+                    child: Text(p.name, overflow: TextOverflow.ellipsis),
+                  ),
+                )
+                .toList(),
+            onChanged: _busy ? null : (v) => setState(() => _selectedPrinterId = v),
+          ),
+        ),
+        const SizedBox(width: 8),
+        ElevatedButton(
+          onPressed: (_busy || _selectedPrinterId == null) ? null : _add,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFFF97316),
+            foregroundColor: Colors.white,
+          ),
+          child: _busy
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Asignar'),
+        ),
+      ],
     );
   }
 }
