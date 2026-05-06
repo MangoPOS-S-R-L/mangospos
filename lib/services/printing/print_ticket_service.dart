@@ -552,29 +552,6 @@ class PrintTicketService {
       gen.textRow('MESERO:', waiterName);
     }
 
-    // ============================================================
-    // QR e-CF (DGII) — centrado en 80mm
-    // ============================================================
-    // Solo se imprime el QR cuando el e-CF fue aceptado por DGII y tenemos
-    // public_url (caller pasa qrBytes pre-generados via QrEscPosBuilder).
-    // Si todavía está pending/sent o rejected, se imprime un mensaje textual
-    // sin QR. Para NCF físico (B0x), ambos son null y este bloque es no-op.
-    if (qrBytes != null && qrBytes.isNotEmpty) {
-      gen.lineFeed();
-      gen.appendRaw(qrBytes);
-      gen.setAlignment(Alignment.center);
-      gen.text('Verifique este comprobante en');
-      gen.text('rnc.dgii.gov.do');
-      gen.setAlignment(Alignment.left);
-    } else if (ecfStatusMessage != null && ecfStatusMessage.isNotEmpty) {
-      gen.lineFeed();
-      gen.setAlignment(Alignment.center);
-      gen.setBold(true);
-      gen.text(ecfStatusMessage);
-      gen.setBold(false);
-      gen.setAlignment(Alignment.left);
-    }
-
     gen.lineFeed();
     _thinSeparator(gen);
 
@@ -727,6 +704,25 @@ class PrintTicketService {
         gen.textRow('CAMBIO:', 'RD\$ ${_formatMoney(totalChange)}');
         gen.setBold(false);
       }
+    }
+
+    // ============================================================
+    // QR e-CF (DGII) — debajo de pagos, solo el código (sin leyenda).
+    // ============================================================
+    // Si el e-CF fue aceptado por DGII tenemos public_url codificado en
+    // qrBytes (caller pre-generó con QrEscPosBuilder). Solo el QR centrado.
+    // Si está pending/sent/rejected, se muestra el mensaje de estado en
+    // su lugar. Para NCF físico (B0x), ambos son null y este bloque es no-op.
+    if (qrBytes != null && qrBytes.isNotEmpty) {
+      gen.lineFeed();
+      gen.appendRaw(qrBytes);
+    } else if (ecfStatusMessage != null && ecfStatusMessage.isNotEmpty) {
+      gen.lineFeed();
+      gen.setAlignment(Alignment.center);
+      gen.setBold(true);
+      gen.text(ecfStatusMessage);
+      gen.setBold(false);
+      gen.setAlignment(Alignment.left);
     }
 
     // Footer
