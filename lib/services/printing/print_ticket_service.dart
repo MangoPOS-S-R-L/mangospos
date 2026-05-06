@@ -463,6 +463,14 @@ class PrintTicketService {
     List<({String label, double amount})> taxBreakdown = const [],
     bool preferStoredOrderTotals = false,
     bool preferStoredItemTotals = false,
+    /// Bytes ESC/POS pre-generados del QR del e-CF (centrados). Cuando es
+    /// non-null se imprimen después del bloque NCF. Generar con
+    /// `QrEscPosBuilder.build(data: fiscalDoc.publicUrl!)`.
+    List<int>? qrBytes,
+    /// Mensaje de estado del e-CF a imprimir cuando aún no hay QR
+    /// (ej. "Pendiente de aprobacion DGII", "Rechazado por DGII: ...").
+    /// Solo aplica para e-CF; ignorado en NCF físico.
+    String? ecfStatusMessage,
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
 
@@ -542,6 +550,29 @@ class PrintTicketService {
 
     if (waiterName != null && waiterName.isNotEmpty) {
       gen.textRow('MESERO:', waiterName);
+    }
+
+    // ============================================================
+    // QR e-CF (DGII) — centrado en 80mm
+    // ============================================================
+    // Solo se imprime el QR cuando el e-CF fue aceptado por DGII y tenemos
+    // public_url (caller pasa qrBytes pre-generados via QrEscPosBuilder).
+    // Si todavía está pending/sent o rejected, se imprime un mensaje textual
+    // sin QR. Para NCF físico (B0x), ambos son null y este bloque es no-op.
+    if (qrBytes != null && qrBytes.isNotEmpty) {
+      gen.lineFeed();
+      gen.appendRaw(qrBytes);
+      gen.setAlignment(Alignment.center);
+      gen.text('Verifique este comprobante en');
+      gen.text('rnc.dgii.gov.do');
+      gen.setAlignment(Alignment.left);
+    } else if (ecfStatusMessage != null && ecfStatusMessage.isNotEmpty) {
+      gen.lineFeed();
+      gen.setAlignment(Alignment.center);
+      gen.setBold(true);
+      gen.text(ecfStatusMessage);
+      gen.setBold(false);
+      gen.setAlignment(Alignment.left);
     }
 
     gen.lineFeed();

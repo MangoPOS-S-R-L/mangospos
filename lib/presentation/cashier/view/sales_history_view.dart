@@ -16,6 +16,7 @@ import 'package:mangopos/presentation/settings/more%20settings/printing/printers
 import 'package:mangopos/core/tax/tax_engine.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
+import 'package:mangopos/services/printing/qr_esc_pos_builder.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -745,6 +746,27 @@ class _PaymentTableRow extends ConsumerWidget {
         // Fallback: the ticket will use the summary-level ITBIS/SERVICIO lines
       }
 
+      // e-CF: fresh fetch del fiscal_document. Crítico en re-impresión porque
+      // el estado puede haber cambiado desde el cobro original (sent → accepted
+      // vía webhook DGII async). NO usamos los datos históricos del payment;
+      // siempre consultamos el estado más actual antes de imprimir.
+      List<int>? ecfQrBytes;
+      String? ecfStatusMsg;
+      try {
+        final fiscalDoc = await salesRepo.getOrderFiscalDocument(orderId);
+        if (fiscalDoc != null && fiscalDoc.isElectronic) {
+          if (fiscalDoc.hasQrData) {
+            ecfQrBytes = await QrEscPosBuilder.build(
+              data: fiscalDoc.publicUrl!,
+            );
+          } else {
+            ecfStatusMsg = fiscalDoc.ecfStatusMessage;
+          }
+        }
+      } catch (_) {
+        // Fail-soft: si la consulta o el QR fallan, imprimimos sin ellos.
+      }
+
       final ticket = PrintTicketService.generateInvoice(
         order: printOrder,
         items: printItems,
@@ -765,6 +787,8 @@ class _PaymentTableRow extends ConsumerWidget {
         taxBreakdown: reprintTaxBreakdown,
         preferStoredOrderTotals: true,
         preferStoredItemTotals: true,
+        qrBytes: ecfQrBytes,
+        ecfStatusMessage: ecfStatusMsg,
       );
 
       await printRepo.printEscPos(

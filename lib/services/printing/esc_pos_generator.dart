@@ -29,6 +29,14 @@ class EscPosGenerator {
   /// Limpiar buffer
   void clear() => _buffer.clear();
 
+  /// Append crudo al buffer. Se usa para inyectar bytes ESC/POS pre-generados
+  /// (ej. una imagen raster del QR producida por QrEscPosBuilder). El caller
+  /// es responsable de incluir los comandos de alineación si los necesita.
+  void appendRaw(List<int> bytes) {
+    if (bytes.isEmpty) return;
+    _buffer.addAll(bytes);
+  }
+
   // ============================================================
   // 🔧 COMANDOS BÁSICOS
   // ============================================================
