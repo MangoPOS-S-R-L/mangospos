@@ -57,6 +57,17 @@ class TaxDef {
   /// is_service_fee=true (preserva el skip hardcodeado).
   final bool applyOnTakeout;
 
+  /// Si true: este impuesto se incluye en el cálculo del e-CF DGII
+  /// (itbis_amount, taxable_amount, totalAmount declarado a DGII).
+  /// Si false: se cobra al cliente pero NO se declara en el e-CF
+  /// (uso típico: Propina Legal 10% que es a favor de empleados).
+  ///
+  /// Backfill SQL: default `true` para is_service_fee=false, `false` para
+  /// is_service_fee=true. Cada negocio puede ajustar el toggle según su
+  /// criterio contable (algunos contadores prefieren declarar la propina,
+  /// otros la mantienen extra-fiscal).
+  final bool includeInEcf;
+
   const TaxDef({
     required this.name,
     required this.rate,
@@ -67,6 +78,7 @@ class TaxDef {
     this.applyOnQuick = true,
     this.applyOnDelivery = true,
     this.applyOnTakeout = true,
+    this.includeInEcf = true,
   });
 
   factory TaxDef.fromMap(Map<String, dynamic> m) => TaxDef(
@@ -79,6 +91,10 @@ class TaxDef {
         applyOnQuick: m['apply_on_quick'] as bool? ?? true,
         applyOnDelivery: m['apply_on_delivery'] as bool? ?? true,
         applyOnTakeout: m['apply_on_takeout'] as bool? ?? true,
+        // Backfill default: ITBIS-like va al e-CF, propina-like no.
+        // Si la columna no existe (DB vieja), usa el mismo default sensato.
+        includeInEcf: (m['include_in_ecf'] as bool?) ??
+            !((m['is_service_fee'] as bool?) ?? false),
       );
 
   double get rateDecimal => rate / 100.0;
