@@ -12,7 +12,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+// flutter_blue_plus_windows: wrapper cross-platform. Re-exporta APIs de
+// flutter_blue_plus en no-Windows y usa win_ble_plus en Windows.
+import 'package:flutter_blue_plus_windows/flutter_blue_plus_windows.dart';
 import 'package:flutter_usb_printer/flutter_usb_printer.dart';
 import 'package:shelf/shelf.dart' as shelf;
 import 'package:shelf/shelf_io.dart' as shelf_io;
@@ -204,9 +206,17 @@ class MobilePrintAgent {
         final isOn = await FlutterBluePlus.adapterState.first ==
             BluetoothAdapterState.on;
         if (isOn) {
+          // lastScanResults no existe en el wrapper Windows. Recolectamos
+          // los results via stream durante el scan.
+          final List<ScanResult> results = [];
+          final sub = FlutterBluePlus.scanResults.listen((rs) {
+            results
+              ..clear()
+              ..addAll(rs);
+          });
           await FlutterBluePlus.startScan(timeout: _btScanTimeout);
           await Future.delayed(_btScanTimeout + const Duration(seconds: 1));
-          final results = FlutterBluePlus.lastScanResults;
+          await sub.cancel();
           for (final r in results) {
             final name = r.device.platformName;
             if (name.isEmpty) continue;

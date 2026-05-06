@@ -3,7 +3,8 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart' as fbp;
+// flutter_blue_plus_windows: wrapper cross-platform para soportar Windows.
+import 'package:flutter_blue_plus_windows/flutter_blue_plus_windows.dart' as fbp;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../data/repositories/printing_repository.dart';
