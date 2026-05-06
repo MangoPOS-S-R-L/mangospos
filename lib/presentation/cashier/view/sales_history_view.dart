@@ -752,9 +752,15 @@ class _PaymentTableRow extends ConsumerWidget {
       // siempre consultamos el estado más actual antes de imprimir.
       List<int>? ecfQrBytes;
       String? ecfStatusMsg;
+      bool isElectronicCf = false;
+      String? ecfSecurityCode;
+      DateTime? ecfSignedAt;
       try {
         final fiscalDoc = await salesRepo.getOrderFiscalDocument(orderId);
         if (fiscalDoc != null && fiscalDoc.isElectronic) {
+          isElectronicCf = true;
+          ecfSecurityCode = fiscalDoc.ecfSecurityCode;
+          ecfSignedAt = fiscalDoc.ecfSignedAt;
           if (fiscalDoc.hasQrData) {
             ecfQrBytes = await QrEscPosBuilder.build(
               data: fiscalDoc.publicUrl!,
@@ -789,6 +795,9 @@ class _PaymentTableRow extends ConsumerWidget {
         preferStoredItemTotals: true,
         qrBytes: ecfQrBytes,
         ecfStatusMessage: ecfStatusMsg,
+        isElectronicCf: isElectronicCf,
+        ecfSecurityCode: ecfSecurityCode,
+        ecfSignedAt: ecfSignedAt,
       );
 
       await printRepo.printEscPos(

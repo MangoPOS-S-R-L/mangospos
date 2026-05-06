@@ -2693,12 +2693,18 @@ class _CartView extends ConsumerWidget {
         // sale igual que antes (sin QR) — fail-soft, no rompe el cobro.
         List<int>? ecfQrBytes;
         String? ecfStatusMsg;
+        bool isElectronicCf = false;
+        String? ecfSecurityCode;
+        DateTime? ecfSignedAt;
         if (type == 'invoice') {
           try {
             final fiscalDoc = await ref
                 .read(salesRepositoryProvider)
                 .getOrderFiscalDocument(orderObj.id);
             if (fiscalDoc != null && fiscalDoc.isElectronic) {
+              isElectronicCf = true;
+              ecfSecurityCode = fiscalDoc.ecfSecurityCode;
+              ecfSignedAt = fiscalDoc.ecfSignedAt;
               if (fiscalDoc.hasQrData) {
                 ecfQrBytes = await QrEscPosBuilder.build(
                   data: fiscalDoc.publicUrl!,
@@ -2737,6 +2743,9 @@ class _CartView extends ConsumerWidget {
                 taxBreakdown: printTaxBreakdown,
                 qrBytes: ecfQrBytes,
                 ecfStatusMessage: ecfStatusMsg,
+                isElectronicCf: isElectronicCf,
+                ecfSecurityCode: ecfSecurityCode,
+                ecfSignedAt: ecfSignedAt,
               )
             : PrintTicketService.generatePrecheck(
                 order: orderObj,
