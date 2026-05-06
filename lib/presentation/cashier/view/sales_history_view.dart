@@ -762,9 +762,23 @@ class _PaymentTableRow extends ConsumerWidget {
           ecfSecurityCode = fiscalDoc.ecfSecurityCode;
           ecfSignedAt = fiscalDoc.ecfSignedAt;
           if (fiscalDoc.hasQrData) {
-            ecfQrBytes = await QrEscPosBuilder.build(
-              data: fiscalDoc.publicUrl!,
-            );
+            // Preferimos publicUrl si Alanube/DGII ya nos lo dio. Si aún
+            // estamos en estado `sent` (publicUrl null), construimos la
+            // URL DGII localmente con security_code + RNC + NCF + fecha
+            // + total — el QR sigue siendo válido.
+            final emitterRnc = (profileRaw?['rnc'] as String?)?.trim() ?? '';
+            final qrUrl = fiscalDoc.publicUrl?.isNotEmpty == true
+                ? fiscalDoc.publicUrl!
+                : (fiscalDoc.buildDgiiVerifyUrl(
+                      emitterRnc: emitterRnc,
+                      sandbox: true,
+                    ) ??
+                    '');
+            if (qrUrl.isNotEmpty) {
+              ecfQrBytes = await QrEscPosBuilder.build(data: qrUrl);
+            } else {
+              ecfStatusMsg = fiscalDoc.ecfStatusMessage;
+            }
           } else {
             ecfStatusMsg = fiscalDoc.ecfStatusMessage;
           }

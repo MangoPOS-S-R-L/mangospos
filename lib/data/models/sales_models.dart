@@ -699,6 +699,60 @@ class FiscalDocument extends Equatable {
       (ecfStatus == 'accepted' || ecfStatus == 'sent') &&
       (ecfSecurityCode?.isNotEmpty ?? false);
 
+  /// Construye la URL DGII de verificación del e-CF a partir de los campos
+  /// del documento. Esta es la URL que se encodea en el QR del ticket impreso.
+  ///
+  /// Norma DGII 01-2020 — formato:
+  ///   https://ecf.dgii.gov.do/{env}/ConsultaTimbreFC?
+  ///     RncEmisor=...&ENCF=...&FechaEmision=DD-MM-YYYY&
+  ///     MontoTotal=...&CodigoSeguridad=...
+  ///
+  /// Para E31 (crédito fiscal) DGII también exige `RncComprador`.
+  ///
+  /// Se usa como **fallback** cuando `publicUrl` no fue populado por
+  /// Alanube todavía (típico en estado `sent` antes de que el webhook DGII
+  /// llegue). Si Alanube ya nos dio una URL, preferimos esa.
+  ///
+  /// Retorna null si faltan datos críticos (RNC emisor o security code).
+  String? buildDgiiVerifyUrl({
+    required String emitterRnc,
+    required bool sandbox,
+  }) {
+    final code = ecfSecurityCode;
+    if (code == null || code.isEmpty) return null;
+    if (emitterRnc.trim().isEmpty) return null;
+
+    final base = sandbox
+        ? 'https://ecf.dgii.gov.do/testecf/ConsultaTimbreFC'
+        : 'https://ecf.dgii.gov.do/ecf/ConsultaTimbreFC';
+
+    // FechaEmision en formato DD-MM-YYYY (no ISO).
+    final d = issuedAt;
+    final fecha =
+        '${d.day.toString().padLeft(2, '0')}-'
+        '${d.month.toString().padLeft(2, '0')}-'
+        '${d.year}';
+
+    final params = <String, String>{
+      'RncEmisor': emitterRnc.trim(),
+      'ENCF': ncfNumber,
+      'FechaEmision': fecha,
+      'MontoTotal': total.toStringAsFixed(2),
+      'CodigoSeguridad': code,
+    };
+    // E31 requiere RncComprador. Para E32/E44/E45 es opcional.
+    if (ncfType == 'E31' &&
+        customerRnc != null &&
+        customerRnc!.trim().isNotEmpty) {
+      params['RncComprador'] = customerRnc!.trim();
+    }
+
+    final query = params.entries
+        .map((e) => '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}')
+        .join('&');
+    return '$base?$query';
+  }
+
   /// Mensaje legible del estado e-CF para imprimir cuando aún no hay QR.
   /// Devuelve null si el doc es físico o ya fue aceptado (no requiere mensaje).
   String? get ecfStatusMessage {

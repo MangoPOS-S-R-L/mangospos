@@ -2706,9 +2706,25 @@ class _CartView extends ConsumerWidget {
               ecfSecurityCode = fiscalDoc.ecfSecurityCode;
               ecfSignedAt = fiscalDoc.ecfSignedAt;
               if (fiscalDoc.hasQrData) {
-                ecfQrBytes = await QrEscPosBuilder.build(
-                  data: fiscalDoc.publicUrl!,
-                );
+                // Preferimos publicUrl si Alanube ya nos lo dio (post-webhook
+                // DGII). En estado `sent` típicamente publicUrl aún es null,
+                // así que construimos la URL DGII localmente con los campos
+                // del documento (security_code + RNC + NCF + fecha + total).
+                // El QR sigue siendo válido — DGII permite consultas para
+                // docs en proceso.
+                final emitterRnc = (data['rnc'] as String?)?.trim() ?? '';
+                final qrUrl = fiscalDoc.publicUrl?.isNotEmpty == true
+                    ? fiscalDoc.publicUrl!
+                    : (fiscalDoc.buildDgiiVerifyUrl(
+                          emitterRnc: emitterRnc,
+                          sandbox: true,
+                        ) ??
+                        '');
+                if (qrUrl.isNotEmpty) {
+                  ecfQrBytes = await QrEscPosBuilder.build(data: qrUrl);
+                } else {
+                  ecfStatusMsg = fiscalDoc.ecfStatusMessage;
+                }
               } else {
                 ecfStatusMsg = fiscalDoc.ecfStatusMessage;
               }
