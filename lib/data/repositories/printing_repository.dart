@@ -792,6 +792,33 @@ class PrintingRepository {
     );
   }
 
+  /// Verifica que una impresora de red responda en `ip:port` sin emitir datos.
+  ///
+  /// Uso típico: feedback "Probar conexión" en el formulario de alta antes de
+  /// persistir. Abre socket, lo cierra inmediato. No escribe payload — la
+  /// térmica no imprime nada de prueba; solo se valida alcanzabilidad TCP.
+  ///
+  /// Devuelve `true` si conecta dentro de [timeout]; `false` ante cualquier
+  /// fallo (timeout, ECONNREFUSED, EHOSTUNREACH, etc.). No lanza.
+  Future<bool> pingNetworkPrinter({
+    required String ip,
+    int port = 9100,
+    Duration timeout = const Duration(seconds: 3),
+  }) async {
+    if (kIsWeb) return false; // dart:io.Socket no disponible en Web
+    Socket? socket;
+    try {
+      socket = await Socket.connect(ip, port, timeout: timeout);
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      try {
+        socket?.destroy();
+      } catch (_) {}
+    }
+  }
+
   /// Enviar datos ESC/POS directos por TCP (solo plataformas nativas).
   ///
   /// Garantías del flush+close:
