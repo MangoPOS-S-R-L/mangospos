@@ -435,6 +435,10 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
   String _type = 'network';
   int _paperWidth = 80;
   bool _isLoading = false;
+  bool _isTesting = false;
+  // null = sin probar todavía; true/false = resultado del último ping.
+  bool? _lastTestResult;
+  String? _lastTestMessage;
 
   @override
   void dispose() {
@@ -442,6 +446,54 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
     _ipController.dispose();
     _portController.dispose();
     super.dispose();
+  }
+
+  // IPv4 dotted: 4 octetos 0-255. Regex en vez de InternetAddress.tryParse
+  // para evitar import de dart:io (que no compila en Flutter Web).
+  static final _ipv4Re = RegExp(
+    r'^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$',
+  );
+
+  String? _validateIp(String? value) {
+    if (value == null || value.trim().isEmpty) return 'Ingresa la IP';
+    if (!_ipv4Re.hasMatch(value.trim())) {
+      return 'IP inválida (formato esperado: 192.168.1.100)';
+    }
+    return null;
+  }
+
+  String? _validatePort(String? value) {
+    if (value == null || value.trim().isEmpty) return 'Ingresa el puerto';
+    final port = int.tryParse(value.trim());
+    if (port == null || port < 1 || port > 65535) {
+      return 'Puerto fuera de rango (1-65535)';
+    }
+    return null;
+  }
+
+  Future<void> _testConnection() async {
+    // Solo valida los campos de network, no exige nombre lleno aún.
+    if (_validateIp(_ipController.text) != null ||
+        _validatePort(_portController.text) != null) {
+      _formKey.currentState?.validate();
+      return;
+    }
+    setState(() {
+      _isTesting = true;
+      _lastTestResult = null;
+      _lastTestMessage = null;
+    });
+    final ip = _ipController.text.trim();
+    final port = int.parse(_portController.text.trim());
+    final ok = await widget.repo.pingNetworkPrinter(ip: ip, port: port);
+    if (!mounted) return;
+    setState(() {
+      _isTesting = false;
+      _lastTestResult = ok;
+      _lastTestMessage = ok
+          ? 'Conexión exitosa con $ip:$port'
+          : 'No se pudo conectar a $ip:$port. Verifica IP, puerto y red.';
+    });
   }
 
   @override
@@ -498,12 +550,17 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
                     hintText: '192.168.1.100',
                     prefixIcon: Icon(Icons.wifi),
                   ),
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Ingresa la IP';
+                  keyboardType: TextInputType.number,
+                  // Cualquier cambio invalida el último resultado de prueba.
+                  onChanged: (_) {
+                    if (_lastTestResult != null) {
+                      setState(() {
+                        _lastTestResult = null;
+                        _lastTestMessage = null;
+                      });
                     }
-                    return null;
                   },
+                  validator: _validateIp,
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
@@ -514,13 +571,59 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
                     prefixIcon: Icon(Icons.settings_ethernet),
                   ),
                   keyboardType: TextInputType.number,
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Ingresa el puerto';
+                  onChanged: (_) {
+                    if (_lastTestResult != null) {
+                      setState(() {
+                        _lastTestResult = null;
+                        _lastTestMessage = null;
+                      });
                     }
-                    return null;
                   },
+                  validator: _validatePort,
                 ),
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    onPressed: (_isTesting || _isLoading) ? null : _testConnection,
+                    icon: _isTesting
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.network_check),
+                    label: Text(_isTesting ? 'Probando…' : 'Probar conexión'),
+                  ),
+                ),
+                if (_lastTestMessage != null) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Icon(
+                        _lastTestResult == true
+                            ? Icons.check_circle
+                            : Icons.error_outline,
+                        size: 18,
+                        color: _lastTestResult == true
+                            ? const Color(0xFF22C55E)
+                            : Colors.red,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          _lastTestMessage!,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: _lastTestResult == true
+                                ? const Color(0xFF15803D)
+                                : Colors.red,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ],
               const SizedBox(height: 16),
               DropdownButtonFormField<int>(
