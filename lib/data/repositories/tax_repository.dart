@@ -24,8 +24,12 @@ class TaxRepository {
     bool applyOnDelivery = true,
     bool applyOnTakeout = true,
     bool isServiceFee = false,
+    bool? includeInEcf,
   }) async {
     final bid = await BusinessResolver.ensure(businessId);
+    // Default sensato si el caller no decide: ITBIS-like va al e-CF;
+    // propina-like (is_service_fee=true) NO va al e-CF.
+    final resolvedIncludeInEcf = includeInEcf ?? !isServiceFee;
     final row = await _sp.from(_table).insert({
       'business_id': bid,
       'name': name,
@@ -37,6 +41,7 @@ class TaxRepository {
       'apply_on_delivery': applyOnDelivery,
       'apply_on_takeout': applyOnTakeout,
       'is_service_fee': isServiceFee,
+      'include_in_ecf': resolvedIncludeInEcf,
     }).select().single();
     return Tax.fromMap(row);
   }
