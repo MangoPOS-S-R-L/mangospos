@@ -792,7 +792,14 @@ class PrintingRepository {
     );
   }
 
-  /// Enviar datos ESC/POS directos por TCP (solo plataformas nativas)
+  /// Enviar datos ESC/POS directos por TCP (solo plataformas nativas).
+  ///
+  /// Garantías del flush+close:
+  /// - try/finally cierra el socket aunque `flush` lance, evitando leaks de
+  ///   FD cuando la térmica corta la conexión a media impresión.
+  /// - `await socket.done` espera el handshake de cierre real; sin esto, el
+  ///   `close()` retorna apenas inicia el shutdown y la térmica puede recibir
+  ///   un FIN antes de procesar los últimos bytes (paper jam / corte parcial).
   Future<void> printRawDirectTcp({
     required String ip,
     int port = 9100,
@@ -800,9 +807,13 @@ class PrintingRepository {
     Duration timeout = const Duration(seconds: 3),
   }) async {
     final socket = await Socket.connect(ip, port, timeout: timeout);
-    socket.add(data);
-    await socket.flush();
-    await socket.close();
+    try {
+      socket.add(data);
+      await socket.flush();
+    } finally {
+      await socket.close();
+      await socket.done;
+    }
   }
 
   Future<void> printEscPos({
