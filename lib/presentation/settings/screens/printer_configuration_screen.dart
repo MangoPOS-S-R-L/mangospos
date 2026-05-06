@@ -1,9 +1,14 @@
 // lib/presentation/settings/screens/printer_configuration_screen.dart
+import 'dart:async';
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart' as fbp;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../data/repositories/printing_repository.dart';
 import '../../../data/models/printing_models.dart';
+import '../../../services/printing/esc_pos_generator.dart' show EscPosGenerator;
 import '../../../widgets/error_handler_widget.dart';
 
 /// 🖨️ Pantalla de Configuración de Impresoras y Áreas
@@ -199,7 +204,30 @@ class _PrintersTabState extends State<_PrintersTab> {
 
   Future<void> _testPrinter(PrinterConfig printer) async {
     try {
-      await widget.repo.enqueueTestPrint(printer.id);
+      if (printer.printerType == PrinterType.bluetooth) {
+        // BT no pasa por el agent Node.js (no maneja BLE). Construimos un
+        // ticket minimo de prueba y dispatcheamos por printEscPos, que para
+        // type=bluetooth llama BluetoothPrintService.printRaw directo.
+        final gen = EscPosGenerator(paperWidth: printer.paperWidth);
+        gen.initialize();
+        gen.textCentered('=== PRUEBA BLUETOOTH ===');
+        gen.lineFeed();
+        gen.text(printer.name);
+        gen.text(DateTime.now().toString().split('.').first);
+        gen.lineFeed();
+        gen.text(
+          'Si lees esto, la impresora Bluetooth esta correctamente '
+          'emparejada y MangoPOS puede enviarle trabajos.',
+        );
+        gen.lineFeed(3);
+        gen.cut();
+        await widget.repo.printEscPos(
+          printer: printer,
+          data: gen.getCommands(),
+        );
+      } else {
+        await widget.repo.enqueueTestPrint(printer.id);
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -450,6 +478,16 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
   bool? _lastTestResult;
   String? _lastTestMessage;
 
+  // Bluetooth scan state. Solo se activa cuando _type == 'bluetooth'.
+  // _btRemoteId es el identificador estable que persiste en printers.mac
+  // y que BluetoothPrintService.printRaw usa para reconectar.
+  String? _btRemoteId;
+  String? _btDeviceName;
+  bool _isScanning = false;
+  String? _btScanError;
+  List<fbp.ScanResult> _scanResults = const [];
+  StreamSubscription<List<fbp.ScanResult>>? _scanSub;
+
   bool get _isEdit => widget.editing != null;
 
   @override
@@ -462,15 +500,199 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
       _paperWidth = e.paperWidth;
       if (e.ipAddress != null) _ipController.text = e.ipAddress!;
       if (e.port != null) _portController.text = e.port!.toString();
+      if (e.printerType == PrinterType.bluetooth) {
+        _btRemoteId = (e.mac?.trim().isNotEmpty == true)
+            ? e.mac
+            : (e.devicePath?.trim().isNotEmpty == true ? e.devicePath : null);
+        _btDeviceName = e.name;
+      }
     }
   }
 
   @override
   void dispose() {
+    _scanSub?.cancel();
+    if (!kIsWeb) {
+      // No await: dispose es sincronico. stopScan() retorna Future pero
+      // dejamos que el plugin termine en background.
+      fbp.FlutterBluePlus.stopScan();
+    }
     _nameController.dispose();
     _ipController.dispose();
     _portController.dispose();
     super.dispose();
+  }
+
+  Future<void> _scanBluetooth() async {
+    if (kIsWeb) {
+      setState(() {
+        _btScanError = 'Bluetooth no esta disponible desde la Web.';
+      });
+      return;
+    }
+    setState(() {
+      _isScanning = true;
+      _scanResults = const [];
+      _btScanError = null;
+    });
+
+    await _scanSub?.cancel();
+    _scanSub = fbp.FlutterBluePlus.scanResults.listen((results) {
+      if (!mounted) return;
+      // Filtra dispositivos sin nombre legible (ruido BLE) y ordena por
+      // RSSI desc para que las impresoras cerca aparezcan primero.
+      final named = results
+          .where((r) => r.device.platformName.trim().isNotEmpty)
+          .toList()
+        ..sort((a, b) => b.rssi.compareTo(a.rssi));
+      setState(() => _scanResults = named);
+    });
+
+    try {
+      await fbp.FlutterBluePlus.startScan(
+        timeout: const Duration(seconds: 8),
+      );
+      // Espera a que el plugin marque scanning=false (timeout o stopScan).
+      await fbp.FlutterBluePlus.isScanning.firstWhere((s) => s == false);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _btScanError =
+            'Error al escanear Bluetooth: ${e.toString()}');
+      }
+    } finally {
+      await _scanSub?.cancel();
+      _scanSub = null;
+      if (mounted) setState(() => _isScanning = false);
+    }
+  }
+
+  void _selectBtDevice(fbp.ScanResult r) {
+    setState(() {
+      _btRemoteId = r.device.remoteId.str;
+      _btDeviceName = r.device.platformName;
+      // Si el usuario no puso nombre, lo pre-llenamos con el del dispositivo.
+      if (_nameController.text.trim().isEmpty) {
+        _nameController.text = r.device.platformName;
+      }
+      _scanResults = const [];
+    });
+  }
+
+  Widget _buildBluetoothSection() {
+    if (kIsWeb) {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.orange.withOpacity(0.08),
+          border: Border.all(color: Colors.orange),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: const Text(
+          'Bluetooth no esta disponible desde la Web. Usa la app de escritorio o movil para escanear y emparejar la impresora.',
+          style: TextStyle(fontSize: 13),
+        ),
+      );
+    }
+
+    if (_btRemoteId != null) {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF97316).withOpacity(0.06),
+          border: Border.all(color: const Color(0xFFF97316)),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.bluetooth_connected, color: Color(0xFFF97316)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _btDeviceName?.trim().isNotEmpty == true
+                        ? _btDeviceName!
+                        : 'Dispositivo Bluetooth',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    _btRemoteId!,
+                    style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+                  ),
+                ],
+              ),
+            ),
+            TextButton(
+              onPressed: _isLoading
+                  ? null
+                  : () {
+                      setState(() {
+                        _btRemoteId = null;
+                        _btDeviceName = null;
+                      });
+                    },
+              child: const Text('Cambiar'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        OutlinedButton.icon(
+          icon: _isScanning
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.bluetooth_searching),
+          label: Text(
+            _isScanning ? 'Escaneando…' : 'Buscar impresoras Bluetooth',
+          ),
+          onPressed: _isScanning ? null : _scanBluetooth,
+        ),
+        if (_btScanError != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            _btScanError!,
+            style: const TextStyle(color: Colors.red, fontSize: 12),
+          ),
+        ],
+        if (_scanResults.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 220),
+            child: Material(
+              color: Colors.grey.shade50,
+              borderRadius: BorderRadius.circular(8),
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: _scanResults.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (context, i) {
+                  final r = _scanResults[i];
+                  return ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.bluetooth, size: 20),
+                    title: Text(r.device.platformName),
+                    subtitle: Text(
+                      '${r.device.remoteId.str}  ·  ${r.rssi} dBm',
+                      style: const TextStyle(fontSize: 11),
+                    ),
+                    onTap: () => _selectBtDevice(r),
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
   }
 
   // IPv4 dotted: 4 octetos 0-255. Regex en vez de InternetAddress.tryParse
@@ -566,6 +788,10 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
                   });
                 },
               ),
+              if (_type == 'bluetooth') ...[
+                const SizedBox(height: 16),
+                _buildBluetoothSection(),
+              ],
               if (_type == 'network') ...[
                 const SizedBox(height: 16),
                 TextFormField(
@@ -697,6 +923,18 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
   Future<void> _savePrinter() async {
     if (!_formKey.currentState!.validate()) return;
 
+    // Bluetooth: el form no usa validators TextFormField para el device, asi
+    // que validamos aqui antes de persistir. printers.mac es lo que mantiene
+    // BluetoothPrintService funcionando.
+    if (_type == 'bluetooth' && (_btRemoteId == null || _btRemoteId!.isEmpty)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Selecciona un dispositivo Bluetooth antes de guardar.'),
+        ),
+      );
+      return;
+    }
+
     setState(() {
       _isLoading = true;
     });
@@ -704,6 +942,7 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
     try {
       final ip = _type == 'network' ? _ipController.text.trim() : null;
       final port = _type == 'network' ? int.parse(_portController.text.trim()) : null;
+      final mac = _type == 'bluetooth' ? _btRemoteId : null;
 
       if (_isEdit) {
         await widget.repo.updatePrinter(
@@ -712,6 +951,7 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
           type: _type,
           ipAddress: ip,
           port: port,
+          mac: mac,
           paperWidth: _paperWidth,
         );
       } else {
@@ -721,6 +961,7 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
           type: _type,
           ipAddress: ip,
           port: port,
+          mac: mac,
           paperWidth: _paperWidth,
         );
       }
