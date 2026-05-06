@@ -762,9 +762,42 @@ class _PaymentTableRow extends ConsumerWidget {
           ecfSecurityCode = fiscalDoc.ecfSecurityCode;
           ecfSignedAt = fiscalDoc.ecfSignedAt;
           if (fiscalDoc.hasQrData) {
-            ecfQrBytes = await QrEscPosBuilder.build(
-              data: fiscalDoc.publicUrl!,
-            );
+            // Preferimos publicUrl si Alanube/DGII ya nos lo dio. Si aún
+            // estamos en estado `sent` (publicUrl null), construimos la
+            // URL DGII localmente con security_code + RNC + NCF + fecha
+            // + total — el QR sigue siendo válido.
+            //
+            // RNC del emisor: source of truth es fiscal_settings.rnc.
+            // businesses puede tener tax_id en lugar de rnc, o estar
+            // vacio en setups legacy. Cascade: businesses.rnc →
+            // businesses.tax_id → fiscal_settings.rnc.
+            String emitterRnc = (profileRaw?['rnc'] as String?)?.trim() ?? '';
+            if (emitterRnc.isEmpty) {
+              emitterRnc = (profileRaw?['tax_id'] as String?)?.trim() ?? '';
+            }
+            if (emitterRnc.isEmpty) {
+              try {
+                final fs = await Supabase.instance.client
+                    .from('fiscal_settings')
+                    .select('rnc')
+                    .eq('business_id', businessId)
+                    .maybeSingle();
+                emitterRnc = ((fs?['rnc'] as String?)?.trim()) ?? '';
+              } catch (_) {}
+            }
+
+            final qrUrl = fiscalDoc.publicUrl?.isNotEmpty == true
+                ? fiscalDoc.publicUrl!
+                : (fiscalDoc.buildDgiiVerifyUrl(
+                      emitterRnc: emitterRnc,
+                      sandbox: true,
+                    ) ??
+                    '');
+            if (qrUrl.isNotEmpty) {
+              ecfQrBytes = await QrEscPosBuilder.build(data: qrUrl);
+            } else {
+              ecfStatusMsg = fiscalDoc.ecfStatusMessage;
+            }
           } else {
             ecfStatusMsg = fiscalDoc.ecfStatusMessage;
           }

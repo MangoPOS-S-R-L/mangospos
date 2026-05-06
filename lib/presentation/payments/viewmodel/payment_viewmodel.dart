@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -254,26 +255,72 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
     state = state.copyWith(selectedNcfType: type);
   }
 
-  /// Dispara la Edge Function `emit-document` para procesar el outbox de
-  /// e-CF. Fire-and-forget: NO bloquea el flujo de cobro y NO propaga
-  /// errores a la UI (el cobro ya esta cerrado al llegar aqui).
+  /// Invoca `emit-document` en modo SYNC: emite el doc inmediatamente y
+  /// devuelve el snapshot actualizado del fiscal_document para que el ticket
+  /// pueda imprimirse con QR + codigo de seguridad sin necesidad de un
+  /// segundo round-trip a Supabase.
   ///
-  /// Sin este disparo el doc se quedaria en `alanube_emit_outbox` con
-  /// status='pending' hasta que un cron externo lo procese. Esta llamada
-  /// reduce la latencia entre cobro y `accepted` a ~5-15s en lugar de
-  /// minutos.
+  /// Se aplica timeout de [timeout] (default 8s) — Alanube responde tipico
+  /// en 1-3s, DGII puede tardar mas pero solo necesitamos el `securityCode`
+  /// para armar el QR (lo cual ya viene en el response sync de Alanube,
+  /// independiente de DGII).
   ///
-  /// Si la function falla (network, 5xx, etc.), el doc sigue encolado y
-  /// puede recogerse luego por:
-  ///   - Otro cobro en el mismo business (este mismo trigger)
-  ///   - Cron externo en Coolify (si esta configurado)
-  ///   - Llamada manual via curl
-  Future<void> _triggerEmitDocument() async {
+  /// Retorna el FiscalDocument con `ecf_status` actualizado:
+  /// - `sent` o `accepted` → tenemos `ecf_security_code` → ticket sale con QR.
+  /// - `rejected` → DGII rechazo, ticket sale sin QR + mensaje de error.
+  /// - `pending` (timeout) → emit no termino a tiempo, retornamos null y el
+  ///   ticket sale con "EN PROCESO". El cron de respaldo + el webhook van a
+  ///   actualizar la fila eventualmente.
+  ///
+  /// Norma DGII 01-2020: la representacion impresa que se le da al cliente
+  /// debe incluir el QR. Por eso esta llamada bloquea el cierre de cobro;
+  /// si llegamos a producir muchos timeouts, hay que evaluar contingencia
+  /// (downgrade a B02) en una proxima iteracion.
+  Future<FiscalDocument?> _emitDocumentSync({
+    required String fiscalDocumentId,
+    Duration timeout = const Duration(seconds: 8),
+  }) async {
+    // Pasamos fiscal_document_id en el body para que el Edge Function nuevo
+    // procese SOLO ese doc (modo sync). El Edge Function viejo ignora el
+    // body y procesa batch — igual de util porque el doc nuevo va a estar
+    // entre los pending de la queue.
+    final t0 = DateTime.now();
+    debugPrint('[emit-sync] START doc=$fiscalDocumentId timeout=${timeout.inSeconds}s');
     try {
-      await Supabase.instance.client.functions.invoke('emit-document');
+      final res = await Supabase.instance.client.functions
+          .invoke(
+            'emit-document',
+            body: {'fiscal_document_id': fiscalDocumentId},
+          )
+          .timeout(timeout);
+      final dt = DateTime.now().difference(t0).inMilliseconds;
+      debugPrint(
+        '[emit-sync] OK status=${res.status} dt=${dt}ms '
+        'data=${res.data?.toString().substring(0, (res.data?.toString().length ?? 0).clamp(0, 300))}',
+      );
+    } on TimeoutException {
+      final dt = DateTime.now().difference(t0).inMilliseconds;
+      debugPrint('[emit-sync] TIMEOUT después de ${dt}ms');
+      // Timeout: el cron de respaldo + webhook eventualmente van a actualizar.
     } catch (e) {
-      // Silent fail: el cobro ya esta cerrado, no hay UI que actualizar.
-      // El doc queda en outbox y se procesara despues.
+      final dt = DateTime.now().difference(t0).inMilliseconds;
+      debugPrint('[emit-sync] ERROR dt=${dt}ms exception=$e');
+      // Error de red / 5xx: idem timeout, falla suave.
+    }
+
+    // Re-fetch unconditional. Esto funciona con AMBAS versiones del Edge
+    // Function (la vieja batch, la nueva sync per-doc) — solo nos importa
+    // el estado actual del doc en DB despues del intento.
+    try {
+      final refreshed = await _salesRepo.getOrderFiscalDocument(state.order!.id);
+      debugPrint(
+        '[emit-sync] REFETCH status=${refreshed?.ecfStatus} '
+        'sec=${refreshed?.ecfSecurityCode ?? "null"}',
+      );
+      return refreshed;
+    } catch (e) {
+      debugPrint('[emit-sync] REFETCH ERROR: $e');
+      return null;
     }
   }
 
@@ -391,6 +438,23 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         fiscalDoc = await _salesRepo.getOrderFiscalDocument(orderId);
       } catch (_) {}
 
+      // Para e-CF: invocamos emit-document SYNC y esperamos al security_code
+      // antes de cerrar el flujo de cobro. Asi el ticket impreso al cliente
+      // sale con QR valido (Norma DGII 01-2020). Si Alanube tarda mas de
+      // 8s, el ticket sale con "EN PROCESO" y el cron + webhook actualizan
+      // despues — el cobro no se traba.
+      //
+      // Mantenemos el state con processingPayment=true durante la espera
+      // para que el spinner del modal siga visible al usuario.
+      if (fiscalDoc != null && fiscalDoc.isElectronic) {
+        final emitted = await _emitDocumentSync(
+          fiscalDocumentId: fiscalDoc.id,
+        );
+        if (emitted != null) {
+          fiscalDoc = emitted;
+        }
+      }
+
       state = state.copyWith(
         processingPayment: false,
         paymentProcessed: true,
@@ -398,15 +462,6 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         fiscalDocument: fiscalDoc,
         offlineQueued: false,
       );
-
-      // Si es e-CF, dispara emit-document async (fire-and-forget) para que
-      // Alanube envie el doc a DGII inmediatamente. Sin esto el doc queda en
-      // outbox 'pending' hasta que un cron externo lo procese. Como es F&F,
-      // no bloquea el cobro: si falla, el cron de respaldo (si existe) o un
-      // retry manual lo recogeran luego.
-      if (fiscalDoc != null && fiscalDoc.isElectronic) {
-        unawaited(_triggerEmitDocument());
-      }
     } catch (e) {
       final shouldQueueOffline =
           !_connectivity.isConnected ||
