@@ -2712,7 +2712,26 @@ class _CartView extends ConsumerWidget {
                 // del documento (security_code + RNC + NCF + fecha + total).
                 // El QR sigue siendo válido — DGII permite consultas para
                 // docs en proceso.
-                final emitterRnc = (data['rnc'] as String?)?.trim() ?? '';
+                //
+                // RNC del emisor: source of truth es fiscal_settings.rnc.
+                // businesses puede tener tax_id en lugar de rnc, o estar
+                // vacio en setups legacy. Cascade: data.rnc → data.tax_id →
+                // fiscal_settings.rnc del business activo.
+                String emitterRnc = (data['rnc'] as String?)?.trim() ?? '';
+                if (emitterRnc.isEmpty) {
+                  emitterRnc = (data['tax_id'] as String?)?.trim() ?? '';
+                }
+                if (emitterRnc.isEmpty) {
+                  try {
+                    final fs = await Supabase.instance.client
+                        .from('fiscal_settings')
+                        .select('rnc')
+                        .eq('business_id', businessId)
+                        .maybeSingle();
+                    emitterRnc = ((fs?['rnc'] as String?)?.trim()) ?? '';
+                  } catch (_) {}
+                }
+
                 final qrUrl = fiscalDoc.publicUrl?.isNotEmpty == true
                     ? fiscalDoc.publicUrl!
                     : (fiscalDoc.buildDgiiVerifyUrl(

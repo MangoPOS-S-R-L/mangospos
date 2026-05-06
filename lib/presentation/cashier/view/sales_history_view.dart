@@ -767,10 +767,10 @@ class _PaymentTableRow extends ConsumerWidget {
             // URL DGII localmente con security_code + RNC + NCF + fecha
             // + total — el QR sigue siendo válido.
             //
-            // RNC del emisor: source of truth es fiscal_settings.rnc (el
-            // mismo que se mandó a Alanube). businesses.rnc/tax_id puede
-            // diferir (formato con guiones, vacío, etc). Si no esta en
-            // profileRaw, lo cargamos como fallback desde fiscal_settings.
+            // RNC del emisor: source of truth es fiscal_settings.rnc.
+            // businesses puede tener tax_id en lugar de rnc, o estar
+            // vacio en setups legacy. Cascade: businesses.rnc →
+            // businesses.tax_id → fiscal_settings.rnc.
             String emitterRnc = (profileRaw?['rnc'] as String?)?.trim() ?? '';
             if (emitterRnc.isEmpty) {
               emitterRnc = (profileRaw?['tax_id'] as String?)?.trim() ?? '';
@@ -783,15 +783,8 @@ class _PaymentTableRow extends ConsumerWidget {
                     .eq('business_id', businessId)
                     .maybeSingle();
                 emitterRnc = ((fs?['rnc'] as String?)?.trim()) ?? '';
-              } catch (e) {
-                debugPrint('[Reimpresion e-CF] fiscal_settings.rnc fetch failed: $e');
-              }
+              } catch (_) {}
             }
-            debugPrint(
-              '[Reimpresion e-CF] doc=${fiscalDoc.ncfNumber} '
-              'status=${fiscalDoc.ecfStatus} sec=${fiscalDoc.ecfSecurityCode} '
-              'publicUrl=${fiscalDoc.publicUrl ?? "null"} emitterRnc=$emitterRnc',
-            );
 
             final qrUrl = fiscalDoc.publicUrl?.isNotEmpty == true
                 ? fiscalDoc.publicUrl!
@@ -800,13 +793,8 @@ class _PaymentTableRow extends ConsumerWidget {
                       sandbox: true,
                     ) ??
                     '');
-            debugPrint('[Reimpresion e-CF] qrUrl="$qrUrl"');
-
             if (qrUrl.isNotEmpty) {
               ecfQrBytes = await QrEscPosBuilder.build(data: qrUrl);
-              debugPrint(
-                '[Reimpresion e-CF] qrBytes=${ecfQrBytes?.length ?? 0}',
-              );
             } else {
               ecfStatusMsg = fiscalDoc.ecfStatusMessage;
             }
