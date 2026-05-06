@@ -186,9 +186,14 @@ class _PrintersTabState extends State<_PrintersTab> {
   }
 
   void _editPrinter(PrinterConfig printer) {
-    // TODO: Implementar edición
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Función de edición próximamente')),
+    showDialog(
+      context: context,
+      builder: (context) => _AddPrinterDialog(
+        businessId: widget.businessId,
+        repo: widget.repo,
+        onSaved: _loadPrinters,
+        editing: printer,
+      ),
     );
   }
 
@@ -410,16 +415,21 @@ class _InfoRow extends StatelessWidget {
   }
 }
 
-/// ➕ Diálogo para agregar impresora
+/// ➕ Diálogo para agregar/editar impresora.
+///
+/// Si [editing] es null → modo crear; si trae un PrinterConfig → modo editar
+/// (pre-llena campos y al guardar llama updatePrinter en vez de createPrinter).
 class _AddPrinterDialog extends StatefulWidget {
   final String businessId;
   final PrintingRepository repo;
   final VoidCallback onSaved;
+  final PrinterConfig? editing;
 
   const _AddPrinterDialog({
     required this.businessId,
     required this.repo,
     required this.onSaved,
+    this.editing,
   });
 
   @override
@@ -439,6 +449,21 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
   // null = sin probar todavía; true/false = resultado del último ping.
   bool? _lastTestResult;
   String? _lastTestMessage;
+
+  bool get _isEdit => widget.editing != null;
+
+  @override
+  void initState() {
+    super.initState();
+    final e = widget.editing;
+    if (e != null) {
+      _nameController.text = e.name;
+      _type = e.printerType.name; // network | usb | bluetooth
+      _paperWidth = e.paperWidth;
+      if (e.ipAddress != null) _ipController.text = e.ipAddress!;
+      if (e.port != null) _portController.text = e.port!.toString();
+    }
+  }
 
   @override
   void dispose() {
@@ -499,7 +524,7 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Agregar Impresora'),
+      title: Text(_isEdit ? 'Editar Impresora' : 'Agregar Impresora'),
       content: SingleChildScrollView(
         child: Form(
           key: _formKey,
@@ -677,21 +702,39 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
     });
 
     try {
-      await widget.repo.createPrinter(
-        businessId: widget.businessId,
-        name: _nameController.text,
-        type: _type,
-        ipAddress: _type == 'network' ? _ipController.text : null,
-        port: _type == 'network' ? int.parse(_portController.text) : null,
-        paperWidth: _paperWidth,
-      );
+      final ip = _type == 'network' ? _ipController.text.trim() : null;
+      final port = _type == 'network' ? int.parse(_portController.text.trim()) : null;
+
+      if (_isEdit) {
+        await widget.repo.updatePrinter(
+          printerId: widget.editing!.id,
+          name: _nameController.text.trim(),
+          type: _type,
+          ipAddress: ip,
+          port: port,
+          paperWidth: _paperWidth,
+        );
+      } else {
+        await widget.repo.createPrinter(
+          businessId: widget.businessId,
+          name: _nameController.text.trim(),
+          type: _type,
+          ipAddress: ip,
+          port: port,
+          paperWidth: _paperWidth,
+        );
+      }
 
       if (mounted) {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Impresora agregada exitosamente'),
-            backgroundColor: Color(0xFF22C55E),
+          SnackBar(
+            content: Text(
+              _isEdit
+                  ? 'Impresora actualizada'
+                  : 'Impresora agregada exitosamente',
+            ),
+            backgroundColor: const Color(0xFF22C55E),
           ),
         );
         widget.onSaved();
