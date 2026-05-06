@@ -522,30 +522,37 @@ class PrintTicketService {
     _thickSeparator(gen);
     gen.lineFeed();
 
+    // Bloque del comprobante fiscal:
+    // - e-CF (Exx): VA PRIMERO (estandar DGII Norma General 01-2020).
+    //   Titulo descriptivo centrado en negrita + "e-NCF:" + separador.
+    //   Despues va el ORDEN como dato interno secundario.
+    // - NCF fisico (Bxx): TIPO/NCF van DESPUES del ORDEN (formato tradicional).
+    if (isElectronicCf &&
+        fiscalNcf != null &&
+        fiscalNcf.isNotEmpty &&
+        fiscalType != null) {
+      gen.setBold(true);
+      gen.textCentered(_getNcfTypeName(fiscalType));
+      gen.textRow('e-NCF:', fiscalNcf);
+      gen.setBold(false);
+      gen.lineFeed();
+    }
+
     // Order Info
     gen.setBold(true);
     gen.textRow('ORDEN:', order.id.substring(0, 8).toUpperCase());
     gen.setBold(false);
 
-    // Bloque del comprobante fiscal:
-    // - e-CF (Exx): titulo descriptivo centrado en negrita + "e-NCF:"
-    //   (estandar DGII Norma General 01-2020, ver imagen oficial DGII).
-    // - NCF fisico (Bxx): formato tradicional "TIPO:" + "NCF:".
-    if (fiscalNcf != null && fiscalNcf.isNotEmpty) {
-      if (isElectronicCf && fiscalType != null) {
-        gen.lineFeed();
-        gen.setBold(true);
-        gen.textCentered(_getNcfTypeName(fiscalType));
-        gen.textRow('e-NCF:', fiscalNcf);
-        gen.setBold(false);
-      } else {
+    // Para NCF fisico, TIPO/NCF van DESPUES de ORDEN (orden tradicional).
+    if (!isElectronicCf) {
+      if (fiscalNcf != null && fiscalNcf.isNotEmpty) {
         if (fiscalType != null) {
           gen.textRow('TIPO:', _getNcfTypeName(fiscalType));
         }
         gen.textRow('NCF:', fiscalNcf);
+      } else if (fiscalType != null) {
+        gen.textRow('TIPO:', _getNcfTypeName(fiscalType));
       }
-    } else if (fiscalType != null) {
-      gen.textRow('TIPO:', _getNcfTypeName(fiscalType));
     }
 
     if (customerName != null && customerName != 'Cliente') {
