@@ -254,6 +254,29 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
     state = state.copyWith(selectedNcfType: type);
   }
 
+  /// Dispara la Edge Function `emit-document` para procesar el outbox de
+  /// e-CF. Fire-and-forget: NO bloquea el flujo de cobro y NO propaga
+  /// errores a la UI (el cobro ya esta cerrado al llegar aqui).
+  ///
+  /// Sin este disparo el doc se quedaria en `alanube_emit_outbox` con
+  /// status='pending' hasta que un cron externo lo procese. Esta llamada
+  /// reduce la latencia entre cobro y `accepted` a ~5-15s en lugar de
+  /// minutos.
+  ///
+  /// Si la function falla (network, 5xx, etc.), el doc sigue encolado y
+  /// puede recogerse luego por:
+  ///   - Otro cobro en el mismo business (este mismo trigger)
+  ///   - Cron externo en Coolify (si esta configurado)
+  ///   - Llamada manual via curl
+  Future<void> _triggerEmitDocument() async {
+    try {
+      await Supabase.instance.client.functions.invoke('emit-document');
+    } catch (e) {
+      // Silent fail: el cobro ya esta cerrado, no hay UI que actualizar.
+      // El doc queda en outbox y se procesara despues.
+    }
+  }
+
   // ============================================================
   // 💳 SELECCIÓN DE MÉTODO DE PAGO
   // ============================================================
@@ -375,6 +398,15 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         fiscalDocument: fiscalDoc,
         offlineQueued: false,
       );
+
+      // Si es e-CF, dispara emit-document async (fire-and-forget) para que
+      // Alanube envie el doc a DGII inmediatamente. Sin esto el doc queda en
+      // outbox 'pending' hasta que un cron externo lo procese. Como es F&F,
+      // no bloquea el cobro: si falla, el cron de respaldo (si existe) o un
+      // retry manual lo recogeran luego.
+      if (fiscalDoc != null && fiscalDoc.isElectronic) {
+        unawaited(_triggerEmitDocument());
+      }
     } catch (e) {
       final shouldQueueOffline =
           !_connectivity.isConnected ||
