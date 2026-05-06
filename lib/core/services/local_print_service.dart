@@ -3,13 +3,9 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'agent_auth.dart';
 
 class LocalPrintService {
-  static const String _defaultApiToken = String.fromEnvironment(
-    'MANGOPOS_AGENT_TOKEN',
-    defaultValue: 'MANGOPOS_SECURE_TOKEN_123',
-  );
-
   static const List<String> _baseUrls = [
     'http://127.0.0.1:4000',
     'http://localhost:4000',
@@ -88,11 +84,14 @@ class LocalPrintService {
     return null;
   }
 
-  Map<String, String> _headers({bool auth = true}) => {
-    'Content-Type': 'application/json',
-    if (auth && (_apiToken ?? _defaultApiToken).isNotEmpty)
-      'Authorization': 'Bearer ${_apiToken ?? _defaultApiToken}',
-  };
+  Map<String, String> _headers({bool auth = true}) {
+    if (!auth) return {'Content-Type': 'application/json'};
+    final token = resolveAgentBearerToken(explicitToken: _apiToken);
+    return {
+      'Content-Type': 'application/json',
+      if (token.isNotEmpty) 'Authorization': 'Bearer $token',
+    };
+  }
 
   String _normalizePrinterId(String ip, [int port = 9100]) => '$ip:$port';
 

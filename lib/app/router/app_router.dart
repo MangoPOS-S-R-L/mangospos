@@ -16,6 +16,7 @@ import 'package:mangopos/presentation/settings/more%20settings/printing/areas/vi
 import 'package:mangopos/presentation/settings/more%20settings/printing/products/view/printing_products_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/receipts/view/printing_receipts_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/orders/view/printing_orders_view.dart';
+import 'package:mangopos/presentation/settings/more%20settings/printing/diagnostics/view/printing_diagnostics_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/view/taxes_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/zones_tables/view/zones_tables_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/users/view/roles_permissions_view.dart';
@@ -38,7 +39,11 @@ import '../../presentation/cashier/view/sales_history_view.dart';
 import '../../presentation/kitchen/view/kitchen_view.dart';
 import '../../presentation/customers/view/customers_view.dart';
 import '../../presentation/customers/view/customer_detail_view.dart';
+import '../../presentation/inventory/view/inventory_hub_view.dart';
+import '../../presentation/inventory/view/inventory_items_view.dart';
 import '../../presentation/inventory/view/inventory_outflow_view.dart';
+import '../../presentation/inventory/view/suppliers_view.dart';
+import '../../presentation/inventory/view/warehouses_view.dart';
 import '../../presentation/inventory/view/requirements_view.dart';
 import '../../presentation/inventory/view/stock_reconciliation_view.dart';
 import '../../presentation/purchases/view/purchases_list_view.dart';
@@ -514,6 +519,22 @@ class AppRouter {
             builder: (context, state) => const RegionalView(),
           ),
           GoRoute(
+            path: AppRoutes.inventoryHome,
+            builder: (context, state) => const InventoryHubView(),
+          ),
+          GoRoute(
+            path: AppRoutes.inventoryItems,
+            builder: (context, state) => const InventoryItemsView(),
+          ),
+          GoRoute(
+            path: AppRoutes.inventoryWarehouses,
+            builder: (context, state) => const WarehousesView(),
+          ),
+          GoRoute(
+            path: AppRoutes.inventorySuppliers,
+            builder: (context, state) => const SuppliersView(),
+          ),
+          GoRoute(
             path: AppRoutes.inventoryRequirements,
             builder: (context, state) => const RequirementsView(),
           ),
@@ -631,6 +652,12 @@ class AppRouter {
                 path: AppRoutes.printingOrders,
                 builder: (context, state) =>
                     const PrintingOrdersView(businessId: 'auto'),
+              ),
+              // /settings/printing/diagnostics
+              GoRoute(
+                path: AppRoutes.printingDiagnostics,
+                builder: (context, state) =>
+                    const PrintingDiagnosticsView(businessId: 'auto'),
               ),
             ],
           ),

@@ -40,12 +40,17 @@ class CashierRepository {
       );
     }
 
+    // Defensive: si hay 2+ sesiones abiertas para el mismo user (drift por
+    // bug previo de cierre), tomamos la más reciente en lugar de crashear
+    // con PostgrestException 406. Idem en las otras getActive* abajo.
     final data = await _client
         .from('cash_register_sessions')
         .select()
         .eq('user_id', userId)
         .eq('status', 'open')
         .isFilter('closed_at', null)
+        .order('created_at', ascending: false)
+        .limit(1)
         .maybeSingle();
 
     if (data == null) {
@@ -209,6 +214,8 @@ class CashierRepository {
         .eq('user_id', userId)
         .eq('status', 'open')
         .isFilter('closed_at', null)
+        .order('created_at', ascending: false)
+        .limit(1)
         .maybeSingle();
 
     if (data == null) return null;
@@ -222,6 +229,28 @@ class CashierRepository {
         .eq('device_id', deviceId)
         .eq('status', 'open')
         .isFilter('closed_at', null)
+        .order('created_at', ascending: false)
+        .limit(1)
+        .maybeSingle();
+
+    if (data == null) return null;
+    return CashRegisterSession.fromMap(data);
+  }
+
+  /// Busca la sesión abierta de un cash_register, sin filtrar por user.
+  /// Permite que cualquier empleado del local sepa si la caja del register
+  /// está operativa para vender. El cierre sigue restringido al dueño.
+  Future<CashRegisterSession?> getActiveSessionForRegister(
+    String cashRegisterId,
+  ) async {
+    final data = await _client
+        .from('cash_register_sessions')
+        .select()
+        .eq('cash_register_id', cashRegisterId)
+        .eq('status', 'open')
+        .isFilter('closed_at', null)
+        .order('created_at', ascending: false)
+        .limit(1)
         .maybeSingle();
 
     if (data == null) return null;

@@ -329,8 +329,45 @@ class KitchenRepository {
     final items = rows.map(KitchenItem.fromMap).toList()
       ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
-    if (!includeModifiers || items.isEmpty) return items;
-    return _attachModifiers(items);
+    if (items.isEmpty) return items;
+    final withTakeout = await _attachTakeoutFlags(items);
+    if (!includeModifiers) return withTakeout;
+    return _attachModifiers(withTakeout);
+  }
+
+  Future<List<KitchenItem>> _attachTakeoutFlags(
+    List<KitchenItem> items,
+  ) async {
+    // kds_active_items no expone is_takeout, asi que lo traemos directo
+    // de order_items en lotes para no excederse en el filtro `in`.
+    final itemIds = items.map((i) => i.id).toList(growable: false);
+    final flagsByItem = <String, bool>{};
+    const chunkSize = 100;
+
+    for (var i = 0; i < itemIds.length; i += chunkSize) {
+      final end = (i + chunkSize > itemIds.length)
+          ? itemIds.length
+          : i + chunkSize;
+      final chunk = itemIds.sublist(i, end);
+
+      final rows = await _client
+          .from('order_items')
+          .select('id,is_takeout')
+          .inFilter('id', chunk);
+
+      for (final row in List<Map<String, dynamic>>.from(rows)) {
+        final id = row['id']?.toString();
+        if (id == null || id.isEmpty) continue;
+        flagsByItem[id] = row['is_takeout'] == true;
+      }
+    }
+
+    return items
+        .map(
+          (item) =>
+              item.copyWith(isTakeout: flagsByItem[item.id] ?? item.isTakeout),
+        )
+        .toList(growable: false);
   }
 
   Future<List<KitchenItem>> _attachModifiers(List<KitchenItem> items) async {

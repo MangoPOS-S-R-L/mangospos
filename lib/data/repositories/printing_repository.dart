@@ -792,7 +792,41 @@ class PrintingRepository {
     );
   }
 
-  /// Enviar datos ESC/POS directos por TCP (solo plataformas nativas)
+  /// Verifica que una impresora de red responda en `ip:port` sin emitir datos.
+  ///
+  /// Uso típico: feedback "Probar conexión" en el formulario de alta antes de
+  /// persistir. Abre socket, lo cierra inmediato. No escribe payload — la
+  /// térmica no imprime nada de prueba; solo se valida alcanzabilidad TCP.
+  ///
+  /// Devuelve `true` si conecta dentro de [timeout]; `false` ante cualquier
+  /// fallo (timeout, ECONNREFUSED, EHOSTUNREACH, etc.). No lanza.
+  Future<bool> pingNetworkPrinter({
+    required String ip,
+    int port = 9100,
+    Duration timeout = const Duration(seconds: 3),
+  }) async {
+    if (kIsWeb) return false; // dart:io.Socket no disponible en Web
+    Socket? socket;
+    try {
+      socket = await Socket.connect(ip, port, timeout: timeout);
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      try {
+        socket?.destroy();
+      } catch (_) {}
+    }
+  }
+
+  /// Enviar datos ESC/POS directos por TCP (solo plataformas nativas).
+  ///
+  /// Garantías del flush+close:
+  /// - try/finally cierra el socket aunque `flush` lance, evitando leaks de
+  ///   FD cuando la térmica corta la conexión a media impresión.
+  /// - `await socket.done` espera el handshake de cierre real; sin esto, el
+  ///   `close()` retorna apenas inicia el shutdown y la térmica puede recibir
+  ///   un FIN antes de procesar los últimos bytes (paper jam / corte parcial).
   Future<void> printRawDirectTcp({
     required String ip,
     int port = 9100,
@@ -800,9 +834,13 @@ class PrintingRepository {
     Duration timeout = const Duration(seconds: 3),
   }) async {
     final socket = await Socket.connect(ip, port, timeout: timeout);
-    socket.add(data);
-    await socket.flush();
-    await socket.close();
+    try {
+      socket.add(data);
+      await socket.flush();
+    } finally {
+      await socket.close();
+      await socket.done;
+    }
   }
 
   Future<void> printEscPos({

@@ -1,0 +1,6 @@
+# PRD 7 Fase 1.1 — runtime state, no commitear
+queue.db
+queue.db-shm
+queue.db-wal
+agent.log
+

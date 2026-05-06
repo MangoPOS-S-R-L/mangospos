@@ -50,6 +50,7 @@ class PrinterDevice {
     this.paperWidth = 80,
     this.encoding = 'CP437',
     required this.createdAt,
+    this.hostDeviceId,
   });
 
   final String id;
@@ -65,6 +66,10 @@ class PrinterDevice {
   final int paperWidth;
   final String encoding;
   final DateTime createdAt;
+  /// PRD 5 F2.5 — id del device que tiene físicamente la impresora
+  /// (USB/BT). NULL para impresoras de red. Se propaga desde
+  /// `PrinterConfig.hostDeviceId` al construir vía `fromConfig`.
+  final String? hostDeviceId;
 
   factory PrinterDevice.fromMap(Map<String, dynamic> map) {
     final normalized = PrinterFieldMapper.normalize(map);
@@ -82,6 +87,7 @@ class PrinterDevice {
       paperWidth: normalized['paper_width'] as int,
       encoding: normalized['encoding'] as String,
       createdAt: normalized['created_at'] as DateTime,
+      hostDeviceId: map['host_device_id'] as String?,
     );
   }
 
@@ -100,6 +106,7 @@ class PrinterDevice {
       paperWidth: config.paperWidth,
       encoding: config.encoding,
       createdAt: config.createdAt,
+      hostDeviceId: config.hostDeviceId,
     );
   }
 

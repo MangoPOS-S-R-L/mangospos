@@ -76,6 +76,15 @@ class AppRoutes {
   static const inventoryRequirements = '$settings/inventory-requirements';
   static const inventoryOutflow = '$settings/inventory-outflow';
   static const inventoryReconciliation = '$settings/inventory-reconciliation';
+
+  // ---- Módulo Inventario (PRD 9) ----
+  static const inventoryHome = '/inventory';
+  static const inventoryItems = '$inventoryHome/items';
+  static const inventoryWarehouses = '$inventoryHome/warehouses';
+  static const inventorySuppliers = '$inventoryHome/suppliers';
+  static const inventoryReceipts = '$inventoryHome/receipts';
+  static const inventoryTransfers = '$inventoryHome/transfers';
+  static const inventoryAdjustments = '$inventoryHome/adjustments';
   static const printingBase = '$settings/printing';
 
   // ---- Gestión de impresión (sin businessId en URL) ----
@@ -84,6 +93,7 @@ class AppRoutes {
   static const printingProducts = '$settings/printing/products';
   static const printingReceipts = '$settings/printing/receipts';
   static const printingOrders = '$settings/printing/orders';
+  static const printingDiagnostics = '$settings/printing/diagnostics';
 
   // ---- Tests ----
   static const cacheTest = '/cache-test';

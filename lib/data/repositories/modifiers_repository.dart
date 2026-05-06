@@ -29,11 +29,28 @@ class ModifiersRepository {
         .from('modifier_groups')
         .select('id, name, min_select, max_select, is_active, created_at')
         .eq('business_id', businessId)
-        .order('created_at', ascending: false);
+        .order('sort_order', ascending: true)
+        .order('name', ascending: true);
 
     return List<Map<String, dynamic>>.from(
       response,
     ).map(ModifierGroupSummary.fromMap).toList(growable: false);
+  }
+
+  /// Reordena globalmente los grupos del negocio. Asigna sort_order = 1..N
+  /// usando el RPC fn_reorder_modifier_groups_global.
+  Future<void> reorderGroupsGlobal({
+    required String businessId,
+    required List<String> orderedGroupIds,
+  }) async {
+    if (orderedGroupIds.isEmpty) return;
+    await _client.rpc(
+      'fn_reorder_modifier_groups_global',
+      params: {
+        'p_business_id': businessId,
+        'p_group_ids': orderedGroupIds,
+      },
+    );
   }
 
   Future<List<ModifierOption>> getModifiers(String businessId) async {
@@ -41,7 +58,8 @@ class ModifiersRepository {
         .from('modifiers')
         .select('id, group_id, name, price_delta, is_active, created_at')
         .eq('business_id', businessId)
-        .order('created_at', ascending: false);
+        .order('sort_order', ascending: true)
+        .order('name', ascending: true);
 
     return List<Map<String, dynamic>>.from(
       response,
@@ -160,5 +178,61 @@ class ModifiersRepository {
           )
           .toList(growable: false),
     );
+  }
+
+  /// Lista los grupos asignados a un producto en el orden actual (position).
+  /// Devuelve una lista de mapas con `id`, `name` y `position`.
+  Future<List<Map<String, dynamic>>> getGroupsForMenuItem(
+    String menuItemId,
+  ) async {
+    final response = await _client
+        .from('menu_item_groups')
+        .select(
+          'group_id, position, modifier_groups!inner(id, name, is_active)',
+        )
+        .eq('menu_item_id', menuItemId)
+        .order('position', ascending: true);
+
+    final rows = List<Map<String, dynamic>>.from(response);
+    return rows.map((row) {
+      final group = row['modifier_groups'] as Map<String, dynamic>?;
+      return <String, dynamic>{
+        'id': group?['id']?.toString() ?? row['group_id']?.toString() ?? '',
+        'name': group?['name']?.toString() ?? '',
+        'is_active': group?['is_active'] ?? true,
+        'position': row['position'] ?? 0,
+      };
+    }).toList(growable: false);
+  }
+
+  /// Persiste el nuevo orden de grupos asignados a un producto.
+  /// Usa el RPC fn_reorder_modifier_groups que actualiza atómicamente.
+  Future<void> reorderModifierGroupsForMenuItem({
+    required String menuItemId,
+    required List<String> orderedGroupIds,
+  }) async {
+    await _client.rpc(
+      'fn_reorder_modifier_groups',
+      params: {
+        'p_menu_item_id': menuItemId,
+        'p_group_ids': orderedGroupIds,
+      },
+    );
+  }
+
+  /// Persiste el nuevo orden de modificadores (opciones) dentro de un grupo.
+  /// Actualiza modifiers.sort_order para cada id en orden 1..N.
+  Future<void> reorderModifiersInGroup({
+    required String groupId,
+    required List<String> orderedModifierIds,
+  }) async {
+    if (orderedModifierIds.isEmpty) return;
+    for (var i = 0; i < orderedModifierIds.length; i++) {
+      await _client
+          .from('modifiers')
+          .update({'sort_order': i + 1})
+          .eq('id', orderedModifierIds[i])
+          .eq('group_id', groupId);
+    }
   }
 }

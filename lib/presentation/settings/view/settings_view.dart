@@ -221,11 +221,18 @@ class SettingsView extends ConsumerWidget {
         title: 'Gestión de Productos',
         items: [
           _SettingsOption(
-            title: 'Productos y Categorías',
+            title: 'Productos',
             subtitle: 'Catálogo de productos',
             icon: Icons.inventory_2_rounded,
             color: const Color(0xFFFFE6D5),
             route: AppRoutes.products,
+          ),
+          _SettingsOption(
+            title: 'Categorías',
+            subtitle: 'Crear, renombrar, activar y eliminar categorías',
+            icon: Icons.category_rounded,
+            color: const Color(0xFFFFF7ED),
+            route: AppRoutes.menuCategories,
           ),
           _SettingsOption(
             title: 'Modificadores',
@@ -345,6 +352,13 @@ class SettingsView extends ConsumerWidget {
       _SettingsSection(
         title: 'Almacenes e Inventario',
         items: const [
+          _SettingsOption(
+            title: 'Inventario',
+            subtitle: 'Insumos, recetas, almacenes y proveedores',
+            icon: Icons.inventory_2_rounded,
+            color: Color(0xFFFFE6D5),
+            route: AppRoutes.inventoryHome,
+          ),
           _SettingsOption(
             title: 'Kardex por Sucursal',
             subtitle: 'Historial de movimientos por ubicación',

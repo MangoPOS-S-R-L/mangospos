@@ -353,14 +353,14 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
   }
 }
 
-class _ProductsHeader extends StatelessWidget {
+class _ProductsHeader extends ConsumerWidget {
   final VoidCallback onRefresh;
   final VoidCallback onAdd;
 
   const _ProductsHeader({required this.onRefresh, required this.onAdd});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final compact = Breakpoints.isCompact(context);
 
     final title = Text(
@@ -378,8 +378,71 @@ class _ProductsHeader extends StatelessWidget {
         IconButton(
           onPressed: onRefresh,
           icon: Icon(Icons.refresh, color: AppColors.mutedForeground),
+          tooltip: 'Actualizar',
         ),
-        const SizedBox(width: AppSpacing.lg),
+        const SizedBox(width: AppSpacing.sm),
+        PopupMenuButton<String>(
+          icon: Icon(Icons.more_vert, color: AppColors.mutedForeground),
+          tooltip: 'M\u00e1s opciones',
+          onSelected: (value) async {
+            final viewModel = ref.read(productsViewModelProvider);
+            if (value == 'import') {
+              await viewModel.importProductsFromExcel();
+              if (context.mounted && viewModel.error != null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(viewModel.error!)),
+                );
+              }
+            } else if (value == 'export') {
+              await viewModel.exportProductsToExcel();
+              if (context.mounted && viewModel.error != null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(viewModel.error!)),
+                );
+              }
+            } else if (value == 'template') {
+              await viewModel.downloadTemplate();
+              if (context.mounted && viewModel.error != null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(viewModel.error!)),
+                );
+              }
+            }
+          },
+          itemBuilder: (context) => [
+            const PopupMenuItem(
+              value: 'import',
+              child: Row(
+                children: [
+                  Icon(Icons.upload_file, size: 20),
+                  SizedBox(width: 8),
+                  Text('Importar desde Excel'),
+                ],
+              ),
+            ),
+            const PopupMenuItem(
+              value: 'export',
+              child: Row(
+                children: [
+                  Icon(Icons.download, size: 20),
+                  SizedBox(width: 8),
+                  Text('Exportar a Excel'),
+                ],
+              ),
+            ),
+            const PopupMenuItem(
+              value: 'template',
+              child: Row(
+                children: [
+                  Icon(Icons.description, size: 20),
+                  SizedBox(width: 8),
+                  Text('Descargar plantilla'),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(width: AppSpacing.md),
         ElevatedButton.icon(
           onPressed: onAdd,
           icon: const Icon(Icons.add, size: 18),
@@ -544,6 +607,7 @@ class _ProductsTable extends StatelessWidget {
                                     ? DecorationImage(
                                         image: CachedNetworkImageProvider(imageUrl.replaceAll('sqdwjjewdqzxglvqerqt.supabase.co', 'supabase.mangopos.do')),
                                         fit: BoxFit.cover,
+                                        onError: (_, _) {},
                                       )
                                     : null,
                               ),

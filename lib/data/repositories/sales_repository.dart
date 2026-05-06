@@ -550,22 +550,39 @@ class SalesRepository {
     String menuItemId,
   ) async {
     try {
+      // Orden personalizado por producto (menu_item_groups.position).
+      // El cliente reordena los grupos desde el editor de producto.
       final data = await _client
           .from('menu_item_groups')
           .select(
-            'group_id, modifier_groups!inner(id, name, min_select, max_select, is_active, display_type, selection_mode, is_required, free_qty, max_qty_per_option, sort_order, modifiers(id, group_id, name, price_delta, is_active, sort_order, default_selected))',
+            'group_id, position, modifier_groups!inner(id, name, min_select, max_select, is_active, display_type, selection_mode, is_required, free_qty, max_qty_per_option, sort_order, modifiers(id, group_id, name, price_delta, is_active, sort_order, default_selected))',
           )
           .eq('menu_item_id', menuItemId)
           .eq('modifier_groups.is_active', true)
-          .order(
-            'sort_order',
-            referencedTable: 'modifier_groups',
-            ascending: true,
-          );
+          .order('position', ascending: true);
 
-      return List<Map<String, dynamic>>.from(
+      final rows = List<Map<String, dynamic>>.from(
         data as List,
       ).map((row) => Map<String, dynamic>.from(row)).toList(growable: false);
+
+      for (final row in rows) {
+        final group = row['modifier_groups'];
+        if (group is Map && group['modifiers'] is List) {
+          final modifiers = List<dynamic>.from(group['modifiers'] as List);
+          // Ordenar opciones por sort_order ascendente; si empate, por nombre.
+          modifiers.sort((a, b) {
+            final ao = a is Map ? (a['sort_order'] as num?)?.toInt() ?? 0 : 0;
+            final bo = b is Map ? (b['sort_order'] as num?)?.toInt() ?? 0 : 0;
+            if (ao != bo) return ao.compareTo(bo);
+            final an = (a is Map ? a['name'] : '')?.toString().toLowerCase() ?? '';
+            final bn = (b is Map ? b['name'] : '')?.toString().toLowerCase() ?? '';
+            return an.compareTo(bn);
+          });
+          group['modifiers'] = modifiers;
+        }
+      }
+
+      return rows;
     } catch (e) {
       throw Exception('Error al obtener modificadores del producto: $e');
     }
@@ -912,6 +929,25 @@ class SalesRepository {
   }) async {
     try {
       await _assertOrderInBusinessScope(orderId, businessId: businessId);
+
+      // Defensa en profundidad: si onlyOpen, validar que la orden padre
+      // esté abierta. Esto evita devolver items huérfanos de órdenes
+      // void/paid cuyos items no se marcaron correctamente.
+      if (onlyOpen) {
+        final parent = await _client
+            .from('orders')
+            .select('closed_at,status_ext')
+            .eq('id', orderId)
+            .maybeSingle();
+        final closedAt = parent?['closed_at'];
+        final statusExt = parent?['status_ext']?.toString();
+        if (closedAt != null ||
+            statusExt == 'void' ||
+            statusExt == 'paid' ||
+            statusExt == 'cancelled') {
+          return const <OrderItem>[];
+        }
+      }
 
       var query = _client
           .from('order_items')

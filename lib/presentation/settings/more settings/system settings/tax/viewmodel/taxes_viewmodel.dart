@@ -40,8 +40,13 @@ class TaxesVm extends Notifier<TaxesState> {
     bool applyOnManual = true,
     bool applyOnQuick = true,
     bool applyOnDelivery = true,
+    bool applyOnTakeout = true,
     bool isServiceFee = false,
+    bool? includeInEcf,
   }) async {
+    // Default sensato si el caller no especifica: ITBIS-like va al e-CF;
+    // propina-like (is_service_fee=true) NO va al e-CF.
+    final resolvedIncludeInEcf = includeInEcf ?? !isServiceFee;
     await _repo.create(
       businessId: _businessId,
       name: name,
@@ -51,7 +56,9 @@ class TaxesVm extends Notifier<TaxesState> {
       applyOnManual: applyOnManual,
       applyOnQuick: applyOnQuick,
       applyOnDelivery: applyOnDelivery,
+      applyOnTakeout: applyOnTakeout,
       isServiceFee: isServiceFee,
+      includeInEcf: resolvedIncludeInEcf,
     );
     await refresh();
   }
@@ -66,7 +73,9 @@ class TaxesVm extends Notifier<TaxesState> {
     bool? applyOnManual,
     bool? applyOnQuick,
     bool? applyOnDelivery,
+    bool? applyOnTakeout,
     bool? isServiceFee,
+    bool? includeInEcf,
   }) async {
     final patch = <String, dynamic>{
       if (name != null) 'name': name,
@@ -76,7 +85,9 @@ class TaxesVm extends Notifier<TaxesState> {
       if (applyOnManual != null) 'apply_on_manual': applyOnManual,
       if (applyOnQuick != null) 'apply_on_quick': applyOnQuick,
       if (applyOnDelivery != null) 'apply_on_delivery': applyOnDelivery,
+      if (applyOnTakeout != null) 'apply_on_takeout': applyOnTakeout,
       if (isServiceFee != null) 'is_service_fee': isServiceFee,
+      if (includeInEcf != null) 'include_in_ecf': includeInEcf,
     };
     await _repo.update(id, patch);
     await refresh();

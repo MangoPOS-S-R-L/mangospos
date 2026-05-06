@@ -15,6 +15,7 @@ class KitchenItem extends Equatable {
   final DateTime? startedAt;
   final DateTime? readyAt;
   final List<KitchenModifier> modifiers;
+  final bool isTakeout;
 
   const KitchenItem({
     required this.id,
@@ -30,6 +31,7 @@ class KitchenItem extends Equatable {
     this.startedAt,
     this.readyAt,
     this.modifiers = const [],
+    this.isTakeout = false,
   });
 
   factory KitchenItem.fromMap(Map<String, dynamic> map) {
@@ -51,6 +53,7 @@ class KitchenItem extends Equatable {
           ? DateTime.tryParse(map['ready_at'])
           : null,
       modifiers: [],
+      isTakeout: map['is_takeout'] == true,
     );
   }
 
@@ -68,6 +71,7 @@ class KitchenItem extends Equatable {
     DateTime? startedAt,
     DateTime? readyAt,
     List<KitchenModifier>? modifiers,
+    bool? isTakeout,
   }) {
     return KitchenItem(
       id: id ?? this.id,
@@ -83,6 +87,7 @@ class KitchenItem extends Equatable {
       startedAt: startedAt ?? this.startedAt,
       readyAt: readyAt ?? this.readyAt,
       modifiers: modifiers ?? this.modifiers,
+      isTakeout: isTakeout ?? this.isTakeout,
     );
   }
 
@@ -116,6 +121,7 @@ class KitchenItem extends Equatable {
     startedAt,
     readyAt,
     modifiers,
+    isTakeout,
   ];
 }
 

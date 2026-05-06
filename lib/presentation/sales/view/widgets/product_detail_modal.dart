@@ -21,6 +21,7 @@ class ProductDetailModal extends StatefulWidget {
   )?
   onSaveBatch;
   final Future<void> Function(String reason) onDelete;
+  final Future<bool> Function()? onBeforeDelete;
   final Future<void> Function()? onMarkSoldOut;
   final VoidCallback? onReprint;
 
@@ -33,6 +34,7 @@ class ProductDetailModal extends StatefulWidget {
     required this.onSave,
     this.onSaveBatch,
     required this.onDelete,
+    this.onBeforeDelete,
     this.onMarkSoldOut,
     this.onReprint,
   });
@@ -115,6 +117,12 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
   }
 
   Future<void> _handleDelete() async {
+    if (widget.onBeforeDelete != null) {
+      final allowed = await widget.onBeforeDelete!();
+      if (!allowed) return;
+      if (!mounted) return;
+    }
+
     final reasonController = TextEditingController();
 
     final reason = await showDialog<String>(
@@ -433,18 +441,21 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
       backgroundColor: Colors.white,
       surfaceTintColor: Colors.white,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      insetPadding: const EdgeInsets.all(16),
       child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: 950,
-          maxHeight: MediaQuery.of(context).size.height * 0.95,
-        ),
-        child: Container(
-          width: double.maxFinite,
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+        constraints: const BoxConstraints(maxWidth: 950),
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.center,
+          child: SizedBox(
+            width: 950,
+            child: Container(
+              width: double.maxFinite,
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
               // Header
               Row(
                 children: [
@@ -979,6 +990,8 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                 ),
               ),
             ],
+          ),
+        ),
           ),
         ),
       ),

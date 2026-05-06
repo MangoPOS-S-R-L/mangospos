@@ -24,6 +24,7 @@ import 'package:mangopos/presentation/customers/viewmodel/customers_viewmodel.da
 
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
+import 'package:mangopos/services/printing/qr_esc_pos_builder.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
@@ -49,9 +50,37 @@ const double _salesRadiusButton = 12; // botones pill
 const double _salesRadiusField = 14;
 const double _salesRadiusTab = 12;
 
-final _salesActionLocksProvider = StateProvider<Set<String>>(
-  (ref) => <String>{},
+/// Locks de acciones por orden (envío a cocina, impresión, etc.) — el
+/// valor es el timestamp en ms cuando se adquirió el lock. Permite que
+/// `_isActionLocked` ignore locks expirados aunque el timer failsafe no
+/// haya llegado a correr (ej: app en background, frame skip).
+final _salesActionLocksProvider = StateProvider<Map<String, int>>(
+  (ref) => const {},
 );
+
+/// Vida máxima de un lock antes de considerarse stale y permitir
+/// reintento. Si la acción legítimamente puede tomar más tiempo, hay que
+/// pasar `failsafeTimeout` mayor en `_runLockedAction`.
+const Duration _kLockMaxAge = Duration(seconds: 15);
+
+Future<bool> _ensureCanDeleteOrderItem(
+  BuildContext context,
+  WidgetRef ref,
+) async {
+  final sessionCtrl = ref.read(sessionProvider.notifier);
+  if (sessionCtrl.hasPermission('ventas.orden.eliminar_item')) {
+    return true;
+  }
+  final authorized = await showPinVerificationModal(
+    context,
+    ref,
+    level: PinAccessLevel.supervisor,
+    title: 'Autorización para eliminar',
+    subtitle:
+        'Se requiere PIN de Supervisor o Administrador para eliminar este producto.',
+  );
+  return authorized;
+}
 
 const List<BoxShadow> _salesSoftShadow = [
   BoxShadow(color: Color(0x10000000), blurRadius: 6, offset: Offset(0, 2)),
@@ -920,29 +949,72 @@ class _CartView extends ConsumerWidget {
 
   bool _isActionLocked(WidgetRef ref, String key) {
     return ref.watch(
-      _salesActionLocksProvider.select(
-        (activeLocks) => activeLocks.contains(key),
-      ),
+      _salesActionLocksProvider.select((locks) {
+        final ts = locks[key];
+        if (ts == null) return false;
+        // Lock expirado por edad → ignorado. Permite reintento aunque el
+        // timer failsafe no haya corrido (app suspendida, frame skip).
+        final age = DateTime.now().millisecondsSinceEpoch - ts;
+        return age < _kLockMaxAge.inMilliseconds;
+      }),
     );
   }
 
   Future<void> _runLockedAction(
     WidgetRef ref,
     String key,
-    Future<void> Function() action,
-  ) async {
-    final activeLocks = ref.read(_salesActionLocksProvider);
-    if (activeLocks.contains(key)) return;
-
+    Future<void> Function() action, {
+    Duration failsafeTimeout = _kLockMaxAge,
+  }) async {
     final notifier = ref.read(_salesActionLocksProvider.notifier);
-    notifier.state = {...activeLocks, key};
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    // Si ya hay un lock fresco para esta key, ignorar la nueva invocación.
+    // Si el lock está expirado, lo sobrescribimos (timer anterior nunca
+    // limpió por algún motivo).
+    final current = ref.read(_salesActionLocksProvider);
+    final existingTs = current[key];
+    if (existingTs != null &&
+        now - existingTs < failsafeTimeout.inMilliseconds) {
+      debugPrint(
+        '[SalesLocks] SKIP "$key": lock fresco existente '
+        '(edad ${now - existingTs}ms < TTL ${failsafeTimeout.inMilliseconds}ms). '
+        'Click ignorado.',
+      );
+      return;
+    }
+    debugPrint(
+      '[SalesLocks] ACQUIRE "$key" en ts=$now '
+      '(${existingTs == null ? "sin lock previo" : "sobrescribiendo lock viejo de hace ${now - existingTs}ms"}).',
+    );
+    notifier.state = {...current, key: now};
+
+    // Failsafe: si la acción se cuelga, libera el lock tras
+    // [failsafeTimeout] para que el botón vuelva a habilitarse. La acción
+    // puede seguir corriendo en background — el `finally` también limpia
+    // (idempotente).
+    final failsafe = Timer(failsafeTimeout, () {
+      final state = ref.read(_salesActionLocksProvider);
+      if (!state.containsKey(key)) return;
+      final next = {...state}..remove(key);
+      notifier.state = next;
+      debugPrint(
+        '[SalesLocks] FAILSAFE release "$key" tras '
+        '${failsafeTimeout.inSeconds}s sin completar.',
+      );
+    });
 
     try {
       await action();
     } finally {
-      final nextLocks = {...ref.read(_salesActionLocksProvider)};
-      nextLocks.remove(key);
-      notifier.state = nextLocks;
+      failsafe.cancel();
+      final next = {...ref.read(_salesActionLocksProvider)};
+      final hadKey = next.remove(key) != null;
+      notifier.state = next;
+      debugPrint(
+        '[SalesLocks] RELEASE "$key" tras ${DateTime.now().millisecondsSinceEpoch - now}ms '
+        '(finally, ${hadKey ? "lock estaba presente" : "lock ya removido"}).',
+      );
     }
   }
 
@@ -1262,6 +1334,11 @@ class _CartView extends ConsumerWidget {
           final targetTotalQty = updatedItem.quantity <= 0
               ? 1.0
               : updatedItem.quantity;
+          if (targetTotalQty < originalTotalQty) {
+            if (!await _ensureCanDeleteOrderItem(context, ref)) {
+              return;
+            }
+          }
           var qtyToDistribute = targetTotalQty;
 
           for (var index = 0; index < items.length; index++) {
@@ -1323,6 +1400,7 @@ class _CartView extends ConsumerWidget {
               .read(currentOrderProvider.notifier)
               .deleteItem(item.id, reason: reason);
         },
+        onBeforeDelete: () => _ensureCanDeleteOrderItem(context, ref),
         onMarkSoldOut: item.productId == null
             ? null
             : () async {
@@ -1360,9 +1438,14 @@ class _CartView extends ConsumerWidget {
                   order.id,
                   itemsToReprint,
                 );
-                if (ref
-                    .read(_salesActionLocksProvider)
-                    .contains(reprintLockKey)) {
+                // El lock está vivo si tiene timestamp dentro de la
+                // ventana _kLockMaxAge. Locks expirados se ignoran y el
+                // _runLockedAction posterior los va a sobrescribir.
+                final now = DateTime.now().millisecondsSinceEpoch;
+                final ts = ref
+                    .read(_salesActionLocksProvider)[reprintLockKey];
+                if (ts != null &&
+                    now - ts < _kLockMaxAge.inMilliseconds) {
                   return;
                 }
 
@@ -1494,11 +1577,16 @@ class _CartView extends ConsumerWidget {
 
     final currency = NumberFormat('#,##0.00', 'en_US');
 
-    // Group items for display
-    final sentItems = displayedItems.where((i) => i.status != 'draft').toList();
-    final draftItems = displayedItems
+    // Group items for display.
+    // El orden se invierte para que los productos agregados más recientemente
+    // aparezcan ARRIBA. Items agrupados (mismo nombre/takeout) toman el orden
+    // del más reciente porque la iteración entra primero.
+    final sentItems = displayedItems.reversed
+        .where((i) => i.status != 'draft')
+        .toList(growable: false);
+    final draftItems = displayedItems.reversed
         .where((i) => i.status == 'draft')
-        .toList();
+        .toList(growable: false);
     final itemsCount = _sumItemQty(
       displayedItems,
     ); // Cantidad real, no cantidad de líneas
@@ -1526,7 +1614,17 @@ class _CartView extends ConsumerWidget {
       }
     }
     final groupedSentItems = groupedSent.values.toList();
-    final latestVoidAudit = _extractLatestVoidAudit(orderState.sessionNote);
+    // Solo mostrar el panel "Última anulación" si la orden actual está
+    // anulada/cerrada. Si la orden actual es nueva pero la sesión tiene
+    // historial de anulación, no aplica al momento actual.
+    final currentOrder = orderState.order;
+    final isCurrentOrderVoided = currentOrder != null &&
+        (currentOrder.status == 'void' ||
+            currentOrder.status == 'cancelled' ||
+            currentOrder.closedAt != null);
+    final latestVoidAudit = isCurrentOrderVoided
+        ? _extractLatestVoidAudit(orderState.sessionNote)
+        : null;
     final currentOrderId = orderState.order?.id;
     final sendKitchenLockKey = _sendKitchenActionKey(currentOrderId);
     final precheckLockKey = _printActionKey(
@@ -1534,8 +1632,12 @@ class _CartView extends ConsumerWidget {
       orderId: currentOrderId,
       checkId: selectedCheckId,
     );
-    final sendKitchenLocked =
-        orderState.loading || _isActionLocked(ref, sendKitchenLockKey);
+    // Solo bloqueamos por el lock TTL específico de la acción. Antes
+    // también dependíamos de `orderState.loading`, pero ese flag puede
+    // quedar pegado si un fetch/persist HTTP se cuelga, y dejaba el
+    // botón inservible aún cuando la operación de envío a cocina sí
+    // podía proceder. El lock TTL (60s) es la única gate confiable.
+    final sendKitchenLocked = _isActionLocked(ref, sendKitchenLockKey);
     final precheckLocked = _isActionLocked(ref, precheckLockKey);
 
     return Column(
@@ -2056,8 +2158,14 @@ class _CartView extends ConsumerWidget {
                           isDraft: true,
                           onTap: () =>
                               _openProductDetailModal(context, ref, item),
-                          onDelete: () {
-                            ref
+                          onDelete: () async {
+                            if (!await _ensureCanDeleteOrderItem(
+                              context,
+                              ref,
+                            )) {
+                              return;
+                            }
+                            await ref
                                 .read(currentOrderProvider.notifier)
                                 .deleteItem(item.id);
                           },
@@ -2577,6 +2685,39 @@ class _CartView extends ConsumerWidget {
           configuredBreakdown: configuredBreakdown,
         );
 
+        // e-CF: pre-fetch del fiscal_document para resolver QR/estado.
+        // Solo aplica al tipo 'invoice' (precheck no lleva NCF). El
+        // fiscalDoc se resuelve por order_id; el trigger SQL lo crea
+        // automáticamente al cobrar. Si la consulta o el render del QR
+        // fallan, dejamos qrBytes/ecfStatusMessage en null y el ticket
+        // sale igual que antes (sin QR) — fail-soft, no rompe el cobro.
+        List<int>? ecfQrBytes;
+        String? ecfStatusMsg;
+        bool isElectronicCf = false;
+        String? ecfSecurityCode;
+        DateTime? ecfSignedAt;
+        if (type == 'invoice') {
+          try {
+            final fiscalDoc = await ref
+                .read(salesRepositoryProvider)
+                .getOrderFiscalDocument(orderObj.id);
+            if (fiscalDoc != null && fiscalDoc.isElectronic) {
+              isElectronicCf = true;
+              ecfSecurityCode = fiscalDoc.ecfSecurityCode;
+              ecfSignedAt = fiscalDoc.ecfSignedAt;
+              if (fiscalDoc.hasQrData) {
+                ecfQrBytes = await QrEscPosBuilder.build(
+                  data: fiscalDoc.publicUrl!,
+                );
+              } else {
+                ecfStatusMsg = fiscalDoc.ecfStatusMessage;
+              }
+            }
+          } catch (_) {
+            // No tumbar el cobro por un fallo de QR/estado e-CF.
+          }
+        }
+
         ticket = type == 'invoice'
             ? PrintTicketService.generateInvoice(
                 order: orderObj,
@@ -2600,6 +2741,11 @@ class _CartView extends ConsumerWidget {
                 title: title,
                 receiptItemDisplayMode: receiptItemDisplayMode,
                 taxBreakdown: printTaxBreakdown,
+                qrBytes: ecfQrBytes,
+                ecfStatusMessage: ecfStatusMsg,
+                isElectronicCf: isElectronicCf,
+                ecfSecurityCode: ecfSecurityCode,
+                ecfSignedAt: ecfSignedAt,
               )
             : PrintTicketService.generatePrecheck(
                 order: orderObj,
@@ -2865,9 +3011,11 @@ class _CartView extends ConsumerWidget {
                   Expanded(
                     child: FilledButton(
                       onPressed: () async {
-                        if (ref
-                            .read(_salesActionLocksProvider)
-                            .contains(retryPrintLockKey)) {
+                        final now = DateTime.now().millisecondsSinceEpoch;
+                        final ts = ref
+                            .read(_salesActionLocksProvider)[retryPrintLockKey];
+                        if (ts != null &&
+                            now - ts < _kLockMaxAge.inMilliseconds) {
                           return;
                         }
                         Navigator.pop(ctx);
@@ -5479,8 +5627,10 @@ class _ProductAvatar extends StatelessWidget {
         shape: BoxShape.circle,
         image: imageUrl != null
             ? DecorationImage(
-                image: CachedNetworkImageProvider(imageUrl!.replaceAll('sqdwjjewdqzxglvqerqt.supabase.co', 'supabase.mangopos.do')), 
-                fit: BoxFit.cover)
+                image: CachedNetworkImageProvider(imageUrl!.replaceAll('sqdwjjewdqzxglvqerqt.supabase.co', 'supabase.mangopos.do')),
+                fit: BoxFit.cover,
+                onError: (_, _) {},
+              )
             : null,
       ),
       child: imageUrl == null

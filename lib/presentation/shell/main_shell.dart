@@ -52,14 +52,14 @@ class MainShell extends ConsumerWidget {
                   const _Logo(),
                   const SizedBox(width: 32),
 
-                  // Menú principal (Centro)
+                  // Menú principal (Centro) - scroll horizontal cuando no cabe
                   Expanded(
-                    child: Center(
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        physics: const BouncingScrollPhysics(),
-                        child: Row(
-                          children: [
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      physics: const BouncingScrollPhysics(),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
                             const _TopNavItem(
                               label: 'Dashboard',
                               route: AppRoutes.dashboard,
@@ -104,7 +104,7 @@ class MainShell extends ConsumerWidget {
                             ),
                             const SizedBox(width: navGap),
                             const _TopNavItem(
-                              label: 'Más Ajustes',
+                              label: 'Más Opciones',
                               route: AppRoutes.settings,
                               asset: 'assets/icons/masajustes.svg',
                               permissionCode: 'settings.usuarios.acceso',
@@ -113,7 +113,6 @@ class MainShell extends ConsumerWidget {
                         ),
                       ),
                     ),
-                  ),
 
                   // Sección derecha (Acciones)
                   Row(
@@ -184,7 +183,7 @@ class _TopNavItemState extends ConsumerState<_TopNavItem> {
         (widget.route != '/' && loc.startsWith(widget.route)) ||
         (widget.route == AppRoutes.settings && loc.startsWith(AppRoutes.menu));
 
-    final showLabel = MediaQuery.of(context).size.width >= 1024;
+    final showLabel = MediaQuery.of(context).size.width >= 768;
     final iconColor = hasAccess
         ? (active ? Colors.white : Colors.grey[600]!)
         : Colors.grey[500]!;

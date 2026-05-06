@@ -29,6 +29,14 @@ class EscPosGenerator {
   /// Limpiar buffer
   void clear() => _buffer.clear();
 
+  /// Append crudo al buffer. Se usa para inyectar bytes ESC/POS pre-generados
+  /// (ej. una imagen raster del QR producida por QrEscPosBuilder). El caller
+  /// es responsable de incluir los comandos de alineación si los necesita.
+  void appendRaw(List<int> bytes) {
+    if (bytes.isEmpty) return;
+    _buffer.addAll(bytes);
+  }
+
   // ============================================================
   // 🔧 COMANDOS BÁSICOS
   // ============================================================
@@ -91,27 +99,56 @@ class EscPosGenerator {
     setAlignment(Alignment.left);
   }
 
-  /// Línea con texto a izquierda y derecha
+  /// Línea con texto a izquierda y derecha.
+  ///
+  /// Cuando [right] por sí solo excede el ancho del papel, antes este método
+  /// crasheaba con "RangeError (end): Invalid value: Not in inclusive range
+  /// 0..N: -X" porque hacía `left.substring(0, negative)`. Ahora se trunca
+  /// el [right] primero si fuera necesario, y luego se calcula el espacio
+  /// disponible para el [left] siempre con un end ≥ 0.
   void textRow(String left, String right) {
     final maxWidth = _getMaxChars();
-    final leftPart = left.length > maxWidth - right.length - 1
-        ? left.substring(0, maxWidth - right.length - 1)
-        : left;
-    final spaces = maxWidth - leftPart.length - right.length;
-    final row = leftPart + (' ' * spaces) + right;
-    text(row);
+    final clamped = _clampRow(left: left, right: right, maxWidth: maxWidth);
+    text(clamped.left + (' ' * clamped.gap) + clamped.right);
   }
 
-  /// Línea con relleno personalizado (p.ej. puntos) entre izquierda y derecha
+  /// Línea con relleno personalizado (p.ej. puntos) entre izquierda y derecha.
+  /// Misma corrección de overflow que [textRow].
   void dotRow(String left, String right, {String fill = '.'}) {
     final maxWidth = _getMaxChars();
-    final leftPart = left.length > maxWidth - right.length - 1
-        ? left.substring(0, maxWidth - right.length - 1)
-        : left;
+    final clamped = _clampRow(left: left, right: right, maxWidth: maxWidth);
     final filler = fill.isNotEmpty ? fill[0] : '.';
-    final dots = (maxWidth - leftPart.length - right.length).clamp(1, maxWidth);
-    final row = leftPart + (filler * dots) + right;
-    text(row);
+    final dots = clamped.gap < 1 ? 1 : clamped.gap;
+    text(clamped.left + (filler * dots) + clamped.right);
+  }
+
+  /// Calcula left/right truncados y el gap entre ellos para que la línea
+  /// completa quepa en [maxWidth] caracteres. Algoritmo:
+  /// 1. Si [right] excede [maxWidth], lo trunca a [maxWidth] (caso patológico).
+  /// 2. Calcula el espacio disponible para [left] = maxWidth - right.length - 1.
+  /// 3. Si no queda espacio (<= 0), [left] queda vacío.
+  /// 4. Si [left] excede el disponible, lo trunca.
+  /// 5. El gap es siempre ≥ 0.
+  ({String left, String right, int gap}) _clampRow({
+    required String left,
+    required String right,
+    required int maxWidth,
+  }) {
+    String r = right;
+    if (r.length > maxWidth) {
+      r = r.substring(0, maxWidth);
+    }
+    final available = maxWidth - r.length - 1;
+    String l;
+    if (available <= 0) {
+      l = '';
+    } else if (left.length > available) {
+      l = left.substring(0, available);
+    } else {
+      l = left;
+    }
+    final gap = maxWidth - l.length - r.length;
+    return (left: l, right: r, gap: gap < 0 ? 0 : gap);
   }
 
   /// Línea separadora
@@ -301,10 +338,13 @@ class EscPosGenerator {
     double? serviceFee,
     double? tax,
     required double total,
+    /// Etiqueta del subtotal. Default 'Subtotal:'. Para e-CF DGII se debe
+    /// pasar 'Subtotal Gravado:' (estandar Norma General 01-2020).
+    String subtotalLabel = 'Subtotal:',
   }) {
     separator();
 
-    textRow('Subtotal:', 'RD\$ ${subtotal.toStringAsFixed(2)}');
+    textRow(subtotalLabel, 'RD\$ ${subtotal.toStringAsFixed(2)}');
 
     if (discounts != null && discounts > 0) {
       textRow('Descuentos:', '-RD\$ ${discounts.toStringAsFixed(2)}');

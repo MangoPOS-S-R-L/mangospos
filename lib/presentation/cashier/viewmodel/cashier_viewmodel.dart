@@ -111,19 +111,18 @@ class CashierViewModel extends ChangeNotifier {
               created['name']?.toString() ?? 'Caja principal';
         }
         if (_currentRegisterId != null) {
-          // Rule: Check for ANY open session for this user first
-          final activeSession = await _repository.getCurrentUserActiveSession();
-          if (activeSession != null) {
-            _lastSession = activeSession.toMap();
+          // Modelo: una caja por cash_register, visible para todos los empleados
+          // del local (mesero/cajero/admin pueden vender si hay caja abierta).
+          // El cierre sigue restringido al dueño (validado en cashier_view +
+          // RPC fn_close_cash_session).
+          final registerSession = await _repository
+              .getActiveSessionForRegister(_currentRegisterId!);
+          if (registerSession != null) {
+            _lastSession = registerSession.toMap();
           } else {
-            // Also check for ANY open session on this DEVICE (Rule v2)
-            final deviceId = await DeviceUtils.getDeviceId();
-            final deviceSession = await _repository.getDeviceActiveSession(deviceId);
-            if (deviceSession != null) {
-              _lastSession = deviceSession.toMap();
-            } else {
-              _lastSession = await _repository.getLastSession(_currentRegisterId!);
-            }
+            // Fallback: última sesión del usuario (cerrada o abierta) para
+            // mostrar histórico cuando no hay caja activa.
+            _lastSession = await _repository.getLastSession(_currentRegisterId!);
           }
 
           _lastCashOpenValidationAt = AppTime.nowAst();
@@ -696,7 +695,15 @@ class CashierViewModel extends ChangeNotifier {
         return _lastSession?['status'] == 'open';
       }
 
-      _lastSession = await _repository.getLastSession(_currentRegisterId!);
+      // Buscar caja activa por register (compartida entre empleados del local).
+      // Si no hay activa, caer a última sesión del usuario para mostrar histórico.
+      final registerSession = await _repository
+          .getActiveSessionForRegister(_currentRegisterId!);
+      if (registerSession != null) {
+        _lastSession = registerSession.toMap();
+      } else {
+        _lastSession = await _repository.getLastSession(_currentRegisterId!);
+      }
       _lastCashOpenValidationAt = now;
       return _lastSession?['status'] == 'open';
     } catch (e) {

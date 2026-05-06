@@ -8,9 +8,11 @@ import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_radius.dart';
 import 'package:mangopos/core/theme/app_shadows.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
+import 'package:mangopos/data/repositories/modifiers_repository.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/state/taxes_state.dart';
 import 'package:mangopos/presentation/settings/more settings/system settings/tax/viewmodel/taxes_viewmodel.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class AddEditProductDialog extends ConsumerStatefulWidget {
   final Map<String, dynamic>? product;
@@ -96,6 +98,14 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
   late List<Map<String, dynamic>> _categories;
   bool _isCreatingCategory = false;
 
+  // Modificadores asignados al producto (orden personalizado).
+  late final ModifiersRepository _modifiersRepo = ModifiersRepository(
+    Supabase.instance.client,
+  );
+  List<Map<String, dynamic>> _orderedGroups = const [];
+  bool _loadingGroups = false;
+  bool _savingGroupsOrder = false;
+
   @override
   void initState() {
     super.initState();
@@ -149,6 +159,60 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
           }
         }
       }
+
+      // Cargar grupos asignados (con su orden actual) solo en edición.
+      final productId = p['id']?.toString();
+      if (productId != null && productId.isNotEmpty) {
+        _loadingGroups = true;
+        Future.microtask(() async {
+          try {
+            final groups =
+                await _modifiersRepo.getGroupsForMenuItem(productId);
+            if (!mounted) return;
+            setState(() {
+              _orderedGroups = groups;
+              _loadingGroups = false;
+            });
+          } catch (_) {
+            if (!mounted) return;
+            setState(() => _loadingGroups = false);
+          }
+        });
+      }
+    }
+  }
+
+  Future<void> _persistGroupOrder() async {
+    final productId = widget.product?['id']?.toString();
+    if (productId == null || productId.isEmpty) return;
+    final ids = _orderedGroups
+        .map((g) => g['id']?.toString() ?? '')
+        .where((id) => id.isNotEmpty)
+        .toList(growable: false);
+    if (ids.isEmpty) return;
+    setState(() => _savingGroupsOrder = true);
+    try {
+      await _modifiersRepo.reorderModifierGroupsForMenuItem(
+        menuItemId: productId,
+        orderedGroupIds: ids,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Orden de modificadores actualizado.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error al guardar orden: $e'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _savingGroupsOrder = false);
     }
   }
 
@@ -593,6 +657,123 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
                   },
                 );
               }).toList(),
+            ),
+          ),
+        if (widget.product != null) ...[
+          const SizedBox(height: AppSpacing.lg),
+          _modifierGroupsSection(),
+        ],
+      ],
+    );
+  }
+
+  Widget _modifierGroupsSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            _fieldLabel('Modificadores y orden'),
+            const Spacer(),
+            if (_savingGroupsOrder)
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+          ],
+        ),
+        Text(
+          'Arrastra para cambiar el orden en que se muestran al cobrar.',
+          style: TextStyle(fontSize: 12, color: AppColors.mutedForeground),
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        if (_loadingGroups)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
+            child: LinearProgressIndicator(color: AppColors.primary),
+          )
+        else if (_orderedGroups.isEmpty)
+          Container(
+            padding: const EdgeInsets.all(AppSpacing.md),
+            decoration: BoxDecoration(
+              color: AppColors.accent,
+              borderRadius: BorderRadius.circular(AppRadius.lg),
+              border: Border.all(color: AppColors.border),
+            ),
+            child: Text(
+              'Este producto no tiene grupos de modificadores asignados. '
+              'Asigna grupos desde Ajustes → Menús → Modificadores.',
+              style: TextStyle(
+                fontSize: 13,
+                color: AppColors.mutedForeground,
+              ),
+            ),
+          )
+        else
+          Container(
+            decoration: BoxDecoration(
+              color: AppColors.accent,
+              borderRadius: BorderRadius.circular(AppRadius.lg),
+              border: Border.all(color: AppColors.border),
+            ),
+            child: ReorderableListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              buildDefaultDragHandles: false,
+              itemCount: _orderedGroups.length,
+              onReorder: (oldIndex, newIndex) {
+                setState(() {
+                  if (newIndex > oldIndex) newIndex -= 1;
+                  final item = _orderedGroups.removeAt(oldIndex);
+                  _orderedGroups = List<Map<String, dynamic>>.from(
+                    _orderedGroups,
+                  )..insert(newIndex, item);
+                });
+                _persistGroupOrder();
+              },
+              itemBuilder: (context, index) {
+                final group = _orderedGroups[index];
+                final name = group['name']?.toString() ?? '';
+                final isActive = group['is_active'] == true;
+                return ListTile(
+                  key: ValueKey(group['id']),
+                  dense: true,
+                  leading: Text(
+                    '${index + 1}',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.mutedForeground,
+                    ),
+                  ),
+                  title: Text(
+                    name,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: isActive
+                          ? AppColors.foreground
+                          : AppColors.mutedForeground,
+                    ),
+                  ),
+                  subtitle: !isActive
+                      ? const Text(
+                          'Inactivo',
+                          style: TextStyle(fontSize: 11),
+                        )
+                      : null,
+                  trailing: ReorderableDragStartListener(
+                    index: index,
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.grab,
+                      child: Icon(
+                        Icons.drag_indicator,
+                        color: const Color(0xFF6B7280),
+                        size: 22,
+                      ),
+                    ),
+                  ),
+                );
+              },
             ),
           ),
       ],

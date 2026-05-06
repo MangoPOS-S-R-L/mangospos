@@ -40,17 +40,16 @@ class PrintTicketService {
         order.serviceFee > 0 ||
         order.total > 0 ||
         order.discounts > 0;
-    final summaryDriftsFromStored =
-        (summary.subtotal - order.subtotal).abs() > 0.01 ||
-        (summary.tax - order.tax).abs() > 0.01 ||
-        (summary.serviceFee - order.serviceFee).abs() > 0.01 ||
-        (summary.discounts - order.discounts).abs() > 0.01 ||
-        (summary.total - order.total).abs() > 0.01;
 
-    final useStoredTotals =
-        hasStoredTotals &&
-        ((summary.tax <= 0 && order.tax > 0) ||
-            (preferStoredOrderTotals && summaryDriftsFromStored));
+    // Preferimos `summary` (incluye recomputación takeout-inclusive y la
+    // override `inclusiveGrossNet` → matchea la UI). Caemos a los valores
+    // guardados en DB SOLO cuando `summary` está degenerado (perdió la info
+    // de impuestos pero la orden persistida sí los tiene). Esto hace que
+    // reimpresiones (con `preferStoredOrderTotals=true`) usen la lógica
+    // recomputada y no los valores antiguos del trigger backend, que para
+    // takeout inclusive sobreestimaba el ITBIS y subestimaba el subtotal.
+    final summaryIsDegenerate = summary.tax <= 0 && order.tax > 0;
+    final useStoredTotals = hasStoredTotals && summaryIsDegenerate;
 
     if (!useStoredTotals) {
       return _PrintableReceiptTotals(
@@ -304,6 +303,13 @@ class PrintTicketService {
       final rightPart = 'RD\$ ${_formatMoney(itemDisplayBaseTotal(order, item))}';
       gen.dotRow(leftPart, rightPart);
 
+      // Indicador para llevar (takeout)
+      if (item.isTakeout) {
+        gen.setBold(true);
+        gen.text('  [PARA LLEVAR]');
+        gen.setBold(false);
+      }
+
       // Modificadores con indentación
       if (item.modifiers.isNotEmpty) {
         for (final mod in item.modifiers) {
@@ -336,31 +342,27 @@ class PrintTicketService {
     // con lo que ve el cajero en pantalla. Los items consolidados se usan solo
     // para el render de las lineas del ticket.
     final printableSummary = summarizeOrderPricing(order, items);
-    final printableSubtotal = printableSummary.subtotal;
     final printableDiscounts = printableSummary.discounts;
 
-    // Subtotal
+    // SUBTOTAL/TOTAL: usamos los valores del summary directo, igual que la UI.
+    // El trigger backend guarda `oi.subtotal` pre-descuento; sumar discounts
+    // de vuelta sobre-infla. `summary.total` ya aplica el override correcto
+    // (inclusiveGrossNet para órdenes 100% inclusive) y la fórmula
+    // base+tax-disc para mixed/exclusive.
+    final double printableSubtotal = printableSummary.subtotal;
+
+    // Estructura del bloque de totales (matchea la UI):
+    //   SUBTOTAL → impuestos → DESCUENTO → TOTAL
     gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(printableSubtotal)}');
 
-    // Descuentos
-    if (printableDiscounts > 0) {
-      gen.textRow('DESCUENTO:', '-RD\$ ${_formatMoney(printableDiscounts)}');
-    }
-
-    // Tax breakdown — each tax on its own line
-    double printableGrandTotal;
+    // Tax breakdown — labels normales.
     if (taxBreakdown.isNotEmpty) {
-      double taxSum = 0;
       for (final entry in taxBreakdown) {
         if (entry.amount.abs() < 0.005) continue;
         gen.textRow('${entry.label}:', 'RD\$ ${_formatMoney(entry.amount)}');
-        taxSum += entry.amount;
       }
-      printableGrandTotal = double.parse(
-        (printableSubtotal + taxSum - printableDiscounts).toStringAsFixed(2),
-      );
     } else {
-      // Fallback: single ITBIS line from calculated summary
+      // Fallback: derivar desde printableSummary.
       final printableTax = printableSummary.tax;
       final printableServiceFee = printableSummary.serviceFee;
       if (printableServiceFee > 0) {
@@ -377,8 +379,14 @@ class PrintTicketService {
       if (printableTax > 0.005) {
         gen.textRow('ITBIS:', 'RD\$ ${_formatMoney(printableTax)}');
       }
-      printableGrandTotal = printableSummary.total;
     }
+
+    // Descuento (después de los impuestos, como en la UI).
+    if (printableDiscounts > 0) {
+      gen.textRow('DESCUENTO:', '-RD\$ ${_formatMoney(printableDiscounts)}');
+    }
+
+    final double printableGrandTotal = printableSummary.total;
 
     gen.lineFeed();
     _thickSeparator(gen);
@@ -455,6 +463,23 @@ class PrintTicketService {
     List<({String label, double amount})> taxBreakdown = const [],
     bool preferStoredOrderTotals = false,
     bool preferStoredItemTotals = false,
+    /// Bytes ESC/POS pre-generados del QR del e-CF (centrados). Cuando es
+    /// non-null se imprimen después de la sección de pagos. Generar con
+    /// `QrEscPosBuilder.build(data: fiscalDoc.publicUrl!)`.
+    List<int>? qrBytes,
+    /// Mensaje de estado del e-CF a imprimir cuando aún no hay QR
+    /// (ej. "Pendiente de aprobacion DGII", "Rechazado por DGII: ...").
+    /// Solo aplica para e-CF; ignorado en NCF físico.
+    String? ecfStatusMessage,
+    /// `true` si el documento es e-CF (Exx). Cambia las etiquetas a
+    /// formato DGII: "Factura de Consumo Electrónica", "e-NCF:", etc.
+    bool isElectronicCf = false,
+    /// Código de seguridad alfanumérico DGII (campo `ecf_security_code`).
+    /// Se imprime debajo del QR en e-CF aceptados.
+    String? ecfSecurityCode,
+    /// Fecha de firma digital DGII (campo `ecf_signed_at`).
+    /// Se imprime debajo del Código de Seguridad en e-CF aceptados.
+    DateTime? ecfSignedAt,
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
 
@@ -497,17 +522,38 @@ class PrintTicketService {
     _thickSeparator(gen);
     gen.lineFeed();
 
+    // Bloque del comprobante fiscal:
+    // - e-CF (Exx): VA PRIMERO (estandar DGII Norma General 01-2020).
+    //   Titulo descriptivo centrado en negrita + "e-NCF:" + separador.
+    //   Despues va el ORDEN como dato interno secundario.
+    // - NCF fisico (Bxx): TIPO/NCF van DESPUES del ORDEN (formato tradicional).
+    if (isElectronicCf &&
+        fiscalNcf != null &&
+        fiscalNcf.isNotEmpty &&
+        fiscalType != null) {
+      gen.setBold(true);
+      gen.textCentered(_getNcfTypeName(fiscalType));
+      gen.textRow('e-NCF:', fiscalNcf);
+      gen.setBold(false);
+      // Sin lineFeed extra: ORDEN queda inmediatamente debajo de e-NCF, con
+      // el mismo espaciado que el resto de filas de datos (MESA, FECHA...).
+    }
+
     // Order Info
     gen.setBold(true);
     gen.textRow('ORDEN:', order.id.substring(0, 8).toUpperCase());
     gen.setBold(false);
-    if (fiscalNcf != null && fiscalNcf.isNotEmpty) {
-      if (fiscalType != null) {
+
+    // Para NCF fisico, TIPO/NCF van DESPUES de ORDEN (orden tradicional).
+    if (!isElectronicCf) {
+      if (fiscalNcf != null && fiscalNcf.isNotEmpty) {
+        if (fiscalType != null) {
+          gen.textRow('TIPO:', _getNcfTypeName(fiscalType));
+        }
+        gen.textRow('NCF:', fiscalNcf);
+      } else if (fiscalType != null) {
         gen.textRow('TIPO:', _getNcfTypeName(fiscalType));
       }
-      gen.textRow('NCF:', fiscalNcf);
-    } else if (fiscalType != null) {
-      gen.textRow('TIPO:', _getNcfTypeName(fiscalType));
     }
 
     if (customerName != null && customerName != 'Cliente') {
@@ -574,6 +620,13 @@ class PrintTicketService {
       final rightPart = 'RD\$ ${_formatMoney(lineTotal)}';
       gen.dotRow(leftPart, rightPart);
 
+      // Indicador para llevar (takeout)
+      if (item.isTakeout) {
+        gen.setBold(true);
+        gen.text('  [PARA LLEVAR]');
+        gen.setBold(false);
+      }
+
       if (item.modifiers.isNotEmpty) {
         for (final mod in item.modifiers) {
           gen.text('  + ${mod.name}');
@@ -603,27 +656,28 @@ class PrintTicketService {
       items: items,
       preferStoredOrderTotals: preferStoredOrderTotals,
     );
-    final effectiveSubtotal = effectiveTotals.subtotal;
     final effectiveDiscounts = effectiveTotals.discounts;
 
-    gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(effectiveSubtotal)}');
-    if (effectiveDiscounts > 0) {
-      gen.textRow('DESCUENTO:', '-RD\$ ${_formatMoney(effectiveDiscounts)}');
-    }
+    // SUBTOTAL/TOTAL: usamos el summary directo, igual que la UI.
+    // Ver comentario en generatePrecheck.
+    final double effectiveSubtotal = effectiveTotals.subtotal;
 
-    // Tax breakdown — each tax on its own line
-    double effectiveTotal;
+    // Etiquetas DGII para e-CF (Norma General 01-2020):
+    // - "Subtotal Gravado" en lugar de "SUBTOTAL"
+    // - "Total ITBIS" en lugar de "ITBIS (18%)"
+    final subtotalLabel = isElectronicCf ? 'Subtotal Gravado:' : 'SUBTOTAL:';
+    gen.textRow(subtotalLabel, 'RD\$ ${_formatMoney(effectiveSubtotal)}');
+
+    // Tax breakdown — para e-CF normaliza el label del ITBIS a "Total ITBIS".
     if (taxBreakdown.isNotEmpty) {
-      double taxSum = 0;
       for (final entry in taxBreakdown) {
         if (entry.amount.abs() < 0.005) continue;
-        gen.textRow('${entry.label}:', 'RD\$ ${_formatMoney(entry.amount)}');
-        taxSum += entry.amount;
+        var label = entry.label;
+        if (isElectronicCf && label.toLowerCase().contains('itbis')) {
+          label = 'Total ITBIS';
+        }
+        gen.textRow('$label:', 'RD\$ ${_formatMoney(entry.amount)}');
       }
-      // Total = subtotal + all taxes - discounts (authoritative from breakdown)
-      effectiveTotal = double.parse(
-        (effectiveSubtotal + taxSum - effectiveDiscounts).toStringAsFixed(2),
-      );
     } else {
       // Fallback: derive from resolved printable totals
       final effectiveTax = effectiveTotals.tax;
@@ -640,13 +694,25 @@ class PrintTicketService {
         );
       }
       if (effectiveTax > 0.005) {
-        final taxPct = effectiveSubtotal > 0
-            ? ((effectiveTax / effectiveSubtotal) * 100).toStringAsFixed(0)
-            : '18';
-        gen.textRow('ITBIS ($taxPct%):', 'RD\$ ${_formatMoney(effectiveTax)}');
+        if (isElectronicCf) {
+          gen.textRow('Total ITBIS:', 'RD\$ ${_formatMoney(effectiveTax)}');
+        } else {
+          final taxPct = effectiveSubtotal > 0
+              ? ((effectiveTax / effectiveSubtotal) * 100).toStringAsFixed(0)
+              : '18';
+          gen.textRow(
+            'ITBIS ($taxPct%):',
+            'RD\$ ${_formatMoney(effectiveTax)}',
+          );
+        }
       }
-      effectiveTotal = effectiveTotals.total;
     }
+
+    if (effectiveDiscounts > 0) {
+      gen.textRow('DESCUENTO:', '-RD\$ ${_formatMoney(effectiveDiscounts)}');
+    }
+
+    final double effectiveTotal = effectiveTotals.total;
 
     gen.lineFeed();
     _thickSeparator(gen);
@@ -682,6 +748,51 @@ class PrintTicketService {
         gen.textRow('CAMBIO:', 'RD\$ ${_formatMoney(totalChange)}');
         gen.setBold(false);
       }
+    }
+
+    // ============================================================
+    // QR e-CF (DGII) — debajo de pagos
+    // ============================================================
+    // Si el e-CF fue aceptado por DGII tenemos public_url codificado en
+    // qrBytes. Debajo del QR van Codigo de Seguridad y Fecha de Firma
+    // Digital, formato exigido por DGII (ver imagen oficial Norma General).
+    // Si está pending/sent/rejected, se muestra el mensaje de estado.
+    // Para NCF físico (B0x), todo es no-op.
+    if (qrBytes != null && qrBytes.isNotEmpty) {
+      gen.lineFeed();
+      gen.appendRaw(qrBytes);
+
+      // Codigo de Seguridad + Fecha de Firma Digital, centrados, en negrita.
+      // Solo si tenemos los datos (e-CF aceptado vía webhook).
+      if ((ecfSecurityCode != null && ecfSecurityCode.isNotEmpty) ||
+          ecfSignedAt != null) {
+        gen.setAlignment(Alignment.center);
+        gen.setBold(true);
+        if (ecfSecurityCode != null && ecfSecurityCode.isNotEmpty) {
+          gen.text('Código de Seguridad: $ecfSecurityCode');
+        }
+        if (ecfSignedAt != null) {
+          final astSigned = AppTime.astFromInstant(ecfSignedAt);
+          final signedDate =
+              '${astSigned.day.toString().padLeft(2, '0')}-'
+              '${astSigned.month.toString().padLeft(2, '0')}-'
+              '${astSigned.year}';
+          final signedTime =
+              '${astSigned.hour.toString().padLeft(2, '0')}:'
+              '${astSigned.minute.toString().padLeft(2, '0')}:'
+              '${astSigned.second.toString().padLeft(2, '0')}';
+          gen.text('Fecha de Firma Digital: $signedDate $signedTime');
+        }
+        gen.setBold(false);
+        gen.setAlignment(Alignment.left);
+      }
+    } else if (ecfStatusMessage != null && ecfStatusMessage.isNotEmpty) {
+      gen.lineFeed();
+      gen.setAlignment(Alignment.center);
+      gen.setBold(true);
+      gen.text(ecfStatusMessage);
+      gen.setBold(false);
+      gen.setAlignment(Alignment.left);
     }
 
     // Footer
@@ -976,17 +1087,23 @@ class PrintTicketService {
             )
             .toList(),
       );
+      // Indicador para llevar (takeout)
+      if (item.isTakeout) {
+        gen.setBold(true);
+        gen.text('  [PARA LLEVAR]');
+        gen.setBold(false);
+      }
     }
+
+    // SUBTOTAL/TOTAL: usamos el summary directo, igual que la UI.
+    // Ver comentario en generatePrecheck.
+    final double displaySubtotal = effectiveTotals.subtotal;
 
     gen.separator();
-    gen.textRow('Subtotal:', 'RD\$ ${_formatMoney(effectiveTotals.subtotal)}');
-    if (effectiveTotals.discounts > 0) {
-      gen.textRow(
-        'Descuentos:',
-        '-RD\$ ${_formatMoney(effectiveTotals.discounts)}',
-      );
-    }
+    // Estructura: Subtotal → impuestos → Descuentos → TOTAL (matchea la UI).
+    gen.textRow('Subtotal:', 'RD\$ ${_formatMoney(displaySubtotal)}');
 
+    // Tax breakdown — labels normales.
     if (taxBreakdown.isNotEmpty) {
       for (final entry in taxBreakdown) {
         if (entry.amount.abs() < 0.005) continue;
@@ -994,8 +1111,8 @@ class PrintTicketService {
       }
     } else {
       if (effectiveTotals.serviceFee > 0) {
-        final servicePct = effectiveTotals.subtotal > 0
-            ? ((effectiveTotals.serviceFee / effectiveTotals.subtotal) * 100)
+        final servicePct = displaySubtotal > 0
+            ? ((effectiveTotals.serviceFee / displaySubtotal) * 100)
                   .toStringAsFixed(0)
             : '0';
         gen.textRow(
@@ -1004,9 +1121,8 @@ class PrintTicketService {
         );
       }
       if (effectiveTotals.tax > 0.005) {
-        final taxPct = effectiveTotals.subtotal > 0
-            ? ((effectiveTotals.tax / effectiveTotals.subtotal) * 100)
-                  .toStringAsFixed(0)
+        final taxPct = displaySubtotal > 0
+            ? ((effectiveTotals.tax / displaySubtotal) * 100).toStringAsFixed(0)
             : '18';
         gen.textRow(
           'ITBIS ($taxPct%):',
@@ -1015,10 +1131,19 @@ class PrintTicketService {
       }
     }
 
+    if (effectiveTotals.discounts > 0) {
+      gen.textRow(
+        'Descuentos:',
+        '-RD\$ ${_formatMoney(effectiveTotals.discounts)}',
+      );
+    }
+
+    final double displayTotal = effectiveTotals.total;
+
     gen.doubleSeparator();
     gen.setBold(true);
     gen.setTextSize(width: 2, height: 2);
-    gen.textRow('TOTAL:', 'RD\$ ${_formatMoney(effectiveTotals.total)}');
+    gen.textRow('TOTAL:', 'RD\$ ${_formatMoney(displayTotal)}');
     gen.setTextSize();
     gen.setBold(false);
 
@@ -1123,6 +1248,9 @@ class PrintTicketService {
   // ============================================================
 
   static String _getNcfTypeName(String code) {
+    // Nombres oficiales segun DGII (Norma General 01-2020 y siguientes).
+    // Se mantienen los aliases sin prefijo letra ('01', '32', etc.) por
+    // compat con call sites que pasan solo el codigo numerico.
     switch (code) {
       case 'B01':
       case '01':
@@ -1138,10 +1266,22 @@ class PrintTicketService {
         return 'Gubernamental';
       case 'E31':
       case '31':
-        return 'e-Crédito Fiscal';
+        return 'Factura de Crédito Fiscal Electrónica';
       case 'E32':
       case '32':
-        return 'e-Consumidor';
+        return 'Factura de Consumo Electrónica';
+      case 'E33':
+      case '33':
+        return 'Nota de Débito Electrónica';
+      case 'E34':
+      case '34':
+        return 'Nota de Crédito Electrónica';
+      case 'E44':
+      case '44':
+        return 'Factura de Régimen Especial Electrónica';
+      case 'E45':
+      case '45':
+        return 'Factura Gubernamental Electrónica';
       default:
         return code;
     }

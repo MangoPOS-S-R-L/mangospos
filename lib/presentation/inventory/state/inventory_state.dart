@@ -18,6 +18,86 @@ class InventoryWarehouse {
   }
 }
 
+/// PRD 9 Fase 1C — Proveedor con todos los campos del schema (`rnc`,
+/// `payment_terms`, `notes`, etc.) para el CRUD del módulo Inventario.
+class InventorySupplierDetail {
+  final String id;
+  final String name;
+  final String rnc;
+  final String contactName;
+  final String phone;
+  final String email;
+  final String address;
+  final String paymentTerms;
+  final String notes;
+  final bool isActive;
+  final DateTime? createdAt;
+
+  const InventorySupplierDetail({
+    required this.id,
+    required this.name,
+    required this.rnc,
+    required this.contactName,
+    required this.phone,
+    required this.email,
+    required this.address,
+    required this.paymentTerms,
+    required this.notes,
+    required this.isActive,
+    required this.createdAt,
+  });
+
+  factory InventorySupplierDetail.fromMap(Map<String, dynamic> map) {
+    return InventorySupplierDetail(
+      id: map['id']?.toString() ?? '',
+      name: map['name']?.toString() ?? 'Proveedor',
+      rnc: map['rnc']?.toString() ?? '',
+      contactName: map['contact_name']?.toString() ?? '',
+      phone: map['phone']?.toString() ?? '',
+      email: map['email']?.toString() ?? '',
+      address: map['address']?.toString() ?? '',
+      paymentTerms: map['payment_terms']?.toString() ?? '',
+      notes: map['notes']?.toString() ?? '',
+      isActive: map['is_active'] != false,
+      createdAt: DateTime.tryParse(map['created_at']?.toString() ?? ''),
+    );
+  }
+}
+
+/// PRD 9 Fase 1B — Versión completa de bodega para CRUD (incluye address,
+/// is_active, created_at). La virtual `__IN_TRANSIT__` se identifica por
+/// el `name` para que la UI la pueda mostrar como read-only.
+class InventoryWarehouseDetail {
+  final String id;
+  final String name;
+  final String address;
+  final bool isMain;
+  final bool isActive;
+  final DateTime? createdAt;
+
+  const InventoryWarehouseDetail({
+    required this.id,
+    required this.name,
+    required this.address,
+    required this.isMain,
+    required this.isActive,
+    required this.createdAt,
+  });
+
+  bool get isInTransit => name == '__IN_TRANSIT__';
+
+  factory InventoryWarehouseDetail.fromMap(Map<String, dynamic> map) {
+    return InventoryWarehouseDetail(
+      id: map['id']?.toString() ?? '',
+      name: map['name']?.toString() ?? 'Almacen',
+      address: map['address']?.toString() ?? '',
+      isMain: map['is_main'] == true,
+      isActive: map['is_active'] != false,
+      createdAt: DateTime.tryParse(map['created_at']?.toString() ?? ''),
+    );
+  }
+}
+
 class InventoryItemSummary {
   final String id;
   final String sku;
@@ -29,6 +109,9 @@ class InventoryItemSummary {
   final double? maxStock;
   final bool isActive;
   final double stock;
+  // PRD 9 Fase 1D — campos extendidos.
+  final String costingMethod; // 'average' | 'fifo'
+  final String barcode;
 
   const InventoryItemSummary({
     required this.id,
@@ -41,6 +124,8 @@ class InventoryItemSummary {
     required this.maxStock,
     required this.isActive,
     required this.stock,
+    this.costingMethod = 'average',
+    this.barcode = '',
   });
 
   bool get isLowStock => isActive && stock <= minStock;
@@ -65,6 +150,8 @@ class InventoryItemSummary {
       maxStock: map['max_stock'] == null ? null : toDouble(map['max_stock']),
       isActive: map['is_active'] != false,
       stock: stock,
+      costingMethod: map['costing_method']?.toString() ?? 'average',
+      barcode: map['barcode']?.toString() ?? '',
     );
   }
 }

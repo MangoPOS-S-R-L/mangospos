@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mangopos/app/widgets/mango_modal.dart';
@@ -7,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../viewmodel/payment_split_viewmodel.dart';
 
 const _kPrimary = Color(0xFFF97316);
+const _kPrimaryTint = Color(0xFFFFE4CC);
 const _kSurface = Colors.white;
 const _kPositive = Color(0xFF22C55E);
 const _kDanger = Color(0xFFE11D48);
@@ -39,6 +41,38 @@ class PaymentSplitDialog extends ConsumerStatefulWidget {
 class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
   late FocusNode _focusNode;
 
+  /// Tecla físicamente presionada en este momento, mapeada al label
+  /// visual del keypad ('0'..'9', '⌫'). Se usa para sincronizar el
+  /// highlight visual con el teclado físico.
+  final ValueNotifier<String?> _pressedKeyVN = ValueNotifier<String?>(null);
+
+  /// Mapeo de teclas físicas → labels del keypad. Cubre fila numérica
+  /// y numpad. No incluye '00' ni '.' porque no tienen tecla física
+  /// estándar y no aportan valor visual significativo.
+  static final Map<LogicalKeyboardKey, String> _digitMap = {
+    LogicalKeyboardKey.digit0: '0',
+    LogicalKeyboardKey.digit1: '1',
+    LogicalKeyboardKey.digit2: '2',
+    LogicalKeyboardKey.digit3: '3',
+    LogicalKeyboardKey.digit4: '4',
+    LogicalKeyboardKey.digit5: '5',
+    LogicalKeyboardKey.digit6: '6',
+    LogicalKeyboardKey.digit7: '7',
+    LogicalKeyboardKey.digit8: '8',
+    LogicalKeyboardKey.digit9: '9',
+    LogicalKeyboardKey.numpad0: '0',
+    LogicalKeyboardKey.numpad1: '1',
+    LogicalKeyboardKey.numpad2: '2',
+    LogicalKeyboardKey.numpad3: '3',
+    LogicalKeyboardKey.numpad4: '4',
+    LogicalKeyboardKey.numpad5: '5',
+    LogicalKeyboardKey.numpad6: '6',
+    LogicalKeyboardKey.numpad7: '7',
+    LogicalKeyboardKey.numpad8: '8',
+    LogicalKeyboardKey.numpad9: '9',
+    LogicalKeyboardKey.backspace: '⌫',
+  };
+
   @override
   void initState() {
     super.initState();
@@ -51,24 +85,107 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
   @override
   void dispose() {
     _focusNode.dispose();
+    _pressedKeyVN.dispose();
     super.dispose();
   }
 
-  void _handleKeyEvent(KeyEvent event, PaymentSplitViewModel vm) {
-    if (event is KeyDownEvent) {
-      final logicalKey = event.logicalKey;
+  /// Handler de teclado del modal de cobro.
+  ///
+  /// Shortcuts (PRD 6 § 4.7 — patrones POS profesional):
+  ///   - Dígitos / `.` / Backspace → input de monto.
+  ///   - **Enter**: Si hay monto en input → agrega transacción.
+  ///                Si input vacío y la orden ya cuadra → confirma pago.
+  ///   - **Esc** → cancela y cierra el modal.
+  ///   - **F1** o tecla `*` → atajo "Exacto" (setea monto restante).
+  ///   - **e** → método Efectivo, **t** → Tarjeta, **r** → Transferencia.
+  ///   - **+** → agrega transacción (alias de Enter cuando hay monto).
+  Future<void> _handleKeyEvent(
+    KeyEvent event,
+    PaymentSplitViewModel vm,
+    PaymentSplitState state,
+  ) async {
+    final logicalKey = event.logicalKey;
 
-      if (logicalKey == LogicalKeyboardKey.backspace) {
-        vm.backspace();
-      } else if (logicalKey == LogicalKeyboardKey.enter ||
-          logicalKey == LogicalKeyboardKey.numpadEnter) {
+    // ─── Tracking visual del keypad (KeyDown + KeyUp) ─────────
+    // Esto debe ejecutarse ANTES del filtro `if (event is! KeyDownEvent)`
+    // para que también capturemos el KeyUpEvent y limpiemos el highlight.
+    // Repeats (KeyRepeatEvent) se ignoran intencionalmente — el highlight
+    // ya está activo desde el KeyDown inicial.
+    final mapped = _digitMap[logicalKey];
+    if (mapped != null) {
+      if (event is KeyDownEvent) {
+        _pressedKeyVN.value = mapped;
+      } else if (event is KeyUpEvent && _pressedKeyVN.value == mapped) {
+        _pressedKeyVN.value = null;
+      }
+    }
+
+    if (event is! KeyDownEvent) return;
+    final char = event.character?.toLowerCase();
+
+    if (logicalKey == LogicalKeyboardKey.escape) {
+      if (mounted) Navigator.pop(context, false);
+      return;
+    }
+
+    if (logicalKey == LogicalKeyboardKey.f1 || char == '*') {
+      if (state.remaining > 0) vm.setExactAmount();
+      return;
+    }
+
+    if (logicalKey == LogicalKeyboardKey.backspace) {
+      vm.backspace();
+      return;
+    }
+
+    if (logicalKey == LogicalKeyboardKey.enter ||
+        logicalKey == LogicalKeyboardKey.numpadEnter ||
+        char == '+') {
+      // Enter inteligente: si hay monto pendiente lo agrega como
+      // transacción; si no hay monto y la orden ya cuadra, confirma.
+      if (state.currentInput.isNotEmpty && state.inputAmount > 0) {
         vm.addTransaction();
-      } else if (logicalKey == LogicalKeyboardKey.period ||
-          logicalKey == LogicalKeyboardKey.numpadDecimal) {
-        vm.appendInput('.');
-      } else if (event.character != null &&
-          RegExp(r'[0-9]').hasMatch(event.character!)) {
-        vm.appendInput(event.character!);
+        return;
+      }
+      final canConfirm =
+          state.transactions.isNotEmpty &&
+          state.isComplete &&
+          !state.isProcessing;
+      if (canConfirm) {
+        final List<Payment>? payments = await vm.confirmPayment(context);
+        if (payments != null && mounted) {
+          Navigator.pop(context, payments);
+        }
+      }
+      return;
+    }
+
+    if (logicalKey == LogicalKeyboardKey.period ||
+        logicalKey == LogicalKeyboardKey.numpadDecimal) {
+      vm.appendInput('.');
+      return;
+    }
+
+    // Dígitos directos al input.
+    if (event.character != null &&
+        RegExp(r'[0-9]').hasMatch(event.character!)) {
+      vm.appendInput(event.character!);
+      return;
+    }
+
+    // Letra de método de pago. Solo aplica si el input está vacío para no
+    // bloquear posibles caracteres no esperados durante captura de monto.
+    if (state.currentInput.isEmpty && char != null) {
+      switch (char) {
+        case 'e':
+          vm.setMethod(PaymentMethodType.cash);
+          return;
+        case 't':
+          vm.setMethod(PaymentMethodType.card);
+          return;
+        case 'r':
+          vm.setMethod(PaymentMethodType.transfer);
+          return;
       }
     }
   }
@@ -100,64 +217,87 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
       focusNode: _focusNode,
       autofocus: true,
       onKeyEvent: (node, event) {
-        _handleKeyEvent(event, vm);
+        _handleKeyEvent(event, vm, state);
         return KeyEventResult.handled;
       },
       child: MangoModal.wrap(
         context: context,
         type: MangoModalType.form,
-        child: Container(
-          decoration: BoxDecoration(
-            color: _kSurface,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x22000000),
-                blurRadius: 20,
-                offset: Offset(0, 12),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: isMobile ? double.infinity : 880,
+              maxHeight: isMobile ? double.infinity : 680,
+            ),
+            child: Container(
+              decoration: BoxDecoration(
+                color: _kSurface,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x22000000),
+                    blurRadius: 20,
+                    offset: Offset(0, 12),
+                  ),
+                ],
               ),
-            ],
-          ),
           child: Column(
-              children: [
-                _buildHeader(context),
-                const Divider(height: 1, color: _kBorder),
-                Expanded(
-                  child: isMobile
-                      ? SingleChildScrollView(
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: _MobileLayout(state: state, vm: vm),
-                          ),
-                        )
-                      : Padding(
-                          padding: const EdgeInsets.all(28),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                flex: 3,
-                                child: _LeftPanel(state: state, vm: vm),
-                              ),
-                              Container(width: 1, color: _kBorder),
-                              Expanded(
-                                flex: 2,
-                                child: _RightPanel(
-                                  state: state,
-                                  vm: vm,
-                                  onClose: () => Navigator.pop(context),
-                                ),
-                              ),
-                            ],
+            children: [
+              _buildHeader(context),
+              const Divider(height: 1, color: _kBorder),
+              Expanded(
+                child: isMobile
+                    ? SingleChildScrollView(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: _MobileLayout(
+                            state: state,
+                            vm: vm,
+                            pressedKey: _pressedKeyVN,
                           ),
                         ),
+                      )
+                    : Padding(
+                        // Padding interno reducido para que todo el contenido
+                        // entre sin scroll en el modal de 680px.
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 10,
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              flex: 3,
+                              child: _LeftPanel(
+                                state: state,
+                                vm: vm,
+                                pressedKey: _pressedKeyVN,
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Container(width: 1, color: _kBorder),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              flex: 2,
+                              child: _RightPanel(
+                                state: state,
+                                vm: vm,
+                                onClose: () => Navigator.pop(context),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+              ),
+              if (state.validationError != null || state.error != null)
+                _ErrorBar(
+                  message: state.validationError ?? state.error!,
+                  isDanger: state.error != null,
                 ),
-                if (state.validationError != null || state.error != null)
-                  _ErrorBar(
-                    message: state.validationError ?? state.error!,
-                    isDanger: state.error != null,
-                  ),
-              ],
+            ],
+          ),
             ),
+          ),
         ),
       ),
     );
@@ -165,13 +305,13 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
 
   Widget _buildHeader(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
         children: [
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: Color.fromRGBO(247, 148, 26, 0.12),
+              color: const Color.fromRGBO(247, 148, 26, 0.12),
               borderRadius: BorderRadius.circular(12),
             ),
             child: const Icon(Icons.credit_card, color: _kPrimary, size: 22),
@@ -185,14 +325,14 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
                     ? 'Pago - ${widget.customerName}'
                     : 'Pago - Mesa ${widget.tableName}',
                 style: const TextStyle(
-                  fontSize: 19,
+                  fontSize: 18,
                   fontWeight: FontWeight.w700,
                 ),
               ),
               Text(
                 'Total: RD\$ ${widget.totalAmount.toStringAsFixed(2)}',
                 style: const TextStyle(
-                  fontSize: 13,
+                  fontSize: 12,
                   color: Colors.grey,
                   fontWeight: FontWeight.w600,
                 ),
@@ -217,27 +357,42 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
 class _LeftPanel extends StatelessWidget {
   final PaymentSplitState state;
   final PaymentSplitViewModel vm;
-
+  final ValueListenable<String?> pressedKey;
   final bool compact;
 
   const _LeftPanel({
     required this.state,
     required this.vm,
+    required this.pressedKey,
     this.compact = false,
   });
+
+  /// Altura del keypad en modo compact (mobile). Antes era hardcoded a 250.
+  /// Ahora escala con la altura disponible: ~36 % de la pantalla con bounds
+  /// para que no se aplaste en celulares chicos ni quede gigante en tablets.
+  ///
+  /// Bounds:
+  ///   - Min 240 px → 4 filas × 60 px (touch target mínimo cómodo).
+  ///   - Max 340 px → en tablets grandes evita que un solo botón ocupe
+  ///     toda la pantalla y desbalancee el layout vertical.
+  double _resolveCompactKeypadHeight(BuildContext context) {
+    final screenH = MediaQuery.sizeOf(context).height;
+    return (screenH * 0.36).clamp(240.0, 340.0);
+  }
 
   @override
   Widget build(BuildContext context) {
     final canAdd = state.inputAmount > 0 && !state.isProcessing;
 
-    return Column(
+    final content = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
       children: [
         const Text(
           'Método de pago',
           style: TextStyle(fontWeight: FontWeight.w700, color: Colors.black87),
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 6),
         Row(
           children: [
             _MethodCard(
@@ -246,14 +401,14 @@ class _LeftPanel extends StatelessWidget {
               isSelected: state.activeMethod == PaymentMethodType.cash,
               onTap: () => vm.setMethod(PaymentMethodType.cash),
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: 8),
             _MethodCard(
               label: 'Tarjeta',
               icon: Icons.credit_card,
               isSelected: state.activeMethod == PaymentMethodType.card,
               onTap: () => vm.setMethod(PaymentMethodType.card),
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: 8),
             _MethodCard(
               label: 'Transferencia',
               icon: Icons.qr_code_2,
@@ -262,79 +417,61 @@ class _LeftPanel extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: 16),
-        // PRD 6 § 4.7 — atajos de denominación ARRIBA del input. Exacto
-        // primero (acción más usada en cobros que cuadran). Las
-        // denominaciones siguen el set real de billetes DR (RD$ 50, 100,
-        // 200, 500, 1000, 2000). El cajero tappea uno → setea el campo
-        // Monto recibido y ya puede confirmar.
-        Center(
-          child: Wrap(
-            alignment: WrapAlignment.center,
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              if (state.remaining > 0)
-                _QuickAmountChip(
-                  label: 'Exacto',
+        const SizedBox(height: 10),
+        // PRD 6 § 4.7 — atajos de denominación ARRIBA del input.
+        // Una fila de 5 chips (Exacto + 4 billetes) que se distribuyen
+        // proporcionalmente al ancho disponible. Exacto recibe flex 2 para
+        // destacarse (es la acción más usada en cobros que cuadran).
+        Row(
+          children: [
+            if (state.remaining > 0) ...[
+              Expanded(
+                flex: 3,
+                child: _QuickAmountChip(
+                  label: 'Monto Exacto',
                   primary: true,
                   onTap: () => vm.setExactAmount(),
                 ),
-              for (final amount in const [200, 500, 1000, 2000])
-                _QuickAmountChip(
-                  label: 'RD\$ ${amount.toStringAsFixed(0)}',
+              ),
+              const SizedBox(width: 6),
+            ],
+            for (final amount in const [100, 200, 500, 1000, 2000]) ...[
+              Expanded(
+                child: _QuickAmountChip(
+                  label: amount.toString(),
                   onTap: () => vm.setQuickAmount(amount.toDouble()),
                 ),
+              ),
+              if (amount != 2000) const SizedBox(width: 6),
             ],
+          ],
+        ),
+        const SizedBox(height: 8),
+        _InputDisplay(state: state),
+        const SizedBox(height: 8),
+        if (compact)
+          SizedBox(
+            height: _resolveCompactKeypadHeight(context),
+            child: _NumericKeypad(vm: vm, pressedKey: pressedKey),
+          )
+        else
+          Expanded(
+            child: _NumericKeypad(vm: vm, pressedKey: pressedKey),
+          ),
+        const SizedBox(height: 20),
+        SizedBox(
+          width: double.infinity,
+          height: compact ? 52 : 48,
+          child: _AddPaymentButton(
+            enabled: canAdd,
+            isLoading: state.isProcessing,
+            onTap: vm.addTransaction,
           ),
         ),
-        const SizedBox(height: 12),
-        _InputDisplay(state: state),
-        const SizedBox(height: 12),
-        compact
-            ? Column(
-                children: [
-                  SizedBox(height: 250, child: _NumericKeypad(vm: vm)),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 52,
-                    child: _AddPaymentButton(
-                      enabled: canAdd,
-                      isLoading: state.isProcessing,
-                      onTap: vm.addTransaction,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  _InfoCard(state: state),
-                ],
-              )
-            : Expanded(
-                child: Row(
-                  children: [
-                    Expanded(child: _NumericKeypad(vm: vm)),
-                    const SizedBox(width: 14),
-                    SizedBox(
-                      width: 170,
-                      child: Column(
-                        children: [
-                          Expanded(
-                            child: _AddPaymentButton(
-                              enabled: canAdd,
-                              isLoading: state.isProcessing,
-                              onTap: vm.addTransaction,
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          _InfoCard(state: state),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
       ],
     );
+
+    return content;
   }
 }
 
@@ -375,7 +512,9 @@ class _RightPanel extends StatelessWidget {
     final disabledReason = _resolveDisabledReason(state);
 
     return Padding(
-      padding: const EdgeInsets.only(left: 24),
+      // Sin padding lateral — el modal ya tiene padding general y la
+      // separación con el panel izquierdo viene del Container divider.
+      padding: EdgeInsets.zero,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -425,7 +564,7 @@ class _RightPanel extends StatelessWidget {
                 state.isProcessing ? 'Procesando...' : 'Confirmar pago',
                 style: const TextStyle(
                   fontWeight: FontWeight.w700,
-                  fontSize: 16,
+                  fontSize: 15,
                 ),
               ),
             ),
@@ -444,7 +583,7 @@ class _RightPanel extends StatelessWidget {
                   child: Text(
                     disabledReason,
                     style: const TextStyle(
-                      fontSize: 12,
+                      fontSize: 11,
                       fontWeight: FontWeight.w500,
                       color: Color(0xFF6B7280),
                     ),
@@ -499,8 +638,13 @@ class _RightPanel extends StatelessWidget {
 class _MobileLayout extends StatelessWidget {
   final PaymentSplitState state;
   final PaymentSplitViewModel vm;
+  final ValueListenable<String?> pressedKey;
 
-  const _MobileLayout({required this.state, required this.vm});
+  const _MobileLayout({
+    required this.state,
+    required this.vm,
+    required this.pressedKey,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -514,7 +658,7 @@ class _MobileLayout extends StatelessWidget {
       children: [
         _TotalsCard(state: state, compact: true),
         const SizedBox(height: 16),
-        _LeftPanel(state: state, vm: vm, compact: true),
+        _LeftPanel(state: state, vm: vm, pressedKey: pressedKey, compact: true),
         const SizedBox(height: 16),
         _PaymentList(
           transactions: state.transactions,
@@ -575,7 +719,7 @@ class _MobileLayout extends StatelessWidget {
                 child: Text(
                   _RightPanel._resolveDisabledReason(state)!,
                   style: const TextStyle(
-                    fontSize: 12,
+                    fontSize: 11,
                     fontWeight: FontWeight.w500,
                     color: Color(0xFF6B7280),
                   ),
@@ -636,27 +780,75 @@ class _InputDisplay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final input = state.currentInput.isEmpty ? '0' : state.currentInput;
+    final entered = state.inputAmount;
+    final showChange = entered > state.remaining && state.remaining > 0;
+    final preview = entered - state.remaining;
+
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Monto a ingresar',
+        Text(
+          'MONTO A INGRESAR',
           style: TextStyle(
-            color: Colors.grey,
-            fontWeight: FontWeight.w600,
-            fontSize: 14,
+            color: Colors.grey[600],
+            fontWeight: FontWeight.w700,
+            fontSize: 10,
+            letterSpacing: 1.2,
           ),
         ),
-        const SizedBox(height: 8),
-        FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Text(
-            'RD\$ ${state.currentInput.isEmpty ? "0" : state.currentInput}',
-            style: const TextStyle(
-              fontSize: 42,
-              fontWeight: FontWeight.w800,
-              color: Colors.black87,
-              letterSpacing: -1,
-            ),
+        const SizedBox(height: 6),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF6F7F9),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: _kBorder),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: RichText(
+                    text: TextSpan(
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        color: Colors.black87,
+                        letterSpacing: -0.5,
+                      ),
+                      children: [
+                        const TextSpan(
+                          text: 'RD\$ ',
+                          style: TextStyle(
+                            fontSize: 15,
+                            color: Colors.grey,
+                          ),
+                        ),
+                        TextSpan(
+                          text: input,
+                          style: const TextStyle(fontSize: 25),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              if (showChange) ...[
+                const SizedBox(width: 10),
+                Text(
+                  'Cambio: RD\$ ${preview.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                    color: _kPositive,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ],
           ),
         ),
         if (state.validationError != null)
@@ -675,50 +867,111 @@ class _InputDisplay extends StatelessWidget {
   }
 }
 
+// ---------------------------------------------------------------------------
+// KEYPAD — responsive + sincronizado con teclado físico
+// ---------------------------------------------------------------------------
+
+/// Numeric keypad responsive.
+///
+/// Reglas de sizing (PRD 6 § 4.5 — touch + denso al mismo tiempo):
+///   - Spacing y fontSize escalan con el ancho del propio keypad
+///     (NO con el ancho de pantalla). Esto le permite funcionar igual
+///     embebido en una columna angosta de desktop o en mobile vertical.
+///   - Si el padre da altura finita (modo desktop dentro de Expanded),
+///     el aspect ratio se calcula EXACTO para que las 4 filas llenen el
+///     espacio disponible. Si la altura es ilimitada (mobile, dentro de
+///     SingleChildScrollView), cae a un ratio cómodo para touch (1.7).
+///   - El highlight visual responde tanto a tap (mouse/touch) como a la
+///     tecla física correspondiente, vía `pressedKey`.
 class _NumericKeypad extends StatelessWidget {
   final PaymentSplitViewModel vm;
-  const _NumericKeypad({required this.vm});
+  final ValueListenable<String?> pressedKey;
+
+  const _NumericKeypad({required this.vm, required this.pressedKey});
+
+  static const List<String> _keys = [
+    '7',
+    '8',
+    '9',
+    '4',
+    '5',
+    '6',
+    '1',
+    '2',
+    '3',
+    '0',
+    '00',
+    '⌫',
+  ];
+  static const int _cols = 3;
+  static const int _rows = 4;
 
   @override
   Widget build(BuildContext context) {
-    final keys = ['7', '8', '9', '4', '5', '6', '1', '2', '3', '0', '00', '⌫'];
-
     return LayoutBuilder(
       builder: (context, constraints) {
+        final w = constraints.maxWidth;
+        final h = constraints.maxHeight;
+
+        // Spacing escala con el ancho del propio keypad. Breakpoints
+        // basados en el ANCHO del componente, no de la pantalla — así
+        // funciona idénticamente embebido en cualquier layout.
+        final double spacing;
+        if (w < 240) {
+          spacing = 4;
+        } else if (w < 360) {
+          spacing = 6;
+        } else {
+          spacing = 10;
+        }
+
+        final keyW = (w - spacing * (_cols - 1)) / _cols;
+
+        // Aspect ratio: clamp min en 1.6 para que las celdas siempre sean
+        // más anchas que altas (botones rectangulares al estilo POS).
+        // Esto evita que en columnas altas el teclado crezca tanto que
+        // la última fila desborde el modal.
+        final double aspectRatio;
+        if (h.isFinite && h > 0) {
+          final keyH = (h - spacing * (_rows - 1)) / _rows;
+          aspectRatio = (keyW / keyH).clamp(1.85, 3.0);
+        } else {
+          aspectRatio = 2.0;
+        }
+
+        // Tipografía e íconos: tamaños reducidos para botones más compactos.
+        final fontSize = (keyW * 0.22).clamp(16.0, 22.0);
+        final iconSize = (keyW * 0.18).clamp(15.0, 20.0);
+
         return GridView.builder(
           physics: const NeverScrollableScrollPhysics(),
-          itemCount: keys.length,
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 3,
-            crossAxisSpacing: 10,
-            mainAxisSpacing: 10,
-            childAspectRatio: 2.2,
+          itemCount: _keys.length,
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: _cols,
+            crossAxisSpacing: spacing,
+            mainAxisSpacing: spacing,
+            childAspectRatio: aspectRatio,
           ),
           itemBuilder: (context, index) {
-            final label = keys[index];
+            final label = _keys[index];
             final isBack = label == '⌫';
-            return TextButton(
-              style: TextButton.styleFrom(
-                backgroundColor: Colors.transparent, // Ghost style
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              onPressed: () => isBack ? vm.backspace() : vm.appendInput(label),
-              child: isBack
-                  ? Icon(
-                      Icons.backspace_outlined,
-                      color: Colors.grey[700],
-                      size: 24,
-                    )
-                  : Text(
-                      label,
-                      style: const TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.w400,
-                        color: Colors.black87,
-                      ),
-                    ),
+
+            // ValueListenableBuilder POR CELDA: solo la tecla cuyo
+            // estado cambia se rebuilda (la presionada y la liberada).
+            // Las otras 10 quedan intactas — clave para responsividad
+            // durante secuencias rápidas de tecleo.
+            return ValueListenableBuilder<String?>(
+              valueListenable: pressedKey,
+              builder: (context, pressed, _) {
+                return _KeypadKey(
+                  label: label,
+                  isBack: isBack,
+                  isPressed: pressed == label,
+                  fontSize: fontSize,
+                  iconSize: iconSize,
+                  onTap: () => isBack ? vm.backspace() : vm.appendInput(label),
+                );
+              },
             );
           },
         );
@@ -726,6 +979,106 @@ class _NumericKeypad extends StatelessWidget {
     );
   }
 }
+
+/// Una sola tecla del keypad.
+///
+/// Maneja tres estados visuales independientes:
+///   1. `isPressed` (externo): tecla física correspondiente está abajo.
+///   2. `_tapping` (interno): el usuario tiene el dedo/click abajo.
+///   3. `_hovering` (interno, solo desktop): mouse encima.
+///
+/// La unión de (1)+(2) genera el estado `highlighted` con fondo naranja
+/// claro y borde primary. Hover es un fondo gris sutil (solo desktop;
+/// MouseRegion ignora touch).
+class _KeypadKey extends StatefulWidget {
+  final String label;
+  final bool isBack;
+  final bool isPressed;
+  final double fontSize;
+  final double iconSize;
+  final VoidCallback onTap;
+
+  const _KeypadKey({
+    required this.label,
+    required this.isBack,
+    required this.isPressed,
+    required this.fontSize,
+    required this.iconSize,
+    required this.onTap,
+  });
+
+  @override
+  State<_KeypadKey> createState() => _KeypadKeyState();
+}
+
+class _KeypadKeyState extends State<_KeypadKey> {
+  bool _hovering = false;
+  bool _tapping = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final highlighted = widget.isPressed || _tapping;
+
+    final Color bg;
+    if (highlighted) {
+      bg = _kPrimaryTint;
+    } else if (_hovering) {
+      bg = const Color(0xFFFAFAFA);
+    } else {
+      bg = Colors.white;
+    }
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovering = true),
+      onExit: (_) => setState(() => _hovering = false),
+      child: GestureDetector(
+        onTapDown: (_) => setState(() => _tapping = true),
+        onTapUp: (_) => setState(() => _tapping = false),
+        onTapCancel: () => setState(() => _tapping = false),
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 90),
+          curve: Curves.easeOut,
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: highlighted ? _kPrimary : _kBorder,
+              width: highlighted ? 1.2 : 1,
+            ),
+            boxShadow: _tapping
+                ? null
+                : const [
+                    BoxShadow(
+                      color: Color(0x14000000),
+                      blurRadius: 4,
+                      offset: Offset(0, 2),
+                    ),
+                  ],
+          ),
+          alignment: Alignment.center,
+          child: widget.isBack
+              ? Icon(
+                  Icons.backspace_outlined,
+                  color: highlighted ? _kPrimary : Colors.grey[700],
+                  size: widget.iconSize,
+                )
+              : Text(
+                  widget.label,
+                  style: TextStyle(
+                    fontSize: widget.fontSize,
+                    fontWeight: FontWeight.w600,
+                    color: highlighted ? _kPrimary : Colors.black87,
+                  ),
+                ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 
 class _MethodCard extends StatelessWidget {
   final String label;
@@ -743,34 +1096,33 @@ class _MethodCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final fgColor = isSelected ? _kPrimary : Colors.grey[600];
-    final bgColor = isSelected
-        ? const Color(0xFFFFF3E5)
-        : const Color(0xFFF3F4F6);
+    final bgColor = isSelected ? _kPrimaryTint : const Color(0xFFF8F8F8);
 
     return Expanded(
       child: GestureDetector(
         onTap: onTap,
-        child: Container(
-          height: 42,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          height: 64,
           decoration: BoxDecoration(
             color: bgColor,
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: BorderRadius.circular(10),
             border: Border.all(
-              color: isSelected ? _kPrimary : Colors.transparent,
-              width: 1,
+              color: isSelected ? _kPrimary : _kBorder,
+              width: isSelected ? 1.5 : 1,
             ),
           ),
-          child: Row(
+          child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, color: fgColor, size: 18),
-              const SizedBox(width: 8),
+              Icon(icon, color: fgColor, size: 20),
+              const SizedBox(height: 4),
               Text(
                 label,
                 style: TextStyle(
-                  color: fgColor,
+                  color: isSelected ? _kPrimary : Colors.black87,
                   fontWeight: FontWeight.w700,
-                  fontSize: 14,
+                  fontSize: 11,
                 ),
               ),
             ],
@@ -781,11 +1133,12 @@ class _MethodCard extends StatelessWidget {
   }
 }
 
-class _QuickAmountChip extends StatelessWidget {
+class _QuickAmountChip extends StatefulWidget {
   final String label;
   final VoidCallback onTap;
+
   /// PRD 6 § 4.7 — chip "Exacto" se distingue visualmente del resto:
-  /// fill con primary color y texto blanco. No solo color, también peso.
+  /// fill con primary color y texto blanco.
   final bool primary;
 
   const _QuickAmountChip({
@@ -795,30 +1148,58 @@ class _QuickAmountChip extends StatelessWidget {
   });
 
   @override
+  State<_QuickAmountChip> createState() => _QuickAmountChipState();
+}
+
+class _QuickAmountChipState extends State<_QuickAmountChip> {
+  bool _hovering = false;
+  bool _tapping = false;
+
+  @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(20),
-        child: Container(
-          // PRD 6 § 4.5 — touch target ≥44 px.
-          constraints: const BoxConstraints(minHeight: 44),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+    final pressed = _tapping;
+    final Color bg;
+    final Color fg;
+    if (widget.primary) {
+      bg = pressed
+          ? const Color(0xFFE56710)
+          : (_hovering ? const Color(0xFFFB8429) : _kPrimary);
+      fg = Colors.white;
+    } else {
+      bg = pressed
+          ? _kPrimaryTint
+          : (_hovering ? const Color(0xFFEDEEF1) : const Color(0xFFF6F7F9));
+      fg = pressed ? _kPrimary : Colors.black87;
+    }
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovering = true),
+      onExit: (_) => setState(() => _hovering = false),
+      child: GestureDetector(
+        onTapDown: (_) => setState(() => _tapping = true),
+        onTapUp: (_) => setState(() => _tapping = false),
+        onTapCancel: () => setState(() => _tapping = false),
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 90),
+          curve: Curves.easeOut,
+          constraints: const BoxConstraints(minHeight: 40),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
           decoration: BoxDecoration(
-            color: primary ? _kPrimary : Colors.transparent,
-            border: Border.all(
-              color: primary ? _kPrimary : Colors.grey[300]!,
-            ),
-            borderRadius: BorderRadius.circular(20),
+            color: bg,
+            borderRadius: BorderRadius.circular(10),
           ),
           alignment: Alignment.center,
           child: Text(
-            label,
+            widget.label,
+            maxLines: 1,
+            overflow: TextOverflow.visible,
+            softWrap: false,
             style: TextStyle(
               fontWeight: FontWeight.w700,
-              fontSize: 14,
-              color: primary ? Colors.white : Colors.black87,
+              fontSize: 12,
+              color: fg,
             ),
           ),
         ),
@@ -835,6 +1216,10 @@ class _TotalsCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final remaining = state.remaining;
+    final progress = state.totalAmount <= 0
+        ? 0.0
+        : (state.totalPaid / state.totalAmount).clamp(0.0, 1.0);
+    final isComplete = remaining <= 0;
 
     return Container(
       width: double.infinity,
@@ -847,26 +1232,60 @@ class _TotalsCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _SummaryRow(
-            'Total a pagar',
-            state.totalAmount,
-            isBold: true,
-            fontSize: compact ? 16 : 18,
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Total a pagar',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87,
+                ),
+              ),
+              Text(
+                'RD\$ ${state.totalAmount.toStringAsFixed(2)}',
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: compact ? 18 : 20,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 8),
-          _SummaryRow(
-            'Pagado',
-            state.totalPaid,
-            color: const Color(0xFF22C55E),
-            isBold: true,
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(99),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 6,
+              backgroundColor: _kBorder,
+              valueColor: AlwaysStoppedAnimation<Color>(_kPositive),
+            ),
           ),
-          const SizedBox(height: 8),
-          _SummaryRow(
-            remaining > 0 ? 'Restante' : 'Cambio',
-            remaining > 0 ? remaining : state.change,
-            color: remaining > 0 ? _kPrimary : Colors.redAccent,
-            isBold: true,
-            fontSize: compact ? 18 : 20,
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Pagado RD\$ ${state.totalPaid.toStringAsFixed(2)}',
+                style: const TextStyle(
+                  color: _kPositive,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                ),
+              ),
+              Text(
+                isComplete
+                    ? 'Cambio RD\$ ${state.change.toStringAsFixed(2)}'
+                    : 'Restante RD\$ ${remaining.toStringAsFixed(2)}',
+                style: TextStyle(
+                  color: isComplete
+                      ? Colors.redAccent
+                      : Colors.grey[700],
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                ),
+              ),
+            ],
           ),
           if (remaining > 0 && state.transactions.isNotEmpty) ...[
             const SizedBox(height: 12),
@@ -879,18 +1298,18 @@ class _TotalsCard extends StatelessWidget {
               ),
               child: Row(
                 children: [
-                  Icon(
+                  const Icon(
                     Icons.warning_amber_rounded,
-                    color: const Color(0xFFF97316),
+                    color: Color(0xFFF97316),
                     size: 20,
                   ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Este es un pago parcial. El restante deberá cobrarse con otro método.',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: const Color(0xFFF97316),
+                      'Pago parcial. El restante deberá cobrarse con otro método.',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFFF97316),
                         fontWeight: FontWeight.w500,
                       ),
                     ),
@@ -901,45 +1320,6 @@ class _TotalsCard extends StatelessWidget {
           ],
         ],
       ),
-    );
-  }
-}
-
-class _SummaryRow extends StatelessWidget {
-  final String label;
-  final double value;
-  final Color? color;
-  final bool isBold;
-  final double fontSize;
-  const _SummaryRow(
-    this.label,
-    this.value, {
-    this.color,
-    this.isBold = false,
-    this.fontSize = 16,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(
-            fontWeight: FontWeight.w600,
-            color: Colors.black87,
-          ),
-        ),
-        Text(
-          'RD\$ ${value.toStringAsFixed(2)}',
-          style: TextStyle(
-            fontWeight: isBold ? FontWeight.w800 : FontWeight.w700,
-            color: color ?? Colors.black,
-            fontSize: fontSize,
-          ),
-        ),
-      ],
     );
   }
 }
@@ -955,73 +1335,139 @@ class _PaymentList extends StatelessWidget {
     this.allowScrolling = true,
   });
 
+  static IconData _iconFor(PaymentMethodType method) {
+    switch (method) {
+      case PaymentMethodType.cash:
+        return Icons.payments_outlined;
+      case PaymentMethodType.card:
+        return Icons.credit_card;
+      case PaymentMethodType.transfer:
+        return Icons.qr_code_2;
+      case PaymentMethodType.other:
+        return Icons.attach_money;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (transactions.isEmpty) {
-      return Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: const Color(0xFFFCFCFC),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: _kBorder),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'PAGOS AGREGADOS',
+          style: TextStyle(
+            color: Colors.grey[600],
+            fontWeight: FontWeight.w700,
+            fontSize: 10,
+            letterSpacing: 1.2,
+          ),
         ),
-        child: const Text(
-          'Aún no has agregado pagos.',
-          style: TextStyle(color: Colors.grey),
-        ),
-      );
-    }
+        const SizedBox(height: 8),
+        if (transactions.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFCFCFC),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _kBorder),
+            ),
+            child: const Text(
+              'Aún no has agregado pagos.',
+              style: TextStyle(color: Colors.grey),
+            ),
+          )
+        else if (allowScrolling)
+          Expanded(child: _buildList())
+        else
+          _buildList(),
+      ],
+    );
+  }
 
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFFFCFCFC),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _kBorder),
-      ),
-      child: ListView.separated(
-        shrinkWrap: !allowScrolling,
-        physics: allowScrolling
-            ? const AlwaysScrollableScrollPhysics()
-            : const NeverScrollableScrollPhysics(),
-        itemCount: transactions.length,
-        separatorBuilder: (context, _) =>
-            const Divider(height: 1, color: _kBorder),
-        itemBuilder: (context, index) {
-          final tx = transactions[index];
-          return ListTile(
-            dense: true,
-            title: Text(
-              tx.methodLabel,
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-            subtitle: Text(
-              'Hora: ${tx.timestamp.hour.toString().padLeft(2, '0')}:${tx.timestamp.minute.toString().padLeft(2, '0')}',
-              style: const TextStyle(color: Colors.grey),
-            ),
-            trailing: SizedBox(
-              width: 150,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  Text(
-                    'RD\$ ${tx.amount.toStringAsFixed(2)}',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w800,
-                      fontSize: 15,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    onPressed: () => onDelete(tx.id),
-                    splashRadius: 18,
-                    icon: const Icon(Icons.close, color: _kDanger, size: 20),
-                  ),
-                ],
+  Widget _buildList() {
+    return ListView.separated(
+      shrinkWrap: !allowScrolling,
+      physics: allowScrolling
+          ? const AlwaysScrollableScrollPhysics()
+          : const NeverScrollableScrollPhysics(),
+      itemCount: transactions.length,
+      separatorBuilder: (context, _) => const SizedBox(height: 8),
+      itemBuilder: (context, index) {
+        final tx = transactions[index];
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFCFCFC),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: _kBorder),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: _kPrimaryTint,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  _iconFor(tx.method),
+                  color: _kPrimary,
+                  size: 18,
+                ),
               ),
-            ),
-          );
-        },
-      ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      tx.methodLabel,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 13,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${tx.timestamp.hour.toString().padLeft(2, '0')}:${tx.timestamp.minute.toString().padLeft(2, '0')}',
+                      style: TextStyle(
+                        color: Colors.grey[600],
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'RD\$ ${tx.amount.toStringAsFixed(2)}',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 13,
+                ),
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                onPressed: () => onDelete(tx.id),
+                splashRadius: 16,
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(
+                  minWidth: 32,
+                  minHeight: 32,
+                ),
+                icon: const Icon(
+                  Icons.delete_outline,
+                  color: Colors.grey,
+                  size: 18,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -1060,56 +1506,8 @@ class _AddPaymentButton extends StatelessWidget {
             )
           : const Text(
               'Agregar pago',
-              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
             ),
-    );
-  }
-}
-
-class _InfoCard extends StatelessWidget {
-  final PaymentSplitState state;
-  const _InfoCard({required this.state});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFBF7F3),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _kBorder),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Text(
-            'Detalle',
-            style: TextStyle(fontWeight: FontWeight.w800, color: _kPrimary),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'Pagado: RD\$ ${state.totalPaid.toStringAsFixed(2)}',
-            style: const TextStyle(fontWeight: FontWeight.w700),
-          ),
-          Text(
-            'Restante: RD\$ ${state.remaining.toStringAsFixed(2)}',
-            style: TextStyle(
-              fontWeight: FontWeight.w700,
-              color: state.remaining > 0 ? _kPrimary : const Color(0xFF22C55E),
-            ),
-          ),
-          if (state.change > 0)
-            Text(
-              'Cambio: RD\$ ${state.change.toStringAsFixed(2)}',
-              style: const TextStyle(
-                fontWeight: FontWeight.w700,
-                color: Colors.redAccent,
-              ),
-            ),
-        ],
-      ),
     );
   }
 }
@@ -1127,8 +1525,8 @@ class _ErrorBar extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
         color: isDanger
-            ? Color.fromRGBO(225, 29, 72, 0.12)
-            : Color.fromRGBO(247, 148, 26, 0.12),
+            ? const Color.fromRGBO(225, 29, 72, 0.12)
+            : const Color.fromRGBO(247, 148, 26, 0.12),
         borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
         border: Border(top: BorderSide(color: isDanger ? _kDanger : _kPrimary)),
       ),

@@ -622,6 +622,10 @@ class Payment extends Equatable {
 }
 
 /// 🧾 Documento Fiscal
+///
+/// Soporta tanto NCF físico (B0x) como e-CF DGII (Exx) vía Alanube.
+/// Los campos `ecf*`, `alanube*`, `publicUrl/xmlUrl/pdfUrl`, etc. solo se
+/// llenan para documentos electrónicos (`isElectronic == true`).
 class FiscalDocument extends Equatable {
   final String id;
   final String businessId;
@@ -636,8 +640,22 @@ class FiscalDocument extends Equatable {
   final double taxableAmount;
   final double itbisAmount;
   final double total;
-  final String status;
+  final String status; // 'active' | 'cancelled' | 'modified'
   final DateTime issuedAt;
+
+  // === e-CF (DGII via Alanube). Solo populado cuando isElectronic == true ===
+  final bool isElectronic;
+  final String ecfStatus; // 'pending' | 'sent' | 'accepted' | 'rejected'
+  final String? alanubeDocumentId;
+  final String? ecfTrackingNumber;
+  final String? ecfSecurityCode;
+  final String? publicUrl; // URL DGII de verificación (contenido del QR)
+  final String? xmlUrl;
+  final String? pdfUrl;
+  final DateTime? submittedAt;
+  final DateTime? acceptedAt;
+  final DateTime? ecfSignedAt;
+  final String? lastError;
 
   const FiscalDocument({
     required this.id,
@@ -655,9 +673,48 @@ class FiscalDocument extends Equatable {
     required this.total,
     required this.status,
     required this.issuedAt,
+    this.isElectronic = false,
+    this.ecfStatus = 'pending',
+    this.alanubeDocumentId,
+    this.ecfTrackingNumber,
+    this.ecfSecurityCode,
+    this.publicUrl,
+    this.xmlUrl,
+    this.pdfUrl,
+    this.submittedAt,
+    this.acceptedAt,
+    this.ecfSignedAt,
+    this.lastError,
   });
 
+  /// `true` cuando DGII ya aprobó el e-CF y hay URL pública para QR.
+  bool get hasQrData => isElectronic && ecfStatus == 'accepted' &&
+      (publicUrl?.isNotEmpty ?? false);
+
+  /// Mensaje legible del estado e-CF para imprimir cuando aún no hay QR.
+  /// Devuelve null si el doc es físico o ya fue aceptado (no requiere mensaje).
+  String? get ecfStatusMessage {
+    if (!isElectronic) return null;
+    switch (ecfStatus) {
+      case 'pending':
+      case 'sent':
+        return 'Pendiente de aprobacion DGII';
+      case 'rejected':
+        return lastError?.isNotEmpty == true
+            ? 'Rechazado DGII: ${lastError!.substring(0, lastError!.length.clamp(0, 80))}'
+            : 'Rechazado por DGII';
+      default:
+        return null;
+    }
+  }
+
   factory FiscalDocument.fromMap(Map<String, dynamic> map) {
+    DateTime? parseDate(dynamic v) {
+      if (v == null) return null;
+      final s = v.toString();
+      return s.isEmpty ? null : DateTime.tryParse(s);
+    }
+
     return FiscalDocument(
       id: map['id'] ?? '',
       businessId: map['business_id'] ?? '',
@@ -673,7 +730,19 @@ class FiscalDocument extends Equatable {
       itbisAmount: (map['itbis_amount'] ?? 0).toDouble(),
       total: (map['total'] ?? 0).toDouble(),
       status: map['status'] ?? 'active',
-      issuedAt: DateTime.tryParse(map['issued_at'] ?? '') ?? DateTime.now(),
+      issuedAt: parseDate(map['issued_at']) ?? DateTime.now(),
+      isElectronic: map['is_electronic'] == true,
+      ecfStatus: (map['ecf_status'] as String?) ?? 'pending',
+      alanubeDocumentId: map['alanube_document_id'] as String?,
+      ecfTrackingNumber: map['ecf_tracking_number'] as String?,
+      ecfSecurityCode: map['ecf_security_code'] as String?,
+      publicUrl: map['public_url'] as String?,
+      xmlUrl: map['xml_url'] as String?,
+      pdfUrl: map['pdf_url'] as String?,
+      submittedAt: parseDate(map['submitted_at']),
+      acceptedAt: parseDate(map['accepted_at']),
+      ecfSignedAt: parseDate(map['ecf_signed_at']),
+      lastError: map['last_error'] as String?,
     );
   }
 
@@ -694,5 +763,17 @@ class FiscalDocument extends Equatable {
     total,
     status,
     issuedAt,
+    isElectronic,
+    ecfStatus,
+    alanubeDocumentId,
+    ecfTrackingNumber,
+    ecfSecurityCode,
+    publicUrl,
+    xmlUrl,
+    pdfUrl,
+    submittedAt,
+    acceptedAt,
+    ecfSignedAt,
+    lastError,
   ];
 }

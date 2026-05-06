@@ -350,6 +350,8 @@ class _TaxFormDialogState extends ConsumerState<_TaxFormDialog> {
   bool _applyOnManual = true;
   bool _applyOnQuick = true;
   bool _applyOnDelivery = true;
+  bool _applyOnTakeout = true;
+  bool _includeInEcf = true;
 
 
   @override
@@ -364,6 +366,8 @@ class _TaxFormDialogState extends ConsumerState<_TaxFormDialog> {
       _applyOnManual = e.applyOnManual;
       _applyOnQuick = e.applyOnQuick;
       _applyOnDelivery = e.applyOnDelivery;
+      _applyOnTakeout = e.applyOnTakeout;
+      _includeInEcf = e.includeInEcf;
     }
 
   }
@@ -553,6 +557,66 @@ class _TaxFormDialogState extends ConsumerState<_TaxFormDialog> {
                       ],
                     ),
                   ),
+                  // PRD 6 — toggle "Aplicar para llevar".
+                  // Color azul (infoBlue) para distinguirlo visualmente de los
+                  // toggles de "área de venta" (verde): es un criterio
+                  // distinto — atributo del item, no canal de venta.
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Tipo de pedido',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: MangoColors.darkGray,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: MangoColors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: MangoColors.cardBorder),
+                    ),
+                    child: _dialogToggleCard(
+                      label: 'Aplicar para llevar',
+                      subtitle:
+                          'Si lo apagás, este impuesto NO se cobra a items marcados como "para llevar".',
+                      value: _applyOnTakeout,
+                      onChanged: (v) =>
+                          setState(() => _applyOnTakeout = v),
+                      activeColor: MangoColors.infoBlue,
+                      borderless: true,
+                    ),
+                  ),
+                  // Facturación electrónica DGII — si false, el impuesto se
+                  // cobra al cliente pero NO se declara en el e-CF.
+                  // Caso típico: Propina Legal 10% (cargo a favor de empleados,
+                  // no es ingreso del negocio).
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Facturación electrónica (e-CF DGII)',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: MangoColors.darkGray,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: MangoColors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: MangoColors.cardBorder),
+                    ),
+                    child: _dialogToggleCard(
+                      label: 'Incluir en e-CF DGII',
+                      subtitle:
+                          'Si lo apagás, este impuesto se cobra al cliente pero NO se reporta a DGII en el comprobante electrónico (uso típico: Propina Legal 10%).',
+                      value: _includeInEcf,
+                      onChanged: (v) =>
+                          setState(() => _includeInEcf = v),
+                      activeColor: MangoColors.primaryOrange,
+                      borderless: true,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -620,6 +684,8 @@ class _TaxFormDialogState extends ConsumerState<_TaxFormDialog> {
                             applyOnManual: _applyOnManual,
                             applyOnQuick: _applyOnQuick,
                             applyOnDelivery: _applyOnDelivery,
+                            applyOnTakeout: _applyOnTakeout,
+                            includeInEcf: _includeInEcf,
                           );
                         } else {
                           await vm.create(
@@ -630,6 +696,8 @@ class _TaxFormDialogState extends ConsumerState<_TaxFormDialog> {
                             applyOnManual: _applyOnManual,
                             applyOnQuick: _applyOnQuick,
                             applyOnDelivery: _applyOnDelivery,
+                            applyOnTakeout: _applyOnTakeout,
+                            includeInEcf: _includeInEcf,
                           );
                         }
 

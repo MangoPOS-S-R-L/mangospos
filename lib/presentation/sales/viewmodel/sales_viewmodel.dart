@@ -50,6 +50,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   final OfflinePosService _offlinePos = OfflinePosService();
   final ConnectivityService _connectivity = ConnectivityService();
   Timer? _refreshOrderDebounceTimer;
+  /// Watchdog: si `state.loading` queda en true más de [_loadingMaxAge]
+  /// (típicamente porque un `await` HTTP nunca resolvió) lo forzamos a
+  /// false. Sin esto, todos los botones que dependen de orderState.loading
+  /// quedaban inservibles hasta cerrar la app. Ver bug del 30/4/26 con el
+  /// botón "Enviar a Cocina" gris persistente.
+  Timer? _loadingWatchdogTimer;
+  static const Duration _loadingMaxAge = Duration(seconds: 45);
   StreamSubscription<bool>? _connectivitySubscription;
   String? _queuedRefreshOrderId;
   bool _queuedClearIfPaid = false;
@@ -127,12 +134,37 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
     });
 
+    // Watchdog del flag `loading`. Cualquier transición false→true arma
+    // un timer que lo fuerza a false tras `_loadingMaxAge` si nunca volvió
+    // por las vías normales (catch/finally). Sin esto, un await HTTP que
+    // se cuelga deja todos los botones inservibles hasta cerrar la app.
+    listenSelf((previous, next) {
+      final wasLoading = previous?.loading ?? false;
+      if (next.loading && !wasLoading) {
+        _loadingWatchdogTimer?.cancel();
+        _loadingWatchdogTimer = Timer(_loadingMaxAge, () {
+          if (state.loading) {
+            debugPrint(
+              '[SalesVM] watchdog: loading=true por más de '
+              '${_loadingMaxAge.inSeconds}s sin completar — forzando false.',
+            );
+            state = state.copyWith(loading: false);
+          }
+        });
+      } else if (!next.loading && wasLoading) {
+        _loadingWatchdogTimer?.cancel();
+        _loadingWatchdogTimer = null;
+      }
+    });
+
     ref.onDispose(() {
       _realtimeChannel?.unsubscribe();
       _realtimeChannel = null;
       _subscribedOrderId = null;
       _refreshOrderDebounceTimer?.cancel();
       _refreshOrderDebounceTimer = null;
+      _loadingWatchdogTimer?.cancel();
+      _loadingWatchdogTimer = null;
       _connectivitySubscription?.cancel();
       _connectivitySubscription = null;
     });
@@ -1396,11 +1428,45 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     final orderId = state.order?.id;
     if (orderId == null) return;
 
+    // Los items optimistas usan ids `tmp_<microsegundos>` que no son UUID
+    // validos en server. Si el modal se abrio con un item recien agregado
+    // antes de que `_loadOrderDetail` corriera, el itemId capturado en el
+    // closure del modal seguira siendo tmp_. Refrescamos para que el state
+    // tenga ids reales y resolvemos por product_id al item recien creado.
+    String resolvedId = itemId;
+    if (resolvedId.startsWith('tmp_')) {
+      await refreshOrder();
+      final productId = updatedItem.productId;
+      final matches = state.items.where((i) {
+        if (productId != null && productId.isNotEmpty) {
+          return i.productId == productId;
+        }
+        return i.productName == updatedItem.productName;
+      }).toList()
+        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+      OrderItem? realCandidate;
+      for (final candidate in matches) {
+        if (!candidate.id.startsWith('tmp_')) {
+          realCandidate = candidate;
+          break;
+        }
+      }
+      if (realCandidate == null) {
+        state = state.copyWith(
+          error:
+              'El producto aun se esta sincronizando. Espera un momento e intenta de nuevo.',
+        );
+        return;
+      }
+      resolvedId = realCandidate.id;
+    }
+
     try {
       await ref
           .read(salesRepositoryProvider)
           .updateItemDetails(
-            itemId: itemId,
+            itemId: resolvedId,
             productName: updatedItem.productName,
             quantity: updatedItem.quantity,
             isTakeout: updatedItem.isTakeout,
