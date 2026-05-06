@@ -395,6 +395,55 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
         );
       }
 
+      // Para e-CF (Norma DGII 01-2020): invocamos emit-document SYNC despues
+      // del processPayment para que cuando el caller imprima el ticket, el
+      // fiscal_document ya este en estado 'sent' con security_code y el QR
+      // pueda renderizarse. Sin esto, el ticket sale "Pendiente de emision a
+      // DGII" porque processPayment crea el doc en 'pending' y nadie lo
+      // procesa hasta que el cron de respaldo corra (~60s).
+      //
+      // Mismo comportamiento que payment_viewmodel.dart::_emitDocumentSync,
+      // pero inline aqui porque este viewmodel tiene su propio flujo de
+      // confirmPayment para cobros con split de pagos.
+      try {
+        final fiscalDocRow = await Supabase.instance.client
+            .from('fiscal_documents')
+            .select('id, is_electronic')
+            .eq('order_id', _orderId)
+            .order('created_at', ascending: false)
+            .limit(1)
+            .maybeSingle();
+
+        if (fiscalDocRow != null && fiscalDocRow['is_electronic'] == true) {
+          final fiscalId = fiscalDocRow['id'] as String;
+          final t0 = DateTime.now();
+          debugPrint('[split-emit-sync] START doc=$fiscalId');
+          try {
+            final res = await Supabase.instance.client.functions
+                .invoke(
+                  'emit-document',
+                  body: {'fiscal_document_id': fiscalId},
+                )
+                .timeout(const Duration(seconds: 8));
+            final dt = DateTime.now().difference(t0).inMilliseconds;
+            debugPrint(
+              '[split-emit-sync] OK status=${res.status} dt=${dt}ms',
+            );
+          } on TimeoutException {
+            final dt = DateTime.now().difference(t0).inMilliseconds;
+            debugPrint('[split-emit-sync] TIMEOUT despues de ${dt}ms');
+          } catch (e) {
+            debugPrint('[split-emit-sync] ERROR exception=$e');
+          }
+        } else {
+          debugPrint(
+            '[split-emit-sync] doc no electronico o no encontrado, skip',
+          );
+        }
+      } catch (e) {
+        debugPrint('[split-emit-sync] fetch fiscal_doc fallo: $e');
+      }
+
       // Si se pagó un check parcial, limpiar también en backend y local
       // OPTIMIZACIÓN: processPayment ya debe manejar el cierre del check y orden si aplica.
       if (_checkId != null) {
