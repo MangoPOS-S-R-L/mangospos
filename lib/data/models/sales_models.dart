@@ -687,9 +687,17 @@ class FiscalDocument extends Equatable {
     this.lastError,
   });
 
-  /// `true` cuando DGII ya aprobó el e-CF y hay URL pública para QR.
-  bool get hasQrData => isElectronic && ecfStatus == 'accepted' &&
-      (publicUrl?.isNotEmpty ?? false);
+  /// `true` cuando podemos imprimir un QR valido en la representacion del
+  /// e-CF. DGII Norma 01-2020 exige que la representacion impresa que recibe
+  /// el cliente incluya el QR, por eso renderizamos en cuanto tenemos
+  /// `ecf_security_code` (estado `sent`), sin esperar al webhook que mueve
+  /// a `accepted`. El QR sigue siendo verificable: DGII acepta consultas
+  /// para docs en estado "EN PROCESO" mostrando ese mismo estado al
+  /// consumidor que escanea.
+  bool get hasQrData =>
+      isElectronic &&
+      (ecfStatus == 'accepted' || ecfStatus == 'sent') &&
+      (ecfSecurityCode?.isNotEmpty ?? false);
 
   /// Mensaje legible del estado e-CF para imprimir cuando aún no hay QR.
   /// Devuelve null si el doc es físico o ya fue aceptado (no requiere mensaje).
@@ -697,8 +705,12 @@ class FiscalDocument extends Equatable {
     if (!isElectronic) return null;
     switch (ecfStatus) {
       case 'pending':
+        // Si tenemos security_code estamos en flujo OK pero el outbox aun no
+        // respondio (no deberia llegar aqui con hasQrData=true).
+        return 'Pendiente de emision a DGII';
       case 'sent':
-        return 'Pendiente de aprobacion DGII';
+        // Si ecfSecurityCode esta vacio aun no llego respuesta de Alanube.
+        return 'En proceso DGII (esperando confirmacion)';
       case 'rejected':
         return lastError?.isNotEmpty == true
             ? 'Rechazado DGII: ${lastError!.substring(0, lastError!.length.clamp(0, 80))}'
