@@ -753,18 +753,439 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
   }
 }
 
-/// 📍 Tab de Áreas (simplificado - implementación similar a PrintersTab)
-class _AreasTab extends StatelessWidget {
+/// 📍 Tab de Áreas
+class _AreasTab extends StatefulWidget {
   final String businessId;
   final PrintingRepository repo;
 
   const _AreasTab({required this.businessId, required this.repo});
 
   @override
+  State<_AreasTab> createState() => _AreasTabState();
+}
+
+class _AreasTabState extends State<_AreasTab> {
+  Future<List<PrintArea>>? _areasFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAreas();
+  }
+
+  void _loadAreas() {
+    setState(() {
+      _areasFuture = widget.repo.getPrintAreas(widget.businessId);
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return const Center(
-      child: Text('Tab de Áreas - Implementación similar a Impresoras'),
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Áreas de Impresión',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+              ),
+              ElevatedButton.icon(
+                onPressed: () => _showAreaDialog(),
+                icon: const Icon(Icons.add),
+                label: const Text('Agregar'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFF97316),
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: AsyncOperationBuilder<List<PrintArea>>(
+            future: _areasFuture!,
+            builder: (context, areas) {
+              if (areas.isEmpty) {
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.category, size: 64, color: Colors.grey),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'No hay áreas configuradas',
+                        style: TextStyle(fontSize: 16, color: Colors.grey),
+                      ),
+                      const SizedBox(height: 8),
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 32),
+                        child: Text(
+                          'Las áreas agrupan impresoras por destino: cocina caliente, '
+                          'cocina fría, bar, cajero o fiscal.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 13, color: Colors.grey),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      ElevatedButton.icon(
+                        onPressed: () => _showAreaDialog(),
+                        icon: const Icon(Icons.add),
+                        label: const Text('Agregar Primera Área'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFFF97316),
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }
+
+              return ListView.builder(
+                padding: const EdgeInsets.all(16),
+                itemCount: areas.length,
+                itemBuilder: (context, i) {
+                  final area = areas[i];
+                  return _AreaCard(
+                    area: area,
+                    onEdit: () => _showAreaDialog(editing: area),
+                    onDelete: () => _deleteArea(area),
+                  );
+                },
+              );
+            },
+            onRetry: _loadAreas,
+          ),
+        ),
+      ],
     );
+  }
+
+  void _showAreaDialog({PrintArea? editing}) {
+    showDialog(
+      context: context,
+      builder: (context) => _AreaFormDialog(
+        businessId: widget.businessId,
+        repo: widget.repo,
+        editing: editing,
+        onSaved: _loadAreas,
+      ),
+    );
+  }
+
+  Future<void> _deleteArea(PrintArea area) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Eliminar Área'),
+        content: Text(
+          '¿Eliminar "${area.name}"? Las asignaciones de impresoras a esta '
+          'área también se eliminarán.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+    try {
+      await widget.repo.deleteArea(area.id);
+      _loadAreas();
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Área eliminada')));
+      }
+    } catch (e) {
+      if (mounted) ErrorSnackBar.show(context, e);
+    }
+  }
+}
+
+class _AreaCard extends StatelessWidget {
+  final PrintArea area;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  const _AreaCard({
+    required this.area,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: ListTile(
+        leading: Icon(
+          _iconForCode(area.code),
+          color: area.isActive ? const Color(0xFFF97316) : Colors.grey,
+          size: 32,
+        ),
+        title: Text(
+          area.name,
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        subtitle: Text(
+          'Código: ${area.code}',
+          style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: area.isActive
+                    ? const Color(0xFF22C55E).withOpacity(0.12)
+                    : Colors.grey.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                area.isActive ? 'Activa' : 'Inactiva',
+                style: TextStyle(
+                  color: area.isActive ? const Color(0xFF15803D) : Colors.grey,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.edit, size: 20),
+              onPressed: onEdit,
+              tooltip: 'Editar',
+            ),
+            IconButton(
+              icon: const Icon(Icons.delete, size: 20, color: Colors.red),
+              onPressed: onDelete,
+              tooltip: 'Eliminar',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  IconData _iconForCode(String code) {
+    switch (code) {
+      case 'kitchen_hot':
+        return Icons.local_fire_department;
+      case 'kitchen_cold':
+        return Icons.ac_unit;
+      case 'bar':
+        return Icons.local_bar;
+      case 'cashier':
+        return Icons.point_of_sale;
+      case 'fiscal':
+        return Icons.receipt_long;
+      default:
+        return Icons.category;
+    }
+  }
+}
+
+class _AreaFormDialog extends StatefulWidget {
+  final String businessId;
+  final PrintingRepository repo;
+  final PrintArea? editing;
+  final VoidCallback onSaved;
+
+  const _AreaFormDialog({
+    required this.businessId,
+    required this.repo,
+    required this.onSaved,
+    this.editing,
+  });
+
+  @override
+  State<_AreaFormDialog> createState() => _AreaFormDialogState();
+}
+
+class _AreaFormDialogState extends State<_AreaFormDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _codeController = TextEditingController();
+  bool _isActive = true;
+  bool _isLoading = false;
+
+  // Códigos sugeridos. El usuario puede tipear uno custom si su negocio usa
+  // áreas distintas (ej. "pizza", "pasta"). El validator solo exige formato
+  // snake_case, no que sea uno de la lista.
+  static const _suggestedCodes = [
+    'kitchen_hot',
+    'kitchen_cold',
+    'bar',
+    'cashier',
+    'fiscal',
+  ];
+
+  static final _codeRe = RegExp(r'^[a-z][a-z0-9_]{1,30}$');
+
+  bool get _isEdit => widget.editing != null;
+
+  @override
+  void initState() {
+    super.initState();
+    final e = widget.editing;
+    if (e != null) {
+      _nameController.text = e.name;
+      _codeController.text = e.code;
+      _isActive = e.isActive;
+    }
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _codeController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(_isEdit ? 'Editar Área' : 'Agregar Área'),
+      content: SingleChildScrollView(
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: _nameController,
+                decoration: const InputDecoration(
+                  labelText: 'Nombre',
+                  hintText: 'Ej: Cocina caliente',
+                  prefixIcon: Icon(Icons.label),
+                ),
+                validator: (v) {
+                  if (v == null || v.trim().isEmpty) return 'Ingresa un nombre';
+                  return null;
+                },
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _codeController,
+                // El código es identificador estable usado en menu_items
+                // (print_area_code) y en lookups del backend; cambiarlo en
+                // edit es válido pero rompe asociaciones por código previas.
+                enabled: !_isEdit,
+                decoration: const InputDecoration(
+                  labelText: 'Código (snake_case)',
+                  hintText: 'kitchen_hot',
+                  prefixIcon: Icon(Icons.tag),
+                  helperText:
+                      'Identificador interno. Solo minúsculas, números y guion bajo.',
+                ),
+                validator: (v) {
+                  if (v == null || v.trim().isEmpty) return 'Ingresa un código';
+                  if (!_codeRe.hasMatch(v.trim())) {
+                    return 'Formato inválido (ej: kitchen_hot)';
+                  }
+                  return null;
+                },
+              ),
+              if (!_isEdit) ...[
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  children: _suggestedCodes
+                      .map(
+                        (c) => ActionChip(
+                          label: Text(c, style: const TextStyle(fontSize: 12)),
+                          onPressed: () {
+                            _codeController.text = c;
+                          },
+                        ),
+                      )
+                      .toList(),
+                ),
+              ],
+              const SizedBox(height: 16),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Activa'),
+                subtitle: const Text(
+                  'Si está inactiva, no recibirá trabajos de impresión.',
+                  style: TextStyle(fontSize: 12),
+                ),
+                value: _isActive,
+                onChanged: (v) => setState(() => _isActive = v),
+                activeThumbColor: const Color(0xFF22C55E),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isLoading ? null : () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        ElevatedButton(
+          onPressed: _isLoading ? null : _save,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFFF97316),
+            foregroundColor: Colors.white,
+          ),
+          child: _isLoading
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : Text(_isEdit ? 'Guardar' : 'Agregar'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _isLoading = true);
+    try {
+      if (_isEdit) {
+        await widget.repo.updateArea(
+          areaId: widget.editing!.id,
+          name: _nameController.text.trim(),
+          isActive: _isActive,
+        );
+      } else {
+        await widget.repo.createArea(
+          businessId: widget.businessId,
+          name: _nameController.text.trim(),
+          code: _codeController.text.trim().toLowerCase(),
+        );
+      }
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_isEdit ? 'Área actualizada' : 'Área agregada'),
+            backgroundColor: const Color(0xFF22C55E),
+          ),
+        );
+        widget.onSaved();
+      }
+    } catch (e) {
+      if (mounted) ErrorSnackBar.show(context, e);
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 }
 
