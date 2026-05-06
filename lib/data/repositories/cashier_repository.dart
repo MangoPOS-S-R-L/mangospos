@@ -40,12 +40,17 @@ class CashierRepository {
       );
     }
 
+    // Defensive: si hay 2+ sesiones abiertas para el mismo user (drift por
+    // bug previo de cierre), tomamos la más reciente en lugar de crashear
+    // con PostgrestException 406. Idem en las otras getActive* abajo.
     final data = await _client
         .from('cash_register_sessions')
         .select()
         .eq('user_id', userId)
         .eq('status', 'open')
         .isFilter('closed_at', null)
+        .order('created_at', ascending: false)
+        .limit(1)
         .maybeSingle();
 
     if (data == null) {
@@ -209,6 +214,8 @@ class CashierRepository {
         .eq('user_id', userId)
         .eq('status', 'open')
         .isFilter('closed_at', null)
+        .order('created_at', ascending: false)
+        .limit(1)
         .maybeSingle();
 
     if (data == null) return null;
@@ -222,6 +229,8 @@ class CashierRepository {
         .eq('device_id', deviceId)
         .eq('status', 'open')
         .isFilter('closed_at', null)
+        .order('created_at', ascending: false)
+        .limit(1)
         .maybeSingle();
 
     if (data == null) return null;
@@ -240,6 +249,8 @@ class CashierRepository {
         .eq('cash_register_id', cashRegisterId)
         .eq('status', 'open')
         .isFilter('closed_at', null)
+        .order('created_at', ascending: false)
+        .limit(1)
         .maybeSingle();
 
     if (data == null) return null;
