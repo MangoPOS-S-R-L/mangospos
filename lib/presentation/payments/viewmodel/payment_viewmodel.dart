@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -283,30 +284,42 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
     // procese SOLO ese doc (modo sync). El Edge Function viejo ignora el
     // body y procesa batch — igual de util porque el doc nuevo va a estar
     // entre los pending de la queue.
+    final t0 = DateTime.now();
+    debugPrint('[emit-sync] START doc=$fiscalDocumentId timeout=${timeout.inSeconds}s');
     try {
-      await Supabase.instance.client.functions
+      final res = await Supabase.instance.client.functions
           .invoke(
             'emit-document',
             body: {'fiscal_document_id': fiscalDocumentId},
           )
           .timeout(timeout);
+      final dt = DateTime.now().difference(t0).inMilliseconds;
+      debugPrint(
+        '[emit-sync] OK status=${res.status} dt=${dt}ms '
+        'data=${res.data?.toString().substring(0, (res.data?.toString().length ?? 0).clamp(0, 300))}',
+      );
     } on TimeoutException {
+      final dt = DateTime.now().difference(t0).inMilliseconds;
+      debugPrint('[emit-sync] TIMEOUT después de ${dt}ms');
       // Timeout: el cron de respaldo + webhook eventualmente van a actualizar.
-      // Caemos al re-fetch igual: si Alanube alcanzo a procesar antes del
-      // timeout HTTP (poco probable pero posible), el doc ya esta en 'sent'.
-    } catch (_) {
+    } catch (e) {
+      final dt = DateTime.now().difference(t0).inMilliseconds;
+      debugPrint('[emit-sync] ERROR dt=${dt}ms exception=$e');
       // Error de red / 5xx: idem timeout, falla suave.
     }
 
     // Re-fetch unconditional. Esto funciona con AMBAS versiones del Edge
     // Function (la vieja batch, la nueva sync per-doc) — solo nos importa
-    // el estado actual del doc en DB despues del intento. Si Alanube
-    // respondio, el doc ya tiene ecf_status='sent' + security_code; si
-    // todavia esta procesando o fallo, queda en 'pending' y el ticket
-    // sale con "EN PROCESO".
+    // el estado actual del doc en DB despues del intento.
     try {
-      return await _salesRepo.getOrderFiscalDocument(state.order!.id);
-    } catch (_) {
+      final refreshed = await _salesRepo.getOrderFiscalDocument(state.order!.id);
+      debugPrint(
+        '[emit-sync] REFETCH status=${refreshed?.ecfStatus} '
+        'sec=${refreshed?.ecfSecurityCode ?? "null"}',
+      );
+      return refreshed;
+    } catch (e) {
+      debugPrint('[emit-sync] REFETCH ERROR: $e');
       return null;
     }
   }
