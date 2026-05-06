@@ -338,10 +338,13 @@ class EscPosGenerator {
     double? serviceFee,
     double? tax,
     required double total,
+    /// Etiqueta del subtotal. Default 'Subtotal:'. Para e-CF DGII se debe
+    /// pasar 'Subtotal Gravado:' (estandar Norma General 01-2020).
+    String subtotalLabel = 'Subtotal:',
   }) {
     separator();
 
-    textRow('Subtotal:', 'RD\$ ${subtotal.toStringAsFixed(2)}');
+    textRow(subtotalLabel, 'RD\$ ${subtotal.toStringAsFixed(2)}');
 
     if (discounts != null && discounts > 0) {
       textRow('Descuentos:', '-RD\$ ${discounts.toStringAsFixed(2)}');

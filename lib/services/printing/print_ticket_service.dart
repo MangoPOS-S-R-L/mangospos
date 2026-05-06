@@ -463,6 +463,23 @@ class PrintTicketService {
     List<({String label, double amount})> taxBreakdown = const [],
     bool preferStoredOrderTotals = false,
     bool preferStoredItemTotals = false,
+    /// Bytes ESC/POS pre-generados del QR del e-CF (centrados). Cuando es
+    /// non-null se imprimen después de la sección de pagos. Generar con
+    /// `QrEscPosBuilder.build(data: fiscalDoc.publicUrl!)`.
+    List<int>? qrBytes,
+    /// Mensaje de estado del e-CF a imprimir cuando aún no hay QR
+    /// (ej. "Pendiente de aprobacion DGII", "Rechazado por DGII: ...").
+    /// Solo aplica para e-CF; ignorado en NCF físico.
+    String? ecfStatusMessage,
+    /// `true` si el documento es e-CF (Exx). Cambia las etiquetas a
+    /// formato DGII: "Factura de Consumo Electrónica", "e-NCF:", etc.
+    bool isElectronicCf = false,
+    /// Código de seguridad alfanumérico DGII (campo `ecf_security_code`).
+    /// Se imprime debajo del QR en e-CF aceptados.
+    String? ecfSecurityCode,
+    /// Fecha de firma digital DGII (campo `ecf_signed_at`).
+    /// Se imprime debajo del Código de Seguridad en e-CF aceptados.
+    DateTime? ecfSignedAt,
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
 
@@ -505,17 +522,38 @@ class PrintTicketService {
     _thickSeparator(gen);
     gen.lineFeed();
 
+    // Bloque del comprobante fiscal:
+    // - e-CF (Exx): VA PRIMERO (estandar DGII Norma General 01-2020).
+    //   Titulo descriptivo centrado en negrita + "e-NCF:" + separador.
+    //   Despues va el ORDEN como dato interno secundario.
+    // - NCF fisico (Bxx): TIPO/NCF van DESPUES del ORDEN (formato tradicional).
+    if (isElectronicCf &&
+        fiscalNcf != null &&
+        fiscalNcf.isNotEmpty &&
+        fiscalType != null) {
+      gen.setBold(true);
+      gen.textCentered(_getNcfTypeName(fiscalType));
+      gen.textRow('e-NCF:', fiscalNcf);
+      gen.setBold(false);
+      // Sin lineFeed extra: ORDEN queda inmediatamente debajo de e-NCF, con
+      // el mismo espaciado que el resto de filas de datos (MESA, FECHA...).
+    }
+
     // Order Info
     gen.setBold(true);
     gen.textRow('ORDEN:', order.id.substring(0, 8).toUpperCase());
     gen.setBold(false);
-    if (fiscalNcf != null && fiscalNcf.isNotEmpty) {
-      if (fiscalType != null) {
+
+    // Para NCF fisico, TIPO/NCF van DESPUES de ORDEN (orden tradicional).
+    if (!isElectronicCf) {
+      if (fiscalNcf != null && fiscalNcf.isNotEmpty) {
+        if (fiscalType != null) {
+          gen.textRow('TIPO:', _getNcfTypeName(fiscalType));
+        }
+        gen.textRow('NCF:', fiscalNcf);
+      } else if (fiscalType != null) {
         gen.textRow('TIPO:', _getNcfTypeName(fiscalType));
       }
-      gen.textRow('NCF:', fiscalNcf);
-    } else if (fiscalType != null) {
-      gen.textRow('TIPO:', _getNcfTypeName(fiscalType));
     }
 
     if (customerName != null && customerName != 'Cliente') {
@@ -624,14 +662,21 @@ class PrintTicketService {
     // Ver comentario en generatePrecheck.
     final double effectiveSubtotal = effectiveTotals.subtotal;
 
-    // Estructura: SUBTOTAL → impuestos → DESCUENTO → TOTAL (matchea la UI).
-    gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(effectiveSubtotal)}');
+    // Etiquetas DGII para e-CF (Norma General 01-2020):
+    // - "Subtotal Gravado" en lugar de "SUBTOTAL"
+    // - "Total ITBIS" en lugar de "ITBIS (18%)"
+    final subtotalLabel = isElectronicCf ? 'Subtotal Gravado:' : 'SUBTOTAL:';
+    gen.textRow(subtotalLabel, 'RD\$ ${_formatMoney(effectiveSubtotal)}');
 
-    // Tax breakdown — labels normales.
+    // Tax breakdown — para e-CF normaliza el label del ITBIS a "Total ITBIS".
     if (taxBreakdown.isNotEmpty) {
       for (final entry in taxBreakdown) {
         if (entry.amount.abs() < 0.005) continue;
-        gen.textRow('${entry.label}:', 'RD\$ ${_formatMoney(entry.amount)}');
+        var label = entry.label;
+        if (isElectronicCf && label.toLowerCase().contains('itbis')) {
+          label = 'Total ITBIS';
+        }
+        gen.textRow('$label:', 'RD\$ ${_formatMoney(entry.amount)}');
       }
     } else {
       // Fallback: derive from resolved printable totals
@@ -649,10 +694,17 @@ class PrintTicketService {
         );
       }
       if (effectiveTax > 0.005) {
-        final taxPct = effectiveSubtotal > 0
-            ? ((effectiveTax / effectiveSubtotal) * 100).toStringAsFixed(0)
-            : '18';
-        gen.textRow('ITBIS ($taxPct%):', 'RD\$ ${_formatMoney(effectiveTax)}');
+        if (isElectronicCf) {
+          gen.textRow('Total ITBIS:', 'RD\$ ${_formatMoney(effectiveTax)}');
+        } else {
+          final taxPct = effectiveSubtotal > 0
+              ? ((effectiveTax / effectiveSubtotal) * 100).toStringAsFixed(0)
+              : '18';
+          gen.textRow(
+            'ITBIS ($taxPct%):',
+            'RD\$ ${_formatMoney(effectiveTax)}',
+          );
+        }
       }
     }
 
@@ -696,6 +748,51 @@ class PrintTicketService {
         gen.textRow('CAMBIO:', 'RD\$ ${_formatMoney(totalChange)}');
         gen.setBold(false);
       }
+    }
+
+    // ============================================================
+    // QR e-CF (DGII) — debajo de pagos
+    // ============================================================
+    // Si el e-CF fue aceptado por DGII tenemos public_url codificado en
+    // qrBytes. Debajo del QR van Codigo de Seguridad y Fecha de Firma
+    // Digital, formato exigido por DGII (ver imagen oficial Norma General).
+    // Si está pending/sent/rejected, se muestra el mensaje de estado.
+    // Para NCF físico (B0x), todo es no-op.
+    if (qrBytes != null && qrBytes.isNotEmpty) {
+      gen.lineFeed();
+      gen.appendRaw(qrBytes);
+
+      // Codigo de Seguridad + Fecha de Firma Digital, centrados, en negrita.
+      // Solo si tenemos los datos (e-CF aceptado vía webhook).
+      if ((ecfSecurityCode != null && ecfSecurityCode.isNotEmpty) ||
+          ecfSignedAt != null) {
+        gen.setAlignment(Alignment.center);
+        gen.setBold(true);
+        if (ecfSecurityCode != null && ecfSecurityCode.isNotEmpty) {
+          gen.text('Código de Seguridad: $ecfSecurityCode');
+        }
+        if (ecfSignedAt != null) {
+          final astSigned = AppTime.astFromInstant(ecfSignedAt);
+          final signedDate =
+              '${astSigned.day.toString().padLeft(2, '0')}-'
+              '${astSigned.month.toString().padLeft(2, '0')}-'
+              '${astSigned.year}';
+          final signedTime =
+              '${astSigned.hour.toString().padLeft(2, '0')}:'
+              '${astSigned.minute.toString().padLeft(2, '0')}:'
+              '${astSigned.second.toString().padLeft(2, '0')}';
+          gen.text('Fecha de Firma Digital: $signedDate $signedTime');
+        }
+        gen.setBold(false);
+        gen.setAlignment(Alignment.left);
+      }
+    } else if (ecfStatusMessage != null && ecfStatusMessage.isNotEmpty) {
+      gen.lineFeed();
+      gen.setAlignment(Alignment.center);
+      gen.setBold(true);
+      gen.text(ecfStatusMessage);
+      gen.setBold(false);
+      gen.setAlignment(Alignment.left);
     }
 
     // Footer
@@ -1151,6 +1248,9 @@ class PrintTicketService {
   // ============================================================
 
   static String _getNcfTypeName(String code) {
+    // Nombres oficiales segun DGII (Norma General 01-2020 y siguientes).
+    // Se mantienen los aliases sin prefijo letra ('01', '32', etc.) por
+    // compat con call sites que pasan solo el codigo numerico.
     switch (code) {
       case 'B01':
       case '01':
@@ -1166,10 +1266,22 @@ class PrintTicketService {
         return 'Gubernamental';
       case 'E31':
       case '31':
-        return 'e-Crédito Fiscal';
+        return 'Factura de Crédito Fiscal Electrónica';
       case 'E32':
       case '32':
-        return 'e-Consumidor';
+        return 'Factura de Consumo Electrónica';
+      case 'E33':
+      case '33':
+        return 'Nota de Débito Electrónica';
+      case 'E34':
+      case '34':
+        return 'Nota de Crédito Electrónica';
+      case 'E44':
+      case '44':
+        return 'Factura de Régimen Especial Electrónica';
+      case 'E45':
+      case '45':
+        return 'Factura Gubernamental Electrónica';
       default:
         return code;
     }

@@ -31,6 +31,15 @@ class PaymentState extends Equatable {
   final String? customerRnc;
   final String? customerName;
 
+  // Tipo de comprobante fiscal
+  // Tipos disponibles del business (ncf_sequences activas con rango libre).
+  // Ej: ['B02', 'E32'] o ['B02', 'E31', 'E32'] segun config del business.
+  final List<String> availableNcfTypes;
+  // Tipo seleccionado por el cajero. Default = default_ncf_type del business.
+  final String? selectedNcfType;
+  // True si el business tiene e-CF habilitado (al menos una sequence Exx activa).
+  final bool ecfEnabled;
+
   // Estado del proceso
   final bool processingPayment; // true while payment RPC is in flight
   final bool paymentProcessed;
@@ -53,6 +62,9 @@ class PaymentState extends Equatable {
     this.customerId,
     this.customerRnc,
     this.customerName,
+    this.availableNcfTypes = const [],
+    this.selectedNcfType,
+    this.ecfEnabled = false,
     this.processingPayment = false,
     this.paymentProcessed = false,
     this.processedPayment,
@@ -75,6 +87,9 @@ class PaymentState extends Equatable {
     String? customerId,
     String? customerRnc,
     String? customerName,
+    List<String>? availableNcfTypes,
+    String? selectedNcfType,
+    bool? ecfEnabled,
     bool? processingPayment,
     bool? paymentProcessed,
     Payment? processedPayment,
@@ -96,12 +111,30 @@ class PaymentState extends Equatable {
       customerId: customerId ?? this.customerId,
       customerRnc: customerRnc ?? this.customerRnc,
       customerName: customerName ?? this.customerName,
+      availableNcfTypes: availableNcfTypes ?? this.availableNcfTypes,
+      selectedNcfType: selectedNcfType ?? this.selectedNcfType,
+      ecfEnabled: ecfEnabled ?? this.ecfEnabled,
       processingPayment: processingPayment ?? this.processingPayment,
       paymentProcessed: paymentProcessed ?? this.paymentProcessed,
       processedPayment: processedPayment ?? this.processedPayment,
       fiscalDocument: fiscalDocument ?? this.fiscalDocument,
       offlineQueued: offlineQueued ?? this.offlineQueued,
     );
+  }
+
+  /// True si el tipo seleccionado requiere RNC del comprador.
+  /// E31 (Crédito Fiscal) y E33/E34 contra créditos requieren RNC.
+  bool get requiresCustomerRnc {
+    final t = selectedNcfType;
+    if (t == null) return false;
+    return t == 'E31' || t == 'E33' || t == 'E34' || t == 'B01';
+  }
+
+  /// True si el RNC del comprador está poblado y bien formateado (9 u 11 dígitos).
+  bool get hasValidCustomerRnc {
+    final rnc = customerRnc?.trim() ?? '';
+    if (rnc.isEmpty) return false;
+    return RegExp(r'^\d{9}$|^\d{11}$').hasMatch(rnc);
   }
 
   bool get canProcessPayment {
@@ -111,6 +144,11 @@ class PaymentState extends Equatable {
 
     // Si hay un error (ej: falta sesión de caja), no permitir pago
     if (error != null) return false;
+
+    // Comprobantes que exigen RNC del comprador (E31, E33, E34, B01).
+    if (requiresCustomerRnc && !hasValidCustomerRnc) {
+      return false;
+    }
 
     // Para efectivo, debe recibir al menos el total
     if (selectedMethod!.isCash) {
@@ -145,6 +183,9 @@ class PaymentState extends Equatable {
     customerId,
     customerRnc,
     customerName,
+    availableNcfTypes,
+    selectedNcfType,
+    ecfEnabled,
     processingPayment,
     paymentProcessed,
     processedPayment,

@@ -24,6 +24,7 @@ import 'package:mangopos/presentation/customers/viewmodel/customers_viewmodel.da
 
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
+import 'package:mangopos/services/printing/qr_esc_pos_builder.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
@@ -2684,6 +2685,39 @@ class _CartView extends ConsumerWidget {
           configuredBreakdown: configuredBreakdown,
         );
 
+        // e-CF: pre-fetch del fiscal_document para resolver QR/estado.
+        // Solo aplica al tipo 'invoice' (precheck no lleva NCF). El
+        // fiscalDoc se resuelve por order_id; el trigger SQL lo crea
+        // automáticamente al cobrar. Si la consulta o el render del QR
+        // fallan, dejamos qrBytes/ecfStatusMessage en null y el ticket
+        // sale igual que antes (sin QR) — fail-soft, no rompe el cobro.
+        List<int>? ecfQrBytes;
+        String? ecfStatusMsg;
+        bool isElectronicCf = false;
+        String? ecfSecurityCode;
+        DateTime? ecfSignedAt;
+        if (type == 'invoice') {
+          try {
+            final fiscalDoc = await ref
+                .read(salesRepositoryProvider)
+                .getOrderFiscalDocument(orderObj.id);
+            if (fiscalDoc != null && fiscalDoc.isElectronic) {
+              isElectronicCf = true;
+              ecfSecurityCode = fiscalDoc.ecfSecurityCode;
+              ecfSignedAt = fiscalDoc.ecfSignedAt;
+              if (fiscalDoc.hasQrData) {
+                ecfQrBytes = await QrEscPosBuilder.build(
+                  data: fiscalDoc.publicUrl!,
+                );
+              } else {
+                ecfStatusMsg = fiscalDoc.ecfStatusMessage;
+              }
+            }
+          } catch (_) {
+            // No tumbar el cobro por un fallo de QR/estado e-CF.
+          }
+        }
+
         ticket = type == 'invoice'
             ? PrintTicketService.generateInvoice(
                 order: orderObj,
@@ -2707,6 +2741,11 @@ class _CartView extends ConsumerWidget {
                 title: title,
                 receiptItemDisplayMode: receiptItemDisplayMode,
                 taxBreakdown: printTaxBreakdown,
+                qrBytes: ecfQrBytes,
+                ecfStatusMessage: ecfStatusMsg,
+                isElectronicCf: isElectronicCf,
+                ecfSecurityCode: ecfSecurityCode,
+                ecfSignedAt: ecfSignedAt,
               )
             : PrintTicketService.generatePrecheck(
                 order: orderObj,
