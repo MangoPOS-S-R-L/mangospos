@@ -218,6 +218,10 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
+                              if (state.availableNcfTypes.length > 1)
+                                _buildFiscalSelector(state, viewModel),
+                              if (state.availableNcfTypes.length > 1)
+                                const SizedBox(height: AppSpacing.xl),
                               _buildPaymentMethods(state, viewModel),
                               const Spacer(),
                               _buildTotalsSummary(state),
@@ -392,6 +396,178 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
         ),
       ],
     );
+  }
+
+  /// Selector de tipo de comprobante fiscal (B02 / E32 / E31 / etc.).
+  /// Solo se renderiza cuando el business tiene >1 tipo disponible (si solo
+  /// tiene B02 no tiene sentido mostrar la sección).
+  ///
+  /// Si el tipo seleccionado requiere RNC del comprador (E31/E33/E34/B01),
+  /// muestra inline los campos de RNC y Razón Social con validación.
+  Widget _buildFiscalSelector(PaymentState state, PaymentViewModel viewModel) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'TIPO DE COMPROBANTE',
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            color: AppColors.mutedForeground,
+            letterSpacing: 1,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.md),
+        Wrap(
+          spacing: AppSpacing.md,
+          runSpacing: AppSpacing.md,
+          children: state.availableNcfTypes.map((type) {
+            final isSelected = state.selectedNcfType == type;
+            return _NcfTypeButton(
+              code: type,
+              label: _ncfTypeLabel(type),
+              isSelected: isSelected,
+              onTap: () => viewModel.selectNcfType(type),
+            );
+          }).toList(),
+        ),
+        if (state.requiresCustomerRnc) ...[
+          const SizedBox(height: AppSpacing.md),
+          _buildCustomerFields(state, viewModel),
+        ],
+      ],
+    );
+  }
+
+  /// Campos inline para RNC + Razón Social del comprador.
+  /// Solo se muestran cuando el tipo seleccionado los requiere (E31, etc.).
+  /// Validación visual: el border se pinta rojo si el RNC no es válido.
+  Widget _buildCustomerFields(PaymentState state, PaymentViewModel viewModel) {
+    final rnc = state.customerRnc ?? '';
+    final rncIsValid = state.hasValidCustomerRnc;
+    final rncFilledButInvalid = rnc.isNotEmpty && !rncIsValid;
+
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        border: Border.all(
+          color: AppColors.primary.withValues(alpha: 0.3),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.info_outline,
+                size: 14,
+                color: AppColors.primary,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                'Datos del comprador requeridos',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.primary,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                flex: 2,
+                child: TextFormField(
+                  key: ValueKey('rnc-${state.selectedNcfType}'),
+                  initialValue: state.customerRnc,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    labelText: 'RNC / Cédula',
+                    hintText: '9 u 11 dígitos',
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 10,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(AppRadius.sm),
+                    ),
+                    errorText: rncFilledButInvalid
+                        ? 'Debe tener 9 u 11 dígitos'
+                        : null,
+                  ),
+                  onChanged: (v) => viewModel.setCustomer(
+                    customerRnc: v.trim().isEmpty ? null : v.trim(),
+                    customerName: state.customerName,
+                    customerId: state.customerId,
+                  ),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                flex: 3,
+                child: TextFormField(
+                  key: ValueKey('cname-${state.selectedNcfType}'),
+                  initialValue: state.customerName,
+                  decoration: InputDecoration(
+                    labelText: 'Razón Social / Nombre',
+                    hintText: 'Opcional para algunos tipos',
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 10,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(AppRadius.sm),
+                    ),
+                  ),
+                  onChanged: (v) => viewModel.setCustomer(
+                    customerRnc: state.customerRnc,
+                    customerName: v.trim().isEmpty ? null : v.trim(),
+                    customerId: state.customerId,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Etiqueta amigable en español para cada código DGII.
+  String _ncfTypeLabel(String code) {
+    switch (code) {
+      case 'B01':
+        return 'Crédito Fiscal';
+      case 'B02':
+        return 'Consumo';
+      case 'B14':
+        return 'Régimen Especial';
+      case 'B15':
+        return 'Gubernamental';
+      case 'E31':
+        return 'e-Crédito Fiscal';
+      case 'E32':
+        return 'e-Consumo';
+      case 'E33':
+        return 'e-Nota Débito';
+      case 'E34':
+        return 'e-Nota Crédito';
+      case 'E44':
+        return 'e-Régimen Especial';
+      case 'E45':
+        return 'e-Gubernamental';
+      default:
+        return code;
+    }
   }
 
   Widget _buildPaymentMethods(PaymentState state, PaymentViewModel viewModel) {
@@ -712,6 +888,106 @@ class _PaymentMethodButton extends StatelessWidget {
     if (method.isCard) return Icons.credit_card_outlined;
     if (method.isTransfer) return Icons.account_balance_outlined;
     return Icons.payment_outlined;
+  }
+}
+
+/// Botón compacto de selección de tipo de comprobante fiscal.
+/// Mismo estilo visual que `_PaymentMethodButton` pero más pequeño y con
+/// label de 1-2 líneas. El badge muestra "FÍSICO" o "e-CF" según prefijo.
+class _NcfTypeButton extends StatelessWidget {
+  final String code;
+  final String label;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _NcfTypeButton({
+    required this.code,
+    required this.label,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  bool get _isElectronic => code.isNotEmpty && code[0] == 'E';
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(AppRadius.md),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        constraints: const BoxConstraints(minWidth: 130),
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.md,
+          vertical: AppSpacing.sm,
+        ),
+        decoration: BoxDecoration(
+          color: isSelected ? AppColors.primaryBg : AppColors.card,
+          borderRadius: BorderRadius.circular(AppRadius.md),
+          border: Border.all(
+            color: isSelected ? AppColors.primary : AppColors.border,
+            width: isSelected ? 2 : 1.5,
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 1,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _isElectronic
+                        ? AppColors.primary.withValues(alpha: 0.15)
+                        : AppColors.mutedForeground.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                  child: Text(
+                    _isElectronic ? 'e-CF' : 'FÍSICO',
+                    style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                      color: _isElectronic
+                          ? AppColors.primary
+                          : AppColors.mutedForeground,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  code,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: isSelected
+                        ? AppColors.primary
+                        : AppColors.mutedForeground,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                color: isSelected
+                    ? AppColors.primary
+                    : AppColors.foreground,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

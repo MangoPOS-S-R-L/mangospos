@@ -142,6 +142,25 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
 
       methods.sort((a, b) => a.position.compareTo(b.position));
 
+      // Cargar tipos de comprobante disponibles para este business.
+      // - availableNcfTypes: filtra ncf_sequences activas con rango disponible.
+      // - selectedNcfType: usa default_ncf_type del business como base.
+      // - ecfEnabled: true si hay alguna sequence Exx en disponibles.
+      List<String> availableNcfTypes = const [];
+      String? selectedNcfType;
+      bool ecfEnabled = false;
+      if (_connectivity.isConnected) {
+        try {
+          final config = await _loadFiscalConfig(businessId);
+          availableNcfTypes = config.types;
+          selectedNcfType = config.defaultType;
+          ecfEnabled = config.ecfEnabled;
+        } catch (_) {
+          // Fail-soft: si no se cargan tipos, el cobro queda con default
+          // del backend (B02). No tumbamos el flujo de cobro por esto.
+        }
+      }
+
       state = state.copyWith(
         loading: false,
         order: order,
@@ -149,6 +168,9 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         totalToPay: totalToPay,
         paymentMethods: methods,
         cashSession: cashSession,
+        availableNcfTypes: availableNcfTypes,
+        selectedNcfType: selectedNcfType,
+        ecfEnabled: ecfEnabled,
         error: _connectivity.isConnected
             ? null
             : 'Modo offline: el pago se guardará para sincronizar luego.',
@@ -156,6 +178,80 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
     } catch (e) {
       state = state.copyWith(loading: false, error: _cleanError(e));
     }
+  }
+
+  /// Carga la configuración fiscal del business: tipos disponibles, default,
+  /// y si tiene e-CF habilitado. Fail-soft: si la query falla devuelve config
+  /// vacía (el backend caerá al default 'B02').
+  Future<({List<String> types, String? defaultType, bool ecfEnabled})>
+      _loadFiscalConfig(String businessId) async {
+    final sb = Supabase.instance.client;
+
+    // 1. fiscal_settings: default_ncf_type del business.
+    final fs = await sb
+        .from('fiscal_settings')
+        .select('default_ncf_type, ecf_enabled')
+        .eq('business_id', businessId)
+        .maybeSingle();
+
+    final defaultType = fs?['default_ncf_type'] as String?;
+
+    // 2. ncf_sequences activas con rango disponible.
+    final sequences = await sb
+        .from('ncf_sequences')
+        .select('ncf_type, current_number, range_end')
+        .eq('business_id', businessId)
+        .eq('is_active', true);
+
+    final types = <String>{};
+    for (final row in (sequences as List).cast<Map<String, dynamic>>()) {
+      final type = row['ncf_type']?.toString();
+      final current = (row['current_number'] as num?)?.toInt() ?? 0;
+      final end = (row['range_end'] as num?)?.toInt() ?? 0;
+      if (type == null || type.isEmpty) continue;
+      // Solo incluir si todavía hay rango disponible.
+      if (current >= end) continue;
+      types.add(type);
+    }
+
+    // Orden estable: B0x primero, luego E3x/E4x.
+    final sortedTypes = types.toList()
+      ..sort((a, b) {
+        // 'B' antes que 'E'
+        final aPrefix = a.isNotEmpty ? a[0] : '';
+        final bPrefix = b.isNotEmpty ? b[0] : '';
+        if (aPrefix != bPrefix) return aPrefix.compareTo(bPrefix);
+        return a.compareTo(b);
+      });
+
+    final ecfEnabled = (fs?['ecf_enabled'] == true) ||
+        sortedTypes.any((t) => t.startsWith('E'));
+
+    // Default fallback: si default_ncf_type no está en disponibles, usar el
+    // primero (preferentemente Exx si ecf habilitado, sino B02).
+    String? resolvedDefault = defaultType;
+    if (resolvedDefault == null || !sortedTypes.contains(resolvedDefault)) {
+      if (sortedTypes.isNotEmpty) {
+        resolvedDefault = sortedTypes.firstWhere(
+          (t) => ecfEnabled ? t.startsWith('E') : t.startsWith('B'),
+          orElse: () => sortedTypes.first,
+        );
+      }
+    }
+
+    return (
+      types: sortedTypes,
+      defaultType: resolvedDefault,
+      ecfEnabled: ecfEnabled,
+    );
+  }
+
+  /// Cambia el tipo de comprobante seleccionado para este cobro.
+  /// Si el tipo nuevo NO requiere RNC, se preserva el customer si existe
+  /// (por si el usuario alterna entre E31 y E32 sin perder lo escrito).
+  void selectNcfType(String type) {
+    if (state.selectedNcfType == type) return;
+    state = state.copyWith(selectedNcfType: type);
   }
 
   // ============================================================
@@ -262,6 +358,9 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         customerRnc: customerRnc,
         cashierSessionId: state.cashSession?.id,
         changeAmount: state.change,
+        // Tipo de comprobante seleccionado en el modal. Si es null, el RPC
+        // backend cae al default_ncf_type del business (típicamente B02).
+        fiscalType: state.selectedNcfType,
       );
 
       FiscalDocument? fiscalDoc;
