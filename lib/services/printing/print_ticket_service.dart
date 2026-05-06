@@ -535,7 +535,8 @@ class PrintTicketService {
       gen.textCentered(_getNcfTypeName(fiscalType));
       gen.textRow('e-NCF:', fiscalNcf);
       gen.setBold(false);
-      gen.lineFeed();
+      // Sin lineFeed extra: ORDEN queda inmediatamente debajo de e-NCF, con
+      // el mismo espaciado que el resto de filas de datos (MESA, FECHA...).
     }
 
     // Order Info
