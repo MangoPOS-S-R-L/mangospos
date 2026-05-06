@@ -279,31 +279,34 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
     required String fiscalDocumentId,
     Duration timeout = const Duration(seconds: 8),
   }) async {
+    // Pasamos fiscal_document_id en el body para que el Edge Function nuevo
+    // procese SOLO ese doc (modo sync). El Edge Function viejo ignora el
+    // body y procesa batch — igual de util porque el doc nuevo va a estar
+    // entre los pending de la queue.
     try {
-      final res = await Supabase.instance.client.functions
+      await Supabase.instance.client.functions
           .invoke(
             'emit-document',
             body: {'fiscal_document_id': fiscalDocumentId},
           )
           .timeout(timeout);
-
-      final data = res.data;
-      if (data is! Map<String, dynamic>) return null;
-      final docMap = data['doc'];
-      if (docMap is! Map<String, dynamic>) return null;
-      // Re-leemos el doc completo desde el repo (incluye campos no devueltos
-      // por el response, ej. customer info). Asi mantenemos consistencia
-      // con el resto del flujo que asume FiscalDocument completo.
-      try {
-        return await _salesRepo.getOrderFiscalDocument(state.order!.id);
-      } catch (_) {
-        return null;
-      }
     } on TimeoutException {
       // Timeout: el cron de respaldo + webhook eventualmente van a actualizar.
-      return null;
+      // Caemos al re-fetch igual: si Alanube alcanzo a procesar antes del
+      // timeout HTTP (poco probable pero posible), el doc ya esta en 'sent'.
     } catch (_) {
       // Error de red / 5xx: idem timeout, falla suave.
+    }
+
+    // Re-fetch unconditional. Esto funciona con AMBAS versiones del Edge
+    // Function (la vieja batch, la nueva sync per-doc) — solo nos importa
+    // el estado actual del doc en DB despues del intento. Si Alanube
+    // respondio, el doc ya tiene ecf_status='sent' + security_code; si
+    // todavia esta procesando o fallo, queda en 'pending' y el ticket
+    // sale con "EN PROCESO".
+    try {
+      return await _salesRepo.getOrderFiscalDocument(state.order!.id);
+    } catch (_) {
       return null;
     }
   }
