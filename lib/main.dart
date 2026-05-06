@@ -35,6 +35,7 @@ import 'app/router/routes.dart';
 import 'core/cache/cache_manager.dart';
 import 'core/network/supabase_config.dart';
 import 'core/agent/mobile_print_agent.dart';
+import 'core/agent/windows_firewall.dart';
 import 'core/services/local_print_service.dart';
 import 'core/utils/logger.dart';
 import 'env/env.dart';
@@ -192,6 +193,19 @@ Future<bool> _pingAgentOnce({
 }
 
 Future<void> _ensurePrinterAgentStarted() async {
+  // Windows: garantizar la regla de firewall ANTES de que el agent levante
+  // el socket. Si lo hacemos despues, las primeras conexiones de tablets
+  // en LAN podrian fallar hasta que el usuario clickee Allow en el prompt
+  // del SO. ensureRule() es idempotente y no-op fuera de Windows.
+  try {
+    await WindowsFirewall.ensureRule(port: agentPort);
+  } catch (e) {
+    // Defensivo: si algo raro pasa con el firewall helper, no queremos
+    // bloquear el arranque del agent — la impresion local sigue funcionando
+    // sin la regla, solo el LAN sharing queda inhabilitado.
+    debugPrint('[Agent] WindowsFirewall.ensureRule fallo (no critico): $e');
+  }
+
   if (await _pingAgentOnce()) {
     debugPrint('[Agent] Ya esta activo en http://$agentHost:$agentPort');
     return;
