@@ -1137,9 +1137,16 @@ class _ActiveTablesWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Filter out manual sales
+    // Excluir mesas virtuales que no son mesas fisicas reales:
+    // - 'manual'    → Venta manual (mesa virtual con code 'manual')
+    // - 'quick' / 'quick_sale' → Venta rapida (mesa virtual con code 'quick')
+    // Ambas existen en dining_tables porque el modelo de orders requiere
+    // table_id, pero el dashboard solo deberia mostrar mesas reales del
+    // salon. El listado de Ventas Rapidas/Manual vive en la pantalla
+    // dedicada de Sales.
+    const virtualOrigins = {'manual', 'quick', 'quick_sale'};
     final sessions = viewModel.activeSessions
-        .where((s) => s.origin != 'manual')
+        .where((s) => !virtualOrigins.contains(s.origin))
         .toList();
 
     final visibleSessions = isWide
