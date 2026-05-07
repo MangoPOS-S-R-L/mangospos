@@ -161,6 +161,22 @@ class ReportsRepository {
       values: orderIds,
     );
 
+    // Cargar orders.total para conocer la "verdad fiscal" de cada orden
+    // (lo que efectivamente se cobró al cliente, redondeado a 2 dec).
+    // Usado abajo para distribuir el ruido de redondeo entre items y
+    // distinguir esos centavos de una propina voluntaria real.
+    final orderRows = await _selectInBatches(
+      table: 'orders',
+      select: 'id, total',
+      column: 'id',
+      values: orderIds,
+    );
+    final orderTotalById = <String, double>{
+      for (final row in orderRows)
+        if ((row['id']?.toString() ?? '').isNotEmpty)
+          row['id'].toString(): _toDouble(row['total']),
+    };
+
     final itemById = <String, Map<String, dynamic>>{};
     for (final item in items) {
       final itemId = item['id']?.toString();
@@ -168,6 +184,48 @@ class ReportsRepository {
         itemById[itemId] = item;
       }
     }
+
+    // Largest Remainder Method (LRM): los items se almacenan a 4 decimales
+    // y orders.total a 2. Sumar items raw produce residuos de centavos
+    // que aparecen como "Otros cargos" en reportes. Aquí calculamos por
+    // orden el delta de redondeo y lo asignamos al item de mayor monto
+    // de esa orden — así la suma de items por categoría cuadra al
+    // centavo con orders.total.
+    //
+    // Solo distribuimos diferencias pequeñas (< 1 RD$). Diferencias más
+    // grandes son potencialmente data corrupta o casos especiales y se
+    // dejan intactas para que el bug salga a la vista en lugar de
+    // esconderse.
+    final itemRoundingAdjustment = <String, double>{};
+    final itemsByOrder = <String, List<Map<String, dynamic>>>{};
+    for (final item in items) {
+      if (item['status']?.toString() == 'void') continue;
+      final orderId = item['order_id']?.toString() ?? '';
+      if (orderId.isEmpty) continue;
+      itemsByOrder.putIfAbsent(orderId, () => []).add(item);
+    }
+    itemsByOrder.forEach((orderId, orderItems) {
+      final orderTotal = orderTotalById[orderId];
+      if (orderTotal == null || orderTotal <= 0) return;
+      double itemsSum = 0;
+      String? largestItemId;
+      double largestItemAmount = -1;
+      for (final item in orderItems) {
+        final amount =
+            _toDouble(item['subtotal']) + _toDouble(item['tax']);
+        itemsSum += amount;
+        if (amount > largestItemAmount) {
+          largestItemAmount = amount;
+          largestItemId = item['id']?.toString();
+        }
+      }
+      // Trabajamos en centavos para evitar cascadas de error.
+      final delta = ((orderTotal - itemsSum) * 100).round() / 100;
+      if (delta == 0 || largestItemId == null) return;
+      // Solo redistribuir ruido de redondeo, no propina ni anomalías.
+      if (delta.abs() >= 1.0) return;
+      itemRoundingAdjustment[largestItemId] = delta;
+    });
 
     final itemIds = itemById.keys.toList(growable: false);
     final modifierRows = await _selectInBatches(
@@ -320,7 +378,13 @@ class ReportsRepository {
       // Use subtotal+tax instead of item['total']: the April-17 migration dropped
       // and re-added the total column (resetting historical rows to 0), while
       // subtotal and tax retained their correct values.
-      final itemGrossSales = _toDouble(item['subtotal']) + _toDouble(item['tax']);
+      // El ajuste LRM (calculado arriba) absorbe los centavos de
+      // redondeo que antes salían como "Otros cargos" — solo se aplica
+      // al item más grande de cada orden y solo si |delta| < 1 RD$.
+      final itemId = item['id']?.toString() ?? '';
+      final lrmAdjustment = itemRoundingAdjustment[itemId] ?? 0.0;
+      final itemGrossSales =
+          _toDouble(item['subtotal']) + _toDouble(item['tax']) + lrmAdjustment;
       final itemNetSales = itemGrossSales;
       bucket['amount'] = _toDouble(bucket['amount']) + itemNetSales;
       bucket['quantity'] = _toDouble(bucket['quantity']) + qty;
@@ -607,18 +671,28 @@ class ReportsRepository {
       'top_products': topProductsList,
       'product_sales': productSalesList,
       'sales_by_category': () {
-        final netSales = totalSales - voidedSales;
-        final categoryTotal = byCategory.values.fold<double>(
+        // Después del LRM por item (calculado arriba), la suma de
+        // categorías ya cuadra con SUM(orders.total) al centavo. La
+        // diferencia entre netSales (lo que entró por payments) y la
+        // suma de items debe explicarse como propina voluntaria, NO
+        // como ruido de redondeo.
+        //
+        // Fórmula PRD-11: propina_voluntaria = SUM(payments) - SUM(orders.total)
+        // Ambos lados a 2 decimales = sin ruido. Solo aparece como
+        // categoría "Propina (no facturada)" si supera el umbral de
+        // 1 RD$ (anything below would be operational rounding, no real tip).
+        final ordersTotalSum = orderTotalById.values.fold<double>(
           0,
-          (sum, row) => sum + _toDouble(row['amount']),
+          (sum, total) => sum + total,
         );
-        final remainder = netSales - categoryTotal;
-        if (remainder > 0.01) {
-          byCategory['Otros cargos'] = {
-            'label': 'Otros cargos',
-            'amount': remainder,
+        final voluntaryTip = totalSales - ordersTotalSum;
+        if (voluntaryTip >= 1.0) {
+          byCategory['Propina (no facturada)'] = {
+            'label': 'Propina (no facturada)',
+            'amount': voluntaryTip,
             'quantity': 0.0,
             'count': 0,
+            'is_voluntary_tip': true,
           };
         }
         return byCategory.values.toList(growable: false)
