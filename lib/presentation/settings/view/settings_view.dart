@@ -210,6 +210,13 @@ class SettingsView extends ConsumerWidget {
             route: AppRoutes.cashierIncomeExpense,
           ),
           _SettingsOption(
+            title: 'Tipos de Pago',
+            subtitle: 'Cuentas bancarias para transferencias',
+            icon: Icons.account_balance_rounded,
+            color: Color(0xFFEDE9FE),
+            route: AppRoutes.settingsPaymentMethods,
+          ),
+          _SettingsOption(
             title: 'Gestión de Cierres de Caja',
             subtitle: 'Administración de cierres y arqueos',
             icon: Icons.lock_rounded,

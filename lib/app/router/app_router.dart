@@ -20,6 +20,7 @@ import 'package:mangopos/presentation/settings/more%20settings/printing/diagnost
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/view/taxes_view.dart';
 import 'package:mangopos/presentation/settings/business_profile/business_profile_screen.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/zones_tables/view/zones_tables_view.dart';
+import 'package:mangopos/presentation/settings/payment_methods/view/payment_methods_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/users/view/roles_permissions_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/users/view/users_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/users/view/waiters_view.dart';
@@ -498,6 +499,11 @@ class AppRouter {
             path: AppRoutes.settingsZonesTables,
             builder: (context, state) =>
                 const ZonesTablesView(businessId: 'auto'),
+          ),
+          GoRoute(
+            path: AppRoutes.settingsPaymentMethods,
+            builder: (context, state) =>
+                const PaymentMethodsView(businessId: 'auto'),
           ),
           GoRoute(
             path: AppRoutes.settingsTaxes,

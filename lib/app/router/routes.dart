@@ -67,6 +67,7 @@ class AppRoutes {
 
   static const settingsBusinessProfile = '$settings/business-profile';
   static const settingsZonesTables = '$settings/zones-tables';
+  static const settingsPaymentMethods = '$settings/payment-methods';
   static const settingsTaxes = '$settings/taxes';
   static const settingsFiscalReceipts = '$settings/fiscal-receipts';
   static const settingsBranches = '$settings/branches';
