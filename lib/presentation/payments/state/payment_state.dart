@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import '../../../data/models/bank_account.dart';
 import '../../../data/models/payment_models.dart';
 import '../../../data/models/sales_models.dart';
 
@@ -25,6 +26,13 @@ class PaymentState extends Equatable {
 
   // Referencia (para tarjeta/transferencia)
   final String? reference;
+
+  // Cuenta bancaria seleccionada (solo aplica para transferencias). Las
+  // cuentas se administran desde Ajustes → Tipos de Pago. Cuando el
+  // cajero elige el método 'transfer', el modal le muestra un selector
+  // con las cuentas activas del negocio. Persistido en
+  // payments.bank_account_id para trazabilidad.
+  final BankAccount? selectedBankAccount;
 
   // Cliente (para factura)
   final String? customerId;
@@ -59,6 +67,7 @@ class PaymentState extends Equatable {
     this.amountReceived = 0,
     this.change = 0,
     this.reference,
+    this.selectedBankAccount,
     this.customerId,
     this.customerRnc,
     this.customerName,
@@ -84,6 +93,7 @@ class PaymentState extends Equatable {
     double? amountReceived,
     double? change,
     String? reference,
+    Object? selectedBankAccount = _sentinel,
     String? customerId,
     String? customerRnc,
     String? customerName,
@@ -108,6 +118,11 @@ class PaymentState extends Equatable {
       amountReceived: amountReceived ?? this.amountReceived,
       change: change ?? this.change,
       reference: reference ?? this.reference,
+      // Sentinel para diferenciar "no se pasó" de "se pasó null
+      // explícitamente" (ej. limpiar selección al cambiar de método).
+      selectedBankAccount: identical(selectedBankAccount, _sentinel)
+          ? this.selectedBankAccount
+          : selectedBankAccount as BankAccount?,
       customerId: customerId ?? this.customerId,
       customerRnc: customerRnc ?? this.customerRnc,
       customerName: customerName ?? this.customerName,
@@ -155,6 +170,13 @@ class PaymentState extends Equatable {
       return amountReceived >= totalToPay;
     }
 
+    // Para transferencia, exigimos seleccionar la cuenta destino. La
+    // referencia es opcional por ahora (puede que el cajero la cargue
+    // después de validar manual con el cliente).
+    if (isTransferPayment) {
+      if (selectedBankAccount == null) return false;
+    }
+
     // Para métodos que requieren referencia
     if (requiresReference) {
       return reference != null && reference!.isNotEmpty;
@@ -166,6 +188,10 @@ class PaymentState extends Equatable {
 
   bool get isCashPayment => selectedMethod?.isCash ?? false;
   bool get requiresReference => selectedMethod?.requiresReference ?? false;
+
+  /// `true` si el método activo es transferencia (`code == 'transfer'`).
+  /// El modal usa este flag para mostrar el selector de cuenta bancaria.
+  bool get isTransferPayment => selectedMethod?.code == 'transfer';
 
   @override
   List<Object?> get props => [
@@ -180,6 +206,7 @@ class PaymentState extends Equatable {
     amountReceived,
     change,
     reference,
+    selectedBankAccount,
     customerId,
     customerRnc,
     customerName,
@@ -193,3 +220,8 @@ class PaymentState extends Equatable {
     offlineQueued,
   ];
 }
+
+/// Sentinel privado para diferenciar "no se pasó argumento" de "se pasó
+/// null explícito" en `copyWith`. Sin esto, no podemos limpiar campos
+/// nullable como `selectedBankAccount`.
+const Object _sentinel = Object();

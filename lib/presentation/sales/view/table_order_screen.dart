@@ -12,6 +12,7 @@ import 'package:mangopos/core/utils/display_name_utils.dart';
 import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/models/fiscal_models.dart';
+import 'package:mangopos/data/repositories/bank_accounts_repository.dart';
 import 'package:mangopos/data/repositories/business_profile_repository.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
@@ -2788,6 +2789,14 @@ class _CartView extends ConsumerWidget {
         final profileForPrint =
             await businessProfileRepo.prepareForInvoicePrinting(businessId);
 
+        // PRD F2: si algún payment fue por transferencia con cuenta
+        // bancaria asignada, cargar el mapa para que el ticket muestre
+        // banco/titular debajo de la línea de pago. Si no hay
+        // transferencias, el helper devuelve mapa vacío sin pegar la red.
+        final bankAccountsRepo = BankAccountsRepository();
+        final bankAccountsByPaymentId =
+            await bankAccountsRepo.fetchByPaymentIds(payments ?? const []);
+
         ticket = type == 'invoice'
             ? PrintTicketService.generateInvoice(
                 order: orderObj,
@@ -2824,6 +2833,7 @@ class _CartView extends ConsumerWidget {
                 footerMessage: profileForPrint.profile?.ticketFooterMessage,
                 headerBlocks: profileForPrint.profile?.effectiveHeaderBlocks,
                 footerBlocks: profileForPrint.profile?.effectiveFooterBlocks,
+                bankAccountsByPaymentId: bankAccountsByPaymentId,
               )
             : PrintTicketService.generatePrecheck(
                 order: orderObj,

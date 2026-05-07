@@ -10,11 +10,13 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_shadows.dart';
 import '../../../core/theme/app_spacing.dart';
+import '../../../data/models/bank_account.dart';
 import '../../../data/models/payment_models.dart';
 import '../../../data/models/sales_models.dart';
 import '../state/payment_state.dart';
 import '../viewmodel/payment_viewmodel.dart';
 import '../../cashier/viewmodel/cashier_viewmodel.dart';
+import '../../settings/payment_methods/viewmodel/bank_accounts_viewmodel.dart';
 
 class PaymentModal extends ConsumerStatefulWidget {
   final Order order;
@@ -660,6 +662,13 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
     }
 
     if (!state.isCashPayment) {
+      // Transferencia: mostramos selector de cuenta bancaria del negocio
+      // (cargado desde Ajustes \u2192 Tipos de Pago) + campo opcional de
+      // referencia. El cajero NO puede confirmar el pago si no eligi\u00f3
+      // cuenta destino (canProcessPayment lo bloquea).
+      if (state.isTransferPayment) {
+        return _BankAccountSelector(state: state, viewModel: viewModel);
+      }
       if (state.requiresReference) {
         return Column(
           children: [
@@ -1178,6 +1187,215 @@ class _TabButton extends StatelessWidget {
             fontWeight: FontWeight.w600,
             fontSize: 15,
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Selector de cuenta bancaria que se muestra en el panel derecho del
+/// modal de cobro cuando el método activo es transferencia. Carga las
+/// cuentas activas del negocio (configuradas en Ajustes → Tipos de
+/// Pago) vía `activeBankAccountsProvider`. Mientras carga muestra
+/// spinner; si no hay cuentas, mensaje invitando al admin a crearlas;
+/// con cuentas, lista de cards seleccionables + campo opcional de
+/// referencia de transferencia.
+class _BankAccountSelector extends ConsumerWidget {
+  final PaymentState state;
+  final PaymentViewModel viewModel;
+  const _BankAccountSelector({required this.state, required this.viewModel});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // 'auto' deja al BusinessResolver del provider determinar el id
+    // real (Order no expone business_id directo — vive en session).
+    final asyncAccounts = ref.watch(activeBankAccountsProvider('auto'));
+
+    return asyncAccounts.when(
+      loading: () => const Center(
+        child: CircularProgressIndicator(color: AppColors.primary),
+      ),
+      error: (e, _) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.xl),
+          child: Text(
+            'No se pudieron cargar las cuentas bancarias.\n$e',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: AppColors.destructive),
+          ),
+        ),
+      ),
+      data: (accounts) {
+        if (accounts.isEmpty) {
+          return Padding(
+            padding: const EdgeInsets.all(AppSpacing.xl),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(
+                  Icons.account_balance_outlined,
+                  size: 48,
+                  color: Colors.black26,
+                ),
+                const SizedBox(height: AppSpacing.md),
+                const Text(
+                  'No hay cuentas bancarias configuradas',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.foreground,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                Text(
+                  'Pide al administrador agregar al menos una cuenta '
+                  'desde Ajustes → Tipos de Pago.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: AppColors.mutedForeground,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'CUENTA QUE RECIBIÓ',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: AppColors.mutedForeground,
+                letterSpacing: 1,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            Expanded(
+              child: ListView.separated(
+                itemCount: accounts.length,
+                separatorBuilder: (_, _) =>
+                    const SizedBox(height: AppSpacing.sm),
+                itemBuilder: (ctx, i) {
+                  final acc = accounts[i];
+                  final selected = state.selectedBankAccount?.id == acc.id;
+                  return _BankAccountCard(
+                    account: acc,
+                    selected: selected,
+                    onTap: () => viewModel.setBankAccount(acc),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            // Referencia opcional (Q3 del PRD: opcional por ahora). Si
+            // el negocio quiere obligarla en el futuro, se agrega un
+            // toggle por business y se ajusta canProcessPayment.
+            TextField(
+              decoration: InputDecoration(
+                hintText: 'Referencia (opcional)',
+                filled: true,
+                fillColor: AppColors.card,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(AppRadius.lg),
+                  borderSide: BorderSide.none,
+                ),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.lg,
+                  vertical: AppSpacing.md,
+                ),
+              ),
+              style: const TextStyle(fontSize: 15),
+              onChanged: (value) => viewModel.setReference(value),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _BankAccountCard extends StatelessWidget {
+  final BankAccount account;
+  final bool selected;
+  final VoidCallback onTap;
+  const _BankAccountCard({
+    required this.account,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(AppRadius.lg),
+      child: Container(
+        padding: const EdgeInsets.all(AppSpacing.lg),
+        decoration: BoxDecoration(
+          color: selected
+              ? AppColors.primary.withValues(alpha: 0.08)
+              : AppColors.card,
+          borderRadius: BorderRadius.circular(AppRadius.lg),
+          border: Border.all(
+            color: selected ? AppColors.primary : AppColors.border,
+            width: selected ? 2 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: selected
+                    ? AppColors.primary
+                    : AppColors.mutedForeground.withValues(alpha: 0.15),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.account_balance,
+                color: selected ? Colors.white : AppColors.mutedForeground,
+                size: 18,
+              ),
+            ),
+            const SizedBox(width: AppSpacing.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    account.displayLabel,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.foreground,
+                      fontSize: 15,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${account.bankName} · #${account.accountNumber} · '
+                    '${account.accountType.displayName} · ${account.currency}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppColors.mutedForeground,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+            if (selected)
+              const Icon(
+                Icons.check_circle,
+                color: AppColors.primary,
+                size: 22,
+              ),
+          ],
         ),
       ),
     );

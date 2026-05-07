@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/business/business_resolver.dart';
 import '../models/bank_account.dart';
+import '../models/sales_models.dart';
 
 class BankAccountsRepository {
   static const _table = 'bank_accounts';
@@ -69,6 +70,44 @@ class BankAccountsRepository {
 
   Future<void> remove(String id) async {
     await _client.from(_table).delete().eq('id', id);
+  }
+
+  /// Resuelve un mapa `payment.id → BankAccount` para los payments
+  /// dados que tengan `bankAccountId`. Usado por el ticket service
+  /// para imprimir la línea con info del banco destino. Si la lista
+  /// no tiene transferencias, devuelve mapa vacío (un sólo round-trip
+  /// se ahorra).
+  Future<Map<String, BankAccount>> fetchByPaymentIds(
+    List<Payment> payments,
+  ) async {
+    final byBankId = <String, List<Payment>>{};
+    for (final p in payments) {
+      final id = p.bankAccountId;
+      if (id == null || id.isEmpty) continue;
+      byBankId.putIfAbsent(id, () => []).add(p);
+    }
+    if (byBankId.isEmpty) return const {};
+
+    final ids = byBankId.keys.toList(growable: false);
+    final res = await _client
+        .from(_table)
+        .select()
+        .inFilter('id', ids);
+    final byId = <String, BankAccount>{};
+    for (final row in res as List) {
+      final acc = BankAccount.fromMap(Map<String, dynamic>.from(row as Map));
+      byId[acc.id] = acc;
+    }
+
+    final out = <String, BankAccount>{};
+    byBankId.forEach((bankId, paymentsForBank) {
+      final acc = byId[bankId];
+      if (acc == null) return;
+      for (final p in paymentsForBank) {
+        out[p.id] = acc;
+      }
+    });
+    return out;
   }
 
   /// Persiste el nuevo orden. Step de 10 (mismo patrón que zonas y

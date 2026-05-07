@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/network/connectivity_service.dart';
 import '../../../core/offline/offline_pos_service.dart';
 import '../../../core/tax/tax_exceptions.dart';
+import '../../../data/models/bank_account.dart';
 import '../../../data/models/payment_models.dart';
 import '../../../data/models/sales_models.dart';
 import '../../../data/repositories/cashier_repository.dart';
@@ -334,7 +335,19 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
       amountReceived: method.isCash ? 0 : state.totalToPay,
       change: 0,
       reference: null,
+      // Cambiar método siempre limpia la cuenta bancaria seleccionada
+      // (era válida solo para 'transfer'). Sentinel `null` explícito
+      // para forzar el clear en copyWith.
+      selectedBankAccount: null,
     );
+  }
+
+  /// Selector usado por el modal cuando el método activo es
+  /// transferencia. El cajero elige a cuál cuenta del negocio llegó la
+  /// transacción; persistimos el id en payments.bank_account_id al
+  /// confirmar el pago.
+  void setBankAccount(BankAccount? account) {
+    state = state.copyWith(selectedBankAccount: account);
   }
 
   // ============================================================
@@ -418,7 +431,7 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
     final customerRnc = state.customerRnc;
 
     try {
-      final payment = await _salesRepo.processPayment(
+      var payment = await _salesRepo.processPayment(
         orderId: orderId,
         checkId: checkId,
         paymentMethodId: methodId,
@@ -432,6 +445,27 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         // backend cae al default_ncf_type del business (típicamente B02).
         fiscalType: state.selectedNcfType,
       );
+
+      // Si el método es transferencia y el cajero seleccionó una cuenta
+      // bancaria, escribimos el id en `payments.bank_account_id`. Lo
+      // hacemos como UPDATE puntual post-RPC en vez de meterlo dentro
+      // del RPC fiscal (zona sensible) — el round-trip extra vale la
+      // pena para no tocar el motor de cobro.
+      final selectedBank = state.selectedBankAccount;
+      if (state.isTransferPayment && selectedBank != null) {
+        try {
+          await Supabase.instance.client
+              .from('payments')
+              .update({'bank_account_id': selectedBank.id})
+              .eq('id', payment.id);
+          payment = payment.copyWith(bankAccountId: selectedBank.id);
+        } catch (e) {
+          // No bloquear el cobro por esto. La transferencia ya quedó
+          // registrada; solo perdimos la trazabilidad de qué cuenta
+          // recibió. Se puede corregir manual desde reportes.
+          debugPrint('No se pudo asociar bank_account al payment: $e');
+        }
+      }
 
       FiscalDocument? fiscalDoc;
       try {
