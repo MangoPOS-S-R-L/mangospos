@@ -60,6 +60,15 @@ class CategoriesVm extends Notifier<CategoriesState> {
     await load(businessId: _businessId ?? 'auto');
   }
 
+  /// Aplica un nuevo orden a las categorías. La lista llega ya
+  /// reorganizada visualmente; el repo persiste cada `position` con
+  /// step de 10 (mismo patrón que zonas). Termina recargando para
+  /// reflejar el nuevo orden y resincronizar.
+  Future<void> reorder(List<model.Category> ordered) async {
+    await _repo.reorder(ordered);
+    await load(businessId: _businessId ?? 'auto');
+  }
+
   // ----------------- Helpers -----------------
   void _ensureBusiness() {
     if (_businessId == null || _businessId!.isEmpty || _businessId == 'auto') {

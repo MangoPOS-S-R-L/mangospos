@@ -102,136 +102,168 @@ class _CategoriesViewState extends ConsumerState<CategoriesView> {
             )
           : Padding(
               padding: const EdgeInsets.all(16),
-              child: ListView.separated(
+              child: ReorderableListView.builder(
                 itemCount: vm.list.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 12),
+                buildDefaultDragHandles: false,
+                onReorder: (oldIndex, newIndex) {
+                  if (oldIndex == newIndex) return;
+                  final list = List.of(vm.list);
+                  // ReorderableListView entrega newIndex post-remove: si
+                  // se mueve hacia abajo, el destino real es newIndex-1.
+                  final adjusted = newIndex > oldIndex
+                      ? newIndex - 1
+                      : newIndex;
+                  final moved = list.removeAt(oldIndex);
+                  list.insert(adjusted, moved);
+                  ref.read(categoriesVmProvider.notifier).reorder(list);
+                },
+                proxyDecorator: (child, index, animation) => Material(
+                  color: Colors.transparent,
+                  elevation: 6,
+                  shadowColor: Colors.black26,
+                  borderRadius: BorderRadius.circular(12),
+                  child: child,
+                ),
+                padding: EdgeInsets.zero,
                 itemBuilder: (context, i) {
                   final cat = vm.list[i];
-                  return Card(
-                    elevation: 0,
-                    color: MangoColors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      side: BorderSide(color: MangoColors.cardBorder),
-                    ),
-                    child: ListTile(
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
+                  return Padding(
+                    key: ValueKey('cat-${cat.id}'),
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Card(
+                      elevation: 0,
+                      color: MangoColors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        side: BorderSide(color: MangoColors.cardBorder),
                       ),
-                      title: Text(
-                        cat.name,
-                        style: text.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                          color: MangoColors.darkGray,
+                      child: ListTile(
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
                         ),
-                      ),
-                      subtitle: Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: cat.isActive
-                                  ? MangoColors.successGreen.withOpacity(0.1)
-                                  : MangoColors.muted.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              cat.isActive ? 'Activa' : 'Inactiva',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
+                        leading: ReorderableDragStartListener(
+                          index: i,
+                          child: const Icon(
+                            Icons.drag_indicator,
+                            size: 22,
+                            color: Colors.black38,
+                          ),
+                        ),
+                        title: Text(
+                          cat.name,
+                          style: text.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: MangoColors.darkGray,
+                          ),
+                        ),
+                        subtitle: Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
                                 color: cat.isActive
-                                    ? MangoColors.successGreen
-                                    : MangoColors.muted,
+                                    ? MangoColors.successGreen.withOpacity(0.1)
+                                    : MangoColors.muted.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                cat.isActive ? 'Activa' : 'Inactiva',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: cat.isActive
+                                      ? MangoColors.successGreen
+                                      : MangoColors.muted,
+                                ),
                               ),
                             ),
-                          ),
-                        ],
-                      ),
-                      trailing: PopupMenuButton<String>(
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+                          ],
                         ),
-                        onSelected: (v) async {
-                          if (v == 'rename') {
-                            final newName = await _prompt(
-                              context,
-                              'Renombrar categoría',
-                            );
-                            if (newName != null && newName.trim().isNotEmpty) {
+                        trailing: PopupMenuButton<String>(
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          onSelected: (v) async {
+                            if (v == 'rename') {
+                              final newName = await _prompt(
+                                context,
+                                'Renombrar categoría',
+                              );
+                              if (newName != null && newName.trim().isNotEmpty) {
+                                await ref
+                                    .read(categoriesVmProvider.notifier)
+                                    .rename(cat.id, newName.trim());
+                              }
+                            } else if (v == 'toggle') {
                               await ref
                                   .read(categoriesVmProvider.notifier)
-                                  .rename(cat.id, newName.trim());
+                                  .toggleActive(cat.id, !cat.isActive);
+                            } else if (v == 'delete') {
+                              final ok = await _confirm(
+                                context,
+                                '¿Eliminar "${cat.name}"?',
+                              );
+                              if (ok == true) {
+                                await ref
+                                    .read(categoriesVmProvider.notifier)
+                                    .remove(cat.id);
+                              }
                             }
-                          } else if (v == 'toggle') {
-                            await ref
-                                .read(categoriesVmProvider.notifier)
-                                .toggleActive(cat.id, !cat.isActive);
-                          } else if (v == 'delete') {
-                            final ok = await _confirm(
-                              context,
-                              '¿Eliminar "${cat.name}"?',
-                            );
-                            if (ok == true) {
-                              await ref
-                                  .read(categoriesVmProvider.notifier)
-                                  .remove(cat.id);
-                            }
-                          }
-                        },
-                        itemBuilder: (ctx) => [
-                          const PopupMenuItem(
-                            value: 'rename',
-                            child: Row(
-                              children: [
-                                Icon(
-                                  Icons.edit,
-                                  size: 18,
-                                  color: MangoColors.darkGray,
-                                ),
-                                SizedBox(width: 12),
-                                Text('Renombrar'),
-                              ],
+                          },
+                          itemBuilder: (ctx) => [
+                            const PopupMenuItem(
+                              value: 'rename',
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.edit,
+                                    size: 18,
+                                    color: MangoColors.darkGray,
+                                  ),
+                                  SizedBox(width: 12),
+                                  Text('Renombrar'),
+                                ],
+                              ),
                             ),
-                          ),
-                          PopupMenuItem(
-                            value: 'toggle',
-                            child: Row(
-                              children: [
-                                Icon(
-                                  cat.isActive
-                                      ? Icons.visibility_off
-                                      : Icons.visibility,
-                                  size: 18,
-                                  color: MangoColors.darkGray,
-                                ),
-                                const SizedBox(width: 12),
-                                Text(cat.isActive ? 'Desactivar' : 'Activar'),
-                              ],
+                            PopupMenuItem(
+                              value: 'toggle',
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    cat.isActive
+                                        ? Icons.visibility_off
+                                        : Icons.visibility,
+                                    size: 18,
+                                    color: MangoColors.darkGray,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Text(cat.isActive ? 'Desactivar' : 'Activar'),
+                                ],
+                              ),
                             ),
-                          ),
-                          const PopupMenuItem(
-                            value: 'delete',
-                            child: Row(
-                              children: [
-                                Icon(
-                                  Icons.delete_outline,
-                                  size: 18,
-                                  color: Colors.red,
-                                ),
-                                SizedBox(width: 12),
-                                Text(
-                                  'Eliminar',
-                                  style: TextStyle(color: Colors.red),
-                                ),
-                              ],
+                            const PopupMenuItem(
+                              value: 'delete',
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.delete_outline,
+                                    size: 18,
+                                    color: Colors.red,
+                                  ),
+                                  SizedBox(width: 12),
+                                  Text(
+                                    'Eliminar',
+                                    style: TextStyle(color: Colors.red),
+                                  ),
+                                ],
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   );

@@ -45,4 +45,21 @@ class CategoryRepository {
   Future<void> remove(String id) async {
     await _client.from(_table).delete().eq('id', id);
   }
+
+  /// Persiste el nuevo orden de categorías en `categories.position`. Igual
+  /// patrón que `reorderZones` en zonas: step de 10 (10, 20, 30...) para
+  /// permitir inserciones manuales sin reescribir todo. Hace UPDATE
+  /// individual por categoría que cambió de posición — Supabase no
+  /// soporta batch upsert por id distinto en una sola llamada.
+  Future<void> reorder(List<Category> ordered) async {
+    for (var i = 0; i < ordered.length; i++) {
+      final cat = ordered[i];
+      final newPos = (i + 1) * 10;
+      if (cat.position == newPos) continue;
+      await _client
+          .from(_table)
+          .update({'position': newPos})
+          .eq('id', cat.id);
+    }
+  }
 }
