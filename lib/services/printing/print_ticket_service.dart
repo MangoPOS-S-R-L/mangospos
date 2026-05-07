@@ -105,7 +105,6 @@ class PrintTicketService {
     final takeoutItems = printableItems.where((i) => i.isTakeout).toList();
 
     gen.initialize();
-    gen.lineFeed();
 
     // ─── HEADER: CAJERO ─────────────────────────────────────────────
     final resolvedCashier = cashierName?.trim();
@@ -113,7 +112,6 @@ class PrintTicketService {
       _kitchenDashedSeparator(gen);
       gen.textCentered('CAJERO: ${resolvedCashier.toUpperCase()}');
       _kitchenDashedSeparator(gen);
-      gen.lineFeed();
     }
 
     // ─── TITULO en 2 lineas ─────────────────────────────────────────
@@ -127,6 +125,9 @@ class PrintTicketService {
     gen.doubleSeparator();
 
     // ─── INFO DE ORDEN en 2 columnas ────────────────────────────────
+    // Sin linefeed entre filas: las labels (ORDEN/MESA, MESERO/HORA)
+    // y sus valores quedan apilados directamente para un look mas
+    // compacto.
     gen.textRow('ORDEN', 'MESA');
     gen.setBold(true);
     gen.textRow(
@@ -134,7 +135,6 @@ class PrintTicketService {
       tableName.isNotEmpty ? tableName : '-',
     );
     gen.setBold(false);
-    gen.lineFeed();
 
     if ((waiterName != null && waiterName.isNotEmpty) ||
         order.createdAt.year > 1970) {
@@ -145,7 +145,6 @@ class PrintTicketService {
         _formatTime(order.createdAt),
       );
       gen.setBold(false);
-      gen.lineFeed();
     }
 
     gen.text(_formatDate(order.createdAt));
@@ -256,9 +255,14 @@ class PrintTicketService {
       final qty = _formatQty(item.quantity);
       final headLine = '$qty  ${item.productName}';
 
+      // Items en font height 2x (mismo width 1x para preservar el ancho
+      // del marco). Bold para mas presencia visual sin que el `|` derecho
+      // se descuadre.
+      gen.setTextSize(width: 1, height: 2);
       gen.setBold(true);
       _writeWrappedRow(gen, headLine, inner, row);
       gen.setBold(false);
+      gen.setTextSize();
 
       if (item.modifiers.isNotEmpty) {
         for (final mod in item.modifiers) {
