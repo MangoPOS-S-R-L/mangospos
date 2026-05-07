@@ -9,7 +9,7 @@ import app_links
 import auto_updater_macos
 import connectivity_plus
 import file_picker
-import flutter_blue_plus_darwin
+import flutter_blue_plus
 import media_kit_libs_macos_video
 import media_kit_video
 import network_info_plus
