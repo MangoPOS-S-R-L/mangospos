@@ -53,10 +53,17 @@ class _BusinessProfileScreenState extends ConsumerState<BusinessProfileScreen> {
   bool _uploadingLogo = false;
   String? _error;
 
-  // Toggles (mirroring business_settings)
+  // Listas customizables del header y footer del ticket (commit 0003).
+  // Mantienen orden + on/off por bloque. La UI muestra ReorderableListView
+  // y persiste con _save().
+  List<TicketBlock> _headerBlocks = List.from(TicketBlocks.defaultHeader);
+  List<TicketBlock> _footerBlocks = List.from(TicketBlocks.defaultFooter);
+
+  // Toggle legacy `printLogoOnInvoice` se sigue exponiendo para que el
+  // boton "subir logo" pueda mostrar disabled hasta que el usuario active
+  // el bloque "logo" en el header. Cuando deprecemos los toggles viejos
+  // se reemplaza por chequear _headerBlocks.firstWhere(key=='logo').enabled.
   bool _printLogoOnInvoice = false;
-  bool _showSloganOnInvoice = true;
-  bool _showBranchNameOnInvoice = true;
 
   @override
   void initState() {
@@ -121,9 +128,17 @@ class _BusinessProfileScreenState extends ConsumerState<BusinessProfileScreen> {
     _emailCtrl.text = p.email ?? '';
     _sloganCtrl.text = p.slogan ?? '';
     _footerCtrl.text = p.ticketFooterMessage ?? '';
-    _printLogoOnInvoice = p.printLogoOnInvoice;
-    _showSloganOnInvoice = p.showSloganOnInvoice;
-    _showBranchNameOnInvoice = p.showBranchNameOnInvoice;
+    // Listas reorderables. effectiveHeader/Footer ya cae a defaults
+    // canonicos si la columna esta vacia (negocios viejos pre-0003).
+    _headerBlocks = List.from(p.effectiveHeaderBlocks);
+    _footerBlocks = List.from(p.effectiveFooterBlocks);
+    // El "Logo" del header gobierna la habilitacion del boton subir logo.
+    _printLogoOnInvoice = _headerBlocks
+        .firstWhere(
+          (b) => b.key == 'logo',
+          orElse: () => const TicketBlock(key: 'logo', enabled: false),
+        )
+        .enabled;
   }
 
   Future<void> _save() async {
@@ -132,6 +147,16 @@ class _BusinessProfileScreenState extends ConsumerState<BusinessProfileScreen> {
     if (bid == null) return;
     setState(() => _saving = true);
     try {
+      // Sync el toggle legacy `printLogoOnInvoice` con el bloque "logo"
+      // del header — mientras los toggles viejos no se borran de DB
+      // mantenemos coherencia. PrintTicketService ya solo lee las listas.
+      final headerWithLogoSync = _headerBlocks
+          .map(
+            (b) => b.key == 'logo'
+                ? b.copyWith(enabled: _printLogoOnInvoice)
+                : b,
+          )
+          .toList();
       await _repo.updateProfile(
         businessId: bid,
         businessName: _businessNameCtrl.text,
@@ -144,8 +169,8 @@ class _BusinessProfileScreenState extends ConsumerState<BusinessProfileScreen> {
         slogan: _sloganCtrl.text,
         ticketFooterMessage: _footerCtrl.text,
         printLogoOnInvoice: _printLogoOnInvoice,
-        showSloganOnInvoice: _showSloganOnInvoice,
-        showBranchNameOnInvoice: _showBranchNameOnInvoice,
+        headerBlocks: headerWithLogoSync,
+        footerBlocks: _footerBlocks,
       );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -393,7 +418,7 @@ class _BusinessProfileScreenState extends ConsumerState<BusinessProfileScreen> {
           _logoSectionCard(),
           const SizedBox(height: 16),
           _sectionCard(
-            title: 'Personalización del ticket',
+            title: 'Textos del ticket',
             children: [
               _textField(
                 controller: _sloganCtrl,
@@ -407,35 +432,179 @@ class _BusinessProfileScreenState extends ConsumerState<BusinessProfileScreen> {
                 hint: 'Ej: Gracias por su visita',
                 maxLines: 2,
               ),
-              const SizedBox(height: 16),
-              _toggleCard(
-                title: 'Imprimir logo en factura',
-                subtitle: _profile?.logoUrl == null
-                    ? 'Subí un logo arriba para activar este toggle.'
-                    : 'Imprime el logo en el header del ticket de factura.',
-                value: _printLogoOnInvoice,
-                onChanged: _profile?.logoUrl == null
-                    ? null
-                    : (v) => setState(() => _printLogoOnInvoice = v),
-              ),
-              const Divider(height: 1, color: MangoColors.cardBorder),
-              _toggleCard(
-                title: 'Mostrar eslogan en factura',
-                subtitle: 'Imprime el eslogan debajo del nombre del negocio.',
-                value: _showSloganOnInvoice,
-                onChanged: (v) => setState(() => _showSloganOnInvoice = v),
-              ),
-              const Divider(height: 1, color: MangoColors.cardBorder),
-              _toggleCard(
-                title: 'Mostrar nombre de sucursal',
-                subtitle:
-                    'Imprime "Sucursal: Xxx" en el header. Apagar si todas las facturas son de la misma sucursal.',
-                value: _showBranchNameOnInvoice,
-                onChanged: (v) => setState(() => _showBranchNameOnInvoice = v),
-              ),
             ],
           ),
+          const SizedBox(height: 16),
+          _blocksReorderCard(
+            title: 'Encabezado del ticket',
+            subtitle:
+                'Activá los bloques que querés imprimir y arrastralos para reordenar. Aplica a factura y pre-cuenta.',
+            blocks: _headerBlocks,
+            labelFor: _headerBlockLabel,
+            onReorder: (oldIndex, newIndex) {
+              setState(() {
+                if (newIndex > oldIndex) newIndex -= 1;
+                final item = _headerBlocks.removeAt(oldIndex);
+                _headerBlocks.insert(newIndex, item);
+              });
+            },
+            onToggle: (index, value) {
+              setState(() {
+                _headerBlocks[index] =
+                    _headerBlocks[index].copyWith(enabled: value);
+                // Mantener sync el toggle legacy del logo (gobierna el
+                // boton "subir logo" en la seccion de arriba).
+                if (_headerBlocks[index].key == 'logo') {
+                  _printLogoOnInvoice = value;
+                }
+              });
+            },
+          ),
+          const SizedBox(height: 16),
+          _blocksReorderCard(
+            title: 'Pie del ticket',
+            subtitle:
+                'Bloques al final del ticket. Aplica a factura y pre-cuenta.',
+            blocks: _footerBlocks,
+            labelFor: _footerBlockLabel,
+            onReorder: (oldIndex, newIndex) {
+              setState(() {
+                if (newIndex > oldIndex) newIndex -= 1;
+                final item = _footerBlocks.removeAt(oldIndex);
+                _footerBlocks.insert(newIndex, item);
+              });
+            },
+            onToggle: (index, value) {
+              setState(() {
+                _footerBlocks[index] =
+                    _footerBlocks[index].copyWith(enabled: value);
+              });
+            },
+          ),
           const SizedBox(height: 24),
+        ],
+      ),
+    );
+  }
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Labels legibles para cada key de bloque
+  // ───────────────────────────────────────────────────────────────────────
+
+  String _headerBlockLabel(String key) {
+    switch (key) {
+      case 'logo':
+        return 'Logo';
+      case 'business_name':
+        return 'Nombre comercial';
+      case 'slogan':
+        return 'Eslogan';
+      case 'legal_name':
+        return 'Razón social';
+      case 'branch_name':
+        return 'Sucursal';
+      case 'address':
+        return 'Dirección';
+      case 'phone':
+        return 'Teléfono';
+      case 'email':
+        return 'Email';
+      case 'rnc':
+        return 'RNC';
+      default:
+        return key;
+    }
+  }
+
+  String _footerBlockLabel(String key) {
+    switch (key) {
+      case 'footer_message':
+        return 'Mensaje custom (configurado arriba)';
+      case 'thank_you':
+        return 'Mensaje de despedida';
+      default:
+        return key;
+    }
+  }
+
+  Widget _blocksReorderCard({
+    required String title,
+    required String subtitle,
+    required List<TicketBlock> blocks,
+    required String Function(String) labelFor,
+    required void Function(int oldIndex, int newIndex) onReorder,
+    required void Function(int index, bool value) onToggle,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: MangoColors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: MangoColors.cardBorder),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+              color: MangoColors.darkGray,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            subtitle,
+            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+          ),
+          const SizedBox(height: 12),
+          // shrinkWrap + buildDefaultDragHandles para que entre dentro del
+          // ListView padre sin scroll anidado conflictivo.
+          ReorderableListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            buildDefaultDragHandles: false,
+            itemCount: blocks.length,
+            onReorder: onReorder,
+            itemBuilder: (context, index) {
+              final block = blocks[index];
+              return Padding(
+                key: ValueKey('block-${block.key}'),
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    ReorderableDragStartListener(
+                      index: index,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: Icon(
+                          Icons.drag_handle,
+                          color: Colors.grey.shade500,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Text(
+                        labelFor(block.key),
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: block.enabled
+                              ? MangoColors.darkGray
+                              : Colors.grey.shade500,
+                        ),
+                      ),
+                    ),
+                    Switch(
+                      value: block.enabled,
+                      activeThumbColor: MangoColors.successGreen,
+                      onChanged: (v) => onToggle(index, v),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
         ],
       ),
     );
@@ -600,47 +769,4 @@ class _BusinessProfileScreenState extends ConsumerState<BusinessProfileScreen> {
     );
   }
 
-  Widget _toggleCard({
-    required String title,
-    required String subtitle,
-    required bool value,
-    required ValueChanged<bool>? onChanged,
-  }) {
-    final disabled = onChanged == null;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    color: disabled ? Colors.grey : MangoColors.darkGray,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey.shade600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Switch(
-            value: value,
-            onChanged: onChanged,
-            activeThumbColor: MangoColors.successGreen,
-          ),
-        ],
-      ),
-    );
-  }
 }
