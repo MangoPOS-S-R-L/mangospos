@@ -18,6 +18,10 @@ class TableCard extends StatefulWidget {
   final VentasTable table;
   final String? currentUserId;
   final VoidCallback? onTap;
+  /// PRD-12 F3: long-press en una mesa OCUPADA abre el menú "Unir
+  /// con otra mesa…". El padre decide si lo conecta (típicamente solo
+  /// en sales_by_zone_view, no en selectores tipo modal).
+  final VoidCallback? onLongPress;
   final bool isOpening;
   final bool enabled;
 
@@ -26,6 +30,7 @@ class TableCard extends StatefulWidget {
     required this.table,
     this.currentUserId,
     this.onTap,
+    this.onLongPress,
     this.isOpening = false,
     this.enabled = true,
   });
@@ -51,6 +56,9 @@ class _TableCardState extends State<TableCard> {
           : SystemMouseCursors.forbidden,
       child: GestureDetector(
         onTap: (widget.isOpening || !widget.enabled) ? null : widget.onTap,
+        onLongPress: (widget.isOpening || !widget.enabled)
+            ? null
+            : widget.onLongPress,
         child: Opacity(
           opacity: widget.enabled ? 1 : 0.65,
           child: AnimatedScale(

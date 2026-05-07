@@ -474,6 +474,23 @@ class ZonesRepository {
     return <String, dynamic>{};
   }
 
+  /// PRD-12 F3: devuelve el `id` de la sesión abierta de una mesa
+  /// (sin closed_at). Si no hay ninguna abierta, devuelve null. Usado
+  /// por el flow de "Unir mesas" desde el grid: el cajero hace
+  /// long-press en una mesa ocupada y necesitamos su session_id antes
+  /// de invocar `fn_transfer_table_session`.
+  Future<String?> fetchActiveSessionId(String tableId) async {
+    final row = await sb
+        .from('table_sessions')
+        .select('id')
+        .eq('table_id', tableId)
+        .isFilter('closed_at', null)
+        .order('opened_at', ascending: false)
+        .limit(1)
+        .maybeSingle();
+    return row?['id']?.toString();
+  }
+
   /// Lista todas las mesas activas de un negocio (todas las zonas)
   /// junto con el estado actual y la zona a la que pertenecen. Usado
   /// por el dialog de transferencia para que el cajero elija destino.

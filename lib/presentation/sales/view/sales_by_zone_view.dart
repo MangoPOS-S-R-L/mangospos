@@ -5,10 +5,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
+import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
+import 'package:mangopos/presentation/sales/widgets/transfer_session_dialog.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/data/models/table_status.dart';
 import 'package:mangopos/domain/models/ventas_table.dart' as ventas;
@@ -558,6 +560,13 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
                     onTap: widget.canOpenTables
                         ? () => _handleTableAction(context, ref, table)
                         : null,
+                    // PRD-12 F3: long-press en mesa ocupada → unir con
+                    // otra mesa ocupada. Solo activo cuando la mesa
+                    // tiene sesión abierta (sessionId != null).
+                    onLongPress:
+                        widget.canOpenTables && table.sessionId != null
+                        ? () => _handleMergeTable(context, ref, table)
+                        : null,
                   );
                 },
               );
@@ -566,6 +575,65 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
         ),
       ],
     );
+  }
+
+  /// PRD-12 F3: long-press en mesa ocupada → abre dialog "Unir mesas"
+  /// en modo `mergeOnly`. Solo lista mesas también ocupadas como
+  /// destino. Tras un merge exitoso refresca la zona actual (mesa
+  /// origen quedó vacía) — la zona destino se refresca al volver.
+  Future<void> _handleMergeTable(
+    BuildContext context,
+    WidgetRef ref,
+    TableStatus ts,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final sessionId = ts.sessionId;
+    if (sessionId == null || sessionId.isEmpty) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Esta mesa no tiene cuenta abierta para unir.'),
+        ),
+      );
+      return;
+    }
+
+    // Resolver businessId vía resolver canónico.
+    final String businessId;
+    try {
+      businessId = await BusinessResolver.ensure('auto');
+    } catch (e) {
+      if (!context.mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('No se pudo identificar el negocio: $e'),
+        ),
+      );
+      return;
+    }
+    if (!context.mounted) return;
+
+    final tableLabel = ts.code;
+
+    final merged = await showTransferSessionDialog(
+      context,
+      ref,
+      businessId: businessId,
+      sourceSessionId: sessionId,
+      sourceTableId: ts.tableId,
+      sourceTableLabel: tableLabel,
+      // En modo merge no mostramos items individuales — siempre va
+      // toda la cuenta. Pasamos lista vacía para no cargar nada extra.
+      items: const [],
+      mergeOnly: true,
+    );
+
+    if (!merged) return;
+    if (!context.mounted) return;
+
+    // Refrescar la zona actual: la mesa origen ya no tiene cuenta.
+    await ref
+        .read(byZoneVmProvider.notifier)
+        .loadZoneStatus(widget.zoneId, emitError: false);
   }
 
   Future<void> _handleTableAction(

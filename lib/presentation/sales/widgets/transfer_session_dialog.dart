@@ -18,6 +18,14 @@ import '../../../services/session/session_controller.dart';
 import 'pin_verification_modal.dart';
 
 /// Punto de entrada. Devuelve `true` si la transferencia se completó.
+///
+/// `mergeOnly = true` configura el dialog para el caso F3 (Unir mesas
+/// desde el grid):
+///   - Oculta el toggle "Toda la cuenta / Algunos artículos" — siempre
+///     transfiere todo.
+///   - Filtra el listado de destinos a solo mesas ocupadas (las únicas
+///     con cuenta abierta para combinar).
+///   - Cambia el título a "Unir con otra mesa".
 Future<bool> showTransferSessionDialog(
   BuildContext context,
   WidgetRef ref, {
@@ -26,6 +34,7 @@ Future<bool> showTransferSessionDialog(
   required String sourceTableId,
   required String sourceTableLabel,
   required List<OrderItem> items,
+  bool mergeOnly = false,
 }) async {
   final result = await showDialog<bool>(
     context: context,
@@ -36,6 +45,7 @@ Future<bool> showTransferSessionDialog(
       sourceTableId: sourceTableId,
       sourceTableLabel: sourceTableLabel,
       items: items,
+      mergeOnly: mergeOnly,
     ),
   );
   return result == true;
@@ -48,6 +58,7 @@ class _TransferSessionDialog extends ConsumerStatefulWidget {
     required this.sourceTableId,
     required this.sourceTableLabel,
     required this.items,
+    this.mergeOnly = false,
   });
 
   final String businessId;
@@ -55,6 +66,10 @@ class _TransferSessionDialog extends ConsumerStatefulWidget {
   final String sourceTableId;
   final String sourceTableLabel;
   final List<OrderItem> items;
+  /// PRD-12 F3: cuando `true`, el dialog opera en modo "Unir mesas":
+  /// fija el alcance a TODA la cuenta y filtra el listado de destinos
+  /// a solo mesas ocupadas.
+  final bool mergeOnly;
 
   @override
   ConsumerState<_TransferSessionDialog> createState() =>
@@ -83,11 +98,18 @@ class _TransferSessionDialogState
   Future<void> _loadTables() async {
     try {
       final repo = ZonesRepository(Supabase.instance.client);
-      final list = await repo.fetchTablesForTransfer(
+      var list = await repo.fetchTablesForTransfer(
         businessId: widget.businessId,
         excludeTableId: widget.sourceTableId,
       );
-      // Filtrar items void
+      // F3 (Unir mesas): solo destinos ocupados — unir requiere otra
+      // cuenta abierta con la cual combinar. Las mesas disponibles
+      // serían un transfer normal, no un merge.
+      if (widget.mergeOnly) {
+        list = list
+            .where((t) => (t['state'] as String?) == 'occupied')
+            .toList(growable: false);
+      }
       if (mounted) {
         setState(() {
           _tables = list;
@@ -206,7 +228,9 @@ class _TransferSessionDialogState
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Transferir cuenta · ${widget.sourceTableLabel}',
+            widget.mergeOnly
+                ? 'Unir cuenta de ${widget.sourceTableLabel}'
+                : 'Transferir cuenta · ${widget.sourceTableLabel}',
             style: const TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w700,
@@ -214,11 +238,15 @@ class _TransferSessionDialogState
             ),
           ),
           const SizedBox(height: 4),
-          const Text(
-            'Mueve esta cuenta a otra mesa, completa o por items. Si la '
-            'mesa destino ya tiene cuenta abierta, las cuentas se '
-            'combinan automáticamente.',
-            style: TextStyle(
+          Text(
+            widget.mergeOnly
+                ? 'Selecciona la mesa con la que quieres combinar esta '
+                      'cuenta. Solo se muestran mesas ocupadas. Las cuentas '
+                      'se fusionan en la mesa destino.'
+                : 'Mueve esta cuenta a otra mesa, completa o por items. Si '
+                      'la mesa destino ya tiene cuenta abierta, las cuentas '
+                      'se combinan automáticamente.',
+            style: const TextStyle(
               fontSize: 13,
               color: Color(0xFF6B7280),
               fontWeight: FontWeight.normal,
@@ -233,35 +261,41 @@ class _TransferSessionDialogState
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              _SectionHeader(label: '1. Qué transferir'),
-              const SizedBox(height: 8),
-              _ScopeToggle(
-                isAll: _transferAll,
-                onChanged: (val) {
-                  setState(() {
-                    _transferAll = val;
-                    if (val) _selectedItemIds.clear();
-                  });
-                },
-              ),
-              if (!_transferAll) ...[
-                const SizedBox(height: 12),
-                _ItemsPicker(
-                  items: _activeItems,
-                  selectedIds: _selectedItemIds,
-                  onToggle: (id) {
+              if (!widget.mergeOnly) ...[
+                _SectionHeader(label: '1. Qué transferir'),
+                const SizedBox(height: 8),
+                _ScopeToggle(
+                  isAll: _transferAll,
+                  onChanged: (val) {
                     setState(() {
-                      if (_selectedItemIds.contains(id)) {
-                        _selectedItemIds.remove(id);
-                      } else {
-                        _selectedItemIds.add(id);
-                      }
+                      _transferAll = val;
+                      if (val) _selectedItemIds.clear();
                     });
                   },
                 ),
+                if (!_transferAll) ...[
+                  const SizedBox(height: 12),
+                  _ItemsPicker(
+                    items: _activeItems,
+                    selectedIds: _selectedItemIds,
+                    onToggle: (id) {
+                      setState(() {
+                        if (_selectedItemIds.contains(id)) {
+                          _selectedItemIds.remove(id);
+                        } else {
+                          _selectedItemIds.add(id);
+                        }
+                      });
+                    },
+                  ),
+                ],
+                const SizedBox(height: 16),
               ],
-              const SizedBox(height: 16),
-              _SectionHeader(label: '2. Mesa destino'),
+              _SectionHeader(
+                label: widget.mergeOnly
+                    ? 'Mesa destino (cuentas se combinan)'
+                    : '2. Mesa destino',
+              ),
               const SizedBox(height: 8),
               _TablesList(
                 loading: _loadingTables,
@@ -298,7 +332,7 @@ class _TransferSessionDialogState
                     color: Colors.white,
                   ),
                 )
-              : const Text('Transferir'),
+              : Text(widget.mergeOnly ? 'Unir mesas' : 'Transferir'),
         ),
       ],
     );
