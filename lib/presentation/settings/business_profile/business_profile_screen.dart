@@ -13,6 +13,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../app/theme/mango_colors.dart';
+import '../../../core/business/business_resolver.dart';
 import '../../../data/models/business_profile.dart';
 import '../../../data/repositories/business_profile_repository.dart';
 
@@ -42,6 +43,11 @@ class _BusinessProfileScreenState extends ConsumerState<BusinessProfileScreen> {
 
   // State
   BusinessProfile? _profile;
+  // UUID real del business resuelto desde widget.businessId (que puede
+  // venir como 'auto'). Necesario porque .eq('id', ...) requiere UUID
+  // válido en Postgres y los uploads/policies usan business_id como
+  // primer carpeta del path en Storage.
+  String? _resolvedBusinessId;
   bool _loading = true;
   bool _saving = false;
   bool _uploadingLogo = false;
@@ -79,7 +85,12 @@ class _BusinessProfileScreenState extends ConsumerState<BusinessProfileScreen> {
       _error = null;
     });
     try {
-      final profile = await _repo.getProfile(widget.businessId);
+      // 'auto' viene del router. Resolvemos al UUID del business activo
+      // (cache via BusinessResolver, fallback a SharedPreferences/DB).
+      final resolved = await BusinessResolver.ensure(widget.businessId);
+      _resolvedBusinessId = resolved;
+
+      final profile = await _repo.getProfile(resolved);
       if (profile == null) {
         setState(() {
           _error = 'No se encontró el negocio.';
@@ -117,10 +128,12 @@ class _BusinessProfileScreenState extends ConsumerState<BusinessProfileScreen> {
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
+    final bid = _resolvedBusinessId;
+    if (bid == null) return;
     setState(() => _saving = true);
     try {
       await _repo.updateProfile(
-        businessId: widget.businessId,
+        businessId: bid,
         businessName: _businessNameCtrl.text,
         branchName: _branchNameCtrl.text,
         fiscalName: _fiscalNameCtrl.text,
@@ -158,6 +171,8 @@ class _BusinessProfileScreenState extends ConsumerState<BusinessProfileScreen> {
   }
 
   Future<void> _uploadLogo() async {
+    final bid = _resolvedBusinessId;
+    if (bid == null) return;
     setState(() => _uploadingLogo = true);
     try {
       final result = await FilePicker.platform.pickFiles(
@@ -179,7 +194,7 @@ class _BusinessProfileScreenState extends ConsumerState<BusinessProfileScreen> {
       }
       final ext = (file.extension ?? 'png').toLowerCase();
       await _repo.uploadLogo(
-        businessId: widget.businessId,
+        businessId: bid,
         bytes: bytes,
         extension: ext,
       );
@@ -229,9 +244,11 @@ class _BusinessProfileScreenState extends ConsumerState<BusinessProfileScreen> {
     );
     if (confirmed != true) return;
 
+    final bid = _resolvedBusinessId;
+    if (bid == null) return;
     setState(() => _uploadingLogo = true);
     try {
-      await _repo.deleteLogo(widget.businessId);
+      await _repo.deleteLogo(bid);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Logo eliminado')),
