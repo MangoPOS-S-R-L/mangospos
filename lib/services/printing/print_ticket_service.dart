@@ -152,10 +152,13 @@ class PrintTicketService {
 
     // ─── BLOQUE PARA COMER AQUI ─────────────────────────────────────
     if (regularItems.isNotEmpty) {
-      _renderItemsBox(gen, label: 'PARA COMER AQUI', items: regularItems);
+      _renderItemsList(gen, label: 'PARA COMER AQUI', items: regularItems);
     }
 
     // ─── BLOQUE PARA LLEVAR ─────────────────────────────────────────
+    // Encuadrado en marco ASCII para destacar visualmente vs los items
+    // de PARA COMER AQUI: cocina ve a primer golpe lo que va a empacar
+    // diferente de lo que va al comedor.
     if (takeoutItems.isNotEmpty) {
       if (regularItems.isNotEmpty) gen.lineFeed();
       _renderItemsBox(gen, label: 'PARA LLEVAR', items: takeoutItems);
@@ -213,18 +216,82 @@ class PrintTicketService {
     return ('COMANDA', 'DE ${code.replaceAll('_', ' ').toUpperCase()}');
   }
 
-  /// Renderiza una lista de items adentro de una caja ASCII de 48 chars
-  /// con bordes top/bottom (`+===+`), divisor (`+---+`) y laterales (`|`).
-  /// Items en font normal bold para que el `|` derecho se alinee a 48
-  /// chars exactos. Espaciado uniforme entre items garantizado por una
-  /// row vacia despues de cada item completo.
+  /// Renderiza una lista de items bajo un label centrado bold + separador
+  /// thin. Sin marco ASCII (`+===+ |...|`) — diseño minimalista que se
+  /// apoya en jerarquia visual: items en height 2x bold, modificadores y
+  /// notas indentados a tamaño normal, lineFeed entre items para aire.
+  static void _renderItemsList(
+    EscPosGenerator gen, {
+    required String label,
+    required List<OrderItem> items,
+  }) {
+    gen.setBold(true);
+    gen.textCentered(label.toUpperCase());
+    gen.setBold(false);
+    _kitchenDashedSeparator(gen);
+    gen.lineFeed();
+
+    for (var i = 0; i < items.length; i++) {
+      final item = items[i];
+      final qty = _formatQty(item.quantity);
+
+      gen.setTextSize(width: 1, height: 2);
+      gen.setBold(true);
+      _writeWrappedLine(gen, '$qty   ${item.productName}', 48);
+      gen.setBold(false);
+      gen.setTextSize();
+
+      if (item.modifiers.isNotEmpty) {
+        for (final mod in item.modifiers) {
+          final isComboChoice = mod.name.contains(': ');
+          final priceSuffix = mod.price > 0
+              ? ' (+RD\$ ${_formatMoney(mod.price)})'
+              : '';
+          final prefix = isComboChoice ? '   • ' : '   + ';
+          _writeWrappedLine(gen, '$prefix${mod.name}$priceSuffix', 48);
+        }
+      }
+
+      if (item.notes != null && item.notes!.isNotEmpty) {
+        gen.setBold(true);
+        _writeWrappedLine(gen, '   NOTA: ${item.notes}', 48);
+        gen.setBold(false);
+      }
+
+      // Aire entre items (también después del último: separa visualmente
+      // del siguiente bloque o del footer).
+      gen.lineFeed();
+    }
+  }
+
+  /// Word-wrap por espacios. Escribe cada linea via `gen.text` directamente.
+  static void _writeWrappedLine(EscPosGenerator gen, String text, int width) {
+    if (text.length <= width) {
+      gen.text(text);
+      return;
+    }
+    final words = text.split(' ');
+    var current = '';
+    for (final w in words) {
+      final candidate = current.isEmpty ? w : '$current $w';
+      if (candidate.length <= width) {
+        current = candidate;
+      } else {
+        if (current.isNotEmpty) gen.text(current);
+        current = w;
+      }
+    }
+    if (current.isNotEmpty) gen.text(current);
+  }
+
+  /// Renderiza items adentro de un marco ASCII de 48 chars (`+===+`,
+  /// `+---+`, `|...|`). Usado solo para PARA LLEVAR — destaca visualmente
+  /// vs el bloque PARA COMER AQUI que va sin marco.
   static void _renderItemsBox(
     EscPosGenerator gen, {
     required String label,
     required List<OrderItem> items,
   }) {
-    // Font A (12x24) — 80mm = 48 chars de ancho. Marco 48 chars de
-    // ancho total = 44 chars de contenido entre los bordes laterales.
     const w = 48;
     const inner = w - 4; // 2 bordes `|` + 2 espacios de padding
 
@@ -242,24 +309,20 @@ class PrintTicketService {
       return '| ${' ' * pad}$text${' ' * right} |';
     }
 
-    // Top + header label + divisor
     gen.text(borderLine('='));
     gen.setBold(true);
     gen.text(centeredRow(label.toUpperCase()));
     gen.setBold(false);
     gen.text(borderLine('-'));
 
-    // Espacio respiracion arriba
+    // Respiración arriba
     gen.text(row(''));
 
     for (var i = 0; i < items.length; i++) {
       final item = items[i];
       final qty = _formatQty(item.quantity);
-      final headLine = '$qty  ${item.productName}';
+      final headLine = '$qty   ${item.productName}';
 
-      // Items en font height 2x (mismo width 1x para preservar el ancho
-      // del marco). Bold para mas presencia visual sin que el `|` derecho
-      // se descuadre.
       gen.setTextSize(width: 1, height: 2);
       gen.setBold(true);
       _writeWrappedRow(gen, headLine, inner, row);
@@ -272,10 +335,8 @@ class PrintTicketService {
           final priceSuffix = mod.price > 0
               ? ' (+RD\$ ${_formatMoney(mod.price)})'
               : '';
-          final modLine = isComboChoice
-              ? '   • ${mod.name}$priceSuffix'
-              : '   + ${mod.name}$priceSuffix';
-          _writeWrappedRow(gen, modLine, inner, row);
+          final prefix = isComboChoice ? '   • ' : '   + ';
+          _writeWrappedRow(gen, '$prefix${mod.name}$priceSuffix', inner, row);
         }
       }
 
@@ -285,17 +346,16 @@ class PrintTicketService {
         gen.setBold(false);
       }
 
-      // Espaciado uniforme entre items dentro del marco. Aun el ultimo
-      // tiene linea vacia abajo para simetria con la respiracion del top.
+      // Espaciado uniforme entre items dentro del marco. También después
+      // del último para simetría con la respiración del top.
       gen.text(row(''));
     }
 
-    // Cierre del marco
     gen.text(borderLine('='));
   }
 
-  /// Imprime [text] dentro del marco, partiendolo en multiples filas si
-  /// excede [innerWidth]. Word-wrap simple por espacios.
+  /// Versión de [_writeWrappedLine] que escribe cada línea wrapeada via
+  /// el formatter [row] del marco — preserva los bordes laterales `|`.
   static void _writeWrappedRow(
     EscPosGenerator gen,
     String text,
