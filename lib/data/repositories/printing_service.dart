@@ -28,6 +28,47 @@ class NoAssignedKitchenPrinterException implements Exception {
   }
 }
 
+/// Lanzada cuando hay items sin `print_area_code` asignado al intentar
+/// enviar a cocina. Lleva los nombres de los productos afectados para
+/// que el caller pueda mostrar mensaje claro al admin: "Asigna un area
+/// de impresion a estos productos en Productos → Editar".
+class ItemsWithoutPrintAreaException implements Exception {
+  final List<String> productNames;
+
+  const ItemsWithoutPrintAreaException(this.productNames);
+
+  @override
+  String toString() {
+    if (productNames.isEmpty) {
+      return 'Hay productos sin área de impresión asignada. Edítalos y '
+          'elige un área en Productos → Editar.';
+    }
+    final preview = productNames.take(5).join(', ');
+    final extra = productNames.length > 5
+        ? ' y ${productNames.length - 5} más'
+        : '';
+    return 'Productos sin área de impresión asignada: $preview$extra. '
+        'Edítalos y elige un área en Productos → Editar.';
+  }
+}
+
+/// Lanzada cuando un item trae un `print_area_code` que no corresponde a
+/// ningún area configurada para el negocio. Casos típicos: area renombrada
+/// o desactivada después de que el producto fue creado, o el code
+/// `kitchen_hot` heredado que ya no existe como area.
+class UnknownPrintAreaCodeException implements Exception {
+  final String areaCode;
+
+  const UnknownPrintAreaCodeException(this.areaCode);
+
+  @override
+  String toString() {
+    return 'El area de impresión "$areaCode" no está configurada para '
+        'este negocio. Crea esa área en Ajustes → Impresoras → Áreas o '
+        'reasigna los productos a un área existente.';
+  }
+}
+
 class PrintingService {
   final SupabaseClient _client;
   late final PrintingRepository _printingRepo;
@@ -162,6 +203,10 @@ class PrintingService {
 
       return createdJobs;
     } on NoAssignedKitchenPrinterException {
+      rethrow;
+    } on ItemsWithoutPrintAreaException {
+      rethrow;
+    } on UnknownPrintAreaCodeException {
       rethrow;
     } catch (e) {
       throw Exception('Error al enviar orden a cocina: $e');
@@ -300,28 +345,28 @@ class PrintingService {
     }
   }
 
-  /// Agrupar items por área de impresión
+  /// Agrupa items por su `print_area_code` para enrutarlos a las
+  /// impresoras correctas. Si algún item no trae `print_area_code`
+  /// (admin no eligió area al crear el producto, o producto importado
+  /// vía bulk), lanza [ItemsWithoutPrintAreaException] con la lista de
+  /// nombres afectados — sin defaults silenciosos a `'kitchen_hot'`.
   Future<Map<String, List<OrderItem>>> _groupItemsByPrintArea(
     List<OrderItem> items,
   ) async {
     final itemsByArea = <String, List<OrderItem>>{};
+    final orphans = <String>[];
 
     for (final item in items) {
-      // Obtener área de impresión del item
-      // Primero intentar desde el item directamente
-      String areaCode = item.printAreaCode ?? 'kitchen_hot'; // Default
-
-      // Si el item no trae área asignada, usamos la cocina caliente por defecto.
-      // OJO: el schema actual no tiene menu_items.print_area_code.
-      if (item.printAreaCode == null) {
-        areaCode = 'kitchen_hot';
+      final areaCode = item.printAreaCode?.trim();
+      if (areaCode == null || areaCode.isEmpty) {
+        orphans.add(item.productName);
+        continue;
       }
+      itemsByArea.putIfAbsent(areaCode, () => <OrderItem>[]).add(item);
+    }
 
-      // Agrupar
-      if (!itemsByArea.containsKey(areaCode)) {
-        itemsByArea[areaCode] = [];
-      }
-      itemsByArea[areaCode]!.add(item);
+    if (orphans.isNotEmpty) {
+      throw ItemsWithoutPrintAreaException(orphans);
     }
 
     return itemsByArea;
@@ -447,44 +492,20 @@ class PrintingService {
     }
   }
 
+  /// Resuelve un area de impresión por código. Solo lookup — no crea
+  /// areas automáticamente (el admin debe crearlas explícitamente en
+  /// Ajustes → Impresoras → Áreas). Si no existe, lanza
+  /// [UnknownPrintAreaCodeException] con el código ofensivo.
   Future<PrintArea> _ensureAreaForCode(
     String businessId,
     String areaCode,
   ) async {
-    // Primero intentar GET (todos los miembros del negocio tienen SELECT).
     final existing = await _printingRepo.getPrintAreaByCode(
       businessId: businessId,
       code: areaCode,
     );
     if (existing != null) return existing;
-
-    // El área no existe: solo un admin puede crearla.
-    // Intentamos la inserción y capturamos el error RLS para dar un mensaje claro.
-    try {
-      return await _printingRepo.ensurePrintArea(
-        businessId: businessId,
-        code: areaCode,
-        name: _friendlyAreaName(areaCode),
-      );
-    } catch (_) {
-      throw Exception(
-        'El área de impresión "${_friendlyAreaName(areaCode)}" no está configurada. '
-        'Un administrador debe ir a Ajustes → Impresoras y crear el área "$areaCode" '
-        'antes de enviar a cocina.',
-      );
-    }
-  }
-
-  String _friendlyAreaName(String areaCode) {
-    const areaNames = {
-      'kitchen_hot': 'Cocina Caliente',
-      'kitchen_cold': 'Cocina Fría',
-      'bar': 'Bar',
-      'cashier': 'Caja',
-      'fiscal': 'Fiscal',
-    };
-
-    return areaNames[areaCode] ?? areaCode.toUpperCase();
+    throw UnknownPrintAreaCodeException(areaCode);
   }
 
   Future<Map<String, String>> sendLocalOrderToKitchen({
@@ -629,6 +650,10 @@ class PrintingService {
           },
         );
       }
+    } on ItemsWithoutPrintAreaException {
+      rethrow;
+    } on UnknownPrintAreaCodeException {
+      rethrow;
     } catch (e) {
       throw Exception('Error al reimprimir items: $e');
     }
@@ -712,6 +737,10 @@ class PrintingService {
           },
         );
       }
+    } on ItemsWithoutPrintAreaException {
+      rethrow;
+    } on UnknownPrintAreaCodeException {
+      rethrow;
     } catch (e) {
       throw Exception('Error al imprimir comandas de listos: $e');
     }
@@ -835,6 +864,10 @@ class PrintingService {
       }
 
       return summary;
+    } on ItemsWithoutPrintAreaException {
+      rethrow;
+    } on UnknownPrintAreaCodeException {
+      rethrow;
     } catch (e) {
       throw Exception('Error al obtener resumen: $e');
     }
