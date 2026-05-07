@@ -4,17 +4,25 @@ import '../../../app/theme/sizes.dart';
 import '../../../data/models/kitchen_models.dart';
 import 'timer_widget.dart';
 
-/// 📦 Card de orden para KDS
+/// 📦 Card de orden para KDS.
+///
+/// Cuando una orden tiene mix de items in-house + takeout, el screen
+/// la split en 2 cards: una regular y otra "PARA LLEVAR". Las cards
+/// de takeout setean [isTakeoutBucket]=true para que el header las
+/// distinga claramente — chef ve de un vistazo que los items son para
+/// servir empacados, no en mesa.
 class OrderCard extends StatelessWidget {
   final KitchenOrder order;
   final Function(String itemId, String status) onItemStatusChange;
   final VoidCallback onMarkAllReady;
+  final bool isTakeoutBucket;
 
   const OrderCard({
     super.key,
     required this.order,
     required this.onItemStatusChange,
     required this.onMarkAllReady,
+    this.isTakeoutBucket = false,
   });
 
   @override
@@ -88,6 +96,28 @@ class OrderCard extends StatelessWidget {
                     TimerWidget(startTime: order.createdAt),
                   ],
                 ),
+                if (isTakeoutBucket) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFB020),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Center(
+                      child: Text(
+                        'PARA LLEVAR',
+                        style: TextStyle(
+                          color: Colors.black,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 8),
                 // Table and waiter
                 Row(

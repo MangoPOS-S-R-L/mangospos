@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme/breakpoints.dart';
+import '../../../data/models/kitchen_models.dart';
 import '../viewmodel/kds_viewmodel.dart';
 import '../widgets/order_card.dart';
 import '../widgets/kds_stats_bar.dart';
@@ -187,6 +188,56 @@ class _KitchenDisplayScreenState extends ConsumerState<KitchenDisplayScreen>
     );
   }
 
+  /// Particiona orders por isTakeout: si una orden tiene MIX, emite 2
+  /// entradas (regular + PARA LLEVAR). Si todos los items son del mismo
+  /// tipo, emite una sola entrada con el flag correspondiente.
+  ///
+  /// Mantener orderId/orderNumber/timer compartidos en ambas entradas:
+  /// son la misma orden visual pero el chef las maneja como buckets
+  /// separados — cuando da "Marcar Todo Listo" en un card, solo afecta
+  /// los items del bucket gracias al filtrado del lado del callback.
+  List<({KitchenOrder order, bool isTakeoutBucket})> _splitOrdersByTakeout(
+    List<KitchenOrder> orders,
+  ) {
+    final out = <({KitchenOrder order, bool isTakeoutBucket})>[];
+    for (final o in orders) {
+      final regular = o.items.where((i) => !i.isTakeout).toList();
+      final takeout = o.items.where((i) => i.isTakeout).toList();
+      if (takeout.isEmpty) {
+        out.add((order: o, isTakeoutBucket: false));
+        continue;
+      }
+      if (regular.isEmpty) {
+        out.add((order: o, isTakeoutBucket: true));
+        continue;
+      }
+      // Mix: emitir 2 cards. Mismo header, items filtrados.
+      out.add((
+        order: KitchenOrder(
+          orderId: o.orderId,
+          orderNumber: o.orderNumber,
+          tableName: o.tableName,
+          waiterName: o.waiterName,
+          createdAt: o.createdAt,
+          items: regular,
+        ),
+        isTakeoutBucket: false,
+      ));
+      out.add((
+        order: KitchenOrder(
+          orderId: o.orderId,
+          orderNumber: o.orderNumber,
+          tableName: o.tableName,
+          waiterName: o.waiterName,
+          createdAt: o.createdAt,
+          items: takeout,
+        ),
+        isTakeoutBucket: true,
+      ));
+    }
+    return out;
+  }
+
   Widget _buildOrdersGrid(orders, viewModel) {
     if (orders.isEmpty) {
       return Center(
@@ -208,6 +259,9 @@ class _KitchenDisplayScreenState extends ConsumerState<KitchenDisplayScreen>
     // (340 max) para caber 3 columnas cómodas en 1280-1366 px sin
     // comprimir contenido. En regular/wide mantenemos 400 (4 cols+).
     final maxCardWidth = Breakpoints.isCompact(context) ? 340.0 : 400.0;
+    final buckets = _splitOrdersByTakeout(
+      orders is List<KitchenOrder> ? orders : List<KitchenOrder>.from(orders),
+    );
     return GridView.builder(
       padding: const EdgeInsets.all(16),
       gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
@@ -216,11 +270,13 @@ class _KitchenDisplayScreenState extends ConsumerState<KitchenDisplayScreen>
         crossAxisSpacing: 16,
         mainAxisSpacing: 16,
       ),
-      itemCount: orders.length,
+      itemCount: buckets.length,
       itemBuilder: (context, index) {
-        final order = orders[index];
+        final bucket = buckets[index];
+        final order = bucket.order;
         return OrderCard(
           order: order,
+          isTakeoutBucket: bucket.isTakeoutBucket,
           onItemStatusChange: (itemId, status) async {
             switch (status) {
               case 'preparing':
@@ -234,7 +290,17 @@ class _KitchenDisplayScreenState extends ConsumerState<KitchenDisplayScreen>
                 break;
             }
           },
-          onMarkAllReady: () => viewModel.markOrderReady(order.orderId),
+          // En lugar de markOrderReady (que afectaria toda la orden,
+          // incluyendo el OTRO bucket), iteramos solo los items de
+          // este bucket. Asi "Marcar Todo Listo" en el card "PARA LLEVAR"
+          // no marca los items in-house y viceversa.
+          onMarkAllReady: () async {
+            for (final item in order.items) {
+              if (!item.isReady && !item.isServed) {
+                await viewModel.markItemReady(item.id);
+              }
+            }
+          },
         );
       },
     );
