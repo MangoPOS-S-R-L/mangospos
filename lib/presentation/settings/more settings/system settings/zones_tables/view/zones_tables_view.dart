@@ -393,6 +393,11 @@ class _ZonesTablesViewState extends ConsumerState<ZonesTablesView> {
                                                     _onDeleteTable(zone, t),
                                                 onReactivate: () =>
                                                     _onReactivateTable(zone, t),
+                                                onMoveToZone: () =>
+                                                    _onMoveTableToZone(
+                                                      zone,
+                                                      t,
+                                                    ),
                                               ),
                                             )
                                             .toList(),
@@ -1048,6 +1053,57 @@ class _ZonesTablesViewState extends ConsumerState<ZonesTablesView> {
     }
   }
 
+  /// PRD-12 F1: abre un dialog con las zonas activas del negocio
+  /// (excepto la zona origen) y permite reasignar la mesa. Si el usuario
+  /// confirma, llama al VM que invoca el RPC + refresca ambas zonas.
+  Future<void> _onMoveTableToZone(Zone sourceZone, DiningTable t) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final state = ref.read(zonesTablesVmProvider);
+    final candidates = state.zones
+        .where((z) => z.isActive && z.id != sourceZone.id)
+        .toList(growable: false);
+
+    if (candidates.isEmpty) {
+      _showError(
+        messenger,
+        'No hay otras zonas activas a las que mover esta mesa.',
+      );
+      return;
+    }
+
+    final selectedZone = await showDialog<Zone>(
+      context: context,
+      builder: (dialogCtx) => _MoveTableZonePickerDialog(
+        table: t,
+        sourceZone: sourceZone,
+        candidates: candidates,
+      ),
+    );
+
+    if (selectedZone == null) return;
+    if (!context.mounted) return;
+
+    try {
+      final moved = await ref
+          .read(zonesTablesVmProvider.notifier)
+          .moveTableToZone(
+            tableId: t.id,
+            targetZoneId: selectedZone.id,
+            sourceZoneId: sourceZone.id,
+          );
+      if (!context.mounted) return;
+      _showSuccess(
+        messenger,
+        moved
+            ? 'Mesa ${t.code} movida a "${selectedZone.name}".'
+            : 'La mesa ya estaba en "${selectedZone.name}".',
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      _showError(messenger, e.toString());
+    }
+  }
+
   Future<void> _onDeleteTable(Zone zone, DiningTable t) async {
     final messenger = ScaffoldMessenger.of(context);
     final ok = await _confirmDestructive(
@@ -1333,12 +1389,16 @@ class _TableTile extends StatelessWidget {
   final VoidCallback onEdit;
   final VoidCallback onDelete;
   final VoidCallback onReactivate;
+  /// Acción "Mover a zona…" (PRD-12 F1). Abre un selector de zonas en
+  /// el caller. Solo se muestra cuando la mesa está activa.
+  final VoidCallback onMoveToZone;
 
   const _TableTile({
     required this.table,
     required this.onEdit,
     required this.onDelete,
     required this.onReactivate,
+    required this.onMoveToZone,
   });
 
   @override
@@ -1451,6 +1511,9 @@ class _TableTile extends StatelessWidget {
                     case 'edit':
                       onEdit();
                       break;
+                    case 'move':
+                      onMoveToZone();
+                      break;
                     case 'delete':
                       onDelete();
                       break;
@@ -1491,6 +1554,23 @@ class _TableTile extends StatelessWidget {
                           ),
                         ),
                         PopupMenuItem(
+                          value: 'move',
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.swap_horiz_rounded,
+                                size: 18,
+                                color: Color(0xFF2563EB),
+                              ),
+                              SizedBox(width: 8),
+                              Text(
+                                'Mover a otra zona…',
+                                style: TextStyle(color: Color(0xFF2563EB)),
+                              ),
+                            ],
+                          ),
+                        ),
+                        PopupMenuItem(
                           value: 'delete',
                           child: Row(
                             children: [
@@ -1513,6 +1593,126 @@ class _TableTile extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// PRD-12 F1: dialog para reasignar la zona de una mesa. Muestra lista
+/// vertical con las zonas activas (excluyendo la zona origen). Al tap
+/// devuelve el `Zone` seleccionado vía `Navigator.pop`. Cancelar
+/// retorna `null` y el caller no hace nada.
+class _MoveTableZonePickerDialog extends StatelessWidget {
+  final DiningTable table;
+  final Zone sourceZone;
+  final List<Zone> candidates;
+
+  const _MoveTableZonePickerDialog({
+    required this.table,
+    required this.sourceZone,
+    required this.candidates,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
+      titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 4),
+      contentPadding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+      title: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Mover mesa ${table.code}',
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF111827),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Actualmente en "${sourceZone.name}". Selecciona la zona '
+            'destino. La cuenta y los items se quedan intactos.',
+            style: const TextStyle(
+              fontSize: 13,
+              color: Color(0xFF6B7280),
+              fontWeight: FontWeight.normal,
+            ),
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: 420,
+        child: ListView.separated(
+          shrinkWrap: true,
+          itemCount: candidates.length,
+          separatorBuilder: (_, _) => const SizedBox(height: 8),
+          itemBuilder: (ctx, i) {
+            final zone = candidates[i];
+            return InkWell(
+              onTap: () => Navigator.pop(ctx, zone),
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFFE5E7EB)),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF2563EB).withValues(
+                          alpha: 0.10,
+                        ),
+                        shape: BoxShape.circle,
+                      ),
+                      alignment: Alignment.center,
+                      child: const Icon(
+                        Icons.location_on_outlined,
+                        color: Color(0xFF2563EB),
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        zone.name,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 15,
+                          color: Color(0xFF111827),
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const Icon(
+                      Icons.chevron_right_rounded,
+                      color: Colors.black38,
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+      ],
     );
   }
 }

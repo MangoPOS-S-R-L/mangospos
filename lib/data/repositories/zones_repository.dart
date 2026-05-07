@@ -422,6 +422,28 @@ class ZonesRepository {
         .toList();
   }
 
+  /// PRD-12 F1: cambia la zona de una mesa sin tocar sesiones ni
+  /// órdenes. Backend valida same-business y permisos admin via la
+  /// función `fn_move_table_to_zone` (security definer, manual RBAC
+  /// check). Devuelve true si se movió, false si la mesa ya estaba
+  /// en la zona destino (no-op silencioso).
+  Future<bool> moveTableToZone({
+    required String tableId,
+    required String targetZoneId,
+  }) async {
+    final res = await sb.rpc(
+      'fn_move_table_to_zone',
+      params: {
+        'p_table_id': tableId,
+        'p_target_zone_id': targetZoneId,
+      },
+    );
+    if (res is Map) {
+      return res['moved'] == true;
+    }
+    return true;
+  }
+
   // ---- Realtime usado en la pantalla "Por zona" ----
   RealtimeChannel subscribe(void Function() onChange) {
     final ch = sb.channel('zones:status')

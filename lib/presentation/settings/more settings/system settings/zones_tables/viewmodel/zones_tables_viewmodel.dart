@@ -396,6 +396,44 @@ class ZonesTablesViewModel extends Notifier<ZonesTablesState> {
     }
   }
 
+  // ---------------- MOVER MESA ENTRE ZONAS (PRD-12 F1) ----------------
+
+  /// Cambia la zona de una mesa via RPC `fn_move_table_to_zone`. La
+  /// mesa conserva sesiones / órdenes activas; solo cambia su `zone_id`.
+  /// El backend valida same-business y permiso admin.
+  ///
+  /// Devuelve `false` si la mesa ya estaba en la zona destino (no-op
+  /// silencioso, no se considera error).
+  Future<bool> moveTableToZone({
+    required String tableId,
+    required String targetZoneId,
+    String? sourceZoneId,
+  }) async {
+    state = state.copyWith(loading: true, error: null);
+    try {
+      final repo = ZonesRepository(sb);
+      final moved = await repo.moveTableToZone(
+        tableId: tableId,
+        targetZoneId: targetZoneId,
+      );
+      // Refrescar mesas de ambas zonas afectadas para que la UI se
+      // actualice sin recarga global.
+      if (sourceZoneId != null && sourceZoneId.isNotEmpty) {
+        await refreshTables(sourceZoneId);
+      }
+      await refreshTables(targetZoneId);
+      return moved;
+    } catch (e) {
+      final msg = _friendlyError(e);
+      state = state.copyWith(loading: false, error: msg);
+      throw ZonesTablesException(msg);
+    } finally {
+      if (state.loading) {
+        state = state.copyWith(loading: false);
+      }
+    }
+  }
+
   // ---------------- REACTIVAR (deshacer soft-delete) ----------------
 
   Future<void> reactivateTable(String tableId, {String? zoneId}) async {
