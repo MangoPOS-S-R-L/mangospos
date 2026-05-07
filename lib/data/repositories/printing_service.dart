@@ -140,6 +140,7 @@ class PrintingService {
           items: areaItems,
           tableName: orderData['tableName']?.toString() ?? 'N/A',
           waiterName: orderData['waiterName']?.toString(),
+          cashierName: _resolveCashierName(),
           businessName: businessName,
           areaCode: areaCode,
           receiptItemDisplayMode: receiptItemDisplayMode,
@@ -402,6 +403,28 @@ class PrintingService {
     }
   }
 
+  /// Resuelve el nombre del cajero/usuario activo para imprimir en el
+  /// header y footer de la comanda. Lee del `auth.currentUser` con
+  /// fallback a metadata fields y al email. Si no hay sesion devuelve
+  /// null y el ticket omite el bloque CAJERO.
+  String? _resolveCashierName() {
+    try {
+      final user = _client.auth.currentUser;
+      if (user == null) return null;
+      final metadata = user.userMetadata ?? const <String, dynamic>{};
+      final raw = (metadata['full_name'] ??
+              metadata['name'] ??
+              metadata['display_name'] ??
+              user.email ??
+              '')
+          .toString()
+          .trim();
+      return raw.isEmpty ? null : raw;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<String?> _getBusinessName(String businessId) async {
     try {
       final data = await _client
@@ -517,6 +540,7 @@ class PrintingService {
         items: entry.value,
         tableName: tableName,
         waiterName: waiterName,
+        cashierName: _resolveCashierName(),
         businessName: resolvedBusinessName,
         areaCode: areaCode,
         receiptItemDisplayMode: receiptItemDisplayMode,
@@ -588,6 +612,7 @@ class PrintingService {
           items: areaItems,
           tableName: orderData['tableName']?.toString() ?? 'N/A',
           waiterName: orderData['waiterName']?.toString(),
+          cashierName: _resolveCashierName(),
           businessName: businessName,
           areaCode: areaCode,
           isReprint: true,
@@ -667,6 +692,7 @@ class PrintingService {
           items: areaItems,
           tableName: orderData['tableName']?.toString() ?? 'N/A',
           waiterName: orderData['waiterName']?.toString(),
+          cashierName: _resolveCashierName(),
           businessName: businessName,
           areaCode: areaCode,
           isReprint: true,

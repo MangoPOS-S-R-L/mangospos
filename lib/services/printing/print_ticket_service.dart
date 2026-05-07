@@ -75,19 +75,20 @@ class PrintTicketService {
   /// COMANDA DE COCINA
   /// ============================================================
   ///
-  /// [areaCode] determina el titulo dinamico (ver [_kitchenTitleForArea]).
-  /// Si es null, default "COMANDA DE COCINA" (preserva behavior previo).
+  /// Diseño: header con CAJERO; titulo "COMANDA / DE <AREA>"; bloque
+  /// 2 columnas (ORDEN/MESA, MESERO/HORA, FECHA); items en cards
+  /// separadas por dashed; recuadro inverse "PARA LLEVAR" si aplica;
+  /// footer dashed con timestamp + cajero.
   ///
-  /// Items con `isTakeout=true` se imprimen en una seccion separada al
-  /// final del ticket bajo el recuadro "PARA LLEVAR" para que el chef/
-  /// barista los distinga de un vistazo, en lugar del [PARA LLEVAR]
-  /// inline anterior que era facil de pasar por alto.
+  /// [areaCode] controla el subtitulo (DE COCINA / DE BAR / DE CAJA).
+  /// [cashierName] aparece en header y footer; si null, se omiten.
   static PrintTicket generateKitchenTicket({
     required Order order,
     required List<OrderItem> items,
     required String tableName,
     String? waiterName,
-    String? businessName,
+    String? cashierName,
+    String? businessName, // ya no se usa en el nuevo diseño, se ignora.
     String? areaCode,
     bool isReprint = false,
     String receiptItemDisplayMode = 'grouped',
@@ -106,67 +107,83 @@ class PrintTicketService {
     gen.initialize();
     gen.lineFeed();
 
-    final resolvedBusinessName = businessName?.trim();
-    if (resolvedBusinessName != null && resolvedBusinessName.isNotEmpty) {
-      gen.setTextSize(width: 1, height: 2);
-      gen.setBold(true);
-      gen.textCenteredWrapped(resolvedBusinessName.toUpperCase());
-      gen.setBold(false);
-      gen.setTextSize();
+    // ─── HEADER: CAJERO ─────────────────────────────────────────────
+    final resolvedCashier = cashierName?.trim();
+    if (resolvedCashier != null && resolvedCashier.isNotEmpty) {
+      _kitchenDashedSeparator(gen);
+      gen.textCentered('CAJERO: ${resolvedCashier.toUpperCase()}');
+      _kitchenDashedSeparator(gen);
       gen.lineFeed();
     }
 
+    // ─── TITULO en 2 lineas ─────────────────────────────────────────
+    final (titleMain, titleSub) = _kitchenTitleParts(areaCode);
     gen.setTextSize(width: 2, height: 2);
     gen.setBold(true);
-    final baseTitle = _kitchenTitleForArea(areaCode);
-    gen.textCentered(isReprint ? 'REIMPRESIÓN ${_titleNoun(baseTitle)}' : baseTitle);
+    gen.textCentered(isReprint ? 'REIMPRESIÓN' : titleMain);
     gen.setBold(false);
     gen.setTextSize();
+    gen.textCentered(titleSub);
     gen.doubleSeparator();
 
+    // ─── INFO DE ORDEN en 2 columnas ────────────────────────────────
+    gen.textRow('ORDEN', 'MESA');
     gen.setBold(true);
-    gen.text('ORDEN: ${order.id.substring(0, 8).toUpperCase()}');
+    gen.textRow(
+      '#${order.id.substring(0, 8).toUpperCase()}',
+      tableName.isNotEmpty ? tableName : '-',
+    );
     gen.setBold(false);
-
-    if (tableName.isNotEmpty) {
-      gen.text('MESA: $tableName');
-    }
-
-    if (waiterName != null && waiterName.isNotEmpty) {
-      gen.text('MESERO: $waiterName');
-    }
-
-    final dateStr = _formatDate(order.createdAt);
-    final timeStr = _formatTime(order.createdAt);
-    gen.text('FECHA: $dateStr');
-    gen.text('HORA: $timeStr');
-
     gen.lineFeed();
-    gen.separator();
 
-    // Items regulares (in-house). Si TODOS son takeout, este loop no
-    // imprime nada y el ticket pasa directo al recuadro PARA LLEVAR.
-    for (final item in regularItems) {
-      _renderKitchenItem(gen, item);
-    }
-
-    // Recuadro PARA LLEVAR — solo si hay items takeout en este ticket.
-    if (takeoutItems.isNotEmpty) {
-      gen.lineFeed();
-      gen.doubleSeparator();
-      gen.setTextSize(width: 2, height: 2);
+    if ((waiterName != null && waiterName.isNotEmpty) ||
+        order.createdAt.year > 1970) {
+      gen.textRow('MESERO', 'HORA');
       gen.setBold(true);
-      gen.textCentered('PARA LLEVAR');
+      gen.textRow(
+        (waiterName?.isNotEmpty ?? false) ? waiterName! : '-',
+        _formatTime(order.createdAt),
+      );
       gen.setBold(false);
-      gen.setTextSize();
-      gen.doubleSeparator();
-      for (final item in takeoutItems) {
-        _renderKitchenItem(gen, item);
-      }
-      gen.doubleSeparator();
+      gen.lineFeed();
     }
 
-    gen.lineFeed(2);
+    gen.text(_formatDate(order.createdAt));
+    gen.doubleSeparator();
+
+    // ─── ITEMS REGULARES ────────────────────────────────────────────
+    for (var i = 0; i < regularItems.length; i++) {
+      _renderKitchenItem(gen, regularItems[i]);
+      if (i < regularItems.length - 1) {
+        _kitchenDashedSeparator(gen);
+      }
+    }
+
+    // ─── PARA LLEVAR (recuadro inverse) ─────────────────────────────
+    if (takeoutItems.isNotEmpty) {
+      if (regularItems.isNotEmpty) gen.lineFeed();
+      _kitchenInverseLabel(gen, 'PARA LLEVAR');
+      gen.lineFeed();
+      for (var i = 0; i < takeoutItems.length; i++) {
+        _renderKitchenItem(gen, takeoutItems[i]);
+        if (i < takeoutItems.length - 1) {
+          _kitchenDashedSeparator(gen);
+        }
+      }
+    }
+
+    // ─── FOOTER ─────────────────────────────────────────────────────
+    gen.lineFeed();
+    _kitchenDashedSeparator(gen);
+    final now = DateTime.now();
+    final hms =
+        '${_formatTime(now)}:${now.second.toString().padLeft(2, '0')}';
+    gen.textCentered(
+      resolvedCashier != null && resolvedCashier.isNotEmpty
+          ? '$hms · $resolvedCashier'
+          : hms,
+    );
+
     gen.lineFeed(3);
     gen.cut();
 
@@ -176,45 +193,80 @@ class PrintTicketService {
     );
   }
 
+  /// Separador dashed de ancho de papel (`- - - - -`).
+  static void _kitchenDashedSeparator(EscPosGenerator gen) {
+    // 80mm a font A normal: ~48 chars. '- ' * 24 = 48 chars.
+    gen.text('- ' * 24);
+  }
+
+  /// Linea con label centrado en video inverso (rectangulo negro con
+  /// texto blanco). Algunos firmwares ESC/POS no soportan GS B 1 — en
+  /// ese caso se imprime el texto normal centrado, igual visible.
+  static void _kitchenInverseLabel(EscPosGenerator gen, String label) {
+    const totalWidth = 48;
+    final upper = label.toUpperCase();
+    final padTotal = totalWidth - upper.length;
+    final left = padTotal ~/ 2;
+    final right = padTotal - left;
+    final padded = ' ' * left + upper + ' ' * right;
+    gen.setInverse(true);
+    gen.setBold(true);
+    gen.text(padded);
+    gen.setBold(false);
+    gen.setInverse(false);
+  }
+
   /// Mapea un areaCode a su titulo de comanda. Casos especiales que la
   /// app distingue hoy: kitchen_hot/kitchen_cold/kitchen → "COCINA";
   /// bar → "BAR"; cashier → "CAJA"; fiscal → "CAJA". Cualquier otro
   /// codigo (custom: "pizza", "sushi", etc) se uppercase y se inserta
   /// como esta.
-  static String _kitchenTitleForArea(String? areaCode) {
+  /// Devuelve (titulo grande, subtitulo) para imprimir en 2 lineas.
+  /// kitchen* → ("COMANDA", "DE COCINA"); bar → ("COMANDA", "DE BAR");
+  /// cashier/fiscal → ("COMANDA", "DE CAJA"); custom → ("COMANDA", "DE
+  /// CUSTOM_AREA").
+  static (String, String) _kitchenTitleParts(String? areaCode) {
     final code = (areaCode ?? '').trim().toLowerCase();
-    if (code.isEmpty) return 'COMANDA DE COCINA';
-    if (code.startsWith('kitchen')) return 'COMANDA DE COCINA';
-    if (code == 'bar') return 'COMANDA DE BAR';
-    if (code == 'cashier' || code == 'fiscal') return 'COMANDA DE CAJA';
-    // Custom area — convertimos snake_case a humano: 'cocina_fria' → 'COCINA FRIA'.
-    return 'COMANDA DE ${code.replaceAll('_', ' ').toUpperCase()}';
-  }
-
-  /// "COMANDA DE COCINA" → "DE COCINA". Usado en el header de
-  /// reimpresion para conservar el contexto del area.
-  static String _titleNoun(String fullTitle) {
-    final upper = fullTitle.toUpperCase();
-    final idx = upper.indexOf('COMANDA');
-    if (idx == -1) return upper;
-    final tail = upper.substring(idx + 'COMANDA'.length).trim();
-    return tail.isEmpty ? 'COMANDA' : 'COMANDA $tail';
+    if (code.isEmpty || code.startsWith('kitchen')) {
+      return ('COMANDA', 'DE COCINA');
+    }
+    if (code == 'bar') return ('COMANDA', 'DE BAR');
+    if (code == 'cashier' || code == 'fiscal') {
+      return ('COMANDA', 'DE CAJA');
+    }
+    return ('COMANDA', 'DE ${code.replaceAll('_', ' ').toUpperCase()}');
   }
 
   static void _renderKitchenItem(EscPosGenerator gen, OrderItem item) {
+    // Cantidad en "cuadrado" inverso al inicio (rectangulito blanco/negro
+    // similar a la imagen del modelo). Si el firmware no soporta inverse,
+    // visualmente se ve como `1 ` con bold — sigue legible.
+    final qtyLabel = ' ${_formatQty(item.quantity)} ';
+    gen.setInverse(true);
+    gen.setBold(true);
+    gen.text(qtyLabel, newLine: false);
+    gen.setBold(false);
+    gen.setInverse(false);
+
+    // Espacio + nombre del producto en bold grande, en la MISMA linea que
+    // el cuadrado de la cantidad. Wrap manual en lineas de hasta 18 chars
+    // (font 2x ancho = ~24 chars utiles, dejamos margen).
+    gen.text(' ', newLine: false);
     gen.setTextSize(width: 2, height: 2);
     gen.setBold(true);
-    final itemPrefix = 'x${_formatQty(item.quantity)} ';
-    final itemNameLines = _wrapKitchenItemName(
+    final nameLines = _wrapKitchenItemName(
       item.productName,
-      prefix: itemPrefix,
-      maxChars: 20,
+      prefix: '',
+      maxChars: 18,
     );
-    for (var lineIndex = 0; lineIndex < itemNameLines.length; lineIndex++) {
-      final line = lineIndex == 0
-          ? '$itemPrefix${itemNameLines[lineIndex]}'
-          : '   ${itemNameLines[lineIndex]}';
-      gen.text(line);
+    for (var i = 0; i < nameLines.length; i++) {
+      // Primera linea va sin newline previo (continua despues del cuadrado);
+      // resto comienza con indent.
+      if (i == 0) {
+        gen.text(nameLines[i]);
+      } else {
+        gen.text('  ${nameLines[i]}');
+      }
     }
     gen.setBold(false);
     gen.setTextSize();
@@ -238,8 +290,6 @@ class PrintTicketService {
       gen.text('NOTA: ${item.notes}');
       gen.setBold(false);
     }
-
-    gen.separator();
   }
 
   /// ============================================================
