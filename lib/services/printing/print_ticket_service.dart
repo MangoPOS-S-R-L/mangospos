@@ -151,34 +151,19 @@ class PrintTicketService {
     gen.text(_formatDate(order.createdAt));
     gen.doubleSeparator();
 
-    // ─── BLOQUE PARA COMER ──────────────────────────────────────────
-    // Header inverso "PARA COMER" + items + linea doble de cierre. Si
-    // no hay items regulares (orden 100% takeout), el bloque entero se
-    // omite y solo se imprime el de PARA LLEVAR.
-    if (regularItems.isNotEmpty) {
-      _kitchenInverseLabel(gen, 'PARA COMER');
-      gen.lineFeed();
-      for (var i = 0; i < regularItems.length; i++) {
-        _renderKitchenItem(gen, regularItems[i]);
-        if (i < regularItems.length - 1) {
-          _kitchenDashedSeparator(gen);
-        }
-      }
-      gen.doubleSeparator();
+    // ─── ITEMS REGULARES ────────────────────────────────────────────
+    // Sin header ni separadores entre items — flow limpio.
+    for (final item in regularItems) {
+      _renderKitchenItem(gen, item);
     }
 
-    // ─── BLOQUE PARA LLEVAR ─────────────────────────────────────────
+    // ─── BLOQUE PARA LLEVAR ENMARCADO ───────────────────────────────
+    // Caja ASCII completa: top/bottom border + bordes laterales en
+    // cada linea del contenido. Items adentro en font normal (no 2x)
+    // para que el `|` derecho se alinee a 48 chars.
     if (takeoutItems.isNotEmpty) {
       if (regularItems.isNotEmpty) gen.lineFeed();
-      _kitchenInverseLabel(gen, 'PARA LLEVAR');
-      gen.lineFeed();
-      for (var i = 0; i < takeoutItems.length; i++) {
-        _renderKitchenItem(gen, takeoutItems[i]);
-        if (i < takeoutItems.length - 1) {
-          _kitchenDashedSeparator(gen);
-        }
-      }
-      gen.doubleSeparator();
+      _renderTakeoutBox(gen, takeoutItems);
     }
 
     // ─── FOOTER ─────────────────────────────────────────────────────
@@ -212,26 +197,101 @@ class PrintTicketService {
     gen.text('-' * 48);
   }
 
-  /// Linea con label centrado en video inverso (rectangulo negro con
-  /// texto blanco) en font 2x2 — mismo tamano que el titulo "COMANDA"
-  /// para que el chef lo vea inmediatamente. Algunos firmwares ESC/POS
-  /// no soportan GS B 1; en ese caso se imprime texto normal grande,
-  /// igual visible.
-  static void _kitchenInverseLabel(EscPosGenerator gen, String label) {
-    // En font 2x ancho, el ancho efectivo del papel es ~24 chars (no 48).
-    const totalWidth = 24;
-    final upper = label.toUpperCase();
-    final padTotal = totalWidth - upper.length;
-    final left = padTotal ~/ 2;
-    final right = padTotal - left;
-    final padded = ' ' * left + upper + ' ' * right;
-    gen.setTextSize(width: 2, height: 2);
-    gen.setInverse(true);
+  /// Renderiza un bloque "PARA LLEVAR" enmarcado en una caja ASCII de
+  /// 48 chars de ancho. Top/bottom border con `=`, divisor con `-`,
+  /// laterales con `|`. Items en font normal (no 2x) para que el `|`
+  /// derecho se alinee — la separacion visual del marco es lo que da
+  /// jerarquia, no el tamano de fuente.
+  static void _renderTakeoutBox(EscPosGenerator gen, List<OrderItem> items) {
+    const w = 48;
+    const inner = w - 4; // 2 bordes + 2 espacios de padding
+
+    String border(String char) => '+${char * (w - 2)}+';
+    String row(String content) {
+      final clipped = content.length > inner
+          ? content.substring(0, inner)
+          : content;
+      return '| ${clipped.padRight(inner)} |';
+    }
+
+    String centeredRow(String label) {
+      final pad = (inner - label.length) ~/ 2;
+      final right = inner - pad - label.length;
+      return '| ${' ' * pad}$label${' ' * right} |';
+    }
+
+    // Top + header + divider
+    gen.text(border('='));
     gen.setBold(true);
-    gen.text(padded);
+    gen.text(centeredRow('PARA LLEVAR'));
     gen.setBold(false);
-    gen.setInverse(false);
-    gen.setTextSize();
+    gen.text(border('-'));
+
+    // Espacio respiracion
+    gen.text(row(''));
+
+    for (var i = 0; i < items.length; i++) {
+      final item = items[i];
+      final qty = _formatQty(item.quantity);
+      final headLine = '$qty  ${item.productName}';
+
+      // Linea principal del item (cantidad + nombre) en bold.
+      gen.setBold(true);
+      _writeWrappedRow(gen, headLine, inner, row);
+      gen.setBold(false);
+
+      // Modificadores
+      for (final mod in item.modifiers) {
+        final isComboChoice = mod.name.contains(': ');
+        final priceSuffix = mod.price > 0
+            ? ' (+RD\$ ${_formatMoney(mod.price)})'
+            : '';
+        final modLine = isComboChoice
+            ? '   • ${mod.name}$priceSuffix'
+            : '   + ${mod.name}$priceSuffix';
+        _writeWrappedRow(gen, modLine, inner, row);
+      }
+
+      // Notas
+      if (item.notes != null && item.notes!.isNotEmpty) {
+        gen.setBold(true);
+        _writeWrappedRow(gen, '   NOTA: ${item.notes}', inner, row);
+        gen.setBold(false);
+      }
+
+      // Linea en blanco entre items para respirar dentro del marco
+      if (i < items.length - 1) gen.text(row(''));
+    }
+
+    // Espacio abajo + cierre
+    gen.text(row(''));
+    gen.text(border('='));
+  }
+
+  /// Imprime [text] dentro del marco, partiendolo en multiples filas
+  /// si excede [innerWidth]. Word-wrap simple por espacios.
+  static void _writeWrappedRow(
+    EscPosGenerator gen,
+    String text,
+    int innerWidth,
+    String Function(String) row,
+  ) {
+    if (text.length <= innerWidth) {
+      gen.text(row(text));
+      return;
+    }
+    final words = text.split(' ');
+    var current = '';
+    for (final w in words) {
+      final candidate = current.isEmpty ? w : '$current $w';
+      if (candidate.length <= innerWidth) {
+        current = candidate;
+      } else {
+        if (current.isNotEmpty) gen.text(row(current));
+        current = w;
+      }
+    }
+    if (current.isNotEmpty) gen.text(row(current));
   }
 
   /// Mapea un areaCode a su titulo de comanda. Casos especiales que la
