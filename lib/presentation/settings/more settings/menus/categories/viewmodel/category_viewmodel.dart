@@ -1,4 +1,6 @@
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mangopos/core/offline/offline_catalog_service.dart';
 import 'package:mangopos/data/models/category.dart' as model;
 import 'package:mangopos/data/repositories/category_repository.dart';
 import 'package:mangopos/services/session/session_controller.dart';
@@ -66,13 +68,46 @@ class CategoriesVm extends Notifier<CategoriesState> {
   /// metería). El repo persiste cada `position` con step de 10 en
   /// background. Si falla, recargamos para volver al orden real
   /// persistido (esa recarga sí parpadea — error path).
+  ///
+  /// También sincroniza el cache offline del menu browser (ventas/zona)
+  /// para que el nuevo orden se refleje sin tener que esperar un
+  /// refresh manual del catálogo.
   Future<void> reorder(List<model.Category> ordered) async {
     state = state.copyWith(data: AsyncValue.data(ordered));
     try {
       await _repo.reorder(ordered);
+      await _syncOfflineCatalogCategories(ordered);
     } catch (e) {
       await load(businessId: _businessId ?? 'auto');
       rethrow;
+    }
+  }
+
+  /// Reescribe la sección `categories` del snapshot offline con el orden
+  /// nuevo. El menu browser de ventas/zona lee de este cache primero, así
+  /// que sin este sync el reorder no se refleja hasta que el usuario
+  /// fuerce un refresh del catálogo.
+  ///
+  /// Filtra inactivas — el cache solo lleva categorías visibles para el
+  /// punto de venta (matchea el filtro `is_active = true` de la query
+  /// que hidrata el snapshot).
+  Future<void> _syncOfflineCatalogCategories(
+    List<model.Category> ordered,
+  ) async {
+    final bid = _businessId;
+    if (bid == null || bid.isEmpty || bid == 'auto') return;
+    try {
+      final activeMaps = ordered
+          .where((c) => c.isActive)
+          .map((c) => {'id': c.id, 'name': c.name, 'color': c.color})
+          .toList(growable: false);
+      await OfflineCatalogService().saveSnapshot(
+        businessId: bid,
+        categories: activeMaps,
+      );
+    } catch (e) {
+      // No crítico — la próxima refresh manual del catálogo lo corrige.
+      debugPrint('CategoriesVm: error sincronizando cache offline: $e');
     }
   }
 
