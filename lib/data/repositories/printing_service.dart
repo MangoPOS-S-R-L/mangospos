@@ -141,6 +141,7 @@ class PrintingService {
           tableName: orderData['tableName']?.toString() ?? 'N/A',
           waiterName: orderData['waiterName']?.toString(),
           businessName: businessName,
+          areaCode: areaCode,
           receiptItemDisplayMode: receiptItemDisplayMode,
         );
 
@@ -517,6 +518,7 @@ class PrintingService {
         tableName: tableName,
         waiterName: waiterName,
         businessName: resolvedBusinessName,
+        areaCode: areaCode,
         receiptItemDisplayMode: receiptItemDisplayMode,
       );
 
@@ -587,6 +589,7 @@ class PrintingService {
           tableName: orderData['tableName']?.toString() ?? 'N/A',
           waiterName: orderData['waiterName']?.toString(),
           businessName: businessName,
+          areaCode: areaCode,
           isReprint: true,
           receiptItemDisplayMode: receiptItemDisplayMode,
         );
@@ -665,6 +668,7 @@ class PrintingService {
           tableName: orderData['tableName']?.toString() ?? 'N/A',
           waiterName: orderData['waiterName']?.toString(),
           businessName: businessName,
+          areaCode: areaCode,
           isReprint: true,
           receiptItemDisplayMode: receiptItemDisplayMode,
         );

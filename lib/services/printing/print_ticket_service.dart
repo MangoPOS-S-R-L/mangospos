@@ -74,12 +74,21 @@ class PrintTicketService {
   /// ============================================================
   /// COMANDA DE COCINA
   /// ============================================================
+  ///
+  /// [areaCode] determina el titulo dinamico (ver [_kitchenTitleForArea]).
+  /// Si es null, default "COMANDA DE COCINA" (preserva behavior previo).
+  ///
+  /// Items con `isTakeout=true` se imprimen en una seccion separada al
+  /// final del ticket bajo el recuadro "PARA LLEVAR" para que el chef/
+  /// barista los distinga de un vistazo, en lugar del [PARA LLEVAR]
+  /// inline anterior que era facil de pasar por alto.
   static PrintTicket generateKitchenTicket({
     required Order order,
     required List<OrderItem> items,
     required String tableName,
     String? waiterName,
     String? businessName,
+    String? areaCode,
     bool isReprint = false,
     String receiptItemDisplayMode = 'grouped',
   }) {
@@ -88,6 +97,11 @@ class PrintTicketService {
       items,
       receiptItemDisplayMode: receiptItemDisplayMode,
     );
+
+    // Particionar por isTakeout. Mantener orden relativo dentro de cada
+    // grupo igual al orden original.
+    final regularItems = printableItems.where((i) => !i.isTakeout).toList();
+    final takeoutItems = printableItems.where((i) => i.isTakeout).toList();
 
     gen.initialize();
     gen.lineFeed();
@@ -104,7 +118,8 @@ class PrintTicketService {
 
     gen.setTextSize(width: 2, height: 2);
     gen.setBold(true);
-    gen.textCentered(isReprint ? 'REIMPRESIÓN COMANDA' : 'COMANDA DE COCINA');
+    final baseTitle = _kitchenTitleForArea(areaCode);
+    gen.textCentered(isReprint ? 'REIMPRESIÓN ${_titleNoun(baseTitle)}' : baseTitle);
     gen.setBold(false);
     gen.setTextSize();
     gen.doubleSeparator();
@@ -129,50 +144,26 @@ class PrintTicketService {
     gen.lineFeed();
     gen.separator();
 
-    for (var idx = 0; idx < printableItems.length; idx++) {
-      final item = printableItems[idx];
+    // Items regulares (in-house). Si TODOS son takeout, este loop no
+    // imprime nada y el ticket pasa directo al recuadro PARA LLEVAR.
+    for (final item in regularItems) {
+      _renderKitchenItem(gen, item);
+    }
+
+    // Recuadro PARA LLEVAR — solo si hay items takeout en este ticket.
+    if (takeoutItems.isNotEmpty) {
+      gen.lineFeed();
+      gen.doubleSeparator();
       gen.setTextSize(width: 2, height: 2);
       gen.setBold(true);
-      final itemPrefix = 'x${_formatQty(item.quantity)} ';
-      final itemNameLines = _wrapKitchenItemName(
-        item.productName,
-        prefix: itemPrefix,
-        maxChars: 20,
-      );
-      for (var lineIndex = 0; lineIndex < itemNameLines.length; lineIndex++) {
-        final line = lineIndex == 0
-            ? '$itemPrefix${itemNameLines[lineIndex]}'
-            : '   ${itemNameLines[lineIndex]}';
-        gen.text(line);
-      }
+      gen.textCentered('PARA LLEVAR');
       gen.setBold(false);
       gen.setTextSize();
-
-      if (item.isTakeout) {
-        gen.text('  [PARA LLEVAR]');
+      gen.doubleSeparator();
+      for (final item in takeoutItems) {
+        _renderKitchenItem(gen, item);
       }
-
-      if (item.modifiers.isNotEmpty) {
-        for (final mod in item.modifiers) {
-          final isComboChoice = mod.name.contains(': ');
-          final priceSuffix = mod.price > 0
-              ? ' (+RD\$ ${_formatMoney(mod.price)})'
-              : '';
-          gen.text(
-            isComboChoice
-                ? '  • ${mod.name}$priceSuffix'
-                : '  + ${mod.name}$priceSuffix',
-          );
-        }
-      }
-
-      if (item.notes != null && item.notes!.isNotEmpty) {
-        gen.setBold(true);
-        gen.text('NOTA: ${item.notes}');
-        gen.setBold(false);
-      }
-
-      gen.separator();
+      gen.doubleSeparator();
     }
 
     gen.lineFeed(2);
@@ -183,6 +174,72 @@ class PrintTicketService {
       type: 'kitchen_order',
       escPosCommands: gen.getCommands(),
     );
+  }
+
+  /// Mapea un areaCode a su titulo de comanda. Casos especiales que la
+  /// app distingue hoy: kitchen_hot/kitchen_cold/kitchen → "COCINA";
+  /// bar → "BAR"; cashier → "CAJA"; fiscal → "CAJA". Cualquier otro
+  /// codigo (custom: "pizza", "sushi", etc) se uppercase y se inserta
+  /// como esta.
+  static String _kitchenTitleForArea(String? areaCode) {
+    final code = (areaCode ?? '').trim().toLowerCase();
+    if (code.isEmpty) return 'COMANDA DE COCINA';
+    if (code.startsWith('kitchen')) return 'COMANDA DE COCINA';
+    if (code == 'bar') return 'COMANDA DE BAR';
+    if (code == 'cashier' || code == 'fiscal') return 'COMANDA DE CAJA';
+    // Custom area — convertimos snake_case a humano: 'cocina_fria' → 'COCINA FRIA'.
+    return 'COMANDA DE ${code.replaceAll('_', ' ').toUpperCase()}';
+  }
+
+  /// "COMANDA DE COCINA" → "DE COCINA". Usado en el header de
+  /// reimpresion para conservar el contexto del area.
+  static String _titleNoun(String fullTitle) {
+    final upper = fullTitle.toUpperCase();
+    final idx = upper.indexOf('COMANDA');
+    if (idx == -1) return upper;
+    final tail = upper.substring(idx + 'COMANDA'.length).trim();
+    return tail.isEmpty ? 'COMANDA' : 'COMANDA $tail';
+  }
+
+  static void _renderKitchenItem(EscPosGenerator gen, OrderItem item) {
+    gen.setTextSize(width: 2, height: 2);
+    gen.setBold(true);
+    final itemPrefix = 'x${_formatQty(item.quantity)} ';
+    final itemNameLines = _wrapKitchenItemName(
+      item.productName,
+      prefix: itemPrefix,
+      maxChars: 20,
+    );
+    for (var lineIndex = 0; lineIndex < itemNameLines.length; lineIndex++) {
+      final line = lineIndex == 0
+          ? '$itemPrefix${itemNameLines[lineIndex]}'
+          : '   ${itemNameLines[lineIndex]}';
+      gen.text(line);
+    }
+    gen.setBold(false);
+    gen.setTextSize();
+
+    if (item.modifiers.isNotEmpty) {
+      for (final mod in item.modifiers) {
+        final isComboChoice = mod.name.contains(': ');
+        final priceSuffix = mod.price > 0
+            ? ' (+RD\$ ${_formatMoney(mod.price)})'
+            : '';
+        gen.text(
+          isComboChoice
+              ? '  • ${mod.name}$priceSuffix'
+              : '  + ${mod.name}$priceSuffix',
+        );
+      }
+    }
+
+    if (item.notes != null && item.notes!.isNotEmpty) {
+      gen.setBold(true);
+      gen.text('NOTA: ${item.notes}');
+      gen.setBold(false);
+    }
+
+    gen.separator();
   }
 
   /// ============================================================
