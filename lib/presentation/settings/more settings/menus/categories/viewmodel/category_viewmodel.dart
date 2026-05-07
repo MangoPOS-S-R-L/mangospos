@@ -60,13 +60,20 @@ class CategoriesVm extends Notifier<CategoriesState> {
     await load(businessId: _businessId ?? 'auto');
   }
 
-  /// Aplica un nuevo orden a las categorías. La lista llega ya
-  /// reorganizada visualmente; el repo persiste cada `position` con
-  /// step de 10 (mismo patrón que zonas). Termina recargando para
-  /// reflejar el nuevo orden y resincronizar.
+  /// Aplica un nuevo orden a las categorías. Optimistic: actualiza el
+  /// state local inmediato con la lista ya reorganizada (el UI no
+  /// "pestañea" porque evitamos el AsyncValue.loading que `load()`
+  /// metería). El repo persiste cada `position` con step de 10 en
+  /// background. Si falla, recargamos para volver al orden real
+  /// persistido (esa recarga sí parpadea — error path).
   Future<void> reorder(List<model.Category> ordered) async {
-    await _repo.reorder(ordered);
-    await load(businessId: _businessId ?? 'auto');
+    state = state.copyWith(data: AsyncValue.data(ordered));
+    try {
+      await _repo.reorder(ordered);
+    } catch (e) {
+      await load(businessId: _businessId ?? 'auto');
+      rethrow;
+    }
   }
 
   // ----------------- Helpers -----------------
