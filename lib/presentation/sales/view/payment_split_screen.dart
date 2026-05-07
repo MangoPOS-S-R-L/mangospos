@@ -508,12 +508,37 @@ class _LeftPanel extends ConsumerWidget {
             final asyncAccounts =
                 innerRef.watch(activeBankAccountsProvider('auto'));
             return AlertDialog(
+              backgroundColor: Colors.white,
+              surfaceTintColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
               ),
-              title: const Text('Cuenta que recibió'),
+              titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 4),
+              contentPadding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+              title: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: const [
+                  Text(
+                    'Cuenta que recibió',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF111827),
+                    ),
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                    'Selecciona a cuál cuenta llegó la transferencia.',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Color(0xFF6B7280),
+                      fontWeight: FontWeight.normal,
+                    ),
+                  ),
+                ],
+              ),
               content: SizedBox(
-                width: 460,
+                width: 480,
                 child: asyncAccounts.when(
                   loading: () => const SizedBox(
                     height: 120,
@@ -563,71 +588,18 @@ class _LeftPanel extends ConsumerWidget {
                     return ListView.separated(
                       shrinkWrap: true,
                       itemCount: accounts.length,
-                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      separatorBuilder: (_, _) => const SizedBox(height: 10),
                       itemBuilder: (rowCtx, i) {
                         final acc = accounts[i];
                         final isSelected =
                             state.selectedBankAccount?.id == acc.id;
-                        return InkWell(
+                        return _BankAccountPickerCard(
+                          account: acc,
+                          isSelected: isSelected,
                           onTap: () {
                             vm.setBankAccount(acc);
                             Navigator.pop(ctx);
                           },
-                          borderRadius: BorderRadius.circular(12),
-                          child: Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: isSelected
-                                  ? const Color(0xFFFFF7ED)
-                                  : Colors.white,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color: isSelected
-                                    ? const Color(0xFFF97316)
-                                    : Colors.black12,
-                                width: isSelected ? 2 : 1,
-                              ),
-                            ),
-                            child: Row(
-                              children: [
-                                const Icon(
-                                  Icons.account_balance,
-                                  color: Color(0xFFF97316),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        acc.displayLabel,
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.w700,
-                                          fontSize: 14,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        '${acc.bankName} · #${acc.accountNumber} · '
-                                        '${acc.accountType.displayName} · ${acc.currency}',
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.black54,
-                                        ),
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                if (isSelected)
-                                  const Icon(
-                                    Icons.check_circle,
-                                    color: Color(0xFFF97316),
-                                  ),
-                              ],
-                            ),
-                          ),
                         );
                       },
                     );
@@ -644,6 +616,206 @@ class _LeftPanel extends ConsumerWidget {
           },
         );
       },
+    );
+  }
+}
+
+/// Card de cuenta bancaria dentro del picker. Layout multi-línea con
+/// jerarquía clara: alias destacado, número de cuenta en monospace
+/// grande, banco y meta-info (tipo · moneda · titular) en sub-líneas
+/// secundarias. Fondo siempre blanco; la selección se marca solo con
+/// borde naranja + check (para que el contraste del texto se mantenga).
+class _BankAccountPickerCard extends StatelessWidget {
+  final BankAccount account;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _BankAccountPickerCard({
+    required this.account,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    const orange = Color(0xFFF97316);
+    final borderColor = isSelected ? orange : const Color(0xFFE5E7EB);
+    final aliasOrBank =
+        (account.alias?.trim().isNotEmpty ?? false)
+            ? account.alias!.trim()
+            : account.bankName;
+    final showBankUnderAlias =
+        (account.alias?.trim().isNotEmpty ?? false) &&
+        account.bankName.trim().isNotEmpty;
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: borderColor,
+            width: isSelected ? 2 : 1,
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Avatar circular del banco
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: orange.withValues(alpha: 0.10),
+                shape: BoxShape.circle,
+              ),
+              alignment: Alignment.center,
+              child: const Icon(
+                Icons.account_balance,
+                color: orange,
+                size: 20,
+              ),
+            ),
+            const SizedBox(width: 12),
+            // Info principal
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Alias o banco como título
+                  Text(
+                    aliasOrBank,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 15,
+                      color: Color(0xFF111827),
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (showBankUnderAlias) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      account.bankName,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF6B7280),
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  // Número de cuenta en monospace (lectura clara para
+                  // el cajero al verificar contra la app del banco).
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF9FAFB),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFFE5E7EB)),
+                    ),
+                    child: Text(
+                      account.accountNumber,
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                        letterSpacing: 0.5,
+                        color: Color(0xFF111827),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  // Meta: tipo · moneda · titular como pills
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    children: [
+                      _Pill(
+                        label: account.accountType.displayName,
+                        color: const Color(0xFF6B7280),
+                      ),
+                      _Pill(
+                        label: account.currency,
+                        color: const Color(0xFF3B82F6),
+                      ),
+                      if ((account.accountHolder ?? '').trim().isNotEmpty)
+                        _Pill(
+                          label: account.accountHolder!.trim(),
+                          color: const Color(0xFF6B7280),
+                          icon: Icons.person_outline,
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            // Check de selección a la derecha (24x24 fijo para que
+            // todas las cards alineen aunque solo una esté marcada).
+            SizedBox(
+              width: 24,
+              height: 24,
+              child: isSelected
+                  ? const Icon(
+                      Icons.check_circle,
+                      color: orange,
+                      size: 24,
+                    )
+                  : Container(
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: const Color(0xFFD1D5DB)),
+                      ),
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Pill compacto reutilizado en la card del picker. Estilo subtle
+/// con fondo translúcido del color y borde matching.
+class _Pill extends StatelessWidget {
+  final String label;
+  final Color color;
+  final IconData? icon;
+
+  const _Pill({required this.label, required this.color, this.icon});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.30)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 12, color: color),
+            const SizedBox(width: 4),
+          ],
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
