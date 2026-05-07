@@ -105,6 +105,10 @@ class PrintTicketService {
     final takeoutItems = printableItems.where((i) => i.isTakeout).toList();
 
     gen.initialize();
+    // Double-strike para la comanda: imprime cada línea 2 veces — texto
+    // mas nítido/oscuro y la mecánica avanza más lento (calidad > velocidad
+    // para que cocina lea sin esfuerzo).
+    gen.setDoubleStrike(true);
 
     final resolvedCashier = cashierName?.trim();
 
