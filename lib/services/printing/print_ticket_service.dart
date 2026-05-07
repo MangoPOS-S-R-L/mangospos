@@ -150,9 +150,9 @@ class PrintTicketService {
     gen.text(_formatDate(order.createdAt));
     gen.doubleSeparator();
 
-    // ─── BLOQUE PARA COMER AQUI ─────────────────────────────────────
+    // ─── BLOQUE PARA COMER ──────────────────────────────────────────
     if (regularItems.isNotEmpty) {
-      _renderItemsList(gen, label: 'PARA COMER AQUI', items: regularItems);
+      _renderItemsList(gen, label: 'PARA COMER', items: regularItems);
     }
 
     // ─── BLOQUE PARA LLEVAR ─────────────────────────────────────────
@@ -217,22 +217,28 @@ class PrintTicketService {
   }
 
   /// Renderiza items bajo una **banda inversa full-ancho** con el label
-  /// centrado (`GS B 1` blanco-sobre-negro). Items en height 2x bold,
+  /// centrado en `width:2 height:2` (`GS B 1` blanco-sobre-negro,
+  /// `GS ! 0x11` doble ancho/alto). Items en height 2x bold,
   /// modificadores/notas indentados a tamaño normal, separador thin entre
-  /// items, y `doubleSeparator` (`===`) cerrando la sección.
+  /// items con aire vertical, y `doubleSeparator` (`===`) cerrando la
+  /// sección.
   static void _renderItemsList(
     EscPosGenerator gen, {
     required String label,
     required List<OrderItem> items,
   }) {
-    // Banda inversa: padding lateral con espacios para que el fondo negro
-    // se extienda full-ancho de la línea (sin padding solo se inverteria
-    // sobre los chars del label, dando una banda flaca).
+    // Banda inversa 2x2: padding a 24 chars (max al ser width:2). El
+    // padding hace que el fondo negro se extienda full-ancho. Sin
+    // padding solo se invertiria sobre los chars del label dando una
+    // banda flaca.
     gen.setInverse(true);
+    gen.setTextSize(width: 2, height: 2);
     gen.setBold(true);
-    gen.text(_centerInWidth(label.toUpperCase(), 48));
+    gen.text(_centerInWidth(label.toUpperCase(), 24));
     gen.setBold(false);
+    gen.setTextSize();
     gen.setInverse(false);
+    gen.lineFeed();
 
     for (var i = 0; i < items.length; i++) {
       final item = items[i];
@@ -261,13 +267,17 @@ class PrintTicketService {
         gen.setBold(false);
       }
 
-      // Separador thin entre items (no después del último).
+      // Separador thin entre items con aire vertical antes/después
+      // (no después del último: ahí cierra el doubleSeparator).
       if (i < items.length - 1) {
+        gen.lineFeed();
         _kitchenDashedSeparator(gen);
+        gen.lineFeed();
       }
     }
 
-    // Cierre de sección con doble separador thick.
+    // Cierre de sección con doble separador thick + aire arriba.
+    gen.lineFeed();
     gen.doubleSeparator();
   }
 
