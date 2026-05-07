@@ -48,8 +48,8 @@ class BluetoothPrintService {
 
     if (!device.isConnected) {
       _log('connecting (timeout=${connectTimeout.inSeconds}s)…');
+      // flutter_blue_plus 1.x no acepta `license` (parametro 2.x-only).
       await device.connect(
-        license: License.free,
         timeout: connectTimeout,
         autoConnect: false,
       );

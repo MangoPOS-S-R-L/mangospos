@@ -1112,9 +1112,9 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
           }
         }
         // En todas las plataformas: dispositivos ya conectados al sistema.
-        // En el wrapper flutter_blue_plus_windows systemDevices es getter
-        // (no metodo con args) — Windows no filtra por service UUID.
-        final system = await FlutterBluePlus.systemDevices;
+        // En flutter_blue_plus 1.x systemDevices es metodo que toma
+        // List<Guid> de service UUIDs (lista vacia = todos).
+        final system = await FlutterBluePlus.systemDevices(<Guid>[]);
         for (final d in system) {
           found.add(d);
         }
