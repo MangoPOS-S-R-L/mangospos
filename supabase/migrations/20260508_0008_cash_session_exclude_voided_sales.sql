@@ -19,10 +19,16 @@
 -- =============================================================================
 
 -- 1. fn_close_cash_session
-CREATE OR REPLACE FUNCTION public.fn_close_cash_session(
+-- DROP necesario: la función existente en prod tiene defaults en sus
+-- parámetros que difieren de la firma que declaramos aquí, y Postgres
+-- rechaza CREATE OR REPLACE en ese caso (error 42P13). Drop + recreate
+-- + re-grant es la forma estándar de evolucionar la firma.
+DROP FUNCTION IF EXISTS public.fn_close_cash_session(uuid, numeric, text);
+
+CREATE FUNCTION public.fn_close_cash_session(
   p_session_id uuid,
   p_end_amount numeric,
-  p_notes      text
+  p_notes      text DEFAULT NULL
 ) RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -114,9 +120,14 @@ $$;
 ALTER FUNCTION public.fn_close_cash_session(uuid, numeric, text)
   OWNER TO postgres;
 
+GRANT EXECUTE ON FUNCTION public.fn_close_cash_session(uuid, numeric, text)
+  TO anon, authenticated, service_role;
+
 
 -- 2. fn_get_cash_session_summary
-CREATE OR REPLACE FUNCTION public.fn_get_cash_session_summary(
+DROP FUNCTION IF EXISTS public.fn_get_cash_session_summary(uuid);
+
+CREATE FUNCTION public.fn_get_cash_session_summary(
   p_session_id uuid
 ) RETURNS jsonb
 LANGUAGE plpgsql
@@ -223,3 +234,6 @@ END;
 $$;
 
 ALTER FUNCTION public.fn_get_cash_session_summary(uuid) OWNER TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.fn_get_cash_session_summary(uuid)
+  TO anon, authenticated, service_role;
