@@ -105,6 +105,11 @@ class PrintTicketService {
     final takeoutItems = printableItems.where((i) => i.isTakeout).toList();
 
     gen.initialize();
+    // Font B: bitmap mas denso/nitido que Font A en la mayoria de
+    // termicas ESC/POS — se ve mas "sans/limpio" para el ojo, sin
+    // tener que renderizar raster custom (que seria mucho mas lento).
+    // Ancho efectivo a 80mm: ~64 chars en Font B (vs 48 en Font A).
+    gen.setFont(Font.b);
 
     // ─── HEADER: CAJERO ─────────────────────────────────────────────
     final resolvedCashier = cashierName?.trim();
@@ -189,7 +194,7 @@ class PrintTicketService {
   /// economicas. Sin linefeed extra — el wrapping de los items ya
   /// deja el espaciado correcto.
   static void _kitchenDashedSeparator(EscPosGenerator gen) {
-    gen.text('-' * 48);
+    gen.text('-' * 64);
   }
 
   /// Mapea un areaCode a su titulo de comanda. Casos especiales que la
@@ -223,7 +228,9 @@ class PrintTicketService {
     required String label,
     required List<OrderItem> items,
   }) {
-    const w = 48;
+    // Font B usa ~64 chars de ancho a 80mm. Marco 64 chars de ancho
+    // total = 60 chars de contenido entre los bordes laterales.
+    const w = 64;
     const inner = w - 4; // 2 bordes `|` + 2 espacios de padding
 
     String borderLine(String char) => '+${char * (w - 2)}+';
