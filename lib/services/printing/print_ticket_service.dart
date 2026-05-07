@@ -193,10 +193,14 @@ class PrintTicketService {
     );
   }
 
-  /// Separador dashed de ancho de papel (`- - - - -`).
+  /// Separador entre items. Linea solida `-----` en lugar de dashed
+  /// disperso `- - - -`: se imprime mas definida en termicas economicas
+  /// donde la dashed sale debil/punteada. Linefeed al rededor para mas
+  /// "respiracion" y mejor legibilidad en cocina.
   static void _kitchenDashedSeparator(EscPosGenerator gen) {
-    // 80mm a font A normal: ~48 chars. '- ' * 24 = 48 chars.
-    gen.text('- ' * 24);
+    gen.lineFeed();
+    gen.text('-' * 48);
+    gen.lineFeed();
   }
 
   /// Linea con label centrado en video inverso (rectangulo negro con
@@ -238,34 +242,27 @@ class PrintTicketService {
   }
 
   static void _renderKitchenItem(EscPosGenerator gen, OrderItem item) {
-    // Cantidad en "cuadrado" inverso al inicio (rectangulito blanco/negro
-    // similar a la imagen del modelo). Si el firmware no soporta inverse,
-    // visualmente se ve como `1 ` con bold — sigue legible.
-    final qtyLabel = ' ${_formatQty(item.quantity)} ';
-    gen.setInverse(true);
-    gen.setBold(true);
-    gen.text(qtyLabel, newLine: false);
-    gen.setBold(false);
-    gen.setInverse(false);
-
-    // Espacio + nombre del producto en bold grande, en la MISMA linea que
-    // el cuadrado de la cantidad. Wrap manual en lineas de hasta 18 chars
-    // (font 2x ancho = ~24 chars utiles, dejamos margen).
-    gen.text(' ', newLine: false);
-    gen.setTextSize(width: 2, height: 2);
-    gen.setBold(true);
+    // Linea principal: cantidad + nombre en font 2x ancho/alto, bold.
+    // Sin recuadro inverso — se imprime peor en termicas economicas.
+    // El bold + tamaño grande dan mejor legibilidad y "calidad" visual.
+    final qty = _formatQty(item.quantity);
+    final prefix = '$qty  '; // 2 espacios entre cantidad y nombre.
+    // Wrap considerando que en font 2x2 cabe ~24 chars en 80mm.
     final nameLines = _wrapKitchenItemName(
       item.productName,
-      prefix: '',
-      maxChars: 18,
+      prefix: prefix,
+      maxChars: 22,
     );
+
+    gen.setTextSize(width: 2, height: 2);
+    gen.setBold(true);
     for (var i = 0; i < nameLines.length; i++) {
-      // Primera linea va sin newline previo (continua despues del cuadrado);
-      // resto comienza con indent.
       if (i == 0) {
-        gen.text(nameLines[i]);
+        gen.text('$prefix${nameLines[i]}');
       } else {
-        gen.text('  ${nameLines[i]}');
+        // Indent con el ancho del prefix (qty + 2 spaces) para que el
+        // wrap se alinee bajo el inicio del nombre.
+        gen.text('${' ' * prefix.length}${nameLines[i]}');
       }
     }
     gen.setBold(false);
