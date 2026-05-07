@@ -444,6 +444,57 @@ class ZonesRepository {
     return true;
   }
 
+  /// PRD-12 F2: transfiere una sesión completa o items específicos a
+  /// otra mesa via `fn_transfer_table_session`. Si destino tiene
+  /// sesión abierta, combina automático. PIN supervisor se valida
+  /// client-side ANTES de invocar este método.
+  ///
+  /// - `itemIds = null` → transfiere TODA la cuenta.
+  /// - `itemIds = []` o lista → mueve solo esos items, manteniendo el
+  ///   resto en la mesa origen.
+  ///
+  /// Devuelve el `Map` crudo del RPC (mode, source_*, target_*, etc.)
+  /// para que el caller pueda mostrar feedback específico.
+  Future<Map<String, dynamic>> transferTableSession({
+    required String sourceSessionId,
+    required String targetTableId,
+    List<String>? itemIds,
+  }) async {
+    final res = await sb.rpc(
+      'fn_transfer_table_session',
+      params: {
+        'p_source_session_id': sourceSessionId,
+        'p_target_table_id': targetTableId,
+        'p_item_ids': itemIds,
+      },
+    );
+    if (res is Map) {
+      return Map<String, dynamic>.from(res);
+    }
+    return <String, dynamic>{};
+  }
+
+  /// Lista todas las mesas activas de un negocio (todas las zonas)
+  /// junto con el estado actual y la zona a la que pertenecen. Usado
+  /// por el dialog de transferencia para que el cajero elija destino.
+  /// Excluye la mesa origen y zonas inactivas.
+  Future<List<Map<String, dynamic>>> fetchTablesForTransfer({
+    required String businessId,
+    required String excludeTableId,
+  }) async {
+    final rows = await sb
+        .from('dining_tables')
+        .select(
+          'id, code, label, capacity, state, zone_id, '
+          'zones!inner(id, name, business_id, is_active)',
+        )
+        .neq('id', excludeTableId)
+        .eq('is_active', true)
+        .eq('zones.business_id', businessId)
+        .eq('zones.is_active', true);
+    return List<Map<String, dynamic>>.from(rows as List);
+  }
+
   // ---- Realtime usado en la pantalla "Por zona" ----
   RealtimeChannel subscribe(void Function() onChange) {
     final ch = sb.channel('zones:status')

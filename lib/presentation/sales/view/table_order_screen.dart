@@ -30,7 +30,9 @@ import 'package:mangopos/services/printing/print_ticket_service.dart';
 import 'package:mangopos/services/printing/qr_esc_pos_builder.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
+import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
+import 'package:mangopos/presentation/sales/widgets/transfer_session_dialog.dart';
 import 'package:mangopos/data/models/table_status.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -365,6 +367,66 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         }),
       );
     }
+  }
+
+  /// PRD-12 F2: abre el dialog de transferencia de cuenta. El dialog
+  /// orquesta los pasos (qué transferir → mesa destino → PIN supervisor)
+  /// y devuelve `true` si la transferencia se completó. Cuando esto
+  /// pasa, regresamos al grid de zonas — la cuenta ya no está en esta
+  /// mesa.
+  Future<void> _handleTransferSession(BuildContext context) async {
+    final orderState = ref.read(currentOrderProvider);
+    final order = orderState.order;
+    final messenger = ScaffoldMessenger.of(context);
+
+    if (order == null || order.sessionId.isEmpty) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('No hay cuenta activa para transferir.'),
+        ),
+      );
+      return;
+    }
+    if (widget.origin != OrderOrigin.table) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content:
+              Text('La transferencia solo aplica a cuentas de mesa.'),
+        ),
+      );
+      return;
+    }
+
+    // Resolver businessId vía el resolver canónico (mismo patrón que
+    // otras pantallas — Order no expone business_id directo).
+    final businessId = await BusinessResolver.ensure('auto');
+    if (!context.mounted) return;
+
+    final tableLabel = _currentTableCode ?? widget.tableCode ?? 'Mesa';
+    final sourceTableId = widget.tableId ?? '';
+    if (sourceTableId.isEmpty) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo identificar la mesa origen.'),
+        ),
+      );
+      return;
+    }
+
+    final transferred = await showTransferSessionDialog(
+      context,
+      ref,
+      businessId: businessId,
+      sourceSessionId: order.sessionId,
+      sourceTableId: sourceTableId,
+      sourceTableLabel: tableLabel,
+      items: orderState.items,
+    );
+
+    if (!transferred) return;
+    if (!context.mounted) return;
+    // Volver al grid: la cuenta ya está en otra mesa.
+    context.go(AppRoutes.salesByZone);
   }
 
   Future<void> _handleReleaseTable(BuildContext context) async {
@@ -765,6 +827,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                   ),
                   onApplyDiscount: () => _handleApplyDiscount(context),
                   onApplyCourtesy: () => _handleCourtesyByProduct(context),
+                  onTransferSession: () => _handleTransferSession(context),
                 ),
                 // Usamos ancho fijo según especificación (400px o 320px)
                 SizedBox(width: cartWidth, child: cart),
@@ -3312,6 +3375,7 @@ class _SalesToolsRail extends StatelessWidget {
   final VoidCallback onVoidOrder;
   final VoidCallback onApplyDiscount;
   final VoidCallback onApplyCourtesy;
+  final VoidCallback onTransferSession;
 
   const _SalesToolsRail({
     required this.onBack,
@@ -3320,6 +3384,7 @@ class _SalesToolsRail extends StatelessWidget {
     required this.onVoidOrder,
     required this.onApplyDiscount,
     required this.onApplyCourtesy,
+    required this.onTransferSession,
   });
 
   @override
@@ -3356,6 +3421,11 @@ class _SalesToolsRail extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 8),
+                  _RailButton(
+                    icon: Icons.swap_horiz_rounded,
+                    label: 'Transferir\ncuenta',
+                    onTap: onTransferSession,
+                  ),
                   _RailButton(
                     icon: Icons.logout_rounded,
                     label: 'Liberar\nmesa',
