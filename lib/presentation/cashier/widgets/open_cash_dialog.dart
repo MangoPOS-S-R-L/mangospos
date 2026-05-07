@@ -206,10 +206,14 @@ class _OpenCashDialogState extends ConsumerState<OpenCashDialog> {
       onKeyEvent: _handleKeyboard,
       child: Dialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        // Reducido del original (wp(45), maxWidth 550, maxHeight 85%):
+        // se veía exageradamente grande. wp(32) + maxWidth 420 + 75%
+        // de alto deja el modal compacto en escritorio sin sacrificar
+        // legibilidad del numpad.
         child: Container(
-          width: context.wp(45),
-          constraints: BoxConstraints(maxWidth: 550, maxHeight: context.hp(85)),
-          padding: EdgeInsets.all(context.wp(3)),
+          width: context.wp(32),
+          constraints: BoxConstraints(maxWidth: 420, maxHeight: context.hp(75)),
+          padding: EdgeInsets.all(context.wp(2)),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(24),
