@@ -151,33 +151,15 @@ class PrintTicketService {
     gen.text(_formatDate(order.createdAt));
     gen.doubleSeparator();
 
-    // ─── ITEMS REGULARES ────────────────────────────────────────────
-    // Items en font 2x bold uniforme. _renderKitchenItem agrega un
-    // linefeed al final → espaciado consistente entre items con o sin
-    // modificadores.
-    for (final item in regularItems) {
-      _renderKitchenItem(gen, item);
+    // ─── BLOQUE PARA COMER AQUI ─────────────────────────────────────
+    if (regularItems.isNotEmpty) {
+      _renderItemsBox(gen, label: 'PARA COMER AQUI', items: regularItems);
     }
 
     // ─── BLOQUE PARA LLEVAR ─────────────────────────────────────────
-    // Marco con top/bottom = solamente. Sin laterales `|` porque con
-    // font 2x ancho cada char ocupa el doble y el borde derecho no se
-    // alinea. El marco horizontal + label en bold grande es suficiente
-    // para que el chef identifique el bloque.
     if (takeoutItems.isNotEmpty) {
       if (regularItems.isNotEmpty) gen.lineFeed();
-      gen.text('=' * 48);
-      gen.setTextSize(width: 2, height: 2);
-      gen.setBold(true);
-      gen.textCentered('PARA LLEVAR');
-      gen.setBold(false);
-      gen.setTextSize();
-      gen.text('=' * 48);
-      gen.lineFeed();
-      for (final item in takeoutItems) {
-        _renderKitchenItem(gen, item);
-      }
-      gen.text('=' * 48);
+      _renderItemsBox(gen, label: 'PARA LLEVAR', items: takeoutItems);
     }
 
     // ─── FOOTER ─────────────────────────────────────────────────────
@@ -232,58 +214,104 @@ class PrintTicketService {
     return ('COMANDA', 'DE ${code.replaceAll('_', ' ').toUpperCase()}');
   }
 
-  static void _renderKitchenItem(EscPosGenerator gen, OrderItem item) {
-    // Linea principal: cantidad + nombre en font 2x ancho/alto, bold.
-    // Sin recuadro inverso — se imprime peor en termicas economicas.
-    // El bold + tamaño grande dan mejor legibilidad y "calidad" visual.
-    final qty = _formatQty(item.quantity);
-    final prefix = '$qty  '; // 2 espacios entre cantidad y nombre.
-    // Wrap considerando que en font 2x2 cabe ~24 chars en 80mm.
-    final nameLines = _wrapKitchenItemName(
-      item.productName,
-      prefix: prefix,
-      maxChars: 22,
-    );
+  /// Renderiza una lista de items adentro de una caja ASCII de 48 chars
+  /// con bordes top/bottom (`+===+`), divisor (`+---+`) y laterales (`|`).
+  /// Items en font normal bold para que el `|` derecho se alinee a 48
+  /// chars exactos. Espaciado uniforme entre items garantizado por una
+  /// row vacia despues de cada item completo.
+  static void _renderItemsBox(
+    EscPosGenerator gen, {
+    required String label,
+    required List<OrderItem> items,
+  }) {
+    const w = 48;
+    const inner = w - 4; // 2 bordes `|` + 2 espacios de padding
 
-    gen.setTextSize(width: 2, height: 2);
+    String borderLine(String char) => '+${char * (w - 2)}+';
+    String row(String content) {
+      final clipped = content.length > inner
+          ? content.substring(0, inner)
+          : content;
+      return '| ${clipped.padRight(inner)} |';
+    }
+
+    String centeredRow(String text) {
+      final pad = (inner - text.length) ~/ 2;
+      final right = inner - pad - text.length;
+      return '| ${' ' * pad}$text${' ' * right} |';
+    }
+
+    // Top + header label + divisor
+    gen.text(borderLine('='));
     gen.setBold(true);
-    for (var i = 0; i < nameLines.length; i++) {
-      if (i == 0) {
-        gen.text('$prefix${nameLines[i]}');
-      } else {
-        // Indent con el ancho del prefix (qty + 2 spaces) para que el
-        // wrap se alinee bajo el inicio del nombre.
-        gen.text('${' ' * prefix.length}${nameLines[i]}');
-      }
-    }
+    gen.text(centeredRow(label.toUpperCase()));
     gen.setBold(false);
-    gen.setTextSize();
+    gen.text(borderLine('-'));
 
-    if (item.modifiers.isNotEmpty) {
-      for (final mod in item.modifiers) {
-        final isComboChoice = mod.name.contains(': ');
-        final priceSuffix = mod.price > 0
-            ? ' (+RD\$ ${_formatMoney(mod.price)})'
-            : '';
-        gen.text(
-          isComboChoice
-              ? '  • ${mod.name}$priceSuffix'
-              : '  + ${mod.name}$priceSuffix',
-        );
+    // Espacio respiracion arriba
+    gen.text(row(''));
+
+    for (var i = 0; i < items.length; i++) {
+      final item = items[i];
+      final qty = _formatQty(item.quantity);
+      final headLine = '$qty  ${item.productName}';
+
+      gen.setBold(true);
+      _writeWrappedRow(gen, headLine, inner, row);
+      gen.setBold(false);
+
+      if (item.modifiers.isNotEmpty) {
+        for (final mod in item.modifiers) {
+          final isComboChoice = mod.name.contains(': ');
+          final priceSuffix = mod.price > 0
+              ? ' (+RD\$ ${_formatMoney(mod.price)})'
+              : '';
+          final modLine = isComboChoice
+              ? '   • ${mod.name}$priceSuffix'
+              : '   + ${mod.name}$priceSuffix';
+          _writeWrappedRow(gen, modLine, inner, row);
+        }
+      }
+
+      if (item.notes != null && item.notes!.isNotEmpty) {
+        gen.setBold(true);
+        _writeWrappedRow(gen, '   NOTA: ${item.notes}', inner, row);
+        gen.setBold(false);
+      }
+
+      // Espaciado uniforme entre items dentro del marco. Aun el ultimo
+      // tiene linea vacia abajo para simetria con la respiracion del top.
+      gen.text(row(''));
+    }
+
+    // Cierre del marco
+    gen.text(borderLine('='));
+  }
+
+  /// Imprime [text] dentro del marco, partiendolo en multiples filas si
+  /// excede [innerWidth]. Word-wrap simple por espacios.
+  static void _writeWrappedRow(
+    EscPosGenerator gen,
+    String text,
+    int innerWidth,
+    String Function(String) row,
+  ) {
+    if (text.length <= innerWidth) {
+      gen.text(row(text));
+      return;
+    }
+    final words = text.split(' ');
+    var current = '';
+    for (final w in words) {
+      final candidate = current.isEmpty ? w : '$current $w';
+      if (candidate.length <= innerWidth) {
+        current = candidate;
+      } else {
+        if (current.isNotEmpty) gen.text(row(current));
+        current = w;
       }
     }
-
-    if (item.notes != null && item.notes!.isNotEmpty) {
-      gen.setBold(true);
-      gen.text('NOTA: ${item.notes}');
-      gen.setBold(false);
-    }
-
-    // Espaciado uniforme entre items: 1 linefeed despues de cada item
-    // completo (incluyendo sus modificadores y notas). Asi un item con
-    // modificador tiene la misma separacion del siguiente que un item
-    // sin modificador.
-    gen.lineFeed();
+    if (current.isNotEmpty) gen.text(row(current));
   }
 
   /// ============================================================
@@ -1054,60 +1082,6 @@ class PrintTicketService {
     }
 
     return separated;
-  }
-
-  static List<String> _wrapKitchenItemName(
-    String name, {
-    required String prefix,
-    required int maxChars,
-  }) {
-    final normalized = name.trim().replaceAll(RegExp(r'\s+'), ' ');
-    if (normalized.isEmpty) return [''];
-
-    final firstLineWidth = (maxChars - prefix.length).clamp(8, maxChars);
-    final continuationWidth = (maxChars - 3).clamp(8, maxChars);
-    final words = normalized.split(' ');
-    final lines = <String>[];
-    var current = '';
-    var currentWidth = firstLineWidth;
-
-    void pushCurrent() {
-      if (current.isNotEmpty) {
-        lines.add(current);
-        current = '';
-        currentWidth = continuationWidth;
-      }
-    }
-
-    for (final word in words) {
-      if (word.length > currentWidth) {
-        if (current.isNotEmpty) {
-          pushCurrent();
-        }
-        var start = 0;
-        while (start < word.length) {
-          final width = lines.isEmpty ? firstLineWidth : continuationWidth;
-          final end = (start + width < word.length)
-              ? start + width
-              : word.length;
-          lines.add(word.substring(start, end));
-          start = end;
-          currentWidth = continuationWidth;
-        }
-        continue;
-      }
-
-      final candidate = current.isEmpty ? word : '$current $word';
-      if (candidate.length <= currentWidth) {
-        current = candidate;
-      } else {
-        pushCurrent();
-        current = word;
-      }
-    }
-
-    pushCurrent();
-    return lines.isEmpty ? [''] : lines;
   }
 
   static String _formatQty(double qty) {
