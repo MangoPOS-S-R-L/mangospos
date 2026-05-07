@@ -399,10 +399,10 @@ class MobilePrintAgent {
 
     final device = BluetoothDevice.fromId(address);
     try {
+      // flutter_blue_plus 1.x no acepta `license` (parametro 2.x-only).
       await device.connect(
         autoConnect: false,
         timeout: _btWriteTimeout,
-        license: License.free,
       );
       
       // Try to request a larger MTU for faster printing on supported devices

@@ -50,9 +50,15 @@ dependencies:
   image_picker_for_web: ^3.1.0
   ping_discover_network_forked: ^0.0.1
   network_info_plus: ^7.0.0
-  flutter_blue_plus: ^2.0.0
+  # flutter_blue_plus pinned a 1.x: el wrapper flutter_blue_plus_windows
+  # 1.26.x (ultima) extiende clases de flutter_blue_plus 1.x. Con 2.x el
+  # override falla a compile-time porque 2.x agrego parametros (license,
+  # etc) que el wrapper no implementa. No hay version 2.x del wrapper.
+  # flutter_blue_plus_windows 1.26.x requiere flutter_blue_plus
+  # >=1.32.4 <1.35.0. Pinear ambos en ese rango compatible.
+  flutter_blue_plus: '>=1.32.4 <1.35.0'
   permission_handler: ^12.0.1
-  flutter_blue_plus_windows: ^1.16.0
+  flutter_blue_plus_windows: ^1.26.1
   universal_ble: ^0.21.1
   web_socket_channel: ^3.0.3
   google_fonts: ^7.0.0
