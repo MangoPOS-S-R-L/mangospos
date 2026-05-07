@@ -52,7 +52,8 @@ class BusinessProfileRepository {
         .from('business_settings')
         .select(
           'print_logo_on_invoice, show_slogan_on_invoice, '
-          'show_branch_name_on_invoice',
+          'show_branch_name_on_invoice, '
+          'ticket_header_blocks, ticket_footer_blocks',
         )
         .eq('business_id', businessId)
         .maybeSingle();
@@ -84,6 +85,8 @@ class BusinessProfileRepository {
     bool? printLogoOnInvoice,
     bool? showSloganOnInvoice,
     bool? showBranchNameOnInvoice,
+    List<TicketBlock>? headerBlocks,
+    List<TicketBlock>? footerBlocks,
   }) async {
     String? normalize(String? v) {
       if (v == null) return null;
@@ -132,6 +135,14 @@ class BusinessProfileRepository {
     }
     if (showBranchNameOnInvoice != null) {
       settingsPatch['show_branch_name_on_invoice'] = showBranchNameOnInvoice;
+    }
+    if (headerBlocks != null) {
+      settingsPatch['ticket_header_blocks'] =
+          headerBlocks.map((b) => b.toMap()).toList();
+    }
+    if (footerBlocks != null) {
+      settingsPatch['ticket_footer_blocks'] =
+          footerBlocks.map((b) => b.toMap()).toList();
     }
 
     if (settingsPatch.isNotEmpty) {
