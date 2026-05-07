@@ -4651,7 +4651,6 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _addressController = TextEditingController();
-  final TextEditingController _companyController = TextEditingController();
   final TextEditingController _creditLimitController = TextEditingController();
   final TextEditingController _maxCreditController = TextEditingController();
   final TextEditingController _taxIdController = TextEditingController();
@@ -4684,7 +4683,6 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
     _phoneController.dispose();
     _emailController.dispose();
     _addressController.dispose();
-    _companyController.dispose();
     _creditLimitController.dispose();
     _maxCreditController.dispose();
     _taxIdController.dispose();
@@ -4934,7 +4932,8 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
       'last_name': lastName,
       'customer_type': _customerType,
       'document_type': _documentType,
-      'business_name': _companyController.text.trim(),
+      // business_name removido — la razón social legal ahora se guarda
+      // en `legal_name` (columna top-level), no como nota.
       'birth_date': _birthDate == null
           ? null
           : DateFormat('yyyy-MM-dd').format(_birthDate!),
@@ -5269,12 +5268,6 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
                                   ),
                                 ),
                               ],
-                            ),
-                            const SizedBox(height: 14),
-                            _buildCreateField(
-                              label: 'Razón social',
-                              hint: 'Nombre comercial o empresa',
-                              controller: _companyController,
                             ),
                             const SizedBox(height: 14),
                             Row(
