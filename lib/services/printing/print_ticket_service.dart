@@ -106,22 +106,19 @@ class PrintTicketService {
 
     gen.initialize();
 
-    // ─── HEADER: CAJERO ─────────────────────────────────────────────
     final resolvedCashier = cashierName?.trim();
-    if (resolvedCashier != null && resolvedCashier.isNotEmpty) {
-      _kitchenDashedSeparator(gen);
-      gen.textCentered('CAJERO: ${resolvedCashier.toUpperCase()}');
-      _kitchenDashedSeparator(gen);
-    }
 
-    // ─── TITULO en 2 lineas ─────────────────────────────────────────
+    // ─── TITULO en una sola linea ───────────────────────────────────
+    // "COMANDA DE COCINA" todo junto en width:1 height:2 bold.
+    // (No usamos width:2 porque "COMANDA DE COCINA" = 17ch × 2 = 34ch
+    // y el line max a 2x es 24ch — overflow.)
     final (titleMain, titleSub) = _kitchenTitleParts(areaCode);
-    gen.setTextSize(width: 2, height: 2);
+    final titleSingle = isReprint ? 'REIMPRESIÓN' : '$titleMain $titleSub';
+    gen.setTextSize(width: 1, height: 2);
     gen.setBold(true);
-    gen.textCentered(isReprint ? 'REIMPRESIÓN' : titleMain);
+    gen.textCentered(titleSingle);
     gen.setBold(false);
     gen.setTextSize();
-    gen.textCentered(titleSub);
     gen.doubleSeparator();
 
     // ─── INFO DE ORDEN en 2 columnas ────────────────────────────────
@@ -148,11 +145,16 @@ class PrintTicketService {
     }
 
     gen.text(_formatDate(order.createdAt));
+    // CAJERO baja al bloque de datos de orden (antes estaba en el top
+    // separado). Queda como linea propia abajo de la fecha.
+    if (resolvedCashier != null && resolvedCashier.isNotEmpty) {
+      gen.text('CAJERO: ${resolvedCashier.toUpperCase()}');
+    }
     gen.doubleSeparator();
 
-    // ─── BLOQUE PARA COMER ──────────────────────────────────────────
+    // ─── BLOQUE PARA COMER AQUI ─────────────────────────────────────
     if (regularItems.isNotEmpty) {
-      _renderItemsList(gen, label: 'PARA COMER', items: regularItems);
+      _renderItemsList(gen, label: 'PARA COMER AQUI', items: regularItems);
     }
 
     // ─── BLOQUE PARA LLEVAR ─────────────────────────────────────────
@@ -217,24 +219,25 @@ class PrintTicketService {
   }
 
   /// Renderiza items bajo una **banda inversa full-ancho** con el label
-  /// centrado en `width:2 height:2` (`GS B 1` blanco-sobre-negro,
-  /// `GS ! 0x11` doble ancho/alto). Items en height 2x bold,
-  /// modificadores/notas indentados a tamaño normal, separador thin entre
-  /// items con aire vertical, y `doubleSeparator` (`===`) cerrando la
-  /// sección.
+  /// centrado en `width:1 height:2` (`GS B 1` blanco-sobre-negro). Items
+  /// en height 2x bold (mismo size que el label, sin inverse — asi el
+  /// "tipo de texto" del label y los productos coincide y solo los
+  /// diferencia el fondo invertido). Modificadores/notas indentados a
+  /// tamaño normal, separador thin entre items con aire vertical, y
+  /// `doubleSeparator` (`===`) cerrando la sección.
   static void _renderItemsList(
     EscPosGenerator gen, {
     required String label,
     required List<OrderItem> items,
   }) {
-    // Banda inversa 2x2: padding a 24 chars (max al ser width:2). El
+    // Banda inversa 1x2: padding a 48 chars (line max a width:1). El
     // padding hace que el fondo negro se extienda full-ancho. Sin
     // padding solo se invertiria sobre los chars del label dando una
     // banda flaca.
     gen.setInverse(true);
-    gen.setTextSize(width: 2, height: 2);
+    gen.setTextSize(width: 1, height: 2);
     gen.setBold(true);
-    gen.text(_centerInWidth(label.toUpperCase(), 24));
+    gen.text(_centerInWidth(label.toUpperCase(), 48));
     gen.setBold(false);
     gen.setTextSize();
     gen.setInverse(false);
