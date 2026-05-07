@@ -761,24 +761,73 @@ class ReportsRepository {
 
     final transactions = await _selectInBatches(
       table: ReportsQueries.tableCashTransactions,
-      select: 'session_id, amount, type, created_at',
+      // related_order_id es necesario para excluir las ventas asociadas
+      // a órdenes anuladas (su payment.status = 'cancelled' / 'void').
+      select: 'session_id, amount, type, created_at, related_order_id',
       column: 'session_id',
       values: sessionIds,
       transform: (query) =>
           query.gte('created_at', fromIso).lt('created_at', toIso),
     );
 
+    // Bug fix: cuando se anula una orden, payments.status pasa a
+    // 'cancelled' pero la fila en cash_transactions (type='sale')
+    // queda intacta y el cierre la seguía contando como venta. Aquí
+    // resolvemos los order_ids cuyos pagos están anulados y los
+    // excluimos del cálculo (tanto del total como del byType['sale']).
+    final saleOrderIds = transactions
+        .where(
+          (tx) =>
+              (tx['type']?.toString() ?? '') == 'sale' &&
+              (tx['related_order_id']?.toString().trim().isNotEmpty ?? false),
+        )
+        .map((tx) => tx['related_order_id'].toString())
+        .toSet()
+        .toList(growable: false);
+
+    final cancelledOrderIds = <String>{};
+    if (saleOrderIds.isNotEmpty) {
+      try {
+        final cancelledRows = await _client
+            .from('payments')
+            .select('order_id')
+            .inFilter('order_id', saleOrderIds)
+            .inFilter('status', ['cancelled', 'void']);
+        for (final row in cancelledRows as List) {
+          final id = (row as Map)['order_id']?.toString();
+          if (id != null && id.isNotEmpty) cancelledOrderIds.add(id);
+        }
+      } catch (_) {
+        // Si falla la query, conservamos el behavior previo (sumar
+        // todas las ventas) — preferimos un total ligeramente
+        // inflado a un cierre vacío.
+      }
+    }
+
     double manualIn = 0;
     double manualOut = 0;
     double salesTotal = 0;
     double expensesTotal = 0;
     double withdrawalsTotal = 0;
+    double voidedSalesTotal = 0; // visibilidad: ventas excluidas por anulación
     final byType = <String, Map<String, dynamic>>{};
 
     for (final tx in transactions) {
       final amount = tx['amount'];
       final type = tx['type']?.toString() ?? 'other';
       final normalized = _toDouble(amount);
+      final relatedOrderId = tx['related_order_id']?.toString();
+      final isVoidedSale =
+          type == 'sale' &&
+          relatedOrderId != null &&
+          cancelledOrderIds.contains(relatedOrderId);
+
+      // Las ventas anuladas no se suman al cierre — se reportan aparte
+      // en `voided_sales` para que el comerciante sepa cuánto se anuló.
+      if (isVoidedSale) {
+        voidedSalesTotal += normalized;
+        continue;
+      }
 
       final bucket = byType.putIfAbsent(
         type,
@@ -950,6 +999,10 @@ class ReportsRepository {
       'differences_total': differencesTotal,
       'average_difference': averageDifference,
       'sales_total': salesTotal,
+      // Ventas excluidas del cierre por anulación (payments.status =
+      // cancelled/void). El UI puede mostrarlas como info aparte sin
+      // sumarlas al efectivo esperado.
+      'voided_sales_total': voidedSalesTotal,
       'expenses_total': expensesTotal,
       'withdrawals_total': withdrawalsTotal,
       'manual_in_total': manualIn,
