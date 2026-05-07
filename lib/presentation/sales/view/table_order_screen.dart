@@ -4647,6 +4647,7 @@ class _CreateCustomerDialog extends ConsumerStatefulWidget {
 class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
   final TextEditingController _firstNameController = TextEditingController();
   final TextEditingController _lastNameController = TextEditingController();
+  final TextEditingController _legalNameController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _addressController = TextEditingController();
@@ -4664,15 +4665,22 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
 
   // DGII lookup state — espejo del flujo del editor de clientes en
   // ajustes. El cajero escribe el RNC, click "Buscar en DGII" → si
-  // existe en el padrón, autocompleta nombre/apellido y muestra estado.
+  // existe en el padrón, autocompleta nombre/apellido/razón social y
+  // muestra estado, actividad económica y si es facturador electrónico.
+  // Los indicadores se muestran (no se guardan): re-query si necesitas
+  // data fresca.
   bool _isLookingUpDgii = false;
   String? _dgiiNote;
+  String? _dgiiEstado;
+  String? _dgiiActividad;
+  bool? _dgiiFacturador;
 
   @override
   void dispose() {
     _formScrollController.dispose();
     _firstNameController.dispose();
     _lastNameController.dispose();
+    _legalNameController.dispose();
     _phoneController.dispose();
     _emailController.dispose();
     _addressController.dispose();
@@ -4698,6 +4706,9 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
     setState(() {
       _isLookingUpDgii = true;
       _dgiiNote = null;
+      _dgiiEstado = null;
+      _dgiiActividad = null;
+      _dgiiFacturador = null;
     });
     try {
       final info = await DgiiLookupService().lookupByRnc(raw);
@@ -4706,10 +4717,10 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
         setState(() => _dgiiNote = 'RNC no encontrado en el registro de DGII.');
         return;
       }
+      // Nombre comercial (firstName/lastName): solo llenamos si está
+      // vacío — no pisamos input manual del cajero.
       final fillName = info.displayName;
       if (fillName != null && fillName.isNotEmpty) {
-        // Solo llenar si los campos están vacíos — no pisamos input
-        // manual del cajero.
         if (_firstNameController.text.trim().isEmpty &&
             _lastNameController.text.trim().isEmpty) {
           final parts = fillName.split(RegExp(r'\s+'));
@@ -4721,12 +4732,18 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
           }
         }
       }
-      final shown =
-          info.displayName ?? info.nombreRazonSocial ?? '(sin nombre)';
+      // Razón social: la sobreescribimos siempre que venga del padrón
+      // DGII. Es data oficial que cambia poco; el cajero típicamente no
+      // la modifica manual.
+      final legal = info.nombreRazonSocial;
+      if (legal != null && legal.isNotEmpty) {
+        _legalNameController.text = legal;
+      }
       setState(() {
-        _dgiiNote = info.isActivo
-            ? 'Coincide en DGII: $shown — ACTIVO.'
-            : 'En DGII como ${info.estado ?? 'inactivo'}: $shown.';
+        _dgiiNote = null;
+        _dgiiEstado = info.estado;
+        _dgiiActividad = info.actividadEconomica;
+        _dgiiFacturador = info.esFacturadorElectronico;
       });
     } on InvalidRncException catch (e) {
       if (!mounted) return;
@@ -4739,6 +4756,62 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
         setState(() => _isLookingUpDgii = false);
       }
     }
+  }
+
+  /// Badges no-persistidos del padrón DGII tras un lookup exitoso. Solo
+  /// se muestran como info — DGII puede cambiar el estado del
+  /// contribuyente, así que mantener una copia stale en DB confunde más
+  /// que ayuda. Re-query si el cajero quiere data fresca.
+  Widget _buildDgiiBadges() {
+    final estado = _dgiiEstado;
+    final actividad = _dgiiActividad;
+    final facturador = _dgiiFacturador;
+    if (estado == null && actividad == null && facturador == null) {
+      return const SizedBox.shrink();
+    }
+    final children = <Widget>[];
+    if (estado != null) {
+      final isActivo = estado.trim().toUpperCase() == 'ACTIVO';
+      children.add(_dgiiBadge(
+        label: estado,
+        color: isActivo ? const Color(0xFF22C55E) : Colors.red,
+      ));
+    }
+    if (facturador == true) {
+      children.add(_dgiiBadge(
+        label: 'Facturador Electrónico',
+        color: const Color(0xFF3B82F6),
+      ));
+    }
+    if (actividad != null) {
+      children.add(_dgiiBadge(
+        label: actividad,
+        color: _salesTextSecondary,
+      ));
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Wrap(spacing: 6, runSpacing: 6, children: children),
+    );
+  }
+
+  Widget _dgiiBadge({required String label, required Color color}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          color: color,
+        ),
+      ),
+    );
   }
 
   Future<void> _pickBirthDate() async {
@@ -4876,6 +4949,7 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
 
     return {
       'name': fullName,
+      'legal_name': _legalNameController.text.trim(),
       'phone': _phoneController.text.trim(),
       'email': _emailController.text.trim(),
       'address': _addressController.text.trim(),
@@ -5145,6 +5219,16 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
                               ),
                             ),
                           ],
+                          _buildDgiiBadges(),
+                          const SizedBox(height: 14),
+                          // Razón social — usada en e-CF / facturas
+                          // con NCF. Se autocompleta tras lookup DGII
+                          // pero el cajero puede ajustarla manual.
+                          _buildCreateField(
+                            label: 'Razón Social',
+                            hint: 'Ej. Banco Popular Dominicano S.A.',
+                            controller: _legalNameController,
+                          ),
                           if (_isAdvancedMode) ...[
                             const SizedBox(height: 14),
                             Row(
