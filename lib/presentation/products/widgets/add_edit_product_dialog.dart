@@ -9,6 +9,7 @@ import 'package:mangopos/core/theme/app_radius.dart';
 import 'package:mangopos/core/theme/app_shadows.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
 import 'package:mangopos/data/repositories/modifiers_repository.dart';
+import 'package:mangopos/presentation/settings/more%20settings/printing/areas/viewmodel/print_areas_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/state/taxes_state.dart';
 import 'package:mangopos/presentation/settings/more settings/system settings/tax/viewmodel/taxes_viewmodel.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -32,7 +33,7 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     bool hasVariants,
     bool isActive,
     String itemType,
-    String printAreaCode,
+    String? printAreaCode,
     File? imageFile,
     Uint8List? imageBytes,
     List<String> taxIds,
@@ -53,7 +54,7 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     String? barcode,
     bool hasVariants,
     String itemType,
-    String printAreaCode,
+    String? printAreaCode,
     File? imageFile,
     Uint8List? imageBytes,
     List<String> taxIds,
@@ -90,7 +91,9 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
   bool _isActive = true;
   bool _hasVariants = false;
   String _itemType = 'standard';
-  String _printAreaCode = 'kitchen_hot';
+  /// `null` = el admin no eligió area todavía. Send-to-kitchen bloquea
+  /// con error claro si esto se queda asi.
+  String? _printAreaCode;
 
   File? _pickedImageFile;
   Uint8List? _pickedImageBytes;
@@ -139,11 +142,17 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     _isActive = p?['is_active'] ?? true;
     _hasVariants = p?['has_variants'] ?? false;
     _itemType = p?['item_type']?.toString() ?? 'standard';
-    _printAreaCode = p?['print_area_code']?.toString() ?? 'kitchen_hot';
+    _printAreaCode = p?['print_area_code']?.toString();
 
     Future.microtask(() async {
       try {
         await ref.read(taxesVmProvider.notifier).load(businessId: 'auto');
+      } catch (_) {}
+      // Cargar areas configuradas del negocio para el dropdown dinámico.
+      try {
+        await ref
+            .read(printingAreasViewModelProvider.notifier)
+            .load(businessId: 'auto');
       } catch (_) {}
     });
 
@@ -564,20 +573,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         ),
         const SizedBox(height: AppSpacing.lg),
         _fieldLabel('Área de impresión'),
-        _buildDropdown<String>(
-          value: _printAreaCode,
-          hint: 'Área de impresión',
-          items: const [
-            DropdownMenuItem(value: 'kitchen_hot', child: Text('Cocina Caliente')),
-            DropdownMenuItem(value: 'kitchen_cold', child: Text('Cocina Fría')),
-            DropdownMenuItem(value: 'bar', child: Text('Bar / Bebidas')),
-            DropdownMenuItem(value: 'cashier', child: Text('Caja (no imprime comanda)')),
-          ],
-          onChanged: (value) {
-            if (value == null) return;
-            setState(() => _printAreaCode = value);
-          },
-        ),
+        _buildPrintAreaSelector(),
         const SizedBox(height: AppSpacing.lg),
         _switchRow(
           title: 'Tiene Variaciones',
@@ -840,6 +836,102 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
           vertical: maxLines != null && maxLines > 1 ? AppSpacing.md : AppSpacing.md,
         ),
       ),
+    );
+  }
+
+  /// Dropdown dinámico de áreas de impresión configuradas para el negocio.
+  ///
+  /// - Si aún se está cargando: muestra spinner.
+  /// - Si no hay áreas activas: muestra mensaje + dirige al admin a Ajustes
+  ///   → Impresoras → Áreas para crearlas (sin defaults hardcodeados).
+  /// - Si hay áreas: dropdown con `code → name` de cada area activa. El
+  ///   admin puede dejar el campo vacío y el producto queda sin enrutar
+  ///   (send-to-kitchen lo bloquea con error claro).
+  Widget _buildPrintAreaSelector() {
+    final areasState = ref.watch(printingAreasViewModelProvider);
+    final activeAreas = areasState.items
+        .where((area) => area.isActive)
+        .toList(growable: false);
+
+    if (areasState.isLoading && activeAreas.isEmpty) {
+      return Container(
+        height: 58,
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(AppRadius.button),
+          border: Border.all(color: AppColors.border),
+        ),
+        alignment: Alignment.centerLeft,
+        child: Row(
+          children: [
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: AppColors.primary,
+              ),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            Text(
+              'Cargando áreas...',
+              style: TextStyle(color: AppColors.mutedForeground, fontSize: 14),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (activeAreas.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(AppRadius.button),
+          border: Border.all(color: AppColors.border),
+          color: AppColors.accent,
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.info_outline, size: 18, color: AppColors.mutedForeground),
+            const SizedBox(width: AppSpacing.sm),
+            Expanded(
+              child: Text(
+                'No hay áreas de impresión configuradas. Ve a Ajustes → '
+                'Impresoras → Áreas para crearlas.',
+                style: TextStyle(
+                  color: AppColors.mutedForeground,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Si el código guardado en el producto no coincide con ninguna area
+    // activa (e.g. area renombrada/desactivada después), forzamos null para
+    // que el dropdown no crashee y el admin reasigne explícitamente.
+    final hasCurrentValue =
+        _printAreaCode != null &&
+        activeAreas.any((a) => a.code == _printAreaCode);
+    final dropdownValue = hasCurrentValue ? _printAreaCode : null;
+
+    return _buildDropdown<String>(
+      value: dropdownValue,
+      hint: 'Selecciona un área',
+      items: activeAreas
+          .map(
+            (area) => DropdownMenuItem<String>(
+              value: area.code,
+              child: Text(area.name),
+            ),
+          )
+          .toList(growable: false),
+      onChanged: (value) {
+        if (value == null) return;
+        setState(() => _printAreaCode = value);
+      },
     );
   }
 

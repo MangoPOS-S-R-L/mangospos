@@ -54,8 +54,10 @@ class MenuItem {
 
   final bool hasPrep;
 
-  /// Print area code: 'kitchen_hot', 'kitchen_cold', 'bar', 'cashier', etc.
-  final String printAreaCode;
+  /// Code del area de impresion (FK soft a `print_areas.code`). NULL =
+  /// admin no eligio area; send-to-kitchen bloquea con error claro hasta
+  /// que se asigne una de las areas configuradas para el negocio.
+  final String? printAreaCode;
 
   final DateTime? createdAt;
   final DateTime? updatedAt;
@@ -82,7 +84,7 @@ class MenuItem {
     this.imagePath,
     this.imageUrl,
     required this.hasPrep,
-    this.printAreaCode = 'kitchen_hot',
+    this.printAreaCode,
     this.createdAt,
     this.updatedAt,
     this.categoryName,
@@ -138,7 +140,7 @@ class MenuItem {
       imagePath: m['image_path'] as String?,
       imageUrl: m['image_url'] as String?,
       hasPrep: toBool(m['has_prep']),
-      printAreaCode: m['print_area_code'] as String? ?? 'kitchen_hot',
+      printAreaCode: m['print_area_code'] as String?,
       createdAt: toDate(m['created_at']),
       updatedAt: toDate(m['updated_at']),
       categoryName: m['category_name'] as String?,

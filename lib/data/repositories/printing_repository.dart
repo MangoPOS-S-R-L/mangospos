@@ -3,7 +3,7 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:io';
 import 'dart:async';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 
 import 'package:mangopos/core/printing/bluetooth_print_service.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
@@ -919,20 +919,91 @@ class PrintingRepository {
           return;
         }
 
-        try {
-          await printRawDirectUsb(
-            printer: printer,
-            data: data,
-            timeout: timeout,
-          );
-          return;
-        } catch (_) {
-          if (await isAgentUp()) {
+        // ─── PRE-FLIGHT ─────────────────────────────────────────────
+        // Si el último heartbeat reportó offline y la última señal es
+        // claramente vieja (>60s = más allá del threshold del SQL),
+        // fail rápido en vez de timeout-ear 10s contra un puerto muerto.
+        // Si no tenemos lastSeen confiable (printer recién agregada)
+        // permitimos el intento — el retry abajo se encarga.
+        if (printer.online == false) {
+          final ls = printer.lastSeen;
+          final age = ls == null
+              ? null
+              : DateTime.now().toUtc().difference(ls.toUtc());
+          if (age != null && age > const Duration(seconds: 60)) {
+            throw Exception(
+              'La impresora "${printer.name}" está fuera de línea según '
+              'el último heartbeat (hace ${age.inSeconds}s). Verifica el '
+              'cable USB o que el agente local esté corriendo.',
+            );
+          }
+        }
+
+        // ─── DIRECT USB CON RETRY ───────────────────────────────────
+        // USB se desconecta brevemente bajo carga / sleep / cable
+        // suelto. 3 intentos con backoff (0s, 2s, 5s) recuperan ~70%
+        // de los casos sin que el cajero tenga que reintentar manual.
+        // No reintentamos en errores de configuración (devicePath
+        // vacío) — esos no se arreglan esperando.
+        const usbBackoff = <Duration>[
+          Duration.zero,
+          Duration(seconds: 2),
+          Duration(seconds: 5),
+        ];
+        Object? lastUsbError;
+        StackTrace? lastUsbStack;
+        for (var attempt = 0; attempt < usbBackoff.length; attempt++) {
+          if (usbBackoff[attempt] > Duration.zero) {
+            await Future.delayed(usbBackoff[attempt]);
+          }
+          try {
+            await printRawDirectUsb(
+              printer: printer,
+              data: data,
+              timeout: timeout,
+            );
+            return;
+          } catch (e, st) {
+            lastUsbError = e;
+            lastUsbStack = st;
+            // Errores de configuración: no reintentar.
+            final msg = e.toString();
+            if (msg.contains('no tiene una ruta local') ||
+                msg.contains('no tiene un puerto local')) {
+              break;
+            }
+            debugPrint(
+              '[USB] intento ${attempt + 1}/${usbBackoff.length} falló para '
+              '${printer.name}: $e',
+            );
+          }
+        }
+
+        // ─── FALLBACK: AGENTE LOCAL ─────────────────────────────────
+        if (await isAgentUp()) {
+          try {
             await printRawViaAgentToPrinter(printer: printer, data: data);
             return;
+          } catch (e) {
+            debugPrint(
+              '[USB] fallback al agente también falló para '
+              '${printer.name}: $e',
+            );
           }
-          rethrow;
         }
+
+        // Nada funcionó → propagar el último error del retry directo
+        // (suele ser el más informativo: "device or resource busy", etc).
+        if (lastUsbError != null) {
+          Error.throwWithStackTrace(
+            lastUsbError,
+            lastUsbStack ?? StackTrace.current,
+          );
+        }
+        throw Exception(
+          'No se pudo imprimir en "${printer.name}" después de varios '
+          'intentos. Verifica la conexión USB.',
+        );
       case PrinterType.bluetooth:
         // PRD 5 F3: impresión BT directa via flutter_blue_plus (Mac/iOS/Android).
         // Evita depender del agente Node.js que no maneja BT.

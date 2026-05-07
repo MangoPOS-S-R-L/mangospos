@@ -35,4 +35,27 @@ class Category {
         'is_active': isActive,
         'color': color,
       };
+
+  Category copyWith({
+    String? id,
+    String? businessId,
+    String? name,
+    int? position,
+    bool? isActive,
+    Object? color = _sentinel,
+    DateTime? createdAt,
+  }) {
+    return Category(
+      id: id ?? this.id,
+      businessId: businessId ?? this.businessId,
+      name: name ?? this.name,
+      position: position ?? this.position,
+      isActive: isActive ?? this.isActive,
+      // sentinel para diferenciar "no pasar" vs "pasar null explicito".
+      color: identical(color, _sentinel) ? this.color : color as String?,
+      createdAt: createdAt ?? this.createdAt,
+    );
+  }
 }
+
+const Object _sentinel = Object();

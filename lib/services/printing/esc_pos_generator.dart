@@ -211,6 +211,13 @@ class EscPosGenerator {
     _buffer.addAll([GS, 0x42, enabled ? 1 : 0]); // GS B
   }
 
+  /// Doble impresión: cada línea se imprime dos veces con offset mínimo.
+  /// Resultado: texto más oscuro/nítido, a costa de imprimir ~2x más
+  /// lento. Universal en ESC/POS (ESC G n).
+  void setDoubleStrike(bool enabled) {
+    _buffer.addAll([ESC, 0x47, enabled ? 1 : 0]); // ESC G
+  }
+
   /// Seleccionar fuente (A = más grande, B = más densa/nítida)
   void setFont(Font font) {
     final value = font == Font.a ? 0 : 1; // ESC M n (0=A, 1=B)

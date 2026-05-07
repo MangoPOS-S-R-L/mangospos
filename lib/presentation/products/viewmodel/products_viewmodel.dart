@@ -198,7 +198,7 @@ class ProductsViewModel extends ChangeNotifier {
     bool hasVariants = false,
     bool isActive = true,
     String itemType = 'standard',
-    String printAreaCode = 'kitchen_hot',
+    String? printAreaCode,
     File? imageFile,
     Uint8List? imageBytes,
     List<String> taxIds = const [],
@@ -276,7 +276,7 @@ class ProductsViewModel extends ChangeNotifier {
     String? barcode,
     bool hasVariants = false,
     String itemType = 'standard',
-    String printAreaCode = 'kitchen_hot',
+    String? printAreaCode,
     File? imageFile,
     Uint8List? imageBytes,
     List<String> taxIds = const [],
@@ -561,7 +561,8 @@ class ProductsViewModel extends ChangeNotifier {
               taxMode: 'exclusive',
               isActive: true,
               itemType: 'standard',
-              printAreaCode: 'kitchen_hot',
+              // Bulk-import desde Excel: no asignamos area por default — el
+              // admin debe editar cada producto y elegir un area configurada.
               hasVariants: false,
               taxIds: [],
             );
