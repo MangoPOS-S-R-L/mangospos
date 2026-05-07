@@ -838,11 +838,11 @@ class _PaymentTableRow extends ConsumerWidget {
         // Branding desde BusinessProfile.
         logoBytes: profileForPrint.logoEscPosBytes,
         slogan: profileForPrint.profile?.slogan,
-        showSlogan: profileForPrint.profile?.showSloganOnInvoice ?? true,
         branchName: profileForPrint.profile?.branchName,
-        showBranchName:
-            profileForPrint.profile?.showBranchNameOnInvoice ?? true,
+        businessEmail: profileForPrint.profile?.email,
         footerMessage: profileForPrint.profile?.ticketFooterMessage,
+        headerBlocks: profileForPrint.profile?.effectiveHeaderBlocks,
+        footerBlocks: profileForPrint.profile?.effectiveFooterBlocks,
         preferStoredItemTotals: true,
         qrBytes: ecfQrBytes,
         ecfStatusMessage: ecfStatusMsg,

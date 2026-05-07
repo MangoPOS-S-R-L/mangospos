@@ -1,3 +1,4 @@
+import '../../data/models/business_profile.dart';
 import '../../data/models/printing_models.dart';
 import '../../data/models/sales_models.dart';
 import '../../data/models/payment_models.dart';
@@ -200,6 +201,14 @@ class PrintTicketService {
     String title = 'PRECUENTA',
     String receiptItemDisplayMode = 'grouped',
     List<({String label, double amount})> taxBreakdown = const [],
+    /// Branding compartido con la factura (mismas listas de bloques).
+    List<int>? logoBytes,
+    String? slogan,
+    String? branchName,
+    String? businessEmail,
+    String? footerMessage,
+    List<TicketBlock>? headerBlocks,
+    List<TicketBlock>? footerBlocks,
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
     final consolidatedItems = _buildPrintableItems(
@@ -211,29 +220,21 @@ class PrintTicketService {
     gen.lineFeed(2);
 
     // ════════════════════════════════════════════
-    // HEADER - Nombre del negocio
+    // HEADER (mismo orden/visibilidad que la factura)
     // ════════════════════════════════════════════
-    if (businessName != null && businessName.isNotEmpty) {
-      gen.setBold(true);
-      gen.textCentered(businessName.toUpperCase());
-      gen.setBold(false);
-    }
-    if (legalName != null &&
-        legalName.isNotEmpty &&
-        legalName != businessName) {
-      gen.textCentered(legalName);
-    }
-
-    // Info de contacto centrada
-    if (businessRnc != null && businessRnc.isNotEmpty) {
-      gen.textCentered('RNC: $businessRnc');
-    }
-    if (businessAddress != null && businessAddress.isNotEmpty) {
-      gen.textCentered(businessAddress);
-    }
-    if (businessPhone != null && businessPhone.isNotEmpty) {
-      gen.textCentered('Tel: $businessPhone');
-    }
+    _renderHeaderBlocks(
+      gen,
+      blocks: headerBlocks ?? TicketBlocks.defaultHeader,
+      logoBytes: logoBytes,
+      businessName: businessName,
+      slogan: slogan,
+      legalName: legalName,
+      branchName: branchName,
+      address: businessAddress,
+      phone: businessPhone,
+      email: businessEmail,
+      rnc: businessRnc,
+    );
 
     gen.lineFeed();
     _thinSeparator(gen);
@@ -423,14 +424,19 @@ class PrintTicketService {
     gen.setBold(false);
 
     // ════════════════════════════════════════════
-    // FOOTER
+    // FOOTER (mismas listas que la factura)
     // ════════════════════════════════════════════
     gen.lineFeed();
-    gen.textCentered('GRACIAS POR SU PREFERENCIA');
+    _renderFooterBlocks(
+      gen,
+      blocks: footerBlocks ?? TicketBlocks.defaultFooter,
+      footerMessage: footerMessage,
+    );
     gen.lineFeed();
+    // Aviso especifico de pre-cuenta — fijo, no parte de los bloques
+    // configurables (es disclaimer, no branding).
     gen.textCentered('Por favor verifique los datos');
     gen.textCentered('antes de proceder al pago');
-    gen.lineFeed();
 
     gen.lineFeed(4);
     gen.cut();
@@ -486,58 +492,40 @@ class PrintTicketService {
     /// si carga o no el logo segun `BusinessProfile.printLogoOnInvoice`
     /// y `BusinessProfile.logoUrl`.
     List<int>? logoBytes,
-    /// Eslogan del negocio. Se imprime debajo del nombre comercial si
-    /// `showSlogan=true`. Caller decide segun
-    /// `BusinessProfile.showSloganOnInvoice`.
+    /// Eslogan del negocio. Se imprime via el bloque `slogan` del header
+    /// (orden controlado por [headerBlocks]).
     String? slogan,
-    bool showSlogan = true,
-    /// Nombre de la sucursal. Se imprime "Sucursal: Xxx" debajo del header
-    /// solo si `showBranchName=true` y `branchName` no es null/vacio.
-    /// Caller decide segun `BusinessProfile.showBranchNameOnInvoice`.
+    /// Nombre de la sucursal. Se imprime via el bloque `branch_name`.
     String? branchName,
-    bool showBranchName = true,
-    /// Mensaje opcional al pie del ticket (gracias por su visita, etc).
-    /// Centrado. Caller pasa `BusinessProfile.ticketFooterMessage`.
+    /// Email del negocio. Bloque `email`, off por default.
+    String? businessEmail,
+    /// Mensaje opcional al pie del ticket. Se imprime via el bloque
+    /// `footer_message` del footer.
     String? footerMessage,
+    /// Lista ordenada + on/off de los bloques del header. Si null usa
+    /// [TicketBlocks.defaultHeader] (orden canonico legacy).
+    List<TicketBlock>? headerBlocks,
+    /// Idem para el footer. Si null usa [TicketBlocks.defaultFooter].
+    List<TicketBlock>? footerBlocks,
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
 
     gen.initialize();
     gen.lineFeed(2);
 
-    // Logo (opcional). Si viene pre-generado lo escupimos arriba del
-    // todo, antes del nombre del negocio.
-    if (logoBytes != null && logoBytes.isNotEmpty) {
-      gen.appendRaw(logoBytes);
-      gen.lineFeed();
-    }
-
-    // Header
-    if (businessName != null && businessName.isNotEmpty) {
-      gen.setBold(true);
-      gen.textCentered(businessName.toUpperCase());
-      gen.setBold(false);
-    }
-    if (showSlogan && slogan != null && slogan.isNotEmpty) {
-      gen.textCentered(slogan);
-    }
-    if (legalName != null &&
-        legalName.isNotEmpty &&
-        legalName != businessName) {
-      gen.textCentered(legalName);
-    }
-    if (showBranchName && branchName != null && branchName.isNotEmpty) {
-      gen.textCentered('Sucursal: $branchName');
-    }
-    if (businessAddress != null && businessAddress.isNotEmpty) {
-      gen.textCentered(businessAddress);
-    }
-    if (businessPhone != null && businessPhone.isNotEmpty) {
-      gen.textCentered('Tel: $businessPhone');
-    }
-    if (businessRnc != null && businessRnc.isNotEmpty) {
-      gen.textCentered('RNC: $businessRnc');
-    }
+    _renderHeaderBlocks(
+      gen,
+      blocks: headerBlocks ?? TicketBlocks.defaultHeader,
+      logoBytes: logoBytes,
+      businessName: businessName,
+      slogan: slogan,
+      legalName: legalName,
+      branchName: branchName,
+      address: businessAddress,
+      phone: businessPhone,
+      email: businessEmail,
+      rnc: businessRnc,
+    );
 
     gen.lineFeed();
     _thinSeparator(gen);
@@ -827,15 +815,14 @@ class PrintTicketService {
       gen.setAlignment(Alignment.left);
     }
 
-    // Footer
+    // Footer: bloques en orden segun footerBlocks (o defaults canonicos
+    // si null). El renderer skipea bloques sin contenido.
     gen.lineFeed(2);
-    // Si el negocio configuro un mensaje al pie en BusinessProfile lo
-    // usamos; si no, fallback al texto estandar para mantener el behavior
-    // anterior.
-    final footerText = (footerMessage != null && footerMessage.trim().isNotEmpty)
-        ? footerMessage.trim()
-        : 'GRACIAS POR SU PREFERENCIA';
-    gen.textCentered(footerText);
+    _renderFooterBlocks(
+      gen,
+      blocks: footerBlocks ?? TicketBlocks.defaultFooter,
+      footerMessage: footerMessage,
+    );
     gen.lineFeed(4);
     gen.cut();
 
@@ -1372,6 +1359,118 @@ class PrintTicketService {
   /// Separador grueso (líneas dobles)
   static void _thickSeparator(EscPosGenerator gen) {
     gen.textCentered('=' * 48);
+  }
+
+  /// Itera la lista [blocks] en orden y renderiza solo los enabled cuyo
+  /// valor asociado no sea null/vacio. Usado por factura y pre-cuenta
+  /// (mismos bloques disponibles, mismo orden).
+  ///
+  /// Skip silencioso cuando un bloque enabled no tiene contenido (e.g.
+  /// `email` enabled pero el negocio no configuro email): NO imprime
+  /// nada en su lugar para no dejar lineas en blanco.
+  static void _renderHeaderBlocks(
+    EscPosGenerator gen, {
+    required List<TicketBlock> blocks,
+    List<int>? logoBytes,
+    String? businessName,
+    String? slogan,
+    String? legalName,
+    String? branchName,
+    String? address,
+    String? phone,
+    String? email,
+    String? rnc,
+  }) {
+    for (final block in blocks) {
+      if (!block.enabled) continue;
+      switch (block.key) {
+        case 'logo':
+          if (logoBytes != null && logoBytes.isNotEmpty) {
+            gen.appendRaw(logoBytes);
+            gen.lineFeed();
+          }
+          break;
+        case 'business_name':
+          if (businessName != null && businessName.isNotEmpty) {
+            gen.setBold(true);
+            gen.textCentered(businessName.toUpperCase());
+            gen.setBold(false);
+          }
+          break;
+        case 'slogan':
+          if (slogan != null && slogan.isNotEmpty) {
+            gen.textCentered(slogan);
+          }
+          break;
+        case 'legal_name':
+          if (legalName != null &&
+              legalName.isNotEmpty &&
+              legalName != businessName) {
+            gen.textCentered(legalName);
+          }
+          break;
+        case 'branch_name':
+          if (branchName != null && branchName.isNotEmpty) {
+            gen.textCentered('Sucursal: $branchName');
+          }
+          break;
+        case 'address':
+          if (address != null && address.isNotEmpty) {
+            gen.textCentered(address);
+          }
+          break;
+        case 'phone':
+          if (phone != null && phone.isNotEmpty) {
+            gen.textCentered('Tel: $phone');
+          }
+          break;
+        case 'email':
+          if (email != null && email.isNotEmpty) {
+            gen.textCentered(email);
+          }
+          break;
+        case 'rnc':
+          if (rnc != null && rnc.isNotEmpty) {
+            gen.textCentered('RNC: $rnc');
+          }
+          break;
+        // Keys desconocidas: skip. Defensivo para que clientes con
+        // listas de bloques de versiones futuras no rompan el ticket.
+        default:
+          break;
+      }
+    }
+  }
+
+  /// Idem para el footer. Renderiza linefeed entre bloques visibles para
+  /// que queden separados visualmente.
+  static void _renderFooterBlocks(
+    EscPosGenerator gen, {
+    required List<TicketBlock> blocks,
+    String? footerMessage,
+    String thankYouText = 'GRACIAS POR SU PREFERENCIA',
+  }) {
+    var first = true;
+    for (final block in blocks) {
+      if (!block.enabled) continue;
+      String? text;
+      switch (block.key) {
+        case 'footer_message':
+          text = (footerMessage != null && footerMessage.trim().isNotEmpty)
+              ? footerMessage.trim()
+              : null;
+          break;
+        case 'thank_you':
+          text = thankYouText;
+          break;
+        default:
+          text = null;
+      }
+      if (text == null) continue;
+      if (!first) gen.lineFeed();
+      gen.textCentered(text);
+      first = false;
+    }
   }
 }
 
