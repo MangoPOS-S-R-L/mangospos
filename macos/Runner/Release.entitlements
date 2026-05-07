@@ -10,5 +10,9 @@
 	<true/>
 	<key>com.apple.security.device.bluetooth</key>
 	<true/>
+	<!-- Required for file_picker to open files chosen by the user
+	     (logo upload in BusinessProfileScreen). -->
+	<key>com.apple.security.files.user-selected.read-only</key>
+	<true/>
 </dict>
 </plist>
