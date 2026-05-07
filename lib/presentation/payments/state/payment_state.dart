@@ -189,9 +189,20 @@ class PaymentState extends Equatable {
   bool get isCashPayment => selectedMethod?.isCash ?? false;
   bool get requiresReference => selectedMethod?.requiresReference ?? false;
 
-  /// `true` si el método activo es transferencia (`code == 'transfer'`).
-  /// El modal usa este flag para mostrar el selector de cuenta bancaria.
-  bool get isTransferPayment => selectedMethod?.code == 'transfer';
+  /// `true` si el método activo es transferencia. Match defensivo:
+  /// algunos businesses tienen el code en español ('transferencia') o
+  /// con mayúsculas, y otros llegan con code vacío y solo el name. Se
+  /// chequea code exacto Y se cae al name que contenga "transfer" si
+  /// el code no matchea — así el selector funciona aunque el seed
+  /// del payment_method tenga variaciones.
+  bool get isTransferPayment {
+    final m = selectedMethod;
+    if (m == null) return false;
+    final code = m.code.toLowerCase().trim();
+    if (code == 'transfer' || code == 'transferencia') return true;
+    final name = m.name.toLowerCase();
+    return name.contains('transfer');
+  }
 
   @override
   List<Object?> get props => [

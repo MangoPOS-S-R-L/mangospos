@@ -452,7 +452,11 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
       // del RPC fiscal (zona sensible) — el round-trip extra vale la
       // pena para no tocar el motor de cobro.
       final selectedBank = state.selectedBankAccount;
-      if (state.isTransferPayment && selectedBank != null) {
+      // Nota: usamos isTransferPayment (defensivo: matchea code o name)
+      // pero también permitimos guardar la cuenta si el cajero la
+      // seleccionó aunque la heurística de método transfer no haya
+      // matcheado — la presencia de selectedBank es suficiente intent.
+      if (selectedBank != null) {
         try {
           await Supabase.instance.client
               .from('payments')
