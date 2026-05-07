@@ -1,43 +1,85 @@
 // lib/services/dgii_lookup_service.dart
 //
-// Lookup de contribuyentes contra el registro RNC de la DGII (RD) usando
-// la API pública del gobierno dominicano: api.digital.gob.do.
+// Lookup de contribuyentes contra el registro RNC de la DGII (RD).
 //
-// - Endpoint: GET /v3/contribuyentes/{rnc}
-// - Sin auth, sin costo, sin rate limit documentado para uso normal.
-// - Retorna nombre / razón social, estado, actividad económica.
+// Backend: rnc.megaplus.com.do — proxy público que cachea el padrón
+// oficial de la DGII y expone 3 endpoints REST sin auth:
 //
-// El servicio se usa desde el form de cliente para autocompletar al
-// crear/editar: el usuario escribe el RNC, click "Buscar en DGII", y
-// si existe, los campos `name` (y `address` si vienen) se llenan solos.
+//   GET /api/consulta?rnc={rnc}                — busca por RNC/cédula
+//   GET /api/consulta/nombre?buscar={exact}    — match exacto por nombre
+//   GET /api/consulta/nombres?buscar={partial} — búsqueda parcial paginada
+//
+// Ejemplo respuesta exitosa (single):
+//   {"error":false,"codigo_http":200,"mensaje":"Consulta Exitosa",
+//    "cedula_rnc":"101-01063-2",
+//    "nombre_razon_social":"BANCO POPULAR DOMINICANO S A BANCO MULTIPLE",
+//    "nombre_comercial":"BANCO POPULAR DOMINICANO",
+//    "estado":"ACTIVO","actividad_economica":"BANCOS MULTIPLES",
+//    "regimen_de_pagos":"NORMAL","facturador_electronico":"SI",...}
+//
+// Ejemplo 404:
+//   {"codigo_http":404,"error":true,"mensaje":"el rnc/cedula consultado
+//    no se encuentra inscrito como contribuyente.","rnc_consultado":"..."}
 
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:http/http.dart' as http;
 
-/// Información mínima de un contribuyente devuelta por DGII.
+/// Datos devueltos por el padrón DGII para un contribuyente.
 class DgiiCompanyInfo {
+  /// RNC formateado (`101-01063-2`).
   final String rnc;
-  final String? nombre;
+
+  /// Razón social registrada.
+  final String? nombreRazonSocial;
+
+  /// Nombre comercial / marca (puede estar vacío).
+  final String? nombreComercial;
+
+  /// `ACTIVO`, `DADO DE BAJA`, `SUSPENDIDO`, etc.
   final String? estado;
+
+  /// Actividad económica primaria.
   final String? actividadEconomica;
+
+  /// Régimen de pagos (`NORMAL`, `PST`, etc.).
+  final String? regimenPagos;
+
+  /// Categoría jurídica.
   final String? categoria;
+
+  /// `SI` / `NO` — si el contribuyente está autorizado a emitir e-CF.
+  final String? facturadorElectronico;
 
   const DgiiCompanyInfo({
     required this.rnc,
-    this.nombre,
+    this.nombreRazonSocial,
+    this.nombreComercial,
     this.estado,
     this.actividadEconomica,
+    this.regimenPagos,
     this.categoria,
+    this.facturadorElectronico,
   });
 
-  /// `true` si el RNC está reportado como activo en DGII. Los inactivos
-  /// igual se devuelven (para que el usuario sepa) pero la UI debería
-  /// avisar antes de usarlos en una factura electrónica.
+  /// `true` si el contribuyente está reportado como activo. Los demás
+  /// estados (DADO DE BAJA, SUSPENDIDO) deberían avisar al usuario antes
+  /// de emitir un e-CF en su nombre.
   bool get isActivo {
-    final s = estado?.trim().toUpperCase();
-    return s == 'ACTIVO';
+    return (estado ?? '').trim().toUpperCase() == 'ACTIVO';
+  }
+
+  /// `true` si DGII tiene a este contribuyente autorizado para e-CF.
+  bool get esFacturadorElectronico {
+    return (facturadorElectronico ?? '').trim().toUpperCase() == 'SI';
+  }
+
+  /// Mejor nombre disponible: comercial si existe, si no la razón social.
+  String? get displayName {
+    final c = nombreComercial?.trim();
+    if (c != null && c.isNotEmpty) return c;
+    return nombreRazonSocial?.trim();
   }
 
   factory DgiiCompanyInfo.fromMap(Map<String, dynamic> map) {
@@ -49,14 +91,14 @@ class DgiiCompanyInfo {
     }
 
     return DgiiCompanyInfo(
-      rnc: (map['rnc'] ?? '').toString().trim(),
-      // La API ha tenido variaciones: 'nombre' / 'razonSocial' / 'name'.
-      // Cubrimos las 3 para que cambios menores no rompan la integración.
-      nombre: str('nombre') ?? str('razonSocial') ?? str('name'),
-      estado: str('estado') ?? str('status'),
-      actividadEconomica:
-          str('actividadEconomica') ?? str('actividad_economica'),
-      categoria: str('categoria') ?? str('category'),
+      rnc: (map['cedula_rnc'] ?? map['rnc'] ?? '').toString().trim(),
+      nombreRazonSocial: str('nombre_razon_social'),
+      nombreComercial: str('nombre_comercial'),
+      estado: str('estado'),
+      actividadEconomica: str('actividad_economica'),
+      regimenPagos: str('regimen_de_pagos'),
+      categoria: str('categoria'),
+      facturadorElectronico: str('facturador_electronico'),
     );
   }
 }
@@ -71,17 +113,18 @@ class InvalidRncException implements Exception {
 }
 
 class DgiiLookupService {
-  static const String _baseUrl =
-      'https://api.digital.gob.do/v3/contribuyentes';
+  static const String _baseUrl = 'https://rnc.megaplus.com.do/api';
   static const Duration _timeout = Duration(seconds: 10);
 
   final http.Client _client;
   DgiiLookupService({http.Client? client})
       : _client = client ?? http.Client();
 
-  /// Busca un contribuyente por RNC. Devuelve `null` si la DGII no lo
-  /// tiene registrado (HTTP 404). Lanza:
-  /// - [InvalidRncException] si el formato del RNC es inválido.
+  /// Busca un contribuyente por RNC o cédula. Devuelve `null` si DGII
+  /// no lo tiene registrado (HTTP 404).
+  /// Lanza:
+  /// - [InvalidRncException] si el formato es inválido (no son 9 ni 11
+  ///   dígitos numéricos tras limpiar separadores).
   /// - [Exception] si DGII responde con error o la red falla.
   Future<DgiiCompanyInfo?> lookupByRnc(String rnc) async {
     final cleaned = _normalize(rnc);
@@ -91,18 +134,72 @@ class DgiiLookupService {
       );
     }
 
-    final uri = Uri.parse('$_baseUrl/$cleaned');
+    final uri = Uri.parse('$_baseUrl/consulta?rnc=$cleaned');
     final http.Response response;
     try {
       response = await _client.get(uri).timeout(_timeout);
     } catch (e) {
-      debugPrint('DgiiLookupService: red error: $e');
+      debugPrint('DgiiLookupService.lookupByRnc network: $e');
       throw Exception(
         'No se pudo conectar a DGII. Revisa tu conexión e intenta de nuevo.',
       );
     }
 
+    // El backend distingue 200 (encontrado) y 404 (no inscrito) con un
+    // body JSON estructurado. Otros 4xx/5xx → error real.
     if (response.statusCode == 404) return null;
+    if (response.statusCode != 200) {
+      throw Exception(
+        'DGII devolvió un error (${response.statusCode}). Intenta luego.',
+      );
+    }
+
+    final Map<String, dynamic> decoded;
+    try {
+      decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    } catch (e) {
+      debugPrint('DgiiLookupService.lookupByRnc parse: $e');
+      throw Exception('La respuesta de DGII no se pudo procesar.');
+    }
+
+    if (decoded['error'] == true) {
+      // Algunos endpoints devuelven 200 con error=true (e.g. timeouts
+      // del backend). Tratarlo como "no encontrado" si el status
+      // sugiere 404, si no como error explícito.
+      final code = decoded['codigo_http'];
+      if (code == 404) return null;
+      throw Exception(
+        decoded['mensaje']?.toString() ?? 'Error desconocido de DGII.',
+      );
+    }
+
+    return DgiiCompanyInfo.fromMap(decoded);
+  }
+
+  /// Búsqueda parcial por nombre o razón social. Devuelve la lista de
+  /// matches (puede estar vacía). Lanza [Exception] si la red falla.
+  ///
+  /// Útil cuando el usuario no tiene el RNC pero sí parte del nombre del
+  /// contribuyente. La API pagina los resultados; tomamos solo la
+  /// primera página (suficiente para el caso UI típico).
+  Future<List<DgiiCompanyInfo>> searchByName(String query) async {
+    final q = query.trim();
+    if (q.length < 3) return const <DgiiCompanyInfo>[];
+
+    final uri = Uri.parse(
+      '$_baseUrl/consulta/nombres?buscar=${Uri.encodeQueryComponent(q)}',
+    );
+    final http.Response response;
+    try {
+      response = await _client.get(uri).timeout(_timeout);
+    } catch (e) {
+      debugPrint('DgiiLookupService.searchByName network: $e');
+      throw Exception(
+        'No se pudo conectar a DGII. Revisa tu conexión e intenta de nuevo.',
+      );
+    }
+
+    if (response.statusCode == 404) return const <DgiiCompanyInfo>[];
     if (response.statusCode != 200) {
       throw Exception(
         'DGII devolvió un error (${response.statusCode}). Intenta luego.',
@@ -111,18 +208,17 @@ class DgiiLookupService {
 
     try {
       final decoded = jsonDecode(response.body);
-      if (decoded is Map<String, dynamic>) {
-        final info = DgiiCompanyInfo.fromMap(decoded);
-        // Algunas respuestas vacías llegan como objeto sin nombre/rnc.
-        if ((info.rnc.isEmpty) && (info.nombre == null)) return null;
-        return info;
-      }
-      // La API a veces devuelve [] cuando no hay match — tratarlo como 404.
-      if (decoded is List && decoded.isEmpty) return null;
-      return null;
+      if (decoded is! Map<String, dynamic>) return const [];
+      if (decoded['error'] == true) return const [];
+      final results = decoded['resultados'];
+      if (results is! List) return const [];
+      return results
+          .whereType<Map<String, dynamic>>()
+          .map(DgiiCompanyInfo.fromMap)
+          .toList(growable: false);
     } catch (e) {
-      debugPrint('DgiiLookupService: parse error: $e');
-      throw Exception('La respuesta de DGII no se pudo procesar.');
+      debugPrint('DgiiLookupService.searchByName parse: $e');
+      return const [];
     }
   }
 

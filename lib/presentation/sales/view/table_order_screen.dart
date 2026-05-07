@@ -22,6 +22,7 @@ import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
 import 'package:mangopos/presentation/split_bill/widgets/split_bill_modal.dart';
 import 'package:mangopos/presentation/customers/viewmodel/customers_viewmodel.dart';
+import 'package:mangopos/services/dgii_lookup_service.dart';
 
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
@@ -4661,6 +4662,12 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
   String _documentType = 'Cédula';
   DateTime? _birthDate;
 
+  // DGII lookup state — espejo del flujo del editor de clientes en
+  // ajustes. El cajero escribe el RNC, click "Buscar en DGII" → si
+  // existe en el padrón, autocompleta nombre/apellido y muestra estado.
+  bool _isLookingUpDgii = false;
+  String? _dgiiNote;
+
   @override
   void dispose() {
     _formScrollController.dispose();
@@ -4674,6 +4681,64 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
     _maxCreditController.dispose();
     _taxIdController.dispose();
     super.dispose();
+  }
+
+  /// Consulta el RNC contra el padrón DGII (rnc.megaplus.com.do). Si
+  /// existe, intenta llenar nombre/apellido (parsea la primera palabra
+  /// como nombre y el resto como apellido — heurística simple, cajero
+  /// puede ajustar manual). Para razones sociales (empresas), si el
+  /// nombre vino en una sola pieza, lo deja todo en _firstNameController
+  /// y _lastNameController vacío.
+  Future<void> _lookupDgii() async {
+    final raw = _taxIdController.text.trim();
+    if (raw.isEmpty) {
+      setState(() => _dgiiNote = 'Escribe el RNC primero.');
+      return;
+    }
+    setState(() {
+      _isLookingUpDgii = true;
+      _dgiiNote = null;
+    });
+    try {
+      final info = await DgiiLookupService().lookupByRnc(raw);
+      if (!mounted) return;
+      if (info == null) {
+        setState(() => _dgiiNote = 'RNC no encontrado en el registro de DGII.');
+        return;
+      }
+      final fillName = info.displayName;
+      if (fillName != null && fillName.isNotEmpty) {
+        // Solo llenar si los campos están vacíos — no pisamos input
+        // manual del cajero.
+        if (_firstNameController.text.trim().isEmpty &&
+            _lastNameController.text.trim().isEmpty) {
+          final parts = fillName.split(RegExp(r'\s+'));
+          if (parts.length == 1) {
+            _firstNameController.text = parts.first;
+          } else {
+            _firstNameController.text = parts.first;
+            _lastNameController.text = parts.sublist(1).join(' ');
+          }
+        }
+      }
+      final shown =
+          info.displayName ?? info.nombreRazonSocial ?? '(sin nombre)';
+      setState(() {
+        _dgiiNote = info.isActivo
+            ? 'Coincide en DGII: $shown — ACTIVO.'
+            : 'En DGII como ${info.estado ?? 'inactivo'}: $shown.';
+      });
+    } on InvalidRncException catch (e) {
+      if (!mounted) return;
+      setState(() => _dgiiNote = e.toString());
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _dgiiNote = 'Error consultando DGII: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isLookingUpDgii = false);
+      }
+    }
   }
 
   Future<void> _pickBirthDate() async {
@@ -5025,12 +5090,61 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
                             keyboardType: TextInputType.phone,
                           ),
                           const SizedBox(height: 14),
-                          _buildCreateField(
-                            label: 'RNC / Cédula',
-                            hint: 'Ej. 131234567',
-                            controller: _taxIdController,
-                            keyboardType: TextInputType.number,
+                          // RNC + botón "Buscar en DGII". Mismo flujo que
+                          // el editor de clientes en ajustes: el cajero
+                          // escribe el RNC, click → autocompleta nombre
+                          // y muestra estado del contribuyente.
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Expanded(
+                                child: _buildCreateField(
+                                  label: 'RNC / Cédula',
+                                  hint: 'Ej. 131234567',
+                                  controller: _taxIdController,
+                                  keyboardType: TextInputType.number,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              SizedBox(
+                                height: 48,
+                                child: ElevatedButton.icon(
+                                  onPressed: _isLookingUpDgii
+                                      ? null
+                                      : _lookupDgii,
+                                  icon: _isLookingUpDgii
+                                      ? const SizedBox(
+                                          width: 14,
+                                          height: 14,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: Colors.white,
+                                          ),
+                                        )
+                                      : const Icon(Icons.search, size: 16),
+                                  label: const Text('Buscar en DGII'),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: _salesTotalColor,
+                                    foregroundColor: Colors.white,
+                                    elevation: 0,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
+                          if (_dgiiNote != null) ...[
+                            const SizedBox(height: 6),
+                            Text(
+                              _dgiiNote!,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: _salesTextSecondary,
+                              ),
+                            ),
+                          ],
                           if (_isAdvancedMode) ...[
                             const SizedBox(height: 14),
                             Row(

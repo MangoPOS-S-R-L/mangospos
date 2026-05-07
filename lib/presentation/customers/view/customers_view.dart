@@ -545,18 +545,22 @@ class _CustomerFormDialogState extends ConsumerState<_CustomerFormDialog> {
         });
         return;
       }
-      // Autocompletar nombre solo si el campo está vacío o el usuario
-      // no ha tocado nada (modo crear). En edit no sobreescribimos sin
-      // permiso del usuario.
-      if (info.nombre != null && info.nombre!.isNotEmpty) {
+      // Autocompletar nombre solo si el campo está vacío o estamos
+      // creando. En edit no sobreescribimos sin permiso del usuario
+      // (puede tener un alias custom). Preferimos el nombre comercial
+      // sobre la razón social para mostrar al cajero.
+      final fillName = info.displayName;
+      if (fillName != null && fillName.isNotEmpty) {
         if (!_isEdit || _nameController.text.trim().isEmpty) {
-          _nameController.text = info.nombre!;
+          _nameController.text = fillName;
         }
       }
+      final shown =
+          info.displayName ?? info.nombreRazonSocial ?? '(sin nombre)';
       setState(() {
         _dgiiNote = info.isActivo
-            ? 'Coincide en DGII: ${info.nombre ?? '(sin nombre)'} — ACTIVO.'
-            : 'En DGII como ${info.estado ?? 'inactivo'}: ${info.nombre ?? '(sin nombre)'}.';
+            ? 'Coincide en DGII: $shown — ACTIVO.'
+            : 'En DGII como ${info.estado ?? 'inactivo'}: $shown.';
       });
     } on InvalidRncException catch (e) {
       if (!mounted) return;
