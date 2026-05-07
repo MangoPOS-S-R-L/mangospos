@@ -184,7 +184,9 @@ class PrintTicketService {
           : hms,
     );
 
-    gen.lineFeed(3);
+    // 1 linefeed antes del cut: suficiente margen para que el cutter
+    // no toque el footer pero sin desperdiciar papel.
+    gen.lineFeed();
     gen.cut();
 
     return PrintTicket(
@@ -194,30 +196,33 @@ class PrintTicketService {
   }
 
   /// Separador entre items. Linea solida `-----` en lugar de dashed
-  /// disperso `- - - -`: se imprime mas definida en termicas economicas
-  /// donde la dashed sale debil/punteada. Linefeed al rededor para mas
-  /// "respiracion" y mejor legibilidad en cocina.
+  /// disperso `- - - -` para que se imprima nitida en termicas
+  /// economicas. Sin linefeed extra — el wrapping de los items ya
+  /// deja el espaciado correcto.
   static void _kitchenDashedSeparator(EscPosGenerator gen) {
-    gen.lineFeed();
     gen.text('-' * 48);
-    gen.lineFeed();
   }
 
   /// Linea con label centrado en video inverso (rectangulo negro con
-  /// texto blanco). Algunos firmwares ESC/POS no soportan GS B 1 — en
-  /// ese caso se imprime el texto normal centrado, igual visible.
+  /// texto blanco) en font 2x2 — mismo tamano que el titulo "COMANDA"
+  /// para que el chef lo vea inmediatamente. Algunos firmwares ESC/POS
+  /// no soportan GS B 1; en ese caso se imprime texto normal grande,
+  /// igual visible.
   static void _kitchenInverseLabel(EscPosGenerator gen, String label) {
-    const totalWidth = 48;
+    // En font 2x ancho, el ancho efectivo del papel es ~24 chars (no 48).
+    const totalWidth = 24;
     final upper = label.toUpperCase();
     final padTotal = totalWidth - upper.length;
     final left = padTotal ~/ 2;
     final right = padTotal - left;
     final padded = ' ' * left + upper + ' ' * right;
+    gen.setTextSize(width: 2, height: 2);
     gen.setInverse(true);
     gen.setBold(true);
     gen.text(padded);
     gen.setBold(false);
     gen.setInverse(false);
+    gen.setTextSize();
   }
 
   /// Mapea un areaCode a su titulo de comanda. Casos especiales que la
