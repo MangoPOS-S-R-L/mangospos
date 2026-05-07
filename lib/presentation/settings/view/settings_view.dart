@@ -137,6 +137,19 @@ class SettingsView extends ConsumerWidget {
   List<Widget> _sections(BuildContext context, WidgetRef ref) {
     return [
       _SettingsSection(
+        title: 'Negocio',
+        items: const [
+          _SettingsOption(
+            title: 'Datos del Negocio',
+            subtitle:
+                'Nombre, RNC, dirección, logo, eslogan y personalización del ticket',
+            icon: Icons.store_rounded,
+            color: Color(0xFFFFE6D5),
+            route: AppRoutes.settingsBusinessProfile,
+          ),
+        ],
+      ),
+      _SettingsSection(
         title: 'Punto de Venta',
         items: [
           _SettingsOption(
