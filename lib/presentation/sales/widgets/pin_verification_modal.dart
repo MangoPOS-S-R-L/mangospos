@@ -172,25 +172,34 @@ class _PinVerificationDialogState extends State<_PinVerificationDialog> {
           ),
           child: Stack(
             children: [
-              // TextField oculto para capturar teclado físico
+              // TextField oculto para capturar teclado físico.
+              // Va envuelto en SizedBox(100x40) porque el Positioned
+              // sin left/right/width le pasa width=infinity al
+              // TextField y crashea con 'InputDecorator cannot have
+              // an unbounded width'. Aparecía cuando este modal se
+              // abre encima de otro dialog (e.g. transferir mesa).
               Positioned(
                 top: -1000,
                 child: Opacity(
                   opacity: 0,
-                  child: TextField(
-                    controller: _controller,
-                    focusNode: _focusNode,
-                    keyboardType: TextInputType.none, // Evita que aparezca el teclado virtual en Windows/Android
-                    maxLength: 4,
-                    autofocus: true,
-                    onChanged: (val) {
-                      setState(() {
-                        _localError = null;
-                      });
-                      if (val.length == 4) {
-                        _verify();
-                      }
-                    },
+                  child: SizedBox(
+                    width: 100,
+                    height: 40,
+                    child: TextField(
+                      controller: _controller,
+                      focusNode: _focusNode,
+                      keyboardType: TextInputType.none,
+                      maxLength: 4,
+                      autofocus: true,
+                      onChanged: (val) {
+                        setState(() {
+                          _localError = null;
+                        });
+                        if (val.length == 4) {
+                          _verify();
+                        }
+                      },
+                    ),
                   ),
                 ),
               ),
