@@ -151,15 +151,23 @@ class PrintTicketService {
     gen.text(_formatDate(order.createdAt));
     gen.doubleSeparator();
 
-    // ─── ITEMS REGULARES ────────────────────────────────────────────
-    for (var i = 0; i < regularItems.length; i++) {
-      _renderKitchenItem(gen, regularItems[i]);
-      if (i < regularItems.length - 1) {
-        _kitchenDashedSeparator(gen);
+    // ─── BLOQUE PARA COMER ──────────────────────────────────────────
+    // Header inverso "PARA COMER" + items + linea doble de cierre. Si
+    // no hay items regulares (orden 100% takeout), el bloque entero se
+    // omite y solo se imprime el de PARA LLEVAR.
+    if (regularItems.isNotEmpty) {
+      _kitchenInverseLabel(gen, 'PARA COMER');
+      gen.lineFeed();
+      for (var i = 0; i < regularItems.length; i++) {
+        _renderKitchenItem(gen, regularItems[i]);
+        if (i < regularItems.length - 1) {
+          _kitchenDashedSeparator(gen);
+        }
       }
+      gen.doubleSeparator();
     }
 
-    // ─── PARA LLEVAR (recuadro inverse) ─────────────────────────────
+    // ─── BLOQUE PARA LLEVAR ─────────────────────────────────────────
     if (takeoutItems.isNotEmpty) {
       if (regularItems.isNotEmpty) gen.lineFeed();
       _kitchenInverseLabel(gen, 'PARA LLEVAR');
@@ -170,6 +178,7 @@ class PrintTicketService {
           _kitchenDashedSeparator(gen);
         }
       }
+      gen.doubleSeparator();
     }
 
     // ─── FOOTER ─────────────────────────────────────────────────────
