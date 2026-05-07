@@ -422,6 +422,96 @@ class ZonesRepository {
         .toList();
   }
 
+  /// PRD-12 F1: cambia la zona de una mesa sin tocar sesiones ni
+  /// órdenes. Backend valida same-business y permisos admin via la
+  /// función `fn_move_table_to_zone` (security definer, manual RBAC
+  /// check). Devuelve true si se movió, false si la mesa ya estaba
+  /// en la zona destino (no-op silencioso).
+  Future<bool> moveTableToZone({
+    required String tableId,
+    required String targetZoneId,
+  }) async {
+    final res = await sb.rpc(
+      'fn_move_table_to_zone',
+      params: {
+        'p_table_id': tableId,
+        'p_target_zone_id': targetZoneId,
+      },
+    );
+    if (res is Map) {
+      return res['moved'] == true;
+    }
+    return true;
+  }
+
+  /// PRD-12 F2: transfiere una sesión completa o items específicos a
+  /// otra mesa via `fn_transfer_table_session`. Si destino tiene
+  /// sesión abierta, combina automático. PIN supervisor se valida
+  /// client-side ANTES de invocar este método.
+  ///
+  /// - `itemIds = null` → transfiere TODA la cuenta.
+  /// - `itemIds = []` o lista → mueve solo esos items, manteniendo el
+  ///   resto en la mesa origen.
+  ///
+  /// Devuelve el `Map` crudo del RPC (mode, source_*, target_*, etc.)
+  /// para que el caller pueda mostrar feedback específico.
+  Future<Map<String, dynamic>> transferTableSession({
+    required String sourceSessionId,
+    required String targetTableId,
+    List<String>? itemIds,
+  }) async {
+    final res = await sb.rpc(
+      'fn_transfer_table_session',
+      params: {
+        'p_source_session_id': sourceSessionId,
+        'p_target_table_id': targetTableId,
+        'p_item_ids': itemIds,
+      },
+    );
+    if (res is Map) {
+      return Map<String, dynamic>.from(res);
+    }
+    return <String, dynamic>{};
+  }
+
+  /// PRD-12 F3: devuelve el `id` de la sesión abierta de una mesa
+  /// (sin closed_at). Si no hay ninguna abierta, devuelve null. Usado
+  /// por el flow de "Unir mesas" desde el grid: el cajero hace
+  /// long-press en una mesa ocupada y necesitamos su session_id antes
+  /// de invocar `fn_transfer_table_session`.
+  Future<String?> fetchActiveSessionId(String tableId) async {
+    final row = await sb
+        .from('table_sessions')
+        .select('id')
+        .eq('table_id', tableId)
+        .isFilter('closed_at', null)
+        .order('opened_at', ascending: false)
+        .limit(1)
+        .maybeSingle();
+    return row?['id']?.toString();
+  }
+
+  /// Lista todas las mesas activas de un negocio (todas las zonas)
+  /// junto con el estado actual y la zona a la que pertenecen. Usado
+  /// por el dialog de transferencia para que el cajero elija destino.
+  /// Excluye la mesa origen y zonas inactivas.
+  Future<List<Map<String, dynamic>>> fetchTablesForTransfer({
+    required String businessId,
+    required String excludeTableId,
+  }) async {
+    final rows = await sb
+        .from('dining_tables')
+        .select(
+          'id, code, label, capacity, state, zone_id, '
+          'zones!inner(id, name, business_id, is_active)',
+        )
+        .neq('id', excludeTableId)
+        .eq('is_active', true)
+        .eq('zones.business_id', businessId)
+        .eq('zones.is_active', true);
+    return List<Map<String, dynamic>>.from(rows as List);
+  }
+
   // ---- Realtime usado en la pantalla "Por zona" ----
   RealtimeChannel subscribe(void Function() onChange) {
     final ch = sb.channel('zones:status')

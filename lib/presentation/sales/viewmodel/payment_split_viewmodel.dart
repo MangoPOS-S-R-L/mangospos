@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../data/models/bank_account.dart';
 import '../../../data/models/sales_models.dart';
 
 import '../../../data/repositories/sales_repository_improved.dart';
@@ -17,12 +18,21 @@ import '../../../services/session/session_controller.dart';
 
 enum PaymentMethodType { cash, card, transfer, other }
 
+/// Sentinel para diferenciar "no se pasó argumento" de "se pasó null
+/// explícito" en `PaymentSplitState.copyWith` (sin esto no podríamos
+/// limpiar `selectedBankAccount` al cambiar de método de pago).
+const Object _bankSentinel = Object();
+
 class PaymentTransaction {
   final String id;
   final PaymentMethodType method;
   final double amount;
   final DateTime timestamp;
   final String? reference; // For card ref, auth code, etc.
+  /// Cuenta bancaria a la que llegó la transferencia. Null para
+  /// efectivo/tarjeta y para transferencias legacy donde no se eligió
+  /// cuenta. Se persiste en `payments.bank_account_id` al confirmar.
+  final BankAccount? bankAccount;
 
   PaymentTransaction({
     required this.id,
@@ -30,6 +40,7 @@ class PaymentTransaction {
     required this.amount,
     required this.timestamp,
     this.reference,
+    this.bankAccount,
   });
 
   String get methodLabel {
@@ -56,6 +67,9 @@ class PaymentSplitState {
   final String? validationError;
   final Order? orderDetails; // For printing
   final List<OrderItem> orderItems; // For printing
+  /// Cuenta bancaria seleccionada para el próximo `addTransaction` cuando
+  /// el método activo es transferencia. Se limpia al cambiar de método.
+  final BankAccount? selectedBankAccount;
 
   const PaymentSplitState({
     this.totalAmount = 0,
@@ -67,6 +81,7 @@ class PaymentSplitState {
     this.validationError,
     this.orderDetails,
     this.orderItems = const [],
+    this.selectedBankAccount,
   });
 
   PaymentSplitState copyWith({
@@ -79,6 +94,7 @@ class PaymentSplitState {
     String? validationError,
     Order? orderDetails,
     List<OrderItem>? orderItems,
+    Object? selectedBankAccount = _bankSentinel,
   }) {
     return PaymentSplitState(
       totalAmount: totalAmount ?? this.totalAmount,
@@ -90,6 +106,11 @@ class PaymentSplitState {
       validationError: validationError,
       orderDetails: orderDetails ?? this.orderDetails,
       orderItems: orderItems ?? this.orderItems,
+      // Sentinel para diferenciar "no se pasó" vs "se pasó null para
+      // limpiar la selección" (e.g. al cambiar de método de pago).
+      selectedBankAccount: identical(selectedBankAccount, _bankSentinel)
+          ? this.selectedBankAccount
+          : selectedBankAccount as BankAccount?,
     );
   }
 
@@ -226,11 +247,29 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   }
 
   void setMethod(PaymentMethodType method, {bool presetRemaining = true}) {
-    state = state.copyWith(activeMethod: method, validationError: null);
+    state = state.copyWith(
+      activeMethod: method,
+      validationError: null,
+      // Cambiar de método siempre limpia la cuenta bancaria seleccionada
+      // (era válida solo para transferencia). Al volver a transfer, el
+      // cajero tiene que volver a seleccionarla — UX explícita.
+      selectedBankAccount: null,
+    );
     // Prefill with remaining for convenience when no input is present.
     if (presetRemaining && (state.inputAmount == 0) && state.remaining > 0) {
       state = state.copyWith(currentInput: state.remaining.toStringAsFixed(2));
     }
+  }
+
+  /// Selector usado por el screen cuando el método activo es
+  /// transferencia. El cajero elige a cuál cuenta del negocio llegó la
+  /// transferencia; persistimos el id en `payments.bank_account_id` al
+  /// confirmar el pago.
+  void setBankAccount(BankAccount? account) {
+    state = state.copyWith(
+      selectedBankAccount: account,
+      validationError: null,
+    );
   }
 
   void setQuickAmount(double amount) {
@@ -265,6 +304,16 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       return;
     }
 
+    // Si es transferencia, el cajero tiene que haber seleccionado a cuál
+    // cuenta del negocio llegó. Sin esto, perdemos trazabilidad.
+    if (state.activeMethod == PaymentMethodType.transfer &&
+        state.selectedBankAccount == null) {
+      state = state.copyWith(
+        validationError: 'Selecciona la cuenta bancaria que recibió la transferencia.',
+      );
+      return;
+    }
+
     final projectedRemaining = (state.remaining - amount).clamp(
       0.0,
       double.maxFinite,
@@ -275,6 +324,9 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       method: state.activeMethod,
       amount: amount,
       timestamp: DateTime.now(),
+      bankAccount: state.activeMethod == PaymentMethodType.transfer
+          ? state.selectedBankAccount
+          : null,
     );
 
     state = state.copyWith(
@@ -283,6 +335,10 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
           ? projectedRemaining.toStringAsFixed(2)
           : '',
       validationError: null,
+      // Limpiamos la cuenta seleccionada para que el siguiente pago de
+      // transferencia (si lo hay en el split) requiera elección explícita
+      // — el cajero podría querer fragmentar entre varias cuentas.
+      selectedBankAccount: null,
     );
   }
 
@@ -387,12 +443,31 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
             });
 
         debugPrint('✅ Payment Processed: ${payment.id}');
-        createdPayments.add(
-          payment.copyWith(
-            paymentMethodCode: methodId,
-            paymentMethodName: tx.methodLabel,
-          ),
+
+        // Si la transacción tiene cuenta bancaria asociada, asociarla
+        // al payment recién creado vía UPDATE puntual. No tocamos el
+        // RPC fiscal (zona sensible) — un round-trip extra es OK.
+        // Si el UPDATE falla, log y continuar; el cobro ya está hecho.
+        var enrichedPayment = payment.copyWith(
+          paymentMethodCode: methodId,
+          paymentMethodName: tx.methodLabel,
         );
+        final bankAccount = tx.bankAccount;
+        if (bankAccount != null) {
+          try {
+            await Supabase.instance.client
+                .from('payments')
+                .update({'bank_account_id': bankAccount.id})
+                .eq('id', payment.id);
+            enrichedPayment =
+                enrichedPayment.copyWith(bankAccountId: bankAccount.id);
+          } catch (e) {
+            debugPrint(
+              'No se pudo asociar bank_account a payment ${payment.id}: $e',
+            );
+          }
+        }
+        createdPayments.add(enrichedPayment);
       }
 
       // Para e-CF (Norma DGII 01-2020): invocamos emit-document SYNC despues

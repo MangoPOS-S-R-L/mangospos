@@ -541,6 +541,9 @@ class Payment extends Equatable {
   final String status; // 'pending', 'completed', 'refunded', 'cancelled'
   final String? processedBy;
   final String? sessionId;
+  /// Cuenta bancaria a la que llegó la transferencia. Solo aplica para
+  /// método 'transfer'; null en cash/card/pagos legacy.
+  final String? bankAccountId;
   final DateTime createdAt;
 
   const Payment({
@@ -558,6 +561,7 @@ class Payment extends Equatable {
     required this.status,
     this.processedBy,
     this.sessionId,
+    this.bankAccountId,
     required this.createdAt,
   });
 
@@ -577,6 +581,7 @@ class Payment extends Equatable {
       status: map['status'] ?? 'completed',
       processedBy: map['processed_by'],
       sessionId: map['session_id'],
+      bankAccountId: map['bank_account_id'],
       createdAt: DateTime.tryParse(map['created_at'] ?? '') ?? DateTime.now(),
     );
   }
@@ -597,10 +602,15 @@ class Payment extends Equatable {
     status,
     processedBy,
     sessionId,
+    bankAccountId,
     createdAt,
   ];
 
-  Payment copyWith({String? paymentMethodCode, String? paymentMethodName}) {
+  Payment copyWith({
+    String? paymentMethodCode,
+    String? paymentMethodName,
+    String? bankAccountId,
+  }) {
     return Payment(
       id: id,
       businessId: businessId,
@@ -616,6 +626,7 @@ class Payment extends Equatable {
       status: status,
       processedBy: processedBy,
       sessionId: sessionId,
+      bankAccountId: bankAccountId ?? this.bankAccountId,
       createdAt: createdAt,
     );
   }

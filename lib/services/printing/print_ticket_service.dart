@@ -1,3 +1,4 @@
+import '../../data/models/bank_account.dart';
 import '../../data/models/business_profile.dart';
 import '../../data/models/printing_models.dart';
 import '../../data/models/sales_models.dart';
@@ -641,6 +642,11 @@ class PrintTicketService {
     List<TicketBlock>? headerBlocks,
     /// Idem para el footer. Si null usa [TicketBlocks.defaultFooter].
     List<TicketBlock>? footerBlocks,
+    /// Mapa opcional `payment.id → BankAccount` para imprimir el banco
+    /// destino cuando el pago fue por transferencia. Si no se pasa o
+    /// no contiene el id, simplemente se omite la línea — el ticket
+    /// sigue funcionando como antes (graceful degradation).
+    Map<String, BankAccount>? bankAccountsByPaymentId,
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
 
@@ -893,6 +899,24 @@ class PrintTicketService {
       for (final p in payments) {
         final method = _getPaymentMethodName(p);
         gen.textRow(method, 'RD\$ ${_formatMoney(p.amount)}');
+        // Línea adicional cuando es transferencia y tenemos info del
+        // banco destino — útil para que el cliente confirme y el
+        // contador audite. Indentado 2 espacios para que se note como
+        // sub-detalle del pago, no como otro pago.
+        final BankAccount? bank;
+        if (p.bankAccountId != null && bankAccountsByPaymentId != null) {
+          bank = bankAccountsByPaymentId[p.id];
+        } else {
+          bank = null;
+        }
+        if (bank != null) {
+          final tail = bank.accountTail;
+          final holder = (bank.accountHolder ?? '').trim();
+          final detail = holder.isEmpty
+              ? '  ${bank.bankName} · ····$tail'
+              : '  ${bank.bankName} · ····$tail · $holder';
+          gen.text(detail);
+        }
         totalChange += p.changeAmount;
       }
 

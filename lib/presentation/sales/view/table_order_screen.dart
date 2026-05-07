@@ -12,6 +12,7 @@ import 'package:mangopos/core/utils/display_name_utils.dart';
 import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/models/fiscal_models.dart';
+import 'package:mangopos/data/repositories/bank_accounts_repository.dart';
 import 'package:mangopos/data/repositories/business_profile_repository.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
@@ -22,13 +23,16 @@ import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
 import 'package:mangopos/presentation/split_bill/widgets/split_bill_modal.dart';
 import 'package:mangopos/presentation/customers/viewmodel/customers_viewmodel.dart';
+import 'package:mangopos/services/dgii_lookup_service.dart';
 
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
 import 'package:mangopos/services/printing/qr_esc_pos_builder.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
+import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
+import 'package:mangopos/presentation/sales/widgets/transfer_session_dialog.dart';
 import 'package:mangopos/data/models/table_status.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -363,6 +367,66 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         }),
       );
     }
+  }
+
+  /// PRD-12 F2: abre el dialog de transferencia de cuenta. El dialog
+  /// orquesta los pasos (qué transferir → mesa destino → PIN supervisor)
+  /// y devuelve `true` si la transferencia se completó. Cuando esto
+  /// pasa, regresamos al grid de zonas — la cuenta ya no está en esta
+  /// mesa.
+  Future<void> _handleTransferSession(BuildContext context) async {
+    final orderState = ref.read(currentOrderProvider);
+    final order = orderState.order;
+    final messenger = ScaffoldMessenger.of(context);
+
+    if (order == null || order.sessionId.isEmpty) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('No hay cuenta activa para transferir.'),
+        ),
+      );
+      return;
+    }
+    if (widget.origin != OrderOrigin.table) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content:
+              Text('La transferencia solo aplica a cuentas de mesa.'),
+        ),
+      );
+      return;
+    }
+
+    // Resolver businessId vía el resolver canónico (mismo patrón que
+    // otras pantallas — Order no expone business_id directo).
+    final businessId = await BusinessResolver.ensure('auto');
+    if (!context.mounted) return;
+
+    final tableLabel = _currentTableCode ?? widget.tableCode ?? 'Mesa';
+    final sourceTableId = widget.tableId ?? '';
+    if (sourceTableId.isEmpty) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo identificar la mesa origen.'),
+        ),
+      );
+      return;
+    }
+
+    final transferred = await showTransferSessionDialog(
+      context,
+      ref,
+      businessId: businessId,
+      sourceSessionId: order.sessionId,
+      sourceTableId: sourceTableId,
+      sourceTableLabel: tableLabel,
+      items: orderState.items,
+    );
+
+    if (!transferred) return;
+    if (!context.mounted) return;
+    // Volver al grid: la cuenta ya está en otra mesa.
+    context.go(AppRoutes.salesByZone);
   }
 
   Future<void> _handleReleaseTable(BuildContext context) async {
@@ -763,6 +827,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                   ),
                   onApplyDiscount: () => _handleApplyDiscount(context),
                   onApplyCourtesy: () => _handleCourtesyByProduct(context),
+                  onTransferSession: () => _handleTransferSession(context),
                 ),
                 // Usamos ancho fijo según especificación (400px o 320px)
                 SizedBox(width: cartWidth, child: cart),
@@ -2787,6 +2852,14 @@ class _CartView extends ConsumerWidget {
         final profileForPrint =
             await businessProfileRepo.prepareForInvoicePrinting(businessId);
 
+        // PRD F2: si algún payment fue por transferencia con cuenta
+        // bancaria asignada, cargar el mapa para que el ticket muestre
+        // banco/titular debajo de la línea de pago. Si no hay
+        // transferencias, el helper devuelve mapa vacío sin pegar la red.
+        final bankAccountsRepo = BankAccountsRepository();
+        final bankAccountsByPaymentId =
+            await bankAccountsRepo.fetchByPaymentIds(payments ?? const []);
+
         ticket = type == 'invoice'
             ? PrintTicketService.generateInvoice(
                 order: orderObj,
@@ -2823,6 +2896,7 @@ class _CartView extends ConsumerWidget {
                 footerMessage: profileForPrint.profile?.ticketFooterMessage,
                 headerBlocks: profileForPrint.profile?.effectiveHeaderBlocks,
                 footerBlocks: profileForPrint.profile?.effectiveFooterBlocks,
+                bankAccountsByPaymentId: bankAccountsByPaymentId,
               )
             : PrintTicketService.generatePrecheck(
                 order: orderObj,
@@ -3301,6 +3375,7 @@ class _SalesToolsRail extends StatelessWidget {
   final VoidCallback onVoidOrder;
   final VoidCallback onApplyDiscount;
   final VoidCallback onApplyCourtesy;
+  final VoidCallback onTransferSession;
 
   const _SalesToolsRail({
     required this.onBack,
@@ -3309,6 +3384,7 @@ class _SalesToolsRail extends StatelessWidget {
     required this.onVoidOrder,
     required this.onApplyDiscount,
     required this.onApplyCourtesy,
+    required this.onTransferSession,
   });
 
   @override
@@ -3345,6 +3421,11 @@ class _SalesToolsRail extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 8),
+                  _RailButton(
+                    icon: Icons.swap_horiz_rounded,
+                    label: 'Transferir\ncuenta',
+                    onTap: onTransferSession,
+                  ),
                   _RailButton(
                     icon: Icons.logout_rounded,
                     label: 'Liberar\nmesa',
@@ -4646,10 +4727,10 @@ class _CreateCustomerDialog extends ConsumerStatefulWidget {
 class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
   final TextEditingController _firstNameController = TextEditingController();
   final TextEditingController _lastNameController = TextEditingController();
+  final TextEditingController _legalNameController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _addressController = TextEditingController();
-  final TextEditingController _companyController = TextEditingController();
   final TextEditingController _creditLimitController = TextEditingController();
   final TextEditingController _maxCreditController = TextEditingController();
   final TextEditingController _taxIdController = TextEditingController();
@@ -4661,19 +4742,154 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
   String _documentType = 'Cédula';
   DateTime? _birthDate;
 
+  // DGII lookup state — espejo del flujo del editor de clientes en
+  // ajustes. El cajero escribe el RNC, click "Buscar en DGII" → si
+  // existe en el padrón, autocompleta nombre/apellido/razón social y
+  // muestra estado, actividad económica y si es facturador electrónico.
+  // Los indicadores se muestran (no se guardan): re-query si necesitas
+  // data fresca.
+  bool _isLookingUpDgii = false;
+  String? _dgiiNote;
+  String? _dgiiEstado;
+  String? _dgiiActividad;
+  bool? _dgiiFacturador;
+
   @override
   void dispose() {
     _formScrollController.dispose();
     _firstNameController.dispose();
     _lastNameController.dispose();
+    _legalNameController.dispose();
     _phoneController.dispose();
     _emailController.dispose();
     _addressController.dispose();
-    _companyController.dispose();
     _creditLimitController.dispose();
     _maxCreditController.dispose();
     _taxIdController.dispose();
     super.dispose();
+  }
+
+  /// Consulta el RNC contra el padrón DGII (rnc.megaplus.com.do). Si
+  /// existe, intenta llenar nombre/apellido (parsea la primera palabra
+  /// como nombre y el resto como apellido — heurística simple, cajero
+  /// puede ajustar manual). Para razones sociales (empresas), si el
+  /// nombre vino en una sola pieza, lo deja todo en _firstNameController
+  /// y _lastNameController vacío.
+  Future<void> _lookupDgii() async {
+    final raw = _taxIdController.text.trim();
+    if (raw.isEmpty) {
+      setState(() => _dgiiNote = 'Escribe el RNC primero.');
+      return;
+    }
+    setState(() {
+      _isLookingUpDgii = true;
+      _dgiiNote = null;
+      _dgiiEstado = null;
+      _dgiiActividad = null;
+      _dgiiFacturador = null;
+    });
+    try {
+      final info = await DgiiLookupService().lookupByRnc(raw);
+      if (!mounted) return;
+      if (info == null) {
+        setState(() => _dgiiNote = 'RNC no encontrado en el registro de DGII.');
+        return;
+      }
+      // Nombre comercial (firstName/lastName): solo llenamos si está
+      // vacío — no pisamos input manual del cajero.
+      final fillName = info.displayName;
+      if (fillName != null && fillName.isNotEmpty) {
+        if (_firstNameController.text.trim().isEmpty &&
+            _lastNameController.text.trim().isEmpty) {
+          final parts = fillName.split(RegExp(r'\s+'));
+          if (parts.length == 1) {
+            _firstNameController.text = parts.first;
+          } else {
+            _firstNameController.text = parts.first;
+            _lastNameController.text = parts.sublist(1).join(' ');
+          }
+        }
+      }
+      // Razón social: la sobreescribimos siempre que venga del padrón
+      // DGII. Es data oficial que cambia poco; el cajero típicamente no
+      // la modifica manual.
+      final legal = info.nombreRazonSocial;
+      if (legal != null && legal.isNotEmpty) {
+        _legalNameController.text = legal;
+      }
+      setState(() {
+        _dgiiNote = null;
+        _dgiiEstado = info.estado;
+        _dgiiActividad = info.actividadEconomica;
+        _dgiiFacturador = info.esFacturadorElectronico;
+      });
+    } on InvalidRncException catch (e) {
+      if (!mounted) return;
+      setState(() => _dgiiNote = e.toString());
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _dgiiNote = 'Error consultando DGII: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isLookingUpDgii = false);
+      }
+    }
+  }
+
+  /// Badges no-persistidos del padrón DGII tras un lookup exitoso. Solo
+  /// se muestran como info — DGII puede cambiar el estado del
+  /// contribuyente, así que mantener una copia stale en DB confunde más
+  /// que ayuda. Re-query si el cajero quiere data fresca.
+  Widget _buildDgiiBadges() {
+    final estado = _dgiiEstado;
+    final actividad = _dgiiActividad;
+    final facturador = _dgiiFacturador;
+    if (estado == null && actividad == null && facturador == null) {
+      return const SizedBox.shrink();
+    }
+    final children = <Widget>[];
+    if (estado != null) {
+      final isActivo = estado.trim().toUpperCase() == 'ACTIVO';
+      children.add(_dgiiBadge(
+        label: estado,
+        color: isActivo ? const Color(0xFF22C55E) : Colors.red,
+      ));
+    }
+    if (facturador == true) {
+      children.add(_dgiiBadge(
+        label: 'Facturador Electrónico',
+        color: const Color(0xFF3B82F6),
+      ));
+    }
+    if (actividad != null) {
+      children.add(_dgiiBadge(
+        label: actividad,
+        color: _salesTextSecondary,
+      ));
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Wrap(spacing: 6, runSpacing: 6, children: children),
+    );
+  }
+
+  Widget _dgiiBadge({required String label, required Color color}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          color: color,
+        ),
+      ),
+    );
   }
 
   Future<void> _pickBirthDate() async {
@@ -4796,7 +5012,8 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
       'last_name': lastName,
       'customer_type': _customerType,
       'document_type': _documentType,
-      'business_name': _companyController.text.trim(),
+      // business_name removido — la razón social legal ahora se guarda
+      // en `legal_name` (columna top-level), no como nota.
       'birth_date': _birthDate == null
           ? null
           : DateFormat('yyyy-MM-dd').format(_birthDate!),
@@ -4811,6 +5028,7 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
 
     return {
       'name': fullName,
+      'legal_name': _legalNameController.text.trim(),
       'phone': _phoneController.text.trim(),
       'email': _emailController.text.trim(),
       'address': _addressController.text.trim(),
@@ -5025,11 +5243,70 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
                             keyboardType: TextInputType.phone,
                           ),
                           const SizedBox(height: 14),
+                          // RNC + botón "Buscar en DGII". Mismo flujo que
+                          // el editor de clientes en ajustes: el cajero
+                          // escribe el RNC, click → autocompleta nombre
+                          // y muestra estado del contribuyente.
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Expanded(
+                                child: _buildCreateField(
+                                  label: 'RNC / Cédula',
+                                  hint: 'Ej. 131234567',
+                                  controller: _taxIdController,
+                                  keyboardType: TextInputType.number,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              SizedBox(
+                                height: 48,
+                                child: ElevatedButton.icon(
+                                  onPressed: _isLookingUpDgii
+                                      ? null
+                                      : _lookupDgii,
+                                  icon: _isLookingUpDgii
+                                      ? const SizedBox(
+                                          width: 14,
+                                          height: 14,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: Colors.white,
+                                          ),
+                                        )
+                                      : const Icon(Icons.search, size: 16),
+                                  label: const Text('Buscar en DGII'),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: _salesTotalColor,
+                                    foregroundColor: Colors.white,
+                                    elevation: 0,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (_dgiiNote != null) ...[
+                            const SizedBox(height: 6),
+                            Text(
+                              _dgiiNote!,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: _salesTextSecondary,
+                              ),
+                            ),
+                          ],
+                          _buildDgiiBadges(),
+                          const SizedBox(height: 14),
+                          // Razón social — usada en e-CF / facturas
+                          // con NCF. Se autocompleta tras lookup DGII
+                          // pero el cajero puede ajustarla manual.
                           _buildCreateField(
-                            label: 'RNC / Cédula',
-                            hint: 'Ej. 131234567',
-                            controller: _taxIdController,
-                            keyboardType: TextInputType.number,
+                            label: 'Razón Social',
+                            hint: 'Ej. Banco Popular Dominicano S.A.',
+                            controller: _legalNameController,
                           ),
                           if (_isAdvancedMode) ...[
                             const SizedBox(height: 14),
@@ -5071,12 +5348,6 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
                                   ),
                                 ),
                               ],
-                            ),
-                            const SizedBox(height: 14),
-                            _buildCreateField(
-                              label: 'Razón social',
-                              hint: 'Nombre comercial o empresa',
-                              controller: _companyController,
                             ),
                             const SizedBox(height: 14),
                             Row(
