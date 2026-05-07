@@ -2,7 +2,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mangopos/app/widgets/mango_modal.dart';
+import 'package:mangopos/data/models/bank_account.dart';
 import 'package:mangopos/data/models/sales_models.dart';
+import 'package:mangopos/presentation/settings/payment_methods/viewmodel/bank_accounts_viewmodel.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../viewmodel/payment_split_viewmodel.dart';
@@ -354,7 +356,7 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
 // LAYOUTS
 // ---------------------------------------------------------------------------
 
-class _LeftPanel extends StatelessWidget {
+class _LeftPanel extends ConsumerWidget {
   final PaymentSplitState state;
   final PaymentSplitViewModel vm;
   final ValueListenable<String?> pressedKey;
@@ -381,7 +383,7 @@ class _LeftPanel extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final canAdd = state.inputAmount > 0 && !state.isProcessing;
 
     final content = Column(
@@ -413,10 +415,26 @@ class _LeftPanel extends StatelessWidget {
               label: 'Transferencia',
               icon: Icons.qr_code_2,
               isSelected: state.activeMethod == PaymentMethodType.transfer,
-              onTap: () => vm.setMethod(PaymentMethodType.transfer),
+              onTap: () async {
+                vm.setMethod(PaymentMethodType.transfer);
+                // Tras seleccionar transferencia, abrimos el dialog para
+                // que el cajero elija a cuál cuenta del negocio llegó.
+                // El cajero puede cancelar y reabrirlo después con el
+                // chip de "Cambiar cuenta" que aparece más abajo.
+                await _openBankAccountPicker(context, ref);
+              },
             ),
           ],
         ),
+        // Chip / banner de cuenta bancaria seleccionada (solo cuando
+        // método activo = transferencia). Sin selección: invita a elegir.
+        if (state.activeMethod == PaymentMethodType.transfer) ...[
+          const SizedBox(height: 8),
+          _SelectedBankBanner(
+            account: state.selectedBankAccount,
+            onChange: () => _openBankAccountPicker(context, ref),
+          ),
+        ],
         const SizedBox(height: 10),
         // PRD 6 § 4.7 — atajos de denominación ARRIBA del input.
         // Una fila de 5 chips (Exacto + 4 billetes) que se distribuyen
@@ -472,6 +490,236 @@ class _LeftPanel extends StatelessWidget {
     );
 
     return content;
+  }
+
+  /// Abre un dialog con la lista de cuentas bancarias activas del
+  /// negocio. Al seleccionar, llama `vm.setBankAccount(...)` y cierra.
+  /// Si el negocio no tiene cuentas, muestra empty state invitando al
+  /// admin a configurarlas.
+  Future<void> _openBankAccountPicker(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return Consumer(
+          builder: (innerCtx, innerRef, _) {
+            final asyncAccounts =
+                innerRef.watch(activeBankAccountsProvider('auto'));
+            return AlertDialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              title: const Text('Cuenta que recibió'),
+              content: SizedBox(
+                width: 460,
+                child: asyncAccounts.when(
+                  loading: () => const SizedBox(
+                    height: 120,
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+                  error: (e, _) => SizedBox(
+                    height: 120,
+                    child: Center(
+                      child: Text(
+                        'No se pudieron cargar las cuentas: $e',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: Colors.red),
+                      ),
+                    ),
+                  ),
+                  data: (accounts) {
+                    if (accounts.isEmpty) {
+                      return const Padding(
+                        padding: EdgeInsets.all(16),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.account_balance_outlined,
+                              size: 40,
+                              color: Colors.black38,
+                            ),
+                            SizedBox(height: 10),
+                            Text(
+                              'No hay cuentas bancarias configuradas.',
+                              style: TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                            SizedBox(height: 6),
+                            Text(
+                              'Pide al administrador agregar al menos '
+                              'una cuenta desde Ajustes → Tipos de Pago.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.black54,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }
+                    return ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: accounts.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      itemBuilder: (rowCtx, i) {
+                        final acc = accounts[i];
+                        final isSelected =
+                            state.selectedBankAccount?.id == acc.id;
+                        return InkWell(
+                          onTap: () {
+                            vm.setBankAccount(acc);
+                            Navigator.pop(ctx);
+                          },
+                          borderRadius: BorderRadius.circular(12),
+                          child: Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: isSelected
+                                  ? const Color(0xFFFFF7ED)
+                                  : Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: isSelected
+                                    ? const Color(0xFFF97316)
+                                    : Colors.black12,
+                                width: isSelected ? 2 : 1,
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.account_balance,
+                                  color: Color(0xFFF97316),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        acc.displayLabel,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        '${acc.bankName} · #${acc.accountNumber} · '
+                                        '${acc.accountType.displayName} · ${acc.currency}',
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.black54,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                if (isSelected)
+                                  const Icon(
+                                    Icons.check_circle,
+                                    color: Color(0xFFF97316),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Cerrar'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+/// Banner que muestra la cuenta bancaria seleccionada (o invita a
+/// elegir una) cuando el método activo es transferencia. Click → abre
+/// el picker.
+class _SelectedBankBanner extends StatelessWidget {
+  final BankAccount? account;
+  final VoidCallback onChange;
+  const _SelectedBankBanner({required this.account, required this.onChange});
+
+  @override
+  Widget build(BuildContext context) {
+    final hasAccount = account != null;
+    return InkWell(
+      onTap: onChange,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: hasAccount
+              ? const Color(0xFFFFF7ED)
+              : const Color(0xFFFFEDD5),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: hasAccount
+                ? const Color(0xFFF97316)
+                : const Color(0xFFFFA94D),
+            width: hasAccount ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              hasAccount
+                  ? Icons.check_circle
+                  : Icons.warning_amber_rounded,
+              color: const Color(0xFFF97316),
+              size: 18,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: hasAccount
+                  ? Text(
+                      '${account!.displayLabel} · ${account!.bankName} · '
+                      '#${account!.accountNumber}',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF7C2D12),
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    )
+                  : const Text(
+                      'Selecciona la cuenta que recibió la transferencia',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF7C2D12),
+                      ),
+                    ),
+            ),
+            const SizedBox(width: 6),
+            const Text(
+              'Cambiar',
+              style: TextStyle(
+                fontSize: 12,
+                color: Color(0xFFF97316),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
