@@ -152,18 +152,32 @@ class PrintTicketService {
     gen.doubleSeparator();
 
     // ─── ITEMS REGULARES ────────────────────────────────────────────
-    // Sin header ni separadores entre items — flow limpio.
+    // Items en font 2x bold uniforme. _renderKitchenItem agrega un
+    // linefeed al final → espaciado consistente entre items con o sin
+    // modificadores.
     for (final item in regularItems) {
       _renderKitchenItem(gen, item);
     }
 
-    // ─── BLOQUE PARA LLEVAR ENMARCADO ───────────────────────────────
-    // Caja ASCII completa: top/bottom border + bordes laterales en
-    // cada linea del contenido. Items adentro en font normal (no 2x)
-    // para que el `|` derecho se alinee a 48 chars.
+    // ─── BLOQUE PARA LLEVAR ─────────────────────────────────────────
+    // Marco con top/bottom = solamente. Sin laterales `|` porque con
+    // font 2x ancho cada char ocupa el doble y el borde derecho no se
+    // alinea. El marco horizontal + label en bold grande es suficiente
+    // para que el chef identifique el bloque.
     if (takeoutItems.isNotEmpty) {
       if (regularItems.isNotEmpty) gen.lineFeed();
-      _renderTakeoutBox(gen, takeoutItems);
+      gen.text('=' * 48);
+      gen.setTextSize(width: 2, height: 2);
+      gen.setBold(true);
+      gen.textCentered('PARA LLEVAR');
+      gen.setBold(false);
+      gen.setTextSize();
+      gen.text('=' * 48);
+      gen.lineFeed();
+      for (final item in takeoutItems) {
+        _renderKitchenItem(gen, item);
+      }
+      gen.text('=' * 48);
     }
 
     // ─── FOOTER ─────────────────────────────────────────────────────
@@ -195,103 +209,6 @@ class PrintTicketService {
   /// deja el espaciado correcto.
   static void _kitchenDashedSeparator(EscPosGenerator gen) {
     gen.text('-' * 48);
-  }
-
-  /// Renderiza un bloque "PARA LLEVAR" enmarcado en una caja ASCII de
-  /// 48 chars de ancho. Top/bottom border con `=`, divisor con `-`,
-  /// laterales con `|`. Items en font normal (no 2x) para que el `|`
-  /// derecho se alinee — la separacion visual del marco es lo que da
-  /// jerarquia, no el tamano de fuente.
-  static void _renderTakeoutBox(EscPosGenerator gen, List<OrderItem> items) {
-    const w = 48;
-    const inner = w - 4; // 2 bordes + 2 espacios de padding
-
-    String border(String char) => '+${char * (w - 2)}+';
-    String row(String content) {
-      final clipped = content.length > inner
-          ? content.substring(0, inner)
-          : content;
-      return '| ${clipped.padRight(inner)} |';
-    }
-
-    String centeredRow(String label) {
-      final pad = (inner - label.length) ~/ 2;
-      final right = inner - pad - label.length;
-      return '| ${' ' * pad}$label${' ' * right} |';
-    }
-
-    // Top + header + divider
-    gen.text(border('='));
-    gen.setBold(true);
-    gen.text(centeredRow('PARA LLEVAR'));
-    gen.setBold(false);
-    gen.text(border('-'));
-
-    // Espacio respiracion
-    gen.text(row(''));
-
-    for (var i = 0; i < items.length; i++) {
-      final item = items[i];
-      final qty = _formatQty(item.quantity);
-      final headLine = '$qty  ${item.productName}';
-
-      // Linea principal del item (cantidad + nombre) en bold.
-      gen.setBold(true);
-      _writeWrappedRow(gen, headLine, inner, row);
-      gen.setBold(false);
-
-      // Modificadores
-      for (final mod in item.modifiers) {
-        final isComboChoice = mod.name.contains(': ');
-        final priceSuffix = mod.price > 0
-            ? ' (+RD\$ ${_formatMoney(mod.price)})'
-            : '';
-        final modLine = isComboChoice
-            ? '   • ${mod.name}$priceSuffix'
-            : '   + ${mod.name}$priceSuffix';
-        _writeWrappedRow(gen, modLine, inner, row);
-      }
-
-      // Notas
-      if (item.notes != null && item.notes!.isNotEmpty) {
-        gen.setBold(true);
-        _writeWrappedRow(gen, '   NOTA: ${item.notes}', inner, row);
-        gen.setBold(false);
-      }
-
-      // Linea en blanco entre items para respirar dentro del marco
-      if (i < items.length - 1) gen.text(row(''));
-    }
-
-    // Espacio abajo + cierre
-    gen.text(row(''));
-    gen.text(border('='));
-  }
-
-  /// Imprime [text] dentro del marco, partiendolo en multiples filas
-  /// si excede [innerWidth]. Word-wrap simple por espacios.
-  static void _writeWrappedRow(
-    EscPosGenerator gen,
-    String text,
-    int innerWidth,
-    String Function(String) row,
-  ) {
-    if (text.length <= innerWidth) {
-      gen.text(row(text));
-      return;
-    }
-    final words = text.split(' ');
-    var current = '';
-    for (final w in words) {
-      final candidate = current.isEmpty ? w : '$current $w';
-      if (candidate.length <= innerWidth) {
-        current = candidate;
-      } else {
-        if (current.isNotEmpty) gen.text(row(current));
-        current = w;
-      }
-    }
-    if (current.isNotEmpty) gen.text(row(current));
   }
 
   /// Mapea un areaCode a su titulo de comanda. Casos especiales que la
@@ -361,6 +278,12 @@ class PrintTicketService {
       gen.text('NOTA: ${item.notes}');
       gen.setBold(false);
     }
+
+    // Espaciado uniforme entre items: 1 linefeed despues de cada item
+    // completo (incluyendo sus modificadores y notas). Asi un item con
+    // modificador tiene la misma separacion del siguiente que un item
+    // sin modificador.
+    gen.lineFeed();
   }
 
   /// ============================================================
