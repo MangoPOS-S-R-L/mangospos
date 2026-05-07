@@ -66,8 +66,15 @@ const Duration _kLockMaxAge = Duration(seconds: 15);
 
 Future<bool> _ensureCanDeleteOrderItem(
   BuildContext context,
-  WidgetRef ref,
-) async {
+  WidgetRef ref, {
+  /// `true` cuando el item aun esta en estado `draft` (todavia no se
+  /// envio a cocina). Mesero/cajero puede eliminarlo sin PIN — es como
+  /// quitar algo del carrito antes de confirmar. La proteccion con PIN
+  /// solo aplica cuando el item ya salio impreso a cocina/bar.
+  required bool isDraft,
+}) async {
+  if (isDraft) return true;
+
   final sessionCtrl = ref.read(sessionProvider.notifier);
   if (sessionCtrl.hasPermission('ventas.orden.eliminar_item')) {
     return true;
@@ -1336,7 +1343,16 @@ class _CartView extends ConsumerWidget {
               ? 1.0
               : updatedItem.quantity;
           if (targetTotalQty < originalTotalQty) {
-            if (!await _ensureCanDeleteOrderItem(context, ref)) {
+            // Si TODOS los items consolidated estan en draft no requiere
+            // PIN — el operador esta reduciendo cantidades antes de
+            // enviar a cocina. Si alguno ya salio impreso, mantenemos la
+            // proteccion.
+            final allDraft = items.every((i) => i.status == 'draft');
+            if (!await _ensureCanDeleteOrderItem(
+              context,
+              ref,
+              isDraft: allDraft,
+            )) {
               return;
             }
           }
@@ -1401,7 +1417,11 @@ class _CartView extends ConsumerWidget {
               .read(currentOrderProvider.notifier)
               .deleteItem(item.id, reason: reason);
         },
-        onBeforeDelete: () => _ensureCanDeleteOrderItem(context, ref),
+        onBeforeDelete: () => _ensureCanDeleteOrderItem(
+          context,
+          ref,
+          isDraft: item.status == 'draft',
+        ),
         onMarkSoldOut: item.productId == null
             ? null
             : () async {
@@ -2160,9 +2180,13 @@ class _CartView extends ConsumerWidget {
                           onTap: () =>
                               _openProductDetailModal(context, ref, item),
                           onDelete: () async {
+                            // Items en draftItems son por definicion
+                            // status='draft' (filtrados arriba), pero
+                            // pasamos el chequeo igual por defensa.
                             if (!await _ensureCanDeleteOrderItem(
                               context,
                               ref,
+                              isDraft: item.status == 'draft',
                             )) {
                               return;
                             }
