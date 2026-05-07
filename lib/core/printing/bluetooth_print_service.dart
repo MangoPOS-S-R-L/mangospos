@@ -2,7 +2,12 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+// flutter_blue_plus 2.x oficial NO soporta Windows. Usamos el wrapper
+// community `flutter_blue_plus_windows` que re-exporta todas las APIs de
+// flutter_blue_plus en plataformas no-Windows y provee implementacion
+// nativa win_ble_plus en Windows. Funciona transparente — el resto del
+// codigo (BluetoothDevice, BluetoothCharacteristic, etc.) sigue igual.
+import 'package:flutter_blue_plus_windows/flutter_blue_plus_windows.dart';
 
 /// PRD 5 F3: imprime ESC/POS directo a una impresora Bluetooth via GATT.
 /// Soporta Mac, iOS y Android sin necesidad del agente Node.js.
@@ -43,8 +48,8 @@ class BluetoothPrintService {
 
     if (!device.isConnected) {
       _log('connecting (timeout=${connectTimeout.inSeconds}s)…');
+      // flutter_blue_plus 1.x no acepta `license` (parametro 2.x-only).
       await device.connect(
-        license: License.free,
         timeout: connectTimeout,
         autoConnect: false,
       );

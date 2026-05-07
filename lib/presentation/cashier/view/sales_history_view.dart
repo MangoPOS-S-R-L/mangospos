@@ -15,6 +15,7 @@ import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
 import 'package:mangopos/core/tax/tax_engine.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
+import 'package:mangopos/data/repositories/business_profile_repository.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
 import 'package:mangopos/services/printing/qr_esc_pos_builder.dart';
 import 'package:mangopos/services/session/session_controller.dart';
@@ -762,9 +763,42 @@ class _PaymentTableRow extends ConsumerWidget {
           ecfSecurityCode = fiscalDoc.ecfSecurityCode;
           ecfSignedAt = fiscalDoc.ecfSignedAt;
           if (fiscalDoc.hasQrData) {
-            ecfQrBytes = await QrEscPosBuilder.build(
-              data: fiscalDoc.publicUrl!,
-            );
+            // Preferimos publicUrl si Alanube/DGII ya nos lo dio. Si aún
+            // estamos en estado `sent` (publicUrl null), construimos la
+            // URL DGII localmente con security_code + RNC + NCF + fecha
+            // + total — el QR sigue siendo válido.
+            //
+            // RNC del emisor: source of truth es fiscal_settings.rnc.
+            // businesses puede tener tax_id en lugar de rnc, o estar
+            // vacio en setups legacy. Cascade: businesses.rnc →
+            // businesses.tax_id → fiscal_settings.rnc.
+            String emitterRnc = (profileRaw?['rnc'] as String?)?.trim() ?? '';
+            if (emitterRnc.isEmpty) {
+              emitterRnc = (profileRaw?['tax_id'] as String?)?.trim() ?? '';
+            }
+            if (emitterRnc.isEmpty) {
+              try {
+                final fs = await Supabase.instance.client
+                    .from('fiscal_settings')
+                    .select('rnc')
+                    .eq('business_id', businessId)
+                    .maybeSingle();
+                emitterRnc = ((fs?['rnc'] as String?)?.trim()) ?? '';
+              } catch (_) {}
+            }
+
+            final qrUrl = fiscalDoc.publicUrl?.isNotEmpty == true
+                ? fiscalDoc.publicUrl!
+                : (fiscalDoc.buildDgiiVerifyUrl(
+                      emitterRnc: emitterRnc,
+                      sandbox: true,
+                    ) ??
+                    '');
+            if (qrUrl.isNotEmpty) {
+              ecfQrBytes = await QrEscPosBuilder.build(data: qrUrl);
+            } else {
+              ecfStatusMsg = fiscalDoc.ecfStatusMessage;
+            }
           } else {
             ecfStatusMsg = fiscalDoc.ecfStatusMessage;
           }
@@ -772,6 +806,15 @@ class _PaymentTableRow extends ConsumerWidget {
       } catch (_) {
         // Fail-soft: si la consulta o el QR fallan, imprimimos sin ellos.
       }
+
+      // BusinessProfile (slogan, footer, toggles) + logo pre-rasterizado.
+      // Si el negocio no configuro logo o printLogoOnInvoice=false,
+      // logoBytes viene null y no se imprime nada de logo.
+      final businessProfileRepo = BusinessProfileRepository(
+        Supabase.instance.client,
+      );
+      final profileForPrint =
+          await businessProfileRepo.prepareForInvoicePrinting(businessId);
 
       final ticket = PrintTicketService.generateInvoice(
         order: printOrder,
@@ -792,6 +835,14 @@ class _PaymentTableRow extends ConsumerWidget {
         receiptItemDisplayMode: receiptItemDisplayMode,
         taxBreakdown: reprintTaxBreakdown,
         preferStoredOrderTotals: true,
+        // Branding desde BusinessProfile.
+        logoBytes: profileForPrint.logoEscPosBytes,
+        slogan: profileForPrint.profile?.slogan,
+        branchName: profileForPrint.profile?.branchName,
+        businessEmail: profileForPrint.profile?.email,
+        footerMessage: profileForPrint.profile?.ticketFooterMessage,
+        headerBlocks: profileForPrint.profile?.effectiveHeaderBlocks,
+        footerBlocks: profileForPrint.profile?.effectiveFooterBlocks,
         preferStoredItemTotals: true,
         qrBytes: ecfQrBytes,
         ecfStatusMessage: ecfStatusMsg,

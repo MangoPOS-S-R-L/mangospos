@@ -18,6 +18,7 @@ import 'package:mangopos/presentation/settings/more%20settings/printing/receipts
 import 'package:mangopos/presentation/settings/more%20settings/printing/orders/view/printing_orders_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/diagnostics/view/printing_diagnostics_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/view/taxes_view.dart';
+import 'package:mangopos/presentation/settings/business_profile/business_profile_screen.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/zones_tables/view/zones_tables_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/users/view/roles_permissions_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/users/view/users_view.dart';
@@ -487,6 +488,11 @@ class AppRouter {
             path: AppRoutes.settingsRoles,
             builder: (context, state) =>
                 const SettingsRolesView(businessId: 'auto'),
+          ),
+          GoRoute(
+            path: AppRoutes.settingsBusinessProfile,
+            builder: (context, state) =>
+                const BusinessProfileScreen(businessId: 'auto'),
           ),
           GoRoute(
             path: AppRoutes.settingsZonesTables,

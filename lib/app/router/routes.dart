@@ -65,6 +65,7 @@ class AppRoutes {
   static const menuModifierGroups = '$menu/modifier-groups';
   static const menuModifiers = '$menu/modifiers';
 
+  static const settingsBusinessProfile = '$settings/business-profile';
   static const settingsZonesTables = '$settings/zones-tables';
   static const settingsTaxes = '$settings/taxes';
   static const settingsFiscalReceipts = '$settings/fiscal-receipts';

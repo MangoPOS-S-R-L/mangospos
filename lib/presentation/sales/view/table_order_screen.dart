@@ -12,6 +12,7 @@ import 'package:mangopos/core/utils/display_name_utils.dart';
 import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/models/fiscal_models.dart';
+import 'package:mangopos/data/repositories/business_profile_repository.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
@@ -65,8 +66,15 @@ const Duration _kLockMaxAge = Duration(seconds: 15);
 
 Future<bool> _ensureCanDeleteOrderItem(
   BuildContext context,
-  WidgetRef ref,
-) async {
+  WidgetRef ref, {
+  /// `true` cuando el item aun esta en estado `draft` (todavia no se
+  /// envio a cocina). Mesero/cajero puede eliminarlo sin PIN — es como
+  /// quitar algo del carrito antes de confirmar. La proteccion con PIN
+  /// solo aplica cuando el item ya salio impreso a cocina/bar.
+  required bool isDraft,
+}) async {
+  if (isDraft) return true;
+
   final sessionCtrl = ref.read(sessionProvider.notifier);
   if (sessionCtrl.hasPermission('ventas.orden.eliminar_item')) {
     return true;
@@ -1335,7 +1343,16 @@ class _CartView extends ConsumerWidget {
               ? 1.0
               : updatedItem.quantity;
           if (targetTotalQty < originalTotalQty) {
-            if (!await _ensureCanDeleteOrderItem(context, ref)) {
+            // Si TODOS los items consolidated estan en draft no requiere
+            // PIN — el operador esta reduciendo cantidades antes de
+            // enviar a cocina. Si alguno ya salio impreso, mantenemos la
+            // proteccion.
+            final allDraft = items.every((i) => i.status == 'draft');
+            if (!await _ensureCanDeleteOrderItem(
+              context,
+              ref,
+              isDraft: allDraft,
+            )) {
               return;
             }
           }
@@ -1400,7 +1417,11 @@ class _CartView extends ConsumerWidget {
               .read(currentOrderProvider.notifier)
               .deleteItem(item.id, reason: reason);
         },
-        onBeforeDelete: () => _ensureCanDeleteOrderItem(context, ref),
+        onBeforeDelete: () => _ensureCanDeleteOrderItem(
+          context,
+          ref,
+          isDraft: item.status == 'draft',
+        ),
         onMarkSoldOut: item.productId == null
             ? null
             : () async {
@@ -2159,9 +2180,13 @@ class _CartView extends ConsumerWidget {
                           onTap: () =>
                               _openProductDetailModal(context, ref, item),
                           onDelete: () async {
+                            // Items en draftItems son por definicion
+                            // status='draft' (filtrados arriba), pero
+                            // pasamos el chequeo igual por defensa.
                             if (!await _ensureCanDeleteOrderItem(
                               context,
                               ref,
+                              isDraft: item.status == 'draft',
                             )) {
                               return;
                             }
@@ -2706,9 +2731,44 @@ class _CartView extends ConsumerWidget {
               ecfSecurityCode = fiscalDoc.ecfSecurityCode;
               ecfSignedAt = fiscalDoc.ecfSignedAt;
               if (fiscalDoc.hasQrData) {
-                ecfQrBytes = await QrEscPosBuilder.build(
-                  data: fiscalDoc.publicUrl!,
-                );
+                // Preferimos publicUrl si Alanube ya nos lo dio (post-webhook
+                // DGII). En estado `sent` típicamente publicUrl aún es null,
+                // así que construimos la URL DGII localmente con los campos
+                // del documento (security_code + RNC + NCF + fecha + total).
+                // El QR sigue siendo válido — DGII permite consultas para
+                // docs en proceso.
+                //
+                // RNC del emisor: source of truth es fiscal_settings.rnc.
+                // businesses puede tener tax_id en lugar de rnc, o estar
+                // vacio en setups legacy. Cascade: data.rnc → data.tax_id →
+                // fiscal_settings.rnc del business activo.
+                String emitterRnc = (data['rnc'] as String?)?.trim() ?? '';
+                if (emitterRnc.isEmpty) {
+                  emitterRnc = (data['tax_id'] as String?)?.trim() ?? '';
+                }
+                if (emitterRnc.isEmpty) {
+                  try {
+                    final fs = await Supabase.instance.client
+                        .from('fiscal_settings')
+                        .select('rnc')
+                        .eq('business_id', businessId)
+                        .maybeSingle();
+                    emitterRnc = ((fs?['rnc'] as String?)?.trim()) ?? '';
+                  } catch (_) {}
+                }
+
+                final qrUrl = fiscalDoc.publicUrl?.isNotEmpty == true
+                    ? fiscalDoc.publicUrl!
+                    : (fiscalDoc.buildDgiiVerifyUrl(
+                          emitterRnc: emitterRnc,
+                          sandbox: true,
+                        ) ??
+                        '');
+                if (qrUrl.isNotEmpty) {
+                  ecfQrBytes = await QrEscPosBuilder.build(data: qrUrl);
+                } else {
+                  ecfStatusMsg = fiscalDoc.ecfStatusMessage;
+                }
               } else {
                 ecfStatusMsg = fiscalDoc.ecfStatusMessage;
               }
@@ -2717,6 +2777,15 @@ class _CartView extends ConsumerWidget {
             // No tumbar el cobro por un fallo de QR/estado e-CF.
           }
         }
+
+        // BusinessProfile + logo pre-rasterizado para el header.
+        // Si printLogoOnInvoice=false o no hay logo, logoEscPosBytes=null
+        // y el ticket sale sin logo (preserva el behavior anterior).
+        final businessProfileRepo = BusinessProfileRepository(
+          Supabase.instance.client,
+        );
+        final profileForPrint =
+            await businessProfileRepo.prepareForInvoicePrinting(businessId);
 
         ticket = type == 'invoice'
             ? PrintTicketService.generateInvoice(
@@ -2746,6 +2815,14 @@ class _CartView extends ConsumerWidget {
                 isElectronicCf: isElectronicCf,
                 ecfSecurityCode: ecfSecurityCode,
                 ecfSignedAt: ecfSignedAt,
+                // Branding desde BusinessProfile.
+                logoBytes: profileForPrint.logoEscPosBytes,
+                slogan: profileForPrint.profile?.slogan,
+                branchName: profileForPrint.profile?.branchName,
+                businessEmail: profileForPrint.profile?.email,
+                footerMessage: profileForPrint.profile?.ticketFooterMessage,
+                headerBlocks: profileForPrint.profile?.effectiveHeaderBlocks,
+                footerBlocks: profileForPrint.profile?.effectiveFooterBlocks,
               )
             : PrintTicketService.generatePrecheck(
                 order: orderObj,

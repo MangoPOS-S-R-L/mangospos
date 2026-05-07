@@ -9,8 +9,10 @@ import 'package:multicast_dns/multicast_dns.dart';
 import 'package:network_info_plus/network_info_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-// Bluetooth
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+// Bluetooth — usamos flutter_blue_plus_windows (wrapper cross-platform)
+// para que el scan funcione tambien en Windows. Re-exporta las APIs de
+// flutter_blue_plus en plataformas no-Windows.
+import 'package:flutter_blue_plus_windows/flutter_blue_plus_windows.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 // USB
@@ -1110,6 +1112,8 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
           }
         }
         // En todas las plataformas: dispositivos ya conectados al sistema.
+        // En flutter_blue_plus 1.x systemDevices es metodo que toma
+        // List<Guid> de service UUIDs (lista vacia = todos).
         final system = await FlutterBluePlus.systemDevices(<Guid>[]);
         for (final d in system) {
           found.add(d);
