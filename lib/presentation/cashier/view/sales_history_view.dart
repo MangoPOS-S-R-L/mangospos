@@ -15,6 +15,7 @@ import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
 import 'package:mangopos/core/tax/tax_engine.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
+import 'package:mangopos/data/repositories/business_profile_repository.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
 import 'package:mangopos/services/printing/qr_esc_pos_builder.dart';
 import 'package:mangopos/services/session/session_controller.dart';
@@ -806,6 +807,15 @@ class _PaymentTableRow extends ConsumerWidget {
         // Fail-soft: si la consulta o el QR fallan, imprimimos sin ellos.
       }
 
+      // BusinessProfile (slogan, footer, toggles) + logo pre-rasterizado.
+      // Si el negocio no configuro logo o printLogoOnInvoice=false,
+      // logoBytes viene null y no se imprime nada de logo.
+      final businessProfileRepo = BusinessProfileRepository(
+        Supabase.instance.client,
+      );
+      final profileForPrint =
+          await businessProfileRepo.prepareForInvoicePrinting(businessId);
+
       final ticket = PrintTicketService.generateInvoice(
         order: printOrder,
         items: printItems,
@@ -825,6 +835,14 @@ class _PaymentTableRow extends ConsumerWidget {
         receiptItemDisplayMode: receiptItemDisplayMode,
         taxBreakdown: reprintTaxBreakdown,
         preferStoredOrderTotals: true,
+        // Branding desde BusinessProfile.
+        logoBytes: profileForPrint.logoEscPosBytes,
+        slogan: profileForPrint.profile?.slogan,
+        showSlogan: profileForPrint.profile?.showSloganOnInvoice ?? true,
+        branchName: profileForPrint.profile?.branchName,
+        showBranchName:
+            profileForPrint.profile?.showBranchNameOnInvoice ?? true,
+        footerMessage: profileForPrint.profile?.ticketFooterMessage,
         preferStoredItemTotals: true,
         qrBytes: ecfQrBytes,
         ecfStatusMessage: ecfStatusMsg,

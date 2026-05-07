@@ -15,11 +15,21 @@ import 'dart:typed_data';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../services/printing/logo_esc_pos_builder.dart';
 import '../models/business_profile.dart';
 
 class BusinessProfileRepository {
   final SupabaseClient _client;
   static const String logoBucket = 'business-logos';
+
+  // Cache en memoria de los bytes del logo. Key = URL completa con
+  // cache-buster (?v=timestamp), asi cuando el operador cambia el logo
+  // la URL cambia y el cache miss naturalmente. Sin TTL — vive lo que
+  // viva el proceso, suficiente para tickets.
+  static final Map<String, Uint8List> _logoBytesCache = {};
+  // Idem para los bytes ESC/POS pre-generados (resize + raster), evita
+  // re-decodificar el PNG en cada impresion.
+  static final Map<String, List<int>> _logoEscPosCache = {};
 
   BusinessProfileRepository(this._client);
 
@@ -188,14 +198,55 @@ class BusinessProfileRepository {
   /// Descarga los bytes del logo desde Storage. Util para impresion ESC/POS
   /// que necesita los bytes raw para convertir a raster. Retorna null si
   /// no hay logo configurado o si la descarga falla.
+  ///
+  /// Cachea por logo_url completo (incluye cache-buster). Cuando el
+  /// operador cambia el logo, la URL cambia y la siguiente llamada
+  /// re-descarga.
   Future<Uint8List?> downloadLogoBytes(String businessId) async {
     final profile = await getProfile(businessId);
+    final url = profile?.logoUrl;
     final path = profile?.logoStoragePath;
     if (path == null || path.isEmpty) return null;
+
+    if (url != null && _logoBytesCache.containsKey(url)) {
+      return _logoBytesCache[url];
+    }
+
     try {
-      return await _client.storage.from(logoBucket).download(path);
+      final bytes = await _client.storage.from(logoBucket).download(path);
+      if (url != null) _logoBytesCache[url] = bytes;
+      return bytes;
     } catch (_) {
       return null;
     }
+  }
+
+  /// Helper de alto nivel para imprimir factura: trae profile + bytes
+  /// ESC/POS del logo listos para `PrintTicketService.generateInvoice`.
+  ///
+  /// Si el negocio tiene `printLogoOnInvoice=false` o no tiene logo,
+  /// `logoEscPosBytes` retorna null y la factura se imprime sin logo.
+  /// Cachea los bytes ESC/POS por URL para evitar re-decodificar PNG en
+  /// cada cobro/reimpresion del mismo logo.
+  Future<({BusinessProfile? profile, List<int>? logoEscPosBytes})>
+      prepareForInvoicePrinting(String businessId) async {
+    final profile = await getProfile(businessId);
+    if (profile == null) return (profile: null, logoEscPosBytes: null);
+
+    final url = profile.logoUrl;
+    if (!profile.printLogoOnInvoice || url == null || url.isEmpty) {
+      return (profile: profile, logoEscPosBytes: null);
+    }
+
+    if (_logoEscPosCache.containsKey(url)) {
+      return (profile: profile, logoEscPosBytes: _logoEscPosCache[url]);
+    }
+
+    final bytes = await downloadLogoBytes(businessId);
+    if (bytes == null) return (profile: profile, logoEscPosBytes: null);
+
+    final escPos = await LogoEscPosBuilder.build(bytes: bytes);
+    if (escPos != null) _logoEscPosCache[url] = escPos;
+    return (profile: profile, logoEscPosBytes: escPos);
   }
 }

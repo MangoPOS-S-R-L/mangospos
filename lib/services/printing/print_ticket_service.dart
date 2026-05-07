@@ -480,11 +480,37 @@ class PrintTicketService {
     /// Fecha de firma digital DGII (campo `ecf_signed_at`).
     /// Se imprime debajo del Código de Seguridad en e-CF aceptados.
     DateTime? ecfSignedAt,
+    /// Bytes ESC/POS pre-generados del logo (centrados). Se imprimen al
+    /// inicio del header si vienen non-null. Generar con
+    /// `LogoEscPosBuilder.build(bytes: <pngOrJpgBytes>)`. El caller decide
+    /// si carga o no el logo segun `BusinessProfile.printLogoOnInvoice`
+    /// y `BusinessProfile.logoUrl`.
+    List<int>? logoBytes,
+    /// Eslogan del negocio. Se imprime debajo del nombre comercial si
+    /// `showSlogan=true`. Caller decide segun
+    /// `BusinessProfile.showSloganOnInvoice`.
+    String? slogan,
+    bool showSlogan = true,
+    /// Nombre de la sucursal. Se imprime "Sucursal: Xxx" debajo del header
+    /// solo si `showBranchName=true` y `branchName` no es null/vacio.
+    /// Caller decide segun `BusinessProfile.showBranchNameOnInvoice`.
+    String? branchName,
+    bool showBranchName = true,
+    /// Mensaje opcional al pie del ticket (gracias por su visita, etc).
+    /// Centrado. Caller pasa `BusinessProfile.ticketFooterMessage`.
+    String? footerMessage,
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
 
     gen.initialize();
     gen.lineFeed(2);
+
+    // Logo (opcional). Si viene pre-generado lo escupimos arriba del
+    // todo, antes del nombre del negocio.
+    if (logoBytes != null && logoBytes.isNotEmpty) {
+      gen.appendRaw(logoBytes);
+      gen.lineFeed();
+    }
 
     // Header
     if (businessName != null && businessName.isNotEmpty) {
@@ -492,10 +518,16 @@ class PrintTicketService {
       gen.textCentered(businessName.toUpperCase());
       gen.setBold(false);
     }
+    if (showSlogan && slogan != null && slogan.isNotEmpty) {
+      gen.textCentered(slogan);
+    }
     if (legalName != null &&
         legalName.isNotEmpty &&
         legalName != businessName) {
       gen.textCentered(legalName);
+    }
+    if (showBranchName && branchName != null && branchName.isNotEmpty) {
+      gen.textCentered('Sucursal: $branchName');
     }
     if (businessAddress != null && businessAddress.isNotEmpty) {
       gen.textCentered(businessAddress);
@@ -797,7 +829,13 @@ class PrintTicketService {
 
     // Footer
     gen.lineFeed(2);
-    gen.textCentered('GRACIAS POR SU PREFERENCIA');
+    // Si el negocio configuro un mensaje al pie en BusinessProfile lo
+    // usamos; si no, fallback al texto estandar para mantener el behavior
+    // anterior.
+    final footerText = (footerMessage != null && footerMessage.trim().isNotEmpty)
+        ? footerMessage.trim()
+        : 'GRACIAS POR SU PREFERENCIA';
+    gen.textCentered(footerText);
     gen.lineFeed(4);
     gen.cut();
 

@@ -12,6 +12,7 @@ import 'package:mangopos/core/utils/display_name_utils.dart';
 import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/models/fiscal_models.dart';
+import 'package:mangopos/data/repositories/business_profile_repository.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
@@ -2753,6 +2754,15 @@ class _CartView extends ConsumerWidget {
           }
         }
 
+        // BusinessProfile + logo pre-rasterizado para el header.
+        // Si printLogoOnInvoice=false o no hay logo, logoEscPosBytes=null
+        // y el ticket sale sin logo (preserva el behavior anterior).
+        final businessProfileRepo = BusinessProfileRepository(
+          Supabase.instance.client,
+        );
+        final profileForPrint =
+            await businessProfileRepo.prepareForInvoicePrinting(businessId);
+
         ticket = type == 'invoice'
             ? PrintTicketService.generateInvoice(
                 order: orderObj,
@@ -2781,6 +2791,15 @@ class _CartView extends ConsumerWidget {
                 isElectronicCf: isElectronicCf,
                 ecfSecurityCode: ecfSecurityCode,
                 ecfSignedAt: ecfSignedAt,
+                // Branding desde BusinessProfile.
+                logoBytes: profileForPrint.logoEscPosBytes,
+                slogan: profileForPrint.profile?.slogan,
+                showSlogan:
+                    profileForPrint.profile?.showSloganOnInvoice ?? true,
+                branchName: profileForPrint.profile?.branchName,
+                showBranchName:
+                    profileForPrint.profile?.showBranchNameOnInvoice ?? true,
+                footerMessage: profileForPrint.profile?.ticketFooterMessage,
               )
             : PrintTicketService.generatePrecheck(
                 order: orderObj,
