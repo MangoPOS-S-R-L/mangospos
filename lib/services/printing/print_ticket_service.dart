@@ -156,17 +156,17 @@ class PrintTicketService {
     }
 
     // ─── BLOQUE PARA LLEVAR ─────────────────────────────────────────
-    // Encuadrado en marco ASCII para destacar visualmente vs los items
-    // de PARA COMER AQUI: cocina ve a primer golpe lo que va a empacar
-    // diferente de lo que va al comedor.
+    // Mismo estilo que PARA COMER AQUI: la diferenciación visual la da
+    // la banda inversa del header (full-ancho blanco-sobre-negro) y el
+    // texto del label, sin marco ASCII pesado.
     if (takeoutItems.isNotEmpty) {
-      if (regularItems.isNotEmpty) gen.lineFeed();
-      _renderItemsBox(gen, label: 'PARA LLEVAR', items: takeoutItems);
+      _renderItemsList(gen, label: 'PARA LLEVAR', items: takeoutItems);
     }
 
     // ─── FOOTER ─────────────────────────────────────────────────────
+    // Sin separador propio: el `doubleSeparator` que cierra el último
+    // bloque de items ya provee la división visual con el footer.
     gen.lineFeed();
-    _kitchenDashedSeparator(gen);
     final now = DateTime.now();
     final hms =
         '${_formatTime(now)}:${now.second.toString().padLeft(2, '0')}';
@@ -216,20 +216,23 @@ class PrintTicketService {
     return ('COMANDA', 'DE ${code.replaceAll('_', ' ').toUpperCase()}');
   }
 
-  /// Renderiza una lista de items bajo un label centrado bold + separador
-  /// thin. Sin marco ASCII (`+===+ |...|`) — diseño minimalista que se
-  /// apoya en jerarquia visual: items en height 2x bold, modificadores y
-  /// notas indentados a tamaño normal, lineFeed entre items para aire.
+  /// Renderiza items bajo una **banda inversa full-ancho** con el label
+  /// centrado (`GS B 1` blanco-sobre-negro). Items en height 2x bold,
+  /// modificadores/notas indentados a tamaño normal, separador thin entre
+  /// items, y `doubleSeparator` (`===`) cerrando la sección.
   static void _renderItemsList(
     EscPosGenerator gen, {
     required String label,
     required List<OrderItem> items,
   }) {
+    // Banda inversa: padding lateral con espacios para que el fondo negro
+    // se extienda full-ancho de la línea (sin padding solo se inverteria
+    // sobre los chars del label, dando una banda flaca).
+    gen.setInverse(true);
     gen.setBold(true);
-    gen.textCentered(label.toUpperCase());
+    gen.text(_centerInWidth(label.toUpperCase(), 48));
     gen.setBold(false);
-    _kitchenDashedSeparator(gen);
-    gen.lineFeed();
+    gen.setInverse(false);
 
     for (var i = 0; i < items.length; i++) {
       final item = items[i];
@@ -258,10 +261,24 @@ class PrintTicketService {
         gen.setBold(false);
       }
 
-      // Aire entre items (también después del último: separa visualmente
-      // del siguiente bloque o del footer).
-      gen.lineFeed();
+      // Separador thin entre items (no después del último).
+      if (i < items.length - 1) {
+        _kitchenDashedSeparator(gen);
+      }
     }
+
+    // Cierre de sección con doble separador thick.
+    gen.doubleSeparator();
+  }
+
+  /// Padea [text] con espacios laterales para centrarlo en una línea de
+  /// [width] chars. Necesario cuando un fondo (e.g. inverse video) debe
+  /// extenderse full-ancho con el texto centrado adentro.
+  static String _centerInWidth(String text, int width) {
+    if (text.length >= width) return text.substring(0, width);
+    final pad = (width - text.length) ~/ 2;
+    final right = width - pad - text.length;
+    return '${' ' * pad}$text${' ' * right}';
   }
 
   /// Word-wrap por espacios. Escribe cada linea via `gen.text` directamente.
@@ -282,102 +299,6 @@ class PrintTicketService {
       }
     }
     if (current.isNotEmpty) gen.text(current);
-  }
-
-  /// Renderiza items adentro de un marco ASCII de 48 chars (`+===+`,
-  /// `+---+`, `|...|`). Usado solo para PARA LLEVAR — destaca visualmente
-  /// vs el bloque PARA COMER AQUI que va sin marco.
-  static void _renderItemsBox(
-    EscPosGenerator gen, {
-    required String label,
-    required List<OrderItem> items,
-  }) {
-    const w = 48;
-    const inner = w - 4; // 2 bordes `|` + 2 espacios de padding
-
-    String borderLine(String char) => '+${char * (w - 2)}+';
-    String row(String content) {
-      final clipped = content.length > inner
-          ? content.substring(0, inner)
-          : content;
-      return '| ${clipped.padRight(inner)} |';
-    }
-
-    String centeredRow(String text) {
-      final pad = (inner - text.length) ~/ 2;
-      final right = inner - pad - text.length;
-      return '| ${' ' * pad}$text${' ' * right} |';
-    }
-
-    gen.text(borderLine('='));
-    gen.setBold(true);
-    gen.text(centeredRow(label.toUpperCase()));
-    gen.setBold(false);
-    gen.text(borderLine('-'));
-
-    // Respiración arriba
-    gen.text(row(''));
-
-    for (var i = 0; i < items.length; i++) {
-      final item = items[i];
-      final qty = _formatQty(item.quantity);
-      final headLine = '$qty   ${item.productName}';
-
-      gen.setTextSize(width: 1, height: 2);
-      gen.setBold(true);
-      _writeWrappedRow(gen, headLine, inner, row);
-      gen.setBold(false);
-      gen.setTextSize();
-
-      if (item.modifiers.isNotEmpty) {
-        for (final mod in item.modifiers) {
-          final isComboChoice = mod.name.contains(': ');
-          final priceSuffix = mod.price > 0
-              ? ' (+RD\$ ${_formatMoney(mod.price)})'
-              : '';
-          final prefix = isComboChoice ? '   • ' : '   + ';
-          _writeWrappedRow(gen, '$prefix${mod.name}$priceSuffix', inner, row);
-        }
-      }
-
-      if (item.notes != null && item.notes!.isNotEmpty) {
-        gen.setBold(true);
-        _writeWrappedRow(gen, '   NOTA: ${item.notes}', inner, row);
-        gen.setBold(false);
-      }
-
-      // Espaciado uniforme entre items dentro del marco. También después
-      // del último para simetría con la respiración del top.
-      gen.text(row(''));
-    }
-
-    gen.text(borderLine('='));
-  }
-
-  /// Versión de [_writeWrappedLine] que escribe cada línea wrapeada via
-  /// el formatter [row] del marco — preserva los bordes laterales `|`.
-  static void _writeWrappedRow(
-    EscPosGenerator gen,
-    String text,
-    int innerWidth,
-    String Function(String) row,
-  ) {
-    if (text.length <= innerWidth) {
-      gen.text(row(text));
-      return;
-    }
-    final words = text.split(' ');
-    var current = '';
-    for (final w in words) {
-      final candidate = current.isEmpty ? w : '$current $w';
-      if (candidate.length <= innerWidth) {
-        current = candidate;
-      } else {
-        if (current.isNotEmpty) gen.text(row(current));
-        current = w;
-      }
-    }
-    if (current.isNotEmpty) gen.text(row(current));
   }
 
   /// ============================================================
