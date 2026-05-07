@@ -105,7 +105,22 @@ class BusinessProfileRepository {
     }
 
     if (businessPatch.isNotEmpty) {
-      await _client.from('businesses').update(businessPatch).eq('id', businessId);
+      // .select() devuelve las filas afectadas. Si RLS bloquea el UPDATE
+      // (sin permiso WRITE en businesses para este user) Postgres NO
+      // tira error — simplemente retorna 0 filas. Detectamos y lanzamos
+      // para que el caller muestre snackbar rojo en vez de "guardado OK"
+      // engañoso.
+      final affected = await _client
+          .from('businesses')
+          .update(businessPatch)
+          .eq('id', businessId)
+          .select('id');
+      if ((affected as List).isEmpty) {
+        throw Exception(
+          'No se pudo actualizar el negocio. Permisos insuficientes (RLS) '
+          'o el ID no existe. Verificá las policies de `businesses`.',
+        );
+      }
     }
 
     final settingsPatch = <String, dynamic>{};
