@@ -109,12 +109,12 @@ class PrintTicketService {
     final resolvedCashier = cashierName?.trim();
 
     // ─── TITULO en una sola linea ───────────────────────────────────
-    // "COMANDA DE COCINA" todo junto en width:1 height:2 bold.
-    // (No usamos width:2 porque "COMANDA DE COCINA" = 17ch × 2 = 34ch
-    // y el line max a 2x es 24ch — overflow.)
+    // "COMANDA DE COCINA" (17ch) en width:2 height:2 bold. A 2x width el
+    // line max es 24ch — entra holgado y se ve proporcional (no estirado
+    // como 1x2).
     final (titleMain, titleSub) = _kitchenTitleParts(areaCode);
     final titleSingle = isReprint ? 'REIMPRESIÓN' : '$titleMain $titleSub';
-    gen.setTextSize(width: 1, height: 2);
+    gen.setTextSize(width: 2, height: 2);
     gen.setBold(true);
     gen.textCentered(titleSingle);
     gen.setBold(false);
@@ -219,25 +219,24 @@ class PrintTicketService {
   }
 
   /// Renderiza items bajo una **banda inversa full-ancho** con el label
-  /// centrado en `width:1 height:2` (`GS B 1` blanco-sobre-negro). Items
-  /// en height 2x bold (mismo size que el label, sin inverse — asi el
-  /// "tipo de texto" del label y los productos coincide y solo los
-  /// diferencia el fondo invertido). Modificadores/notas indentados a
-  /// tamaño normal, separador thin entre items con aire vertical, y
-  /// `doubleSeparator` (`===`) cerrando la sección.
+  /// centrado en `width:2 height:2` (`GS B 1` blanco-sobre-negro). Items
+  /// también en 2x2 bold — mismo "tipo de texto" que el label, lo único
+  /// que los diferencia es el fondo invertido. Modificadores/notas
+  /// indentados a tamaño normal, separador thin entre items con aire
+  /// vertical, y `doubleSeparator` (`===`) cerrando la sección.
   static void _renderItemsList(
     EscPosGenerator gen, {
     required String label,
     required List<OrderItem> items,
   }) {
-    // Banda inversa 1x2: padding a 48 chars (line max a width:1). El
+    // Banda inversa 2x2: padding a 24 chars (line max a width:2). El
     // padding hace que el fondo negro se extienda full-ancho. Sin
     // padding solo se invertiria sobre los chars del label dando una
     // banda flaca.
     gen.setInverse(true);
-    gen.setTextSize(width: 1, height: 2);
+    gen.setTextSize(width: 2, height: 2);
     gen.setBold(true);
-    gen.text(_centerInWidth(label.toUpperCase(), 48));
+    gen.text(_centerInWidth(label.toUpperCase(), 24));
     gen.setBold(false);
     gen.setTextSize();
     gen.setInverse(false);
@@ -247,9 +246,11 @@ class PrintTicketService {
       final item = items[i];
       final qty = _formatQty(item.quantity);
 
-      gen.setTextSize(width: 1, height: 2);
+      // Items en width:2 height:2 (proporcional, no estirado como 1x2).
+      // Wrap width 24 (line max a 2x).
+      gen.setTextSize(width: 2, height: 2);
       gen.setBold(true);
-      _writeWrappedLine(gen, '$qty   ${item.productName}', 48);
+      _writeWrappedLine(gen, '$qty  ${item.productName}', 24);
       gen.setBold(false);
       gen.setTextSize();
 
