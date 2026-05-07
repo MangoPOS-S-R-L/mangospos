@@ -55,26 +55,99 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
       }
 
 
-      // 1. Create auth user
-      final AuthResponse resp;
+      // 1. Auth: signUp con flujo de recovery para usuarios huérfanos.
+      //
+      // Bug histórico: si el primer intento creaba auth.users pero
+      // fallaba en pasos posteriores (insert de business, etc.), el
+      // usuario quedaba huérfano. Reintentar el form lanzaba "ya
+      // existe una cuenta" sin opción de continuar el bootstrap.
+      //
+      // Fix: cuando signUp detecta "user_already_exists", probamos
+      // signInWithPassword con el mismo password ingresado. Si funciona
+      // y el user NO tiene business asociado, completamos el bootstrap
+      // (recovery del huérfano). Si funciona y SÍ tiene business, la
+      // cuenta ya está completa → cerrar sesión recién abierta y
+      // mandar al login.
+      String userId;
+      Session? session;
+
+      AuthResponse? signUpResp;
       try {
-        resp = await supabase.auth.signUp(
+        signUpResp = await supabase.auth.signUp(
           email: step1.email!,
           password: step1.password!,
           emailRedirectTo: 'https://app.mangopos.do/auth/callback',
         );
       } on AuthException catch (e) {
-        throw Exception(_friendlyAuthError(e));
+        if (!_isAlreadyRegisteredError(e)) {
+          throw Exception(_friendlyAuthError(e));
+        }
+        // user_already_exists → intentar recovery
+        signUpResp = null;
       }
 
-      final session = resp.session ?? supabase.auth.currentSession;
-      final user = resp.user ?? session?.user ?? supabase.auth.currentUser;
-      if (user == null) {
-        throw Exception(
-          'No se pudo crear la cuenta. Verifica tu correo y contraseña e intenta de nuevo.',
-        );
+      if (signUpResp != null) {
+        // Path normal: signUp exitoso
+        session = signUpResp.session ?? supabase.auth.currentSession;
+        final user =
+            signUpResp.user ?? session?.user ?? supabase.auth.currentUser;
+        if (user == null) {
+          throw Exception(
+            'No se pudo crear la cuenta. Verifica tu correo y contraseña e intenta de nuevo.',
+          );
+        }
+        userId = user.id;
+      } else {
+        // Path recovery: usuario ya existe, probar signIn
+        final AuthResponse signInResp;
+        try {
+          signInResp = await supabase.auth.signInWithPassword(
+            email: step1.email!,
+            password: step1.password!,
+          );
+        } on AuthException {
+          // El password no matchea con la cuenta existente.
+          throw Exception(
+            'Ese correo ya tiene una cuenta y la contraseña no coincide. '
+            'Inicia sesión desde la pantalla principal o usa "¿Olvidaste tu contraseña?".',
+          );
+        }
+        session = signInResp.session;
+        final user = signInResp.user ?? session?.user;
+        if (user == null) {
+          throw Exception(
+            'No se pudo recuperar la cuenta. Intenta iniciar sesión desde la pantalla principal.',
+          );
+        }
+        userId = user.id;
+
+        // Validar si la cuenta ya está completa (tiene business).
+        // Si sí → no estamos recuperando un huérfano, el usuario
+        // simplemente está intentando registrarse con un email que ya
+        // tiene cuenta activa.
+        try {
+          final existingBiz = await supabase
+              .from('businesses')
+              .select('id')
+              .eq('owner_id', userId)
+              .limit(1)
+              .maybeSingle();
+          if (existingBiz != null) {
+            // Cerrar la sesión que acabamos de abrir — no es nuestro flow.
+            await supabase.auth.signOut();
+            throw Exception(
+              'Esta cuenta ya está registrada y activa. '
+              'Inicia sesión desde la pantalla principal en lugar de crear una nueva.',
+            );
+          }
+        } on PostgrestException catch (e) {
+          throw Exception(
+            'No se pudo verificar el estado de la cuenta: ${_friendlyDbError(e)}',
+          );
+        }
+        // Si no había business, caemos al bootstrap normal abajo
+        // (profile upsert + business insert + membership insert).
       }
-      final userId = user.id;
 
       // 2. Create profile
       try {
@@ -179,11 +252,19 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
     }
   }
 
+  /// `true` si el AuthException representa "user_already_exists" en
+  /// cualquiera de las variantes que devuelve Supabase Auth (mensajes han
+  /// cambiado entre versiones — cubrimos las 3 conocidas).
+  bool _isAlreadyRegisteredError(AuthException e) {
+    final msg = e.message.toLowerCase();
+    return msg.contains('already registered') ||
+        msg.contains('already been registered') ||
+        msg.contains('user_already_exists');
+  }
+
   String _friendlyAuthError(AuthException e) {
     final msg = e.message.toLowerCase();
-    if (msg.contains('already registered') ||
-        msg.contains('already been registered') ||
-        msg.contains('user_already_exists')) {
+    if (_isAlreadyRegisteredError(e)) {
       return 'Ya existe una cuenta con este correo electrónico. Intenta iniciar sesión o usa otro correo.';
     }
     if (msg.contains('invalid') && msg.contains('email')) {
