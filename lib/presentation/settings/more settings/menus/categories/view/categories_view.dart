@@ -150,12 +150,38 @@ class _CategoriesViewState extends ConsumerState<CategoriesView> {
                             color: Colors.black38,
                           ),
                         ),
-                        title: Text(
-                          cat.name,
-                          style: text.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
-                            color: MangoColors.darkGray,
-                          ),
+                        title: Row(
+                          children: [
+                            // Swatch del color actual. Sin color → circulo
+                            // outlined que invita a setearlo.
+                            Container(
+                              width: 16,
+                              height: 16,
+                              decoration: BoxDecoration(
+                                color: cat.color != null
+                                    ? _hexToColor(cat.color!)
+                                    : null,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: cat.color != null
+                                      ? Colors.transparent
+                                      : MangoColors.cardBorder,
+                                  width: 1.5,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                cat.name,
+                                style: text.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  color: MangoColors.darkGray,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
                         ),
                         subtitle: Row(
                           children: [
@@ -198,6 +224,16 @@ class _CategoriesViewState extends ConsumerState<CategoriesView> {
                                     .read(categoriesVmProvider.notifier)
                                     .rename(cat.id, newName.trim());
                               }
+                            } else if (v == 'color') {
+                              final picked = await _showColorPicker(
+                                context,
+                                cat.color,
+                              );
+                              if (picked != null) {
+                                await ref
+                                    .read(categoriesVmProvider.notifier)
+                                    .updateColor(cat.id, picked.hex);
+                              }
                             } else if (v == 'toggle') {
                               await ref
                                   .read(categoriesVmProvider.notifier)
@@ -226,6 +262,20 @@ class _CategoriesViewState extends ConsumerState<CategoriesView> {
                                   ),
                                   SizedBox(width: 12),
                                   Text('Renombrar'),
+                                ],
+                              ),
+                            ),
+                            const PopupMenuItem(
+                              value: 'color',
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.palette_outlined,
+                                    size: 18,
+                                    color: MangoColors.darkGray,
+                                  ),
+                                  SizedBox(width: 12),
+                                  Text('Cambiar color'),
                                 ],
                               ),
                             ),
@@ -334,6 +384,110 @@ class _CategoriesViewState extends ConsumerState<CategoriesView> {
     );
   }
 
+  /// Convierte un hex `#RRGGBB` (o `RRGGBB`) a `Color`. Devuelve un gris
+  /// neutro si el formato es inválido para que la UI no crashee con
+  /// datos legacy mal escritos.
+  Color _hexToColor(String hex) {
+    final cleaned = hex.replaceAll('#', '').trim();
+    if (cleaned.length != 6) return MangoColors.cardBorder;
+    final parsed = int.tryParse(cleaned, radix: 16);
+    if (parsed == null) return MangoColors.cardBorder;
+    return Color(0xFF000000 | parsed);
+  }
+
+  /// Picker de color con paleta predefinida + opción "Sin color". Devuelve
+  /// `null` si el usuario cancela; si guarda, devuelve un wrapper con el
+  /// hex elegido (puede ser `null` si eligió "Sin color"). Usar wrapper en
+  /// vez de `String?` directo porque ambos valores (cancelar / guardar
+  /// sin color) coincidirían en `null` y perderíamos la diferencia.
+  Future<_PickedColor?> _showColorPicker(
+    BuildContext ctx,
+    String? currentHex,
+  ) async {
+    const palette = <String>[
+      '#EF4444', // rojo
+      '#F97316', // naranja
+      '#EAB308', // amarillo
+      '#22C55E', // verde
+      '#14B8A6', // teal
+      '#3B82F6', // azul
+      '#6366F1', // indigo
+      '#A855F7', // morado
+      '#EC4899', // rosa
+      '#92400E', // marrón
+      '#6B7280', // gris
+    ];
+    String? selected = currentHex;
+    return showDialog<_PickedColor?>(
+      context: ctx,
+      builder: (dialogCtx) {
+        return StatefulBuilder(
+          builder: (sbCtx, setLocalState) => AlertDialog(
+            backgroundColor: MangoColors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            title: const Text(
+              'Color de la categoría',
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                color: MangoColors.darkGray,
+              ),
+            ),
+            content: SizedBox(
+              width: 320,
+              child: Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: [
+                  // "Sin color" → null
+                  _ColorSwatchTile(
+                    color: null,
+                    selected: selected == null,
+                    onTap: () => setLocalState(() => selected = null),
+                  ),
+                  ...palette.map(
+                    (hex) => _ColorSwatchTile(
+                      color: _hexToColor(hex),
+                      selected:
+                          selected != null &&
+                          selected!.toLowerCase() == hex.toLowerCase(),
+                      onTap: () => setLocalState(() => selected = hex),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                style: TextButton.styleFrom(
+                  foregroundColor: MangoColors.darkGray,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                onPressed: () => Navigator.pop(dialogCtx),
+                child: const Text('Cancelar'),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: MangoColors.primaryOrange,
+                  foregroundColor: MangoColors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                onPressed: () =>
+                    Navigator.pop(dialogCtx, _PickedColor(selected)),
+                child: const Text('Guardar'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   Future<bool?> _confirm(BuildContext ctx, String title) async {
     return showDialog<bool>(
       context: ctx,
@@ -370,6 +524,56 @@ class _CategoriesViewState extends ConsumerState<CategoriesView> {
             child: const Text('Sí, eliminar'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Wrapper para distinguir "usuario canceló el dialog" (Navigator.pop sin
+/// args devuelve null) de "usuario guardó eligiendo Sin color" (devuelve
+/// `_PickedColor(null)`). Sin esto los dos casos colisionarían en `null`.
+class _PickedColor {
+  final String? hex;
+  const _PickedColor(this.hex);
+}
+
+/// Swatch circular individual del picker. `color == null` representa
+/// "Sin color" (círculo outlined con icono `block`).
+class _ColorSwatchTile extends StatelessWidget {
+  const _ColorSwatchTile({
+    required this.color,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final Color? color;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: color,
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: selected
+                ? MangoColors.primaryOrange
+                : (color == null
+                      ? MangoColors.cardBorder
+                      : Colors.transparent),
+            width: selected ? 3 : 1.5,
+          ),
+        ),
+        child: color == null
+            ? const Icon(Icons.block, color: Colors.black38, size: 20)
+            : (selected
+                  ? const Icon(Icons.check, color: Colors.white, size: 20)
+                  : null),
       ),
     );
   }

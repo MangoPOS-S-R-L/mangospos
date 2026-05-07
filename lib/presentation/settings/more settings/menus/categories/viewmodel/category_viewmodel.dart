@@ -57,6 +57,25 @@ class CategoriesVm extends Notifier<CategoriesState> {
     await load(businessId: _businessId ?? 'auto');
   }
 
+  /// Cambia el color de una categoría. [hexColor] = `#RRGGBB` o `null`
+  /// para limpiar. Optimistic: actualiza el state local primero (no
+  /// flash) y luego persiste. También sincroniza el cache offline para
+  /// que ventas/zona muestre el color nuevo sin refresh manual.
+  Future<void> updateColor(String id, String? hexColor) async {
+    final current = state.list;
+    final updated = current
+        .map((c) => c.id == id ? c.copyWith(color: hexColor) : c)
+        .toList(growable: false);
+    state = state.copyWith(data: AsyncValue.data(updated));
+    try {
+      await _repo.update(id, {'color': hexColor});
+      await _syncOfflineCatalogCategories(updated);
+    } catch (e) {
+      await load(businessId: _businessId ?? 'auto');
+      rethrow;
+    }
+  }
+
   Future<void> remove(String id) async {
     await _repo.remove(id);
     await load(businessId: _businessId ?? 'auto');
