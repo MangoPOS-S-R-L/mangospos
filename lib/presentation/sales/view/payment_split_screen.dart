@@ -25,6 +25,14 @@ class PaymentSplitDialog extends ConsumerStatefulWidget {
   final String? customerName;
   final String? fiscalType;
 
+  /// Hook que corre DESPUÉS de que el pago fue confirmado pero ANTES de
+  /// que este dialog se cierre. Sirve para mostrar UI encima del modal
+  /// de pago (e.g. popup de "Imprimir copia") sin que el usuario vea el
+  /// dialog desaparecer y reaparecer. Cuando el Future resuelve, el
+  /// dialog hace pop con la lista de payments para que el caller
+  /// continúe el flujo normal.
+  final Future<void> Function(List<Payment> payments)? onConfirmed;
+
   const PaymentSplitDialog({
     super.key,
     required this.orderId,
@@ -34,6 +42,7 @@ class PaymentSplitDialog extends ConsumerStatefulWidget {
     this.customerId,
     this.customerName,
     this.fiscalType,
+    this.onConfirmed,
   });
 
   @override
@@ -42,6 +51,20 @@ class PaymentSplitDialog extends ConsumerStatefulWidget {
 
 class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
   late FocusNode _focusNode;
+
+  /// Cierre del dialog con la lista de payments. Si el caller pasó
+  /// `onConfirmed`, lo awaitamos PRIMERO — esto mantiene el modal de
+  /// pago montado mientras corre el callback (e.g. el popup
+  /// "Imprimir copia" que el caller monta encima). Solo después
+  /// hacemos pop, devolviendo los payments al .then() del caller.
+  Future<void> _finishWithPayments(List<Payment> payments) async {
+    final hook = widget.onConfirmed;
+    if (hook != null) {
+      await hook(payments);
+    }
+    if (!mounted) return;
+    Navigator.pop(context, payments);
+  }
 
   /// Tecla físicamente presionada en este momento, mapeada al label
   /// visual del keypad ('0'..'9', '⌫'). Se usa para sincronizar el
@@ -156,7 +179,7 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
       if (canConfirm) {
         final List<Payment>? payments = await vm.confirmPayment(context);
         if (payments != null && mounted) {
-          Navigator.pop(context, payments);
+          await _finishWithPayments(payments);
         }
       }
       return;
@@ -256,6 +279,7 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
                             state: state,
                             vm: vm,
                             pressedKey: _pressedKeyVN,
+                            onConfirm: _finishWithPayments,
                           ),
                         ),
                       )
@@ -285,6 +309,7 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
                                 state: state,
                                 vm: vm,
                                 onClose: () => Navigator.pop(context),
+                                onConfirm: _finishWithPayments,
                               ),
                             ),
                           ],
@@ -899,11 +924,13 @@ class _RightPanel extends StatelessWidget {
   final PaymentSplitState state;
   final PaymentSplitViewModel vm;
   final VoidCallback onClose;
+  final Future<void> Function(List<Payment>) onConfirm;
 
   const _RightPanel({
     required this.state,
     required this.vm,
     required this.onClose,
+    required this.onConfirm,
   });
 
   /// PRD 6 § 4.7 — explica al cajero por qué "Confirmar pago" está disabled.
@@ -957,7 +984,7 @@ class _RightPanel extends StatelessWidget {
                         context,
                       );
                       if (payments != null && context.mounted) {
-                        Navigator.pop(context, payments);
+                        await onConfirm(payments);
                       }
                     }
                   : null,
@@ -1059,11 +1086,13 @@ class _MobileLayout extends StatelessWidget {
   final PaymentSplitState state;
   final PaymentSplitViewModel vm;
   final ValueListenable<String?> pressedKey;
+  final Future<void> Function(List<Payment>) onConfirm;
 
   const _MobileLayout({
     required this.state,
     required this.vm,
     required this.pressedKey,
+    required this.onConfirm,
   });
 
   @override
@@ -1096,7 +1125,7 @@ class _MobileLayout extends StatelessWidget {
                       context,
                     );
                     if (payments != null && context.mounted) {
-                      Navigator.pop(context, payments);
+                      await onConfirm(payments);
                     }
                   }
                 : null,

@@ -31,6 +31,7 @@ import 'package:mangopos/services/printing/qr_esc_pos_builder.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
+import 'package:mangopos/presentation/sales/widgets/payment_success_dialog.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
 import 'package:mangopos/presentation/sales/widgets/transfer_session_dialog.dart';
 import 'package:mangopos/data/models/table_status.dart';
@@ -1178,6 +1179,48 @@ class _CartView extends ConsumerWidget {
 
     if (!context.mounted) return;
 
+    // onFinish corre DESPUÉS de que PaymentSplitDialog hace pop —
+    // navega/recarga la orden. Definido aquí para que tanto onConfirmed
+    // (vía _showReimpresionDialog en error) como el .then() lo puedan
+    // invocar.
+    void onFinish() {
+      if (checkId == null) {
+        // PRD 4: en Quick/Manual cerramos la orden de forma MANDATORIA,
+        // reseteamos el state, y abrimos UNA SESIÓN NUEVA en el mismo
+        // modo para que el operador pueda agregar productos
+        // inmediatamente sin tener que navegar. Sin el openQuick/Manual
+        // final, el cart queda vacío con state.order=null y los taps
+        // de producto fallan con "no hay orden activa".
+        if (origin == OrderOrigin.quick || origin == OrderOrigin.manual) {
+          () async {
+            try {
+              await ref
+                  .read(salesRepositoryProvider)
+                  .closeOrder(orderId: order.id, status: 'paid');
+            } catch (_) {
+              // Si ya estaba cerrada, processPayment lo hizo. OK.
+            }
+            await ref
+                .read(currentOrderProvider.notifier)
+                .refreshOrder(clearIfPaid: true);
+            if (origin == OrderOrigin.quick) {
+              await ref
+                  .read(currentOrderProvider.notifier)
+                  .openQuick(forceRestart: true);
+            } else {
+              await ref
+                  .read(currentOrderProvider.notifier)
+                  .openManual(forceRestart: true);
+            }
+          }();
+        } else {
+          if (context.mounted) context.go(AppRoutes.salesByZone);
+        }
+      } else {
+        ref.read(currentOrderProvider.notifier).refreshOrder();
+      }
+    }
+
     _showSmoothDialog(
       context: context,
       barrierDismissible: false,
@@ -1189,36 +1232,37 @@ class _CartView extends ConsumerWidget {
         customerId: finalCustomerId,
         customerName: finalCustomerName,
         fiscalType: finalFiscalType,
-      ),
-    ).then((result) async {
-      if (result is List<Payment>) {
-        if (!context.mounted) return;
+        // onConfirmed corre con el modal de pago AÚN MONTADO. Aquí
+        // hacemos la impresión y mostramos el popup de "Imprimir copia"
+        // encima — así el cajero ve el modal de pago detrás, en lugar
+        // de un fondo vacío. Cuando este Future resuelve, el modal de
+        // pago hace pop y el .then() de abajo dispara onFinish.
+        onConfirmed: (payments) async {
+          if (!context.mounted) return;
 
-        // INSTANT LOAD: Use data from result + local state
-        final payments = result;
-        final items = List<OrderItem>.from(prePaymentItems);
-        final printOrder = prePaymentOrder;
+          final items = List<OrderItem>.from(prePaymentItems);
+          final printOrder = prePaymentOrder;
 
-        final businessProfile = await _loadBusinessReceiptProfile(ref);
-        final fiscalDoc = await _loadFiscalDocument(ref, order.id);
-        final waiterName =
-            await _loadWaiterName(ref, order.id) ??
-            ref.read(sessionProvider).userName;
-        final issuedAt =
-            fiscalDoc?.issuedAt ??
-            (payments.isNotEmpty
-                ? payments
-                      .map((payment) => payment.createdAt)
-                      .reduce((a, b) => a.isAfter(b) ? a : b)
-                : order.createdAt);
-        // Optional: Filter items if paying a specific check (though strictly we show all items on invoice or filter inside modal)
+          final businessProfile = await _loadBusinessReceiptProfile(ref);
+          final fiscalDoc = await _loadFiscalDocument(ref, order.id);
+          final waiterName =
+              await _loadWaiterName(ref, order.id) ??
+              ref.read(sessionProvider).userName;
+          final issuedAt =
+              fiscalDoc?.issuedAt ??
+              (payments.isNotEmpty
+                  ? payments
+                        .map((payment) => payment.createdAt)
+                        .reduce((a, b) => a.isAfter(b) ? a : b)
+                  : order.createdAt);
 
-        final ncfFromPayment = payments.isNotEmpty
-            ? payments.last.reference
-            : null;
-        final printedFiscalType = fiscalDoc?.ncfType ?? finalFiscalType;
+          final ncfFromPayment = payments.isNotEmpty
+              ? payments.last.reference
+              : null;
+          final printedFiscalType = fiscalDoc?.ncfType ?? finalFiscalType;
 
-        if (context.mounted) {
+          if (!context.mounted) return;
+
           final invoicePrintLockKey = _printActionKey(
             'invoice',
             orderId: printOrder.id,
@@ -1254,46 +1298,6 @@ class _CartView extends ConsumerWidget {
             'total': printOrder.total,
           };
 
-          // Define completion logic
-          void onFinish() {
-            if (checkId == null) {
-              // PRD 4: en Quick/Manual cerramos la orden de forma MANDATORIA,
-              // reseteamos el state, y abrimos UNA SESIÓN NUEVA en el mismo
-              // modo para que el operador pueda agregar productos
-              // inmediatamente sin tener que navegar. Sin el openQuick/Manual
-              // final, el cart queda vacío con state.order=null y los taps
-              // de producto fallan con "no hay orden activa".
-              if (origin == OrderOrigin.quick ||
-                  origin == OrderOrigin.manual) {
-                () async {
-                  try {
-                    await ref
-                        .read(salesRepositoryProvider)
-                        .closeOrder(orderId: order.id, status: 'paid');
-                  } catch (_) {
-                    // Si ya estaba cerrada, processPayment lo hizo. OK.
-                  }
-                  await ref
-                      .read(currentOrderProvider.notifier)
-                      .refreshOrder(clearIfPaid: true);
-                  if (origin == OrderOrigin.quick) {
-                    await ref
-                        .read(currentOrderProvider.notifier)
-                        .openQuick(forceRestart: true);
-                  } else {
-                    await ref
-                        .read(currentOrderProvider.notifier)
-                        .openManual(forceRestart: true);
-                  }
-                }();
-              } else {
-                if (context.mounted) context.go(AppRoutes.salesByZone);
-              }
-            } else {
-              ref.read(currentOrderProvider.notifier).refreshOrder();
-            }
-          }
-
           try {
             await _runLockedAction(ref, invoicePrintLockKey, () async {
               await _handlePrintFlow(
@@ -1309,7 +1313,30 @@ class _CartView extends ConsumerWidget {
                 showSnackBar: true,
               );
             });
-            onFinish();
+            if (context.mounted) {
+              await showPaymentSuccessDialog(
+                context: context,
+                onReprint: () async {
+                  // Marcamos el ticket como "COPIA" para que se
+                  // distinga del original y no se confunda con una
+                  // segunda venta.
+                  final copyData = Map<String, dynamic>.from(invoiceData);
+                  copyData['title'] = '*** COPIA - FACTURA ***';
+                  await _handlePrintFlow(
+                    context,
+                    ref,
+                    'invoice',
+                    copyData,
+                    orderObj: printOrder,
+                    orderItems: items,
+                    payments: payments,
+                    tableName: tableName,
+                    waiterName: waiterName,
+                    showSnackBar: true,
+                  );
+                },
+              );
+            }
           } catch (e) {
             if (context.mounted) {
               _showReimpresionDialog(
@@ -1323,13 +1350,18 @@ class _CartView extends ConsumerWidget {
                 tableName: tableName,
                 waiterName: waiterName,
                 errorMsg: e.toString(),
-                onFinish: onFinish,
+                // onFinish ya corre desde el .then() del modal de pago,
+                // así que no lo pasamos aquí — evita doble navegación.
               );
             }
           }
-        }
+        },
+      ),
+    ).then((result) {
+      if (result is List<Payment>) {
+        onFinish();
       }
-    }); // Close then and _showSmoothDialog
+    });
   }
 
   void _openSplitBillModal(BuildContext context, WidgetRef ref, Order order) {
