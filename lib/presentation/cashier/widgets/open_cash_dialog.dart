@@ -206,10 +206,14 @@ class _OpenCashDialogState extends ConsumerState<OpenCashDialog> {
       onKeyEvent: _handleKeyboard,
       child: Dialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        // Compacto pero NO estrecho. wp(32) era demasiado angosto y
+        // hacía que el header (icono + título) se rompiera vertical.
+        // wp(40) + maxWidth 500 da el ratio cuadrado-horizontal que
+        // se ve bien en escritorio.
         child: Container(
-          width: context.wp(45),
-          constraints: BoxConstraints(maxWidth: 550, maxHeight: context.hp(85)),
-          padding: EdgeInsets.all(context.wp(3)),
+          width: context.wp(40),
+          constraints: BoxConstraints(maxWidth: 500, maxHeight: context.hp(78)),
+          padding: EdgeInsets.all(context.wp(2)),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(24),

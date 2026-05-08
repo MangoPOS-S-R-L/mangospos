@@ -1440,6 +1440,58 @@ class _UserDialogState extends State<_UserDialog> {
     });
   }
 
+  /// Mapea errores crudos del backend (PostgrestException, signUp,
+  /// etc.) a mensajes accionables para el cajero. Cubre los casos
+  /// más comunes; cualquier otro error cae al fallback con la causa
+  /// raíz visible.
+  String _friendlyUserSaveError(Object error) {
+    final raw = error.toString();
+    final lower = raw.toLowerCase();
+
+    // Email duplicado en auth.users (constraint partial unique).
+    if (lower.contains('users_email_partial_key') ||
+        lower.contains('already registered') ||
+        lower.contains('already been registered') ||
+        lower.contains('user_already_exists') ||
+        (lower.contains('email') &&
+            lower.contains('already exists'))) {
+      final email = _email.text.trim();
+      return 'El correo ${email.isEmpty ? '' : '"$email" '}ya tiene una '
+          'cuenta registrada. Si es la misma persona, contáctala para '
+          'que inicie sesión con ese correo, o usa un email distinto '
+          'para este usuario.';
+    }
+
+    // Pin duplicado (si hay constraint en employees.pin per business).
+    if (lower.contains('pin') && lower.contains('duplicate')) {
+      return 'Ese PIN ya está asignado a otro usuario en este negocio. '
+          'Elige uno distinto.';
+    }
+
+    // Password muy corto (Supabase Auth: mínimo 6).
+    if (lower.contains('password') &&
+        (lower.contains('short') || lower.contains('weak'))) {
+      return 'La contraseña debe tener al menos 6 caracteres.';
+    }
+
+    // Email inválido.
+    if (lower.contains('invalid') && lower.contains('email')) {
+      return 'El correo no tiene un formato válido. Revísalo.';
+    }
+
+    // Conexión.
+    if (lower.contains('socket') ||
+        lower.contains('timeout') ||
+        lower.contains('failed host lookup')) {
+      return 'Sin conexión al servidor. Verifica tu internet e intenta '
+          'de nuevo.';
+    }
+
+    // Fallback: dejar el error crudo accesible para soporte pero más
+    // limpio de leer.
+    return 'No se pudo guardar el usuario. Detalle técnico: $raw';
+  }
+
   Future<void> _onSubmit() async {
     if (_firstName.text.isEmpty ||
         _lastName.text.isEmpty ||
@@ -1603,9 +1655,14 @@ class _UserDialogState extends State<_UserDialog> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error al guardar: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_friendlyUserSaveError(e)),
+            backgroundColor: const Color(0xFFEF4444),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 6),
+          ),
+        );
       }
     } finally {
       if (mounted) {
