@@ -525,7 +525,7 @@ class CashierRepository {
     var query = _client
         .from('payments')
         .select(
-          'id, order_id, check_id, payment_method_id, amount, change_amount, reference, status, session_id, created_at, business_id, fiscal_documents(ncf_number, ncf_type, customer_rnc, customer_name)',
+          'id, order_id, check_id, payment_method_id, amount, change_amount, reference, status, session_id, created_at, business_id, fiscal_document_id, fiscal_documents(ncf_number, ncf_type, customer_rnc, customer_name)',
         )
         .eq('business_id', businessId)
         .inFilter('status', ['completed', 'void', 'cancelled']);
@@ -563,7 +563,16 @@ class CashierRepository {
         .range(fromIndex, toIndex)
         .count(CountOption.exact);
 
-    final paymentsRaw = List<Map<String, dynamic>>.from(response.data);
+    // Filtra payments cancelados sin fiscal_document — son huerfanos del bug
+    // de duplicacion pre-20260509_0001. Una anulacion legitima (cancelar
+    // venta valida) conserva fiscal_document_id apuntando al NCF original,
+    // asi que esos siguen listandose como ventas anuladas.
+    final paymentsRaw = List<Map<String, dynamic>>.from(response.data)
+        .where((p) {
+          if (p['status']?.toString() != 'cancelled') return true;
+          return p['fiscal_document_id'] != null;
+        })
+        .toList(growable: false);
     final totalCount = response.count;
 
     if (paymentsRaw.isEmpty) return (payments: <Map<String, dynamic>>[], totalCount: totalCount);

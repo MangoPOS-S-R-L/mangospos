@@ -58,6 +58,45 @@ class ReportsCsvExportService {
       rows.add([]);
     }
 
+    void addFiscalDocumentsDetail(List<Map<String, dynamic>> fiscalDocs) {
+      if (fiscalDocs.isEmpty) return;
+      final taxLabels = _collectTaxLabels(fiscalDocs);
+      rows.add(['Detalle de comprobantes']);
+      rows.add([
+        'NCF',
+        'Tipo',
+        'Cliente',
+        'RNC/Cédula',
+        'Subtotal',
+        ...taxLabels,
+        'Total',
+        'Estado',
+        'Fecha',
+      ]);
+      for (final doc in fiscalDocs) {
+        final issuedAt =
+            DateTime.tryParse(doc['issued_at']?.toString() ?? '') ??
+                DateTime.now();
+        rows.add([
+          doc['ncf_number']?.toString() ?? '',
+          doc['ncf_type']?.toString() ?? '',
+          doc['customer_name']?.toString() ?? 'CONSUMIDOR FINAL',
+          doc['customer_rnc']?.toString() ?? '-',
+          ((doc['subtotal'] as num?)?.toDouble() ?? 0).toStringAsFixed(2),
+          ...taxLabels.map((label) {
+            final amount = _taxAmountForLabel(doc, label);
+            return amount > 0 ? amount.toStringAsFixed(2) : '0.00';
+          }),
+          ((doc['total'] as num?)?.toDouble() ?? 0).toStringAsFixed(2),
+          (doc['status']?.toString() ?? 'active') == 'active'
+              ? 'Activo'
+              : 'Anulado',
+          issuedAt.toLocal().toIso8601String(),
+        ]);
+      }
+      rows.add([]);
+    }
+
     void addProductSalesSection(List<ProductSalesReportRow> productRows) {
       rows.add(['Ventas por producto']);
       rows.add([
@@ -92,6 +131,17 @@ class ReportsCsvExportService {
     switch (category) {
       case ReportCategory.sales:
         addMetricSection(viewModel.getSalesMetricCards());
+        // Sub-reporte "Por comprobante" sale enfocado: solo métricas
+        // + tabla de comprobantes. Mismo formato limpio que el reporte
+        // de impuestos.
+        if (state.salesSubReport == SalesSubReport.byReceipt) {
+          addBreakdownSection(
+            'Ventas por recibo / comprobante',
+            viewModel.getReceiptRows(),
+          );
+          addFiscalDocumentsDetail(viewModel.getFiscalDocuments());
+          break;
+        }
         addBreakdownSection(
           'Ventas por tipo de pago',
           viewModel.getPaymentMethodRows(),
@@ -157,42 +207,7 @@ class ReportsCsvExportService {
           'Desglose por tipo de impuesto',
           viewModel.getFiscalTaxBreakdownRows(),
         );
-        final fiscalDocs = viewModel.getFiscalDocuments();
-        final taxLabels = _collectTaxLabels(fiscalDocs);
-        rows.add(['Detalle de comprobantes fiscales (DGII)']);
-        rows.add([
-          'NCF',
-          'Tipo',
-          'Cliente',
-          'RNC/Cédula',
-          'Subtotal',
-          ...taxLabels,
-          'Total',
-          'Estado',
-          'Fecha',
-        ]);
-        for (final doc in fiscalDocs) {
-          final issuedAt =
-              DateTime.tryParse(doc['issued_at']?.toString() ?? '') ??
-              DateTime.now();
-          rows.add([
-            doc['ncf_number']?.toString() ?? '',
-            doc['ncf_type']?.toString() ?? '',
-            doc['customer_name']?.toString() ?? 'CONSUMIDOR FINAL',
-            doc['customer_rnc']?.toString() ?? '-',
-            ((doc['subtotal'] as num?)?.toDouble() ?? 0).toStringAsFixed(2),
-            ...taxLabels.map((label) {
-              final amount = _taxAmountForLabel(doc, label);
-              return amount > 0 ? amount.toStringAsFixed(2) : '0.00';
-            }),
-            ((doc['total'] as num?)?.toDouble() ?? 0).toStringAsFixed(2),
-            (doc['status']?.toString() ?? 'active') == 'active'
-                ? 'Activo'
-                : 'Anulado',
-            issuedAt.toLocal().toIso8601String(),
-          ]);
-        }
-        rows.add([]);
+        addFiscalDocumentsDetail(viewModel.getFiscalDocuments());
         break;
     }
 
@@ -202,6 +217,10 @@ class ReportsCsvExportService {
   static String _toCsvLine(List<String> cells) {
     return cells.map((cell) => '"${cell.replaceAll('"', '""')}"').join(',');
   }
+
+  // Skip "Impuesto X%" entries — fallback de tax_rate combinado que no
+  // pudo desdoblarse contra impuestos configurados (ej. 28% = ITBIS+Ley).
+  static final RegExp _kUnmappedTaxLabelRe = RegExp(r'^Impuesto\s');
 
   static List<String> _collectTaxLabels(List<Map<String, dynamic>> documents) {
     final labels = <String>{};
@@ -213,6 +232,7 @@ class ReportsCsvExportService {
               ? item
               : Map<String, dynamic>.from(item as Map);
           final label = m['label']?.toString() ?? '';
+          if (_kUnmappedTaxLabelRe.hasMatch(label)) continue;
           final rate = (m['rate'] as num?)?.toDouble() ?? 0;
           final display = rate > 0
               ? '$label (${rate.toStringAsFixed(rate.truncateToDouble() == rate ? 0 : 2)}%)'

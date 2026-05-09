@@ -312,7 +312,13 @@ class _CashierViewState extends ConsumerState<CashierView>
     var totalSales = toInt(summary['total_sales_all_methods']);
     var transactionCount = toInt(summary['transaction_count']);
 
-    final payments = await repository.getSessionPaymentsDetailed(sessionId);
+    final allPayments = await repository.getSessionPaymentsDetailed(sessionId);
+    // El historial trae 'completed', 'void' y 'cancelled' juntos. Para el
+    // calculo del cierre solo cuentan las completed — las anuladas no
+    // ingresaron al cajon ni cuentan como ventas reales del turno.
+    final payments = allPayments
+        .where((p) => p['status']?.toString() == 'completed')
+        .toList(growable: false);
     int cardPayments = 0;
     int transferPayments = 0;
     int totalPaid = 0;

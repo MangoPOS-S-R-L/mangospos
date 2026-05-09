@@ -752,6 +752,18 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                         .map((modifier) {
                           final hasCost = modifier.price > 0.009;
                           final isComboChoice = modifier.name.contains(': ');
+                          // qty efectiva del modifier en este item:
+                          // item.quantity * modifier.qty. Refleja el "7×" en
+                          // el chip cuando el item tiene cantidad multiple.
+                          final itemQty = _quantity <= 0 ? 1.0 : _quantity;
+                          final effectiveQty = itemQty * modifier.qty;
+                          final totalCost = modifier.price * effectiveQty;
+                          final qtyPrefix = effectiveQty > 1.0001
+                              ? '${effectiveQty.toStringAsFixed(effectiveQty % 1 == 0 ? 0 : 1)}× '
+                              : '';
+                          final priceLabel = hasCost
+                              ? ' (+RD\$ ${totalCost.toStringAsFixed(2)})'
+                              : '';
                           return Container(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 10,
@@ -769,9 +781,7 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                               ),
                             ),
                             child: Text(
-                              hasCost
-                                  ? '${modifier.name} (+RD\$ ${modifier.price.toStringAsFixed(2)})'
-                                  : modifier.name,
+                              '$qtyPrefix${modifier.name}$priceLabel',
                               style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w600,
@@ -998,19 +1008,20 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     );
   }
 
-  double _modifiersTotal() => widget.item.modifiers.fold(
+  /// Costo agregado de modifiers por UNA unidad del item parent.
+  /// `modifier.qty` representa "cuantos modifiers de este tipo por unidad".
+  double _modifiersPerUnit() => widget.item.modifiers.fold(
     0.0,
     (sum, modifier) => sum + (modifier.price * modifier.qty),
   );
 
-  double _modifiersTotalForQuantity(double quantity) {
-    final originalQty = widget.item.quantity <= 0 ? 1.0 : widget.item.quantity;
-    final ratio = quantity / originalQty;
-    return _modifiersTotal() * ratio;
+  /// Subtotal estimado para `quantity` unidades del item, usando la formula
+  /// per-unit alineada con el trigger backend fn_compute_item_totals
+  /// (migration 20260509_0004).
+  double _baseSubtotalForQuantity(double quantity) {
+    final q = quantity <= 0 ? 1.0 : quantity;
+    return q * (widget.item.unitPrice + _modifiersPerUnit());
   }
-
-  double _baseSubtotalForQuantity(double quantity) =>
-      (widget.item.unitPrice * quantity) + _modifiersTotalForQuantity(quantity);
 
   double _estimatedSubtotal() {
     final rawAmount = _baseSubtotalForQuantity(_quantity);

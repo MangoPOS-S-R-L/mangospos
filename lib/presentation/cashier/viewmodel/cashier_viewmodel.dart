@@ -73,6 +73,11 @@ class CashierViewModel extends ChangeNotifier {
   Future<void> init() async {
     _isLoading = true;
     _error = null;
+    // Limpia el estado cacheado antes del fetch. Sin esto, isCashOpen sigue
+    // retornando true desde un _lastSession stale durante los ~5s que tarda
+    // el refresh, dejando "Venta rapida" y "Delivery" habilitados con caja
+    // realmente cerrada.
+    _lastSession = null;
     notifyListeners();
     try {
       final client = Supabase.instance.client;
@@ -649,9 +654,27 @@ class CashierViewModel extends ChangeNotifier {
   /// Silent background refresh — loads all data in parallel without showing
   /// a loading spinner. Emits a single notifyListeners at the end.
   Future<void> refreshSilently() async {
+    // Mismo razonamiento que init(): si el cache tiene una sesion 'open' que
+    // ya fue cerrada en otra pantalla/dispositivo, la UI mostraria botones
+    // de venta habilitados durante todo el fetch (~5s). Invalidar al inicio
+    // hace que la UI muestre "caja cerrada" hasta confirmacion. Si caja
+    // realmente sigue abierta, el flicker dura lo que tarde el query.
+    if (_currentRegisterId != null && _businessId != null) {
+      _lastSession = null;
+      notifyListeners();
+    }
     try {
       if (_currentRegisterId != null && _businessId != null) {
-        _lastSession = await _repository.getLastSession(_currentRegisterId!);
+        // Misma resolucion que init(): caja es per-register (cualquier user
+        // del local). Si no hay activa, fallback al historico del usuario
+        // para mostrar el ultimo cierre en el panel.
+        final registerSession = await _repository
+            .getActiveSessionForRegister(_currentRegisterId!);
+        if (registerSession != null) {
+          _lastSession = registerSession.toMap();
+        } else {
+          _lastSession = await _repository.getLastSession(_currentRegisterId!);
+        }
         _lastCashOpenValidationAt = AppTime.nowAst();
         _pendingTables = await _salesRepository.getOpenTablesCount(_businessId!);
         await _loadDashboardData(silent: true);

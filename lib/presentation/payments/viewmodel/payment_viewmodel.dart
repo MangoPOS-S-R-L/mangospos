@@ -44,6 +44,11 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
     unawaited(_connectivity.initialize());
   }
 
+  /// Guard sincronico para `processPayment`. `state.processingPayment` se ve
+  /// en el siguiente frame; este flag bloquea double-tap dentro del mismo
+  /// frame antes de cualquier `await`.
+  bool _processingLocal = false;
+
   @override
   void dispose() {
     _connectivity.dispose();
@@ -58,6 +63,10 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
     if (raw.contains('No hay secuencia NCF disponible para tipo') ||
         raw.contains('Secuencia NCF agotada para tipo')) {
       return 'El negocio no tiene una secuencia fiscal activa para el tipo de comprobante seleccionado. Revisa Ajustes > Fiscal.';
+    }
+    if (raw.contains('ORDER_ALREADY_CLOSED') ||
+        raw.contains('CHECK_ALREADY_CLOSED')) {
+      return 'Esta cuenta ya fue cobrada. Refresca el historial para ver el comprobante.';
     }
     if (e is TimeoutException || e is SocketException) {
       return 'Error de conexion con el servidor.';
@@ -418,6 +427,13 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
       return;
     }
 
+    // Guard sincronico antes de await: bloquea double-tap en el mismo frame
+    // (Riverpod expone state.processingPayment recien tras rebuild). Backend
+    // tambien tiene guard atomico (20260509_0001), esto solo evita disparar
+    // el RPC duplicado innecesariamente.
+    if (_processingLocal || state.processingPayment) return;
+    _processingLocal = true;
+
     state = state.copyWith(processingPayment: true, error: null);
 
     final orderId = state.order!.id;
@@ -576,6 +592,8 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
           error: 'Error al guardar pago offline: ${_cleanError(offlineError)}',
         );
       }
+    } finally {
+      _processingLocal = false;
     }
   }
 

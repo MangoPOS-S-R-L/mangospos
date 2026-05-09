@@ -64,50 +64,29 @@ class ReportsRepository {
     final fromIso = AppTime.astToUtcIso(from);
     final toIso = AppTime.astToUtcIso(to);
 
+    // Scope al business directamente en la query: PostgREST hace INNER
+    // JOIN payments → orders → table_sessions y filtra por business_id.
+    // Antes traíamos TODAS las payments globales del rango y filtrábamos
+    // en memoria — con el límite default (1000 filas) de PostgREST, en
+    // multi-tenant o alto volumen las ventas más recientes (hoy) caían
+    // fuera del cut-off antes de poder ser filtradas localmente, y el
+    // reporte se quedaba sin ellas. Ordenamos DESC además para que, si
+    // se vuelve a tocar el límite, siempre estén las más nuevas.
+    final selectWithScope =
+        '$select, orders!inner(id, table_sessions!inner(business_id))';
+
     final paymentRows = List<Map<String, dynamic>>.from(
       await _client
           .from(ReportsQueries.tablePayments)
-          .select(select)
+          .select(selectWithScope)
+          .eq('orders.table_sessions.business_id', businessId)
           .gte('created_at', fromIso)
-          .lt('created_at', toIso),
+          .lt('created_at', toIso)
+          .order('created_at', ascending: false)
+          .limit(50000),
     );
 
-    final orderIds = paymentRows
-        .map((row) => row['order_id']?.toString().trim())
-        .whereType<String>()
-        .where((id) => id.isNotEmpty)
-        .toSet()
-        .toList(growable: false);
-
-    if (orderIds.isEmpty) return const <Map<String, dynamic>>[];
-
-    final scopedOrders = await _selectInBatches(
-      table: ReportsQueries.tableOrders,
-      select: 'id, table_sessions!inner(business_id)',
-      column: 'id',
-      values: orderIds,
-    );
-
-    final allowedOrderIds = scopedOrders
-        .where((row) {
-          final tableSession = row['table_sessions'];
-          final sessionMap = tableSession is Map<String, dynamic>
-              ? tableSession
-              : (tableSession is Map
-                    ? Map<String, dynamic>.from(tableSession)
-                    : const <String, dynamic>{});
-          return sessionMap['business_id']?.toString() == businessId;
-        })
-        .map((row) => row['id']?.toString().trim())
-        .whereType<String>()
-        .where((id) => id.isNotEmpty)
-        .toSet();
-
-    return paymentRows
-        .where(
-          (row) => allowedOrderIds.contains(row['order_id']?.toString().trim()),
-        )
-        .toList(growable: false);
+    return paymentRows;
   }
 
   Future<Map<String, dynamic>> getSalesSummary({
@@ -394,6 +373,7 @@ class ReportsRepository {
       final productBucket = productSales.putIfAbsent(
         productKey,
         () => {
+          'product_id': productId,
           'product': label,
           'category': categoryName,
           'quantity_sold': 0.0,
@@ -651,9 +631,15 @@ class ReportsRepository {
     return {
       'from': fromIso,
       'to': toIso,
+      // total_sales y net_sales son iguales: ambos representan la suma de
+      // payments con status='completed'. Antes net_sales se calculaba como
+      // (totalSales - voidedSales), pero como completed/voided son sets
+      // disjuntos (un payment es UNO o el OTRO), esa resta dejaba el "neto"
+      // como un valor que no representaba ningun subset real. Ahora ambos
+      // campos son la fuente unica de la verdad: ventas reales completadas.
       'total_sales': totalSales,
       'voided_sales': voidedSales,
-      'net_sales': totalSales - voidedSales,
+      'net_sales': totalSales,
       'payments_count': completedPayments.length,
       'voided_payments_count': voidedPayments.length,
       'items_sold': totalItems.round(),
@@ -1437,8 +1423,16 @@ class ReportsRepository {
       }
       final isService = t['is_service_fee'] == true;
       final nameLower = name.toLowerCase();
+      // Heurística para detectar "propina de ley" en config legacy
+      // donde el flag is_service_fee no está seteado: nombre contiene
+      // alguna palabra clave + rate típico (10%). "ley" cubre el caso
+      // del usuario que tiene el tax llamado solo "LEY".
       final isHeuristic = (rate - 10).abs() < 0.001 &&
-          (nameLower.contains('propina') || nameLower.contains('servicio'));
+          (nameLower.contains('propina') ||
+              nameLower.contains('servicio') ||
+              nameLower == 'ley' ||
+              nameLower.contains(' ley') ||
+              nameLower.startsWith('ley '));
       if (t['is_active'] == true) {
         if (isService || isHeuristic) {
           configuredServiceFeeRate = rate;
@@ -1494,23 +1488,52 @@ class ReportsRepository {
     // --- Build per-order tax breakdown ---
     // key: order_id -> list of { label, rate, taxAmount, base }
     final taxBreakdownByOrder = <String, List<Map<String, dynamic>>>{};
+    // Derivado: porción de propina cuando los items vienen con
+    // tax_rate combinado (28% = ITBIS+Ley). Los pagos viejos / flujos
+    // que no separan la propina al guardarla la dejan baked dentro
+    // del item.tax, así que la rescatamos para que la columna
+    // "Propina de ley" no salga en cero cuando sí se cobró.
+    final derivedServiceFeeByOrder = <String, double>{};
     for (final item in orderItems) {
       final status = item['status']?.toString();
       if (status == 'void') continue;
       final oid = item['order_id']?.toString() ?? '';
       if (oid.isEmpty) continue;
 
-      final taxAmount = _toDouble(item['tax']);
+      var taxAmount = _toDouble(item['tax']);
       var taxRate = _toDouble(item['tax_rate']);
       final subtotal = _toDouble(item['subtotal']);
 
       if (taxRate <= 0 && taxAmount <= 0) continue;
 
-      // Detect combined rate (e.g. 28 = 18% ITBIS + 10% Ley)
+      // Items con tax_rate ≈ configured service fee son propina baked
+      // adentro de items.tax (caso legacy donde el motor viejo trataba
+      // la propina como un impuesto más). La rescatamos al
+      // derivedServiceFeeByOrder y NO la metemos al breakdown — si no,
+      // sale como columna "LEY (10%)" duplicando "Propina de ley".
+      if (configuredServiceFeeRate > 0 &&
+          (taxRate - configuredServiceFeeRate).abs() < 0.01) {
+        derivedServiceFeeByOrder[oid] =
+            (derivedServiceFeeByOrder[oid] ?? 0) + taxAmount;
+        continue;
+      }
+
+      // Detect combined rate (e.g. 28 = 18% ITBIS + 10% Ley) y partir
+      // el tax_amount proporcionalmente. Antes solo cambiábamos el rate
+      // a 18 pero seguíamos sumando los 28 puntos al bucket ITBIS — eso
+      // inflaba ITBIS y hacía desaparecer la propina del breakdown.
       if (configuredServiceFeeRate > 0 &&
           configuredTaxOnlyRate > 0 &&
-          (taxRate - configuredTaxOnlyRate - configuredServiceFeeRate).abs() < 0.01) {
+          (taxRate - configuredTaxOnlyRate - configuredServiceFeeRate).abs() <
+              0.01) {
+        final combined = configuredTaxOnlyRate + configuredServiceFeeRate;
+        final propinaPortion =
+            taxAmount * (configuredServiceFeeRate / combined);
+        final itbisPortion = taxAmount - propinaPortion;
+        derivedServiceFeeByOrder[oid] =
+            (derivedServiceFeeByOrder[oid] ?? 0) + propinaPortion;
         taxRate = configuredTaxOnlyRate;
+        taxAmount = itbisPortion;
       }
 
       final rateKey = taxRate.toStringAsFixed(4);
@@ -1578,10 +1601,26 @@ class ReportsRepository {
       final status = doc['status']?.toString() ?? 'active';
       final subtotal = _toDouble(doc['subtotal']);
       final itbis = _toDouble(doc['itbis_amount']);
-      final serviceFee = _toDouble(doc['service_fee']);
+      final docServiceFee = _toDouble(doc['service_fee']);
       final total = _toDouble(doc['total']);
       final ncfType = doc['ncf_type']?.toString() ?? 'B02';
       final oid = doc['order_id']?.toString() ?? '';
+      final docTaxes = taxBreakdownByOrder[oid] ?? const [];
+
+      // service_fee = (orden-level: doc.service_fee o orders.service_fee)
+      //              + (items-level: derivado de rate=10 baked o split 28%).
+      // Suma, no prioridad: hay docs mixtos donde parte de la propina
+      // se computó al cierre vía calculate_order_totals (queda en
+      // doc.service_fee) y otra parte estaba baked dentro de items.tax
+      // como rate=10 (legacy). Ambos representan propina cobrada al
+      // cliente y deben sumarse para reflejar el total real.
+      // En docs limpios (modernos o backfilled) derived = 0, así que
+      // no hay double-count.
+      final orderLevelServiceFee = docServiceFee > 0
+          ? docServiceFee
+          : (serviceFeeByOrder[oid] ?? 0);
+      final serviceFee =
+          orderLevelServiceFee + (derivedServiceFeeByOrder[oid] ?? 0);
 
       if (status == 'active') {
         activeCount += 1;
@@ -1610,9 +1649,9 @@ class ReportsRepository {
         bucket['count'] = (bucket['count'] as int) + 1;
       }
 
-      final docTaxes = taxBreakdownByOrder[oid] ?? const [];
       enrichedDocs.add({
         ...doc,
+        'service_fee': serviceFee,
         'tax_breakdown': docTaxes,
       });
     }
@@ -1859,5 +1898,130 @@ class ReportsRepository {
       default:
         return type;
     }
+  }
+
+  /// Proyección de cantidades vendidas por producto para el mes en curso.
+  ///
+  /// Algoritmo: usa los últimos 56 días (8 semanas) de ventas pagadas como
+  /// base, y agrupa por día de la semana — los restaurantes tienen
+  /// patrones semanales fuertes (ej: lunes flojo, viernes alto). Para
+  /// proyectar cada día restante del mes en curso, usa el promedio
+  /// histórico de ese día de la semana.
+  ///
+  /// Para los días del mes que ya pasaron, usa la cantidad real
+  /// (incluyendo ceros), no el promedio. Eso evita inflar la
+  /// proyección para productos que aún no se han vendido este mes.
+  ///
+  /// Retorna `Map<productId, projectedQty>`. Productos sin historial
+  /// no aparecen en el map.
+  Future<Map<String, double>> getMonthlyProductProjection({
+    required String businessId,
+  }) async {
+    final now = AppTime.nowAst();
+    final monthStart = DateTime(now.year, now.month, 1);
+    final monthEnd = now.month == 12
+        ? DateTime(now.year + 1, 1, 1)
+        : DateTime(now.year, now.month + 1, 1);
+    final today = DateTime(now.year, now.month, now.day);
+    final tomorrow = today.add(const Duration(days: 1));
+    final histStart = today.subtract(const Duration(days: 56));
+
+    // 1. Pagos completados en la ventana histórica → mapa order_id → fecha.
+    final paymentRows = await _loadScopedPaymentsForRange(
+      businessId: businessId,
+      from: histStart,
+      to: tomorrow,
+      select: 'id, order_id, status, created_at',
+    );
+
+    final orderIdToDate = <String, DateTime>{};
+    for (final p in paymentRows) {
+      final status = p['status']?.toString();
+      if (status == 'void' || status == 'cancelled') continue;
+      final orderId = p['order_id']?.toString() ?? '';
+      if (orderId.isEmpty) continue;
+      final created = DateTime.tryParse(p['created_at']?.toString() ?? '');
+      if (created == null) continue;
+      final ast = AppTime.astFromInstant(created);
+      final dateOnly = DateTime(ast.year, ast.month, ast.day);
+      final existing = orderIdToDate[orderId];
+      if (existing == null || dateOnly.isBefore(existing)) {
+        orderIdToDate[orderId] = dateOnly;
+      }
+    }
+
+    if (orderIdToDate.isEmpty) return const {};
+
+    // 2. Items de esas órdenes.
+    final items = await _selectInBatches(
+      table: ReportsQueries.tableOrderItems,
+      select: 'order_id, product_id, qty, quantity, status',
+      column: 'order_id',
+      values: orderIdToDate.keys.toList(growable: false),
+    );
+
+    // 3. Acumular cantidad diaria por producto.
+    final dailyPerProduct = <String, Map<DateTime, double>>{};
+    for (final item in items) {
+      final status = item['status']?.toString();
+      if (status == 'void') continue;
+      final productId = item['product_id']?.toString() ?? '';
+      if (productId.isEmpty) continue;
+      final orderId = item['order_id']?.toString() ?? '';
+      final date = orderIdToDate[orderId];
+      if (date == null) continue;
+      final qty = _toDouble(item['qty']) > 0
+          ? _toDouble(item['qty'])
+          : _toDouble(item['quantity']);
+      if (qty <= 0) continue;
+
+      final perDate = dailyPerProduct.putIfAbsent(productId, () => {});
+      perDate[date] = (perDate[date] ?? 0) + qty;
+    }
+
+    // 4. Cuántas veces aparece cada día de la semana en la ventana
+    //    histórica. Necesario para promediar correctamente, incluyendo
+    //    días con cero ventas (sin esto, los productos vendidos solo
+    //    en ciertos días tendrían un promedio inflado).
+    final daysByDow = <int, int>{};
+    var checkDate = histStart;
+    while (checkDate.isBefore(tomorrow)) {
+      daysByDow[checkDate.weekday] = (daysByDow[checkDate.weekday] ?? 0) + 1;
+      checkDate = checkDate.add(const Duration(days: 1));
+    }
+
+    // 5. Para cada producto: avg por DOW, luego proyectar el mes en curso.
+    final projection = <String, double>{};
+    for (final entry in dailyPerProduct.entries) {
+      final productId = entry.key;
+      final perDate = entry.value;
+
+      final qtyByDow = <int, double>{};
+      perDate.forEach((date, qty) {
+        qtyByDow[date.weekday] = (qtyByDow[date.weekday] ?? 0) + qty;
+      });
+
+      final avgByDow = <int, double>{};
+      daysByDow.forEach((dow, count) {
+        avgByDow[dow] = count > 0 ? (qtyByDow[dow] ?? 0) / count : 0;
+      });
+
+      double projected = 0;
+      var d = monthStart;
+      while (d.isBefore(monthEnd)) {
+        if (d.isBefore(tomorrow)) {
+          // Día del mes que ya pasó: usar cantidad real (0 si no se vendió).
+          projected += perDate[d] ?? 0;
+        } else {
+          // Día futuro del mes: usar promedio del día de la semana.
+          projected += avgByDow[d.weekday] ?? 0;
+        }
+        d = d.add(const Duration(days: 1));
+      }
+
+      projection[productId] = projected;
+    }
+
+    return projection;
   }
 }

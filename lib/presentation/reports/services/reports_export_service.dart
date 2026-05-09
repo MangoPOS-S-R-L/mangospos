@@ -18,11 +18,34 @@ class ReportsExportService {
       state.salesTo.subtract(const Duration(days: 1)),
     );
 
+    final title =
+        category == ReportCategory.sales &&
+            state.salesSubReport == SalesSubReport.byReceipt
+        ? 'Reporte de comprobantes'
+        : viewModel.getCategoryTitle(category);
+
+    // Reportes con detalle de comprobantes (fiscal, byReceipt) suelen
+    // tener tablas anchas (NCF + cliente + RNC + N columnas de impuestos
+    // + total + estado + fecha) y muchas filas. Landscape + maxPages
+    // alto evita TooManyPagesException cuando el rango cubre semanas
+    // de operación. Las otras categorías mantienen retrato y márgenes
+    // estándar.
+    final useLandscape =
+        category == ReportCategory.fiscal ||
+        (category == ReportCategory.sales &&
+            state.salesSubReport == SalesSubReport.byReceipt);
+    final pageFormat = useLandscape
+        ? PdfPageFormat.a4.landscape
+        : PdfPageFormat.a4;
+
     pdf.addPage(
       pw.MultiPage(
+        pageFormat: pageFormat,
+        maxPages: 500,
+        margin: const pw.EdgeInsets.all(24),
         build: (context) => [
           pw.Text(
-            viewModel.getCategoryTitle(category),
+            title,
             style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold),
           ),
           pw.SizedBox(height: 4),
@@ -45,6 +68,24 @@ class ReportsExportService {
   ) {
     switch (category) {
       case ReportCategory.sales:
+        // Sub-reporte "Por comprobante" sale enfocado al estilo del
+        // PDF de impuestos: solo métricas + tabla de comprobantes.
+        // El dump completo de ventas (categorías, empleados, productos,
+        // etc.) solo se exporta en "Vista general".
+        if (state.salesSubReport == SalesSubReport.byReceipt) {
+          return [
+            _metricsTable(viewModel.getSalesMetricCards()),
+            pw.SizedBox(height: 16),
+            ..._breakdownTable(
+              'Ventas por recibo / comprobante',
+              viewModel.getReceiptRows(),
+            ),
+            pw.SizedBox(height: 16),
+            // Cada comprobante listado individualmente con su estado
+            // (Activo/Anulado), igual que el reporte fiscal.
+            ..._fiscalDocumentsTable(viewModel.getFiscalDocuments()),
+          ];
+        }
         return [
           _metricsTable(viewModel.getSalesMetricCards()),
           pw.SizedBox(height: 16),
@@ -236,6 +277,11 @@ class ReportsExportService {
     }
   }
 
+  // Skip "Impuesto X%" entries — fallback que produce el repositorio
+  // cuando el tax_rate combinado (ej. 28% = ITBIS+Propina) no pudo
+  // desdoblarse, y crea una columna extra que rompe el layout.
+  static final RegExp _kUnmappedTaxLabelRe = RegExp(r'^Impuesto\s');
+
   static List<String> _collectTaxLabels(List<Map<String, dynamic>> documents) {
     final labels = <String>{};
     for (final doc in documents) {
@@ -246,6 +292,7 @@ class ReportsExportService {
               ? item
               : Map<String, dynamic>.from(item as Map);
           final label = m['label']?.toString() ?? '';
+          if (_kUnmappedTaxLabelRe.hasMatch(label)) continue;
           final rate = (m['rate'] as num?)?.toDouble() ?? 0;
           final display = rate > 0
               ? '$label (${rate.toStringAsFixed(rate.truncateToDouble() == rate ? 0 : 2)}%)'

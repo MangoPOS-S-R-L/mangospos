@@ -326,7 +326,14 @@ List<({String label, double amount})>? buildBreakdownFromTaxLines(
   // el rate impreso (18%) y el ratio amount/base. Escalamos los amounts
   // para que reflejen la tasa real aplicada sobre la base recomputada
   // (ej. 76.27 = 18% de 423.73 cuando el customer paga gross 500 sin Ley).
-  final byTaxId = <String, ({String name, double rate, double amount})>{};
+  // Agrupamos por (nombre normalizado, rate) y NO por tax_id. El motivo:
+  // los items optimistas en el frontend (sales_viewmodel.addItem) generan
+  // tax_lines sintéticos con un id `tmp_tax_<name>` que NO coincide con el
+  // UUID real del backend. Si agrupamos por id, el row recien agregado
+  // muestra "ITBIS (18%)" duplicado mientras el backend resuelve el item
+  // real (~1-2s). Agrupar por nombre+rate hace que el optimistico se
+  // fusione con los reales y el breakdown sea estable.
+  final byKey = <String, ({String name, double rate, double amount})>{};
   bool hasAnyLine = false;
   for (final item in activeItems) {
     if (item.taxLines.isEmpty) continue;
@@ -334,15 +341,17 @@ List<({String label, double amount})>? buildBreakdownFromTaxLines(
     final scale = _takeoutInclusiveScale(item);
     for (final line in item.taxLines) {
       final adjustedAmount = line.amount * scale;
-      final existing = byTaxId[line.taxId];
+      final key =
+          '${line.taxName.toLowerCase()}|${line.taxRate.toStringAsFixed(2)}';
+      final existing = byKey[key];
       if (existing == null) {
-        byTaxId[line.taxId] = (
+        byKey[key] = (
           name: line.taxName,
           rate: line.taxRate,
           amount: adjustedAmount,
         );
       } else {
-        byTaxId[line.taxId] = (
+        byKey[key] = (
           name: existing.name,
           rate: existing.rate,
           amount: existing.amount + adjustedAmount,
@@ -357,11 +366,11 @@ List<({String label, double amount})>? buildBreakdownFromTaxLines(
   // Orden estable: por nombre alfabético para que el ticket no varíe entre
   // refrescos. Si el operador prefiere otro orden, se hace en una pasada
   // posterior (ej: ITBIS primero, propina último).
-  final sortedKeys = byTaxId.keys.toList()
-    ..sort((a, b) => byTaxId[a]!.name.compareTo(byTaxId[b]!.name));
+  final sortedKeys = byKey.keys.toList()
+    ..sort((a, b) => byKey[a]!.name.compareTo(byKey[b]!.name));
 
-  for (final taxId in sortedKeys) {
-    final entry = byTaxId[taxId]!;
+  for (final key in sortedKeys) {
+    final entry = byKey[key]!;
     final amount = _r(entry.amount);
     if (amount <= 0.004) continue;
     final pct = entry.rate % 1 == 0 ? entry.rate.toInt() : entry.rate;

@@ -23,7 +23,6 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
   late final TextEditingController _branchCtl;
   late final TextEditingController _addressCtl;
   late final TextEditingController _phoneCtl;
-  late final TextEditingController _subdomainCtl;
   late String _country;
   late String _businessType;
   late String _currency;
@@ -74,20 +73,13 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
     _businessType = state.businessType;
     _currency = _currencyOptions.first;
     _businessSize = _businessSizeOptions[1];
-    final initialSubdomain = state.subdomain.isNotEmpty
-        ? state.subdomain
-        : _normalizeSubdomain(state.businessName);
-    _subdomainCtl = TextEditingController(text: initialSubdomain);
-    notifier.setSubdomain(initialSubdomain);
+    // Subdominio se autogenera en el viewmodel a partir del nombre.
+    notifier.setSubdomain('');
 
     _businessCtl.addListener(() => setState(() {}));
     _branchCtl.addListener(() => setState(() {}));
     _addressCtl.addListener(() => setState(() {}));
     _phoneCtl.addListener(() => setState(() {}));
-    _subdomainCtl.addListener(() {
-      notifier.setSubdomain(_normalizeSubdomain(_subdomainCtl.text));
-      setState(() {});
-    });
   }
 
   @override
@@ -96,7 +88,6 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
     _branchCtl.dispose();
     _addressCtl.dispose();
     _phoneCtl.dispose();
-    _subdomainCtl.dispose();
     super.dispose();
   }
 
@@ -112,8 +103,6 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
     final summaryBranch = _branchCtl.text.trim().isEmpty
         ? 'Sucursal Principal'
         : _branchCtl.text.trim();
-    final suggestion = _currentSubdomain();
-    final domainPreview = '$suggestion.mangopos.do';
     final afterTrialValue = _extractPrice(selectedPlan.price);
 
     return AuthShell(
@@ -288,35 +277,6 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
                 ],
               ),
               const SizedBox(height: 22),
-              _FieldLabel('Subdominio'),
-              TextFormField(
-                controller: _subdomainCtl,
-                textInputAction: TextInputAction.next,
-                decoration: _inputDecoration(
-                  hint: 'tunegocio',
-                  icon: Icons.language_rounded,
-                  suffix: Padding(
-                    padding: const EdgeInsets.only(right: 12),
-                    child: Text(
-                      '.mangopos.do',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: MangoTokens.secondaryForeground,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Tu acceso quedará como $domainPreview',
-                style: GoogleFonts.plusJakartaSans(
-                  fontSize: 13,
-                  color: MangoTokens.mutedForeground,
-                ),
-              ),
-              const SizedBox(height: 22),
               _FieldLabel('Dirección base del negocio'),
               TextFormField(
                 controller: _addressCtl,
@@ -370,7 +330,6 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
                         vm.setCountry(_country);
                         vm.setPhone(_phoneCtl.text.trim());
                         vm.setAddress(_addressCtl.text.trim());
-                        vm.setSubdomain(suggestion);
                         context.go(AppRoutes.registerSetup);
                       },
                       child: Text(
@@ -419,8 +378,6 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
               ),
             ),
             const SizedBox(height: 22),
-            _SubdomainSummaryCard(domain: domainPreview),
-            const SizedBox(height: 18),
             _PlanSummaryCard(plan: selectedPlan),
             const SizedBox(height: 18),
             DecoratedBox(
@@ -469,14 +426,6 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
       return 'Este campo es obligatorio';
     }
     return null;
-  }
-
-  String _currentSubdomain() {
-    final customInput = _subdomainCtl.text.trim();
-    if (customInput.isNotEmpty) {
-      return _normalizeSubdomain(customInput);
-    }
-    return _normalizeSubdomain(_businessCtl.text);
   }
 
   Widget _eyebrow(String text) => Container(
@@ -554,66 +503,6 @@ class _DetailRow extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-class _SubdomainSummaryCard extends StatelessWidget {
-  final String domain;
-
-  const _SubdomainSummaryCard({required this.domain});
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: const Color(0xFFF5F8FF),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFD7E7FF)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 18),
-        child: Row(
-          children: [
-            Container(
-              width: 42,
-              height: 42,
-              decoration: BoxDecoration(
-                color: MangoTokens.primary.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Icon(
-                Icons.language_rounded,
-                color: MangoTokens.primary,
-                size: 24,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Subdominio sugerido',
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: MangoTokens.secondaryForeground,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  domain,
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    color: MangoTokens.foreground,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
@@ -805,16 +694,6 @@ InputDecoration _inputDecoration({
       borderSide: const BorderSide(color: MangoTokens.destructive, width: 1.5),
     ),
   );
-}
-
-String _normalizeSubdomain(String value) {
-  final trimmed = value.trim().toLowerCase();
-  final collapsed = trimmed.replaceAll(RegExp(r'\s+'), '');
-  final sanitized = collapsed.replaceAll(RegExp(r'[^a-z0-9-]'), '');
-  if (sanitized.isEmpty) {
-    return 'tunegocio';
-  }
-  return sanitized;
 }
 
 String _extractPrice(String raw) {

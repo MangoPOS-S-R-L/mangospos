@@ -383,14 +383,20 @@ OrderTaxResult aggregateOrderTax(List<ItemTaxResult> items) {
 // Convenience: gross amount from item data
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Compute the catalog gross amount: (unitPrice × qty) + modifiers.
+/// Compute the catalog gross amount: qty × (unitPrice + modifiers_per_unit).
+///
+/// Cada modifier representa "qty modifiers de este tipo POR UNIDAD del item
+/// padre" — coincide con la formula del trigger backend fn_compute_item_totals
+/// (migration 20260509_0004). Antes la fmla era `(unitPrice * qty) + modsTotal`
+/// que solo cobraba modifiers UNA vez sin importar el qty del item, dejando
+/// el cart frontend en $150 mientras la DB tenia $900.
 double catalogGrossAmount({
   required double unitPrice,
   required double quantity,
   required List<({double price, double qty})> modifiers,
 }) {
   final q = quantity <= 0 ? 1.0 : quantity;
-  final modsTotal =
+  final modsTotalPerUnit =
       modifiers.fold<double>(0, (sum, m) => sum + (m.price * m.qty));
-  return _r((unitPrice * q) + modsTotal);
+  return _r(q * (unitPrice + modsTotalPerUnit));
 }

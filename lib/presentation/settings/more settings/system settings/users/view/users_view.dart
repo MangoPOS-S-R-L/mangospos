@@ -1635,6 +1635,7 @@ class _UserDialogState extends State<_UserDialog> {
           emergencyPhone: _emergencyPhone.text.trim(),
           pin: normalizedPin.isNotEmpty ? normalizedPin : null,
           password: _password.text.isNotEmpty ? _password.text.trim() : null,
+          primaryRole: _primaryBusinessRole,
           roleIds: roleIds,
         );
 

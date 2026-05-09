@@ -163,9 +163,12 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
       }
 
       // 3. Create business
-      final Map<String, dynamic> business;
-      
-      // Clean and ensure unique domain/slug
+      //
+      // El identificador real de la cuenta es el email del owner. El
+      // subdominio es solo infra: si el slug elegido ya existe en la
+      // tabla `businesses` (unique index `uq_businesses_domain_lower`),
+      // reintentamos con sufijo `-2`, `-3`, ... en lugar de bloquear el
+      // registro.
       var slug = step2.subdomain.trim().toLowerCase();
       if (slug.isEmpty) {
         slug = step2.businessName
@@ -174,39 +177,15 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
             .replaceAll(RegExp(r'-+'), '-')
             .trim();
         if (slug.endsWith('-')) slug = slug.substring(0, slug.length - 1);
-        
-        // Add a small random suffix if slug is very common or to be safer
-        final random = DateTime.now().millisecondsSinceEpoch.toString().substring(10);
-        slug = '$slug-$random';
+        if (slug.isEmpty) slug = 'negocio';
       }
-      
-      final finalDomain = '$slug.mangopos.do';
 
-      try {
-        business = await supabase
-            .from('businesses')
-            .insert({
-              'owner_id': userId,
-              'business_name': step2.businessName,
-              'branch_name': step2.branchName.trim().isEmpty
-                  ? 'Sucursal Principal'
-                  : step2.branchName.trim(),
-              'business_type': step2.businessType,
-              'country': step2.country,
-              'address': step2.address,
-              'phone':
-                  step2.phone.trim().isEmpty ? null : step2.phone.trim(),
-              'domain': finalDomain,
-              'status': 'active',
-              'created_at': DateTime.now().toIso8601String(),
-              'updated_at': DateTime.now().toIso8601String(),
-            })
-            .select('id')
-            .single();
-      } on PostgrestException catch (e) {
-        throw Exception(
-            'Error creando el negocio: ${_friendlyDbError(e)}');
-      }
+      final business = await _insertBusinessWithUniqueDomain(
+        supabase: supabase,
+        baseSlug: slug,
+        userId: userId,
+        step2: step2,
+      );
 
       // 4. Create membership
       final businessId = business['id'] as String;
@@ -250,6 +229,58 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
         'Ocurrió un error inesperado. Verifica tu conexión a internet e intenta de nuevo.',
       );
     }
+  }
+
+  /// Inserta el `businesses` row asegurando un `domain` único: si el slug
+  /// base choca con `uq_businesses_domain_lower` (23505), reintenta con
+  /// sufijos `-2`, `-3`, ... hasta `attempts` veces. Cualquier otro error
+  /// se propaga como `Exception` con mensaje amigable.
+  Future<Map<String, dynamic>> _insertBusinessWithUniqueDomain({
+    required SupabaseClient supabase,
+    required String baseSlug,
+    required String userId,
+    required RegisterStep2State step2,
+    int attempts = 8,
+  }) async {
+    final now = DateTime.now().toIso8601String();
+    final branchName = step2.branchName.trim().isEmpty
+        ? 'Sucursal Principal'
+        : step2.branchName.trim();
+    final phone = step2.phone.trim().isEmpty ? null : step2.phone.trim();
+
+    for (var i = 0; i < attempts; i++) {
+      final slug = i == 0 ? baseSlug : '$baseSlug-${i + 1}';
+      final domain = '$slug.mangopos.do';
+      try {
+        return await supabase
+            .from('businesses')
+            .insert({
+              'owner_id': userId,
+              'business_name': step2.businessName,
+              'branch_name': branchName,
+              'business_type': step2.businessType,
+              'country': step2.country,
+              'address': step2.address,
+              'phone': phone,
+              'domain': domain,
+              'status': 'active',
+              'created_at': now,
+              'updated_at': now,
+            })
+            .select('id')
+            .single();
+      } on PostgrestException catch (e) {
+        final isDomainCollision = e.code == '23505' &&
+            e.message.toLowerCase().contains('domain');
+        if (isDomainCollision && i < attempts - 1) {
+          continue;
+        }
+        throw Exception('Error creando el negocio: ${_friendlyDbError(e)}');
+      }
+    }
+    throw Exception(
+      'No se pudo generar un subdominio disponible después de $attempts intentos. Intenta de nuevo en unos segundos.',
+    );
   }
 
   /// `true` si el AuthException representa "user_already_exists" en

@@ -76,9 +76,11 @@ class SalesBreakdownRow {
 }
 
 class ProductSalesReportRow {
+  final String productId;
   final String product;
   final String category;
   final double quantitySold;
+  final double projectedQuantity;
   final double grossSales;
   final double discounts;
   final double courtesies;
@@ -88,9 +90,11 @@ class ProductSalesReportRow {
   final int tickets;
 
   const ProductSalesReportRow({
+    required this.productId,
     required this.product,
     required this.category,
     required this.quantitySold,
+    required this.projectedQuantity,
     required this.grossSales,
     required this.discounts,
     required this.courtesies,
@@ -111,6 +115,7 @@ class ReportsState {
   final Map<String, dynamic>? inventorySummary;
   final Map<String, dynamic>? taxSummary;
   final Map<String, dynamic>? fiscalSummary;
+  final Map<String, double>? productProjection;
   final SalesReportRangePreset salesRangePreset;
   final SalesBreakdownFilter salesBreakdownFilter;
   final SalesSubReport salesSubReport;
@@ -130,6 +135,7 @@ class ReportsState {
     this.inventorySummary,
     this.taxSummary,
     this.fiscalSummary,
+    this.productProjection,
     this.salesRangePreset = SalesReportRangePreset.thisWeek,
     this.salesBreakdownFilter = SalesBreakdownFilter.paymentMethod,
     this.salesSubReport = SalesSubReport.overview,
@@ -162,6 +168,7 @@ class ReportsState {
     Map<String, dynamic>? inventorySummary,
     Map<String, dynamic>? taxSummary,
     Map<String, dynamic>? fiscalSummary,
+    Map<String, double>? productProjection,
     SalesReportRangePreset? salesRangePreset,
     SalesBreakdownFilter? salesBreakdownFilter,
     SalesSubReport? salesSubReport,
@@ -187,6 +194,7 @@ class ReportsState {
       inventorySummary: inventorySummary ?? this.inventorySummary,
       taxSummary: taxSummary ?? this.taxSummary,
       fiscalSummary: fiscalSummary ?? this.fiscalSummary,
+      productProjection: productProjection ?? this.productProjection,
       salesRangePreset: salesRangePreset ?? this.salesRangePreset,
       salesBreakdownFilter: salesBreakdownFilter ?? this.salesBreakdownFilter,
       salesSubReport: salesSubReport ?? this.salesSubReport,
@@ -248,6 +256,18 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
   }
 
   Future<void> load() async {
+    // Re-resolvemos el rango si el preset es relativo (today, yesterday,
+    // thisWeek, thisMonth). Sin esto, abrir la app un día y volver al
+    // siguiente sigue mostrando el "hoy" del día anterior — la fecha
+    // queda congelada en el state desde que se construyó el provider.
+    if (state.salesRangePreset != SalesReportRangePreset.custom) {
+      final fresh = resolveRange(state.salesRangePreset);
+      state = state.copyWith(
+        salesFrom: fresh.from,
+        salesTo: fresh.to,
+      );
+    }
+
     state = state.copyWith(loading: true, clearError: true);
 
     try {
@@ -291,6 +311,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
           from: state.salesFrom,
           to: state.salesTo,
         ),
+        _repository.getMonthlyProductProjection(businessId: businessId),
       ]);
 
       state = state.copyWith(
@@ -301,6 +322,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         inventorySummary: results[3],
         taxSummary: results[4],
         fiscalSummary: results[5],
+        productProjection: Map<String, double>.from(results[6]),
         clearError: true,
       );
     } catch (e) {
@@ -555,18 +577,12 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
 
     return [
       SalesMetricCardData(
-        title: 'Ventas netas',
+        title: 'Ventas',
         value: currency.format(netSales),
-        subtitle: 'Ventas completadas menos anuladas',
+        subtitle:
+            '${numberFormat.format(paymentsCount)} transacciones completadas',
         icon: Icons.payments_outlined,
         color: const Color(0xFF2563EB),
-      ),
-      SalesMetricCardData(
-        title: 'Ventas brutas',
-        value: currency.format(totalSales),
-        subtitle: '${numberFormat.format(paymentsCount)} transacciones cobradas',
-        icon: Icons.point_of_sale_outlined,
-        color: const Color(0xFFF97316),
       ),
       SalesMetricCardData(
         title: 'Ticket promedio',
@@ -637,21 +653,28 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
 
   List<ProductSalesReportRow> getProductSalesRows() {
     final rows = (state.salesSummary?['product_sales'] as List?) ?? const [];
+    final projection = state.productProjection ?? const <String, double>{};
     return rows
         .map((row) => Map<String, dynamic>.from(row as Map))
         .map(
-          (row) => ProductSalesReportRow(
-            product: row['product']?.toString() ?? 'Producto',
-            category: row['category']?.toString() ?? 'Sin categoría',
-            quantitySold: (row['quantity_sold'] as num?)?.toDouble() ?? 0,
-            grossSales: (row['gross_sales'] as num?)?.toDouble() ?? 0,
-            discounts: (row['discounts'] as num?)?.toDouble() ?? 0,
-            courtesies: (row['courtesies'] as num?)?.toDouble() ?? 0,
-            netSales: (row['net_sales'] as num?)?.toDouble() ?? 0,
-            cost: (row['cost'] as num?)?.toDouble() ?? 0,
-            grossProfit: (row['gross_profit'] as num?)?.toDouble() ?? 0,
-            tickets: (row['tickets'] as num?)?.toInt() ?? 0,
-          ),
+          (row) {
+            final productId = row['product_id']?.toString() ?? '';
+            return ProductSalesReportRow(
+              productId: productId,
+              product: row['product']?.toString() ?? 'Producto',
+              category: row['category']?.toString() ?? 'Sin categoría',
+              quantitySold: (row['quantity_sold'] as num?)?.toDouble() ?? 0,
+              projectedQuantity:
+                  productId.isNotEmpty ? (projection[productId] ?? 0) : 0,
+              grossSales: (row['gross_sales'] as num?)?.toDouble() ?? 0,
+              discounts: (row['discounts'] as num?)?.toDouble() ?? 0,
+              courtesies: (row['courtesies'] as num?)?.toDouble() ?? 0,
+              netSales: (row['net_sales'] as num?)?.toDouble() ?? 0,
+              cost: (row['cost'] as num?)?.toDouble() ?? 0,
+              grossProfit: (row['gross_profit'] as num?)?.toDouble() ?? 0,
+              tickets: (row['tickets'] as num?)?.toInt() ?? 0,
+            );
+          },
         )
         .toList(growable: false);
   }
