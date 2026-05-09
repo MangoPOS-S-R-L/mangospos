@@ -23,14 +23,17 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
   RealtimeChannel? _rt;
   String? _rtBusinessId;
   Timer? _realtimeDebounceTimer;
+  Timer? _staleSweepTimer;
   bool _realtimeFlushInProgress = false;
   bool _reloadAllPending = false;
+  bool _staleSweepInFlight = false;
   final Set<String> _dirtyZoneIds = <String>{};
   final Set<String> _dirtyOrderIds = <String>{};
   final Map<String, String> _tableToZoneIndex = <String, String>{};
   final Map<String, String> _sessionToZoneIndex = <String, String>{};
 
   static const _realtimeDebounce = Duration(milliseconds: 450);
+  static const _staleSweepInterval = Duration(seconds: 30);
 
   @override
   ByZoneState build() {
@@ -41,12 +44,69 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
       _rtBusinessId = null;
       _realtimeDebounceTimer?.cancel();
       _realtimeDebounceTimer = null;
+      _staleSweepTimer?.cancel();
+      _staleSweepTimer = null;
       _dirtyZoneIds.clear();
       _dirtyOrderIds.clear();
       _tableToZoneIndex.clear();
       _sessionToZoneIndex.clear();
     });
+
+    // Sweep periodico de mesas "ocupada fantasma" — sesiones abiertas
+    // sin orders+items abiertos. Cubre el caso donde el cajero entra a
+    // una mesa, no agrega nada y se sale: la realtime ya dispara una
+    // limpieza por zona, pero si el cajero esta viendo otra zona o el
+    // evento se pierde, esto lo agarra. Cada 30s recorre TODAS las
+    // zonas cargadas y libera lo que encuentre.
+    _staleSweepTimer = Timer.periodic(_staleSweepInterval, (_) {
+      unawaited(_sweepStaleTables());
+    });
+
     return const ByZoneState();
+  }
+
+  /// Recorre las zonas cargadas y libera las sesiones huerfanas (sin
+  /// items+orders). Idempotente: si no hay nada que limpiar, es no-op.
+  /// Si el sweep anterior aun no completo, salta este tick.
+  Future<void> _sweepStaleTables() async {
+    if (_staleSweepInFlight) return;
+    final zones = state.zones;
+    if (zones.isEmpty) return;
+    _staleSweepInFlight = true;
+    try {
+      final repo = ref.read(zonesRepoProvider);
+      final zoneIdsToReload = <String>{};
+      for (final zone in zones) {
+        try {
+          final released = await repo.releaseStaleTablesInZone(
+            zone.id,
+            businessId: state.businessId,
+          );
+          if (released > 0) {
+            zoneIdsToReload.add(zone.id);
+            developer.log(
+              'Sweep: liberadas $released mesa(s) huerfana(s) en zona ${zone.id}',
+              name: 'ByZoneViewModel',
+            );
+          }
+        } catch (e) {
+          developer.log(
+            'Sweep: error en zona ${zone.id}',
+            name: 'ByZoneViewModel',
+            error: e,
+          );
+          // No propagamos — el sweep es safety net, no debe crashear.
+        }
+      }
+      // Recargar las zonas afectadas para que el grid refleje el cambio.
+      // Los listeners de realtime tambien lo harian, pero esto da
+      // feedback visual inmediato sin esperar el debounce.
+      for (final zoneId in zoneIdsToReload) {
+        unawaited(loadZoneStatus(zoneId, emitError: false));
+      }
+    } finally {
+      _staleSweepInFlight = false;
+    }
   }
 
   Future<void> load(String businessId) async {

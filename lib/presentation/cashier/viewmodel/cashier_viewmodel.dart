@@ -73,11 +73,20 @@ class CashierViewModel extends ChangeNotifier {
   Future<void> init() async {
     _isLoading = true;
     _error = null;
-    // Limpia el estado cacheado antes del fetch. Sin esto, isCashOpen sigue
-    // retornando true desde un _lastSession stale durante los ~5s que tarda
-    // el refresh, dejando "Venta rapida" y "Delivery" habilitados con caja
-    // realmente cerrada.
-    _lastSession = null;
+    // NO limpiamos `_lastSession` aqui aposta. Antes lo nulleabamos para
+    // evitar mostrar "abierta" stale durante el fetch (~5s), pero eso
+    // hacia que en cada navegacion la UI parpadeara "Caja cerrada"
+    // durante 2-5s aun cuando la caja estaba realmente abierta. El
+    // riesgo de cross-device close (cache "abierta" + realidad
+    // "cerrada") esta cubierto por:
+    //   1) `ensureCashOpenFast` (TTL 12s) que se llama al entrar a las
+    //      pantallas de venta — revalida si la ultima validacion es
+    //      vieja.
+    //   2) `processPayment` RPC server-side, que retorna
+    //      `CASH_SESSION_REQUIRED` si la caja no esta abierta.
+    // Resultado: la UI muestra el ultimo estado conocido mientras
+    // refresca en background; si cambia, el `notifyListeners()` final
+    // actualiza sin flash.
     notifyListeners();
     try {
       final client = Supabase.instance.client;
@@ -654,15 +663,12 @@ class CashierViewModel extends ChangeNotifier {
   /// Silent background refresh — loads all data in parallel without showing
   /// a loading spinner. Emits a single notifyListeners at the end.
   Future<void> refreshSilently() async {
-    // Mismo razonamiento que init(): si el cache tiene una sesion 'open' que
-    // ya fue cerrada en otra pantalla/dispositivo, la UI mostraria botones
-    // de venta habilitados durante todo el fetch (~5s). Invalidar al inicio
-    // hace que la UI muestre "caja cerrada" hasta confirmacion. Si caja
-    // realmente sigue abierta, el flicker dura lo que tarde el query.
-    if (_currentRegisterId != null && _businessId != null) {
-      _lastSession = null;
-      notifyListeners();
-    }
+    // NO nulleamos `_lastSession` aqui aposta. Ver comentario largo en
+    // `init()`: nullear causaba el flash "Caja cerrada" en cada
+    // navegacion. La proteccion contra stale "open" esta en
+    // `ensureCashOpenFast` (TTL 12s) y la validacion server-side de
+    // `processPayment`. Aqui solo hacemos fetch y emitimos un unico
+    // `notifyListeners` al final con el estado real.
     try {
       if (_currentRegisterId != null && _businessId != null) {
         // Misma resolucion que init(): caja es per-register (cualquier user

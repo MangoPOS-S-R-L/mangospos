@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'agent_auth.dart';
 
@@ -131,16 +132,49 @@ class LocalPrintService {
     debugPrint('[LocalPrintService] $message');
   }
 
+  /// Cache key compartido con `PrintAgentDetector` (lib/services/
+  /// print_agent_detector.dart). Hardcoded en ambos lados a proposito —
+  /// son dos servicios de niveles distintos y no queremos un import
+  /// cruzado solo por la constante. Si se cambia, cambiar tambien alla.
+  static const String _agentUrlPrefsKey = 'print_agent_url';
+
   static void primeBaseUrl(String baseUrl) {
     final normalized = baseUrl.trim();
     if (normalized.isEmpty) return;
     _sharedResolvedBaseUrl = normalized;
     _sharedResolvedBaseUrlAt = DateTime.now();
+
+    // Espejear al cache de SharedPrefs que `PrintAgentDetector` lee
+    // como fast-path en `scanLocalFirst`. Sin esto, despues de un
+    // update el `PrinterHeartbeatScheduler` escaneaba 4 puertos antes
+    // de caer al cache que main.dart ya habia poblado en memoria.
+    // Fire-and-forget: si la escritura no completa antes del primer
+    // tick, peor caso es un escaneo en ese tick — los siguientes ya
+    // ven el cache.
+    unawaited(() async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(_agentUrlPrefsKey, normalized);
+        await prefs.setInt(
+          '$_agentUrlPrefsKey:ts',
+          DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        );
+      } catch (e) {
+        debugPrint('[LocalPrintService] mirror primeBaseUrl to prefs: $e');
+      }
+    }());
   }
 
   static void clearPrimedBaseUrl() {
     _sharedResolvedBaseUrl = null;
     _sharedResolvedBaseUrlAt = null;
+    unawaited(() async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove(_agentUrlPrefsKey);
+        await prefs.remove('$_agentUrlPrefsKey:ts');
+      } catch (_) {}
+    }());
   }
 
   bool _isFreshResolvedUrl(String? baseUrl, DateTime? resolvedAt) {

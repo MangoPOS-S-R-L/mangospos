@@ -63,6 +63,11 @@ class PaymentSplitState {
   final String currentInput; // String to handle "10." typing
   final PaymentMethodType activeMethod;
   final bool isProcessing;
+  /// Fase post-cobro: el pago ya esta grabado en DB pero la impresion del
+  /// ticket esta en curso. Mientras `isPrinting=true` el modal NO debe
+  /// cerrarse y los botones de salir/cancelar quedan bloqueados — sino el
+  /// cajero puede liberar la mesa sin haber visto el ticket.
+  final bool isPrinting;
   final String? error;
   final String? validationError;
   final Order? orderDetails; // For printing
@@ -77,6 +82,7 @@ class PaymentSplitState {
     this.currentInput = '',
     this.activeMethod = PaymentMethodType.cash,
     this.isProcessing = false,
+    this.isPrinting = false,
     this.error,
     this.validationError,
     this.orderDetails,
@@ -90,6 +96,7 @@ class PaymentSplitState {
     String? currentInput,
     PaymentMethodType? activeMethod,
     bool? isProcessing,
+    bool? isPrinting,
     String? error,
     String? validationError,
     Order? orderDetails,
@@ -102,6 +109,7 @@ class PaymentSplitState {
       currentInput: currentInput ?? this.currentInput,
       activeMethod: activeMethod ?? this.activeMethod,
       isProcessing: isProcessing ?? this.isProcessing,
+      isPrinting: isPrinting ?? this.isPrinting,
       error: error,
       validationError: validationError,
       orderDetails: orderDetails ?? this.orderDetails,
@@ -226,6 +234,14 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     } catch (e) {
       debugPrint('Error loading order details: $e');
     }
+  }
+
+  /// Marca/desmarca la fase de impresion. La pantalla la usa para
+  /// mantener el modal abierto mientras corre el callback de print, y
+  /// para deshabilitar los botones de cerrar mientras tanto.
+  void setPrinting(bool value) {
+    if (state.isPrinting == value) return;
+    state = state.copyWith(isPrinting: value);
   }
 
   // --- INPUT HANDLING ---
@@ -548,7 +564,13 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       // 2. Print Receipt via QZ Tray (Agent) - DISABLED for speed
       // await _printReceipt();
 
-      state = state.copyWith(isProcessing: false);
+      // Bridge atomico: pasamos directamente de "Procesando..." a
+      // "Imprimiendo..." sin un frame intermedio donde isProcessing y
+      // isPrinting esten ambos en false. Sin esto, el boton parpadea
+      // un instante mostrando "Confirmar pago" entre el final del
+      // RPC y el setPrinting(true) que hace _finishWithPayments en la
+      // pantalla. La pantalla igual lo deja en false en el finally.
+      state = state.copyWith(isProcessing: false, isPrinting: true);
       return createdPayments;
     } catch (e, stack) {
       debugPrint('❌ Fatal Error in confirmPayment: $e\n$stack');
