@@ -65,6 +65,7 @@ class CurrentOrderState extends Equatable {
     bool? loading,
     String? error,
     Order? order,
+    bool clearOrder = false,
     List<OrderItem>? items,
     List<OrderCheck>? checks,
     bool? takeout,
@@ -97,7 +98,7 @@ class CurrentOrderState extends Equatable {
     return CurrentOrderState(
       loading: loading ?? this.loading,
       error: error,
-      order: order ?? this.order,
+      order: clearOrder ? null : (order ?? this.order),
       items: items ?? this.items,
       checks: checks ?? this.checks,
       takeout: takeout ?? this.takeout,

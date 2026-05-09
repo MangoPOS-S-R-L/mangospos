@@ -14,6 +14,7 @@ import 'package:mangopos/services/session/session_controller.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../state/sales_state.dart';
 import '../../../data/models/sales_models.dart';
+import '../../../data/models/order_item_tax_line.dart';
 import '../../cashier/viewmodel/cashier_viewmodel.dart';
 import '../../../services/fiscal/fiscal_service.dart';
 import '../../../data/models/fiscal_models.dart';
@@ -491,7 +492,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   Future<bool> ensureCashSessionOpen() async {
     final cashierVm = ref.read(cashierViewModelProvider);
     try {
-      final isOpen = await cashierVm.ensureCashOpenFast();
+      // force: true bypassea el TTL de 12s del cache (`_lastCashOpenValidationAt`).
+      // El cache producía falsos negativos cuando la caja se abría en otro
+      // proceso/empleado y este viewmodel aún tenía `_lastSession` stale.
+      final isOpen = await cashierVm.ensureCashOpenFast(force: true);
       if (!isOpen) {
         state = state.copyWith(loading: false, error: _cashierClosedMessage);
         return false;
@@ -846,11 +850,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         previousOrder != null &&
         qty > 0) {
       final tempId = 'tmp_${DateTime.now().microsecondsSinceEpoch}';
-      final modifiersGross = selectedModifiers.fold<double>(
+      // modifiersPerUnit es el costo de modifiers por UNA unidad del item.
+      // Multiplicamos despues por qty para que coincida con el trigger backend
+      // fn_compute_item_totals (migration 20260509_0004).
+      final modifiersPerUnit = selectedModifiers.fold<double>(
         0,
         (sum, modifier) => sum + (modifier.price * modifier.qty),
       );
-      final grossAmount = (productPrice * qty) + modifiersGross;
+      final grossAmount = qty * (productPrice + modifiersPerUnit);
 
       // El estimador recibe la tasa como fracción decimal (0.18 = 18%).
       final taxRateDecimal = resolvedTaxRate / 100.0;
@@ -863,6 +870,45 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         serviceRate: 0.0, // PRD 2: motor unificado, sin path separado
         includeServiceInInclusivePrice: false,
       );
+
+      // Sintetiza tax_lines para que el panel de totales muestre el desglose
+      // completo (ITBIS + 10% De Ley + cualquier otro tax activo) desde el
+      // primer render. Sin esto, solo aparece ITBIS via la heuristica vieja
+      // y "10% De Ley" pop-in cuando llega la respuesta del backend (~1-2s
+      // despues), causando un salto del total. Replicamos el filtrado del
+      // RPC fn_resolve_order_item_tax_profile (origin + takeout).
+      final originForTaxes = parseSaleOrigin(state.origin);
+      final synthTimestamp = DateTime.now();
+      final taxBase = optimisticAmounts.subtotal;
+      final synthTaxLines = <OrderItemTaxLine>[];
+      for (var i = 0; i < _taxDefs.length; i++) {
+        final taxDef = _taxDefs[i];
+        if (!taxDef.isActive || taxDef.rate <= 0) continue;
+        final appliesToOrigin = switch (originForTaxes) {
+          SaleOrigin.zone => taxDef.applyOnZone,
+          SaleOrigin.manual => taxDef.applyOnManual,
+          SaleOrigin.quick => taxDef.applyOnQuick,
+          SaleOrigin.delivery => taxDef.applyOnDelivery,
+          SaleOrigin.unknown => true,
+        };
+        if (!appliesToOrigin) continue;
+        if (takeout && !taxDef.applyOnTakeout) continue;
+        final amount = double.parse(
+          (taxBase * taxDef.rate / 100.0).toStringAsFixed(2),
+        );
+        if (amount <= 0.004) continue;
+        synthTaxLines.add(
+          OrderItemTaxLine(
+            id: 'tmp_tl_${synthTimestamp.microsecondsSinceEpoch}_$i',
+            orderItemId: tempId,
+            taxId: 'tmp_tax_${taxDef.name}',
+            taxName: taxDef.name,
+            taxRate: taxDef.rate,
+            amount: amount,
+            createdAt: synthTimestamp,
+          ),
+        );
+      }
 
       optimisticItem = OrderItem(
         id: tempId,
@@ -895,6 +941,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
               ),
             )
             .toList(growable: false),
+        taxLines: synthTaxLines,
       );
 
       final optimisticItems = [...state.items, optimisticItem];
@@ -2005,6 +2052,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         orderId,
         businessId: _activeBusinessId,
       );
+      // Marcar las futures como manejadas para que un rechazo temprano no se
+      // reporte como "Error FATAL no controlado" antes de llegar a su await.
+      // El error sigue disponible cuando se haga el await más abajo.
+      orderFuture.ignore();
+      itemsFuture.ignore();
+      checksFuture.ignore();
       Future<({String? customerId, String? customerName, String? note})>?
       customerFuture;
 
@@ -2038,18 +2091,43 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
 
     if (order == null && items.isEmpty) {
-      // DUMP ERROR EN MODO DEBUG
-      print("===== _loadOrderDetail ERROR =====");
-      print("orderId: $orderId");
-      print("loadedByBundle: $loadedByBundle");
-      print("loadError: $loadError");
-      print("==================================");
+      // Tails de IDs para que la captura del usuario sea autodiagnosticable
+      // sin tener que pedirle logs. order=…<8> · business=…<8>.
+      String tail(String? value) {
+        if (value == null || value.isEmpty) return 'null';
+        return value.length >= 8
+            ? value.substring(value.length - 8)
+            : value;
+      }
 
+      final activeBusinessId = _activeBusinessId;
+      final diag = 'order=…${tail(orderId)} · business=…${tail(activeBusinessId)}';
+
+      debugPrint("===== _loadOrderDetail ERROR =====");
+      debugPrint("orderId: $orderId");
+      debugPrint("activeBusinessId: $activeBusinessId");
+      debugPrint("loadedByBundle: $loadedByBundle");
+      debugPrint("loadError: $loadError");
+      debugPrint("==================================");
+
+      // Recovery: si el orderId no es accesible en el negocio actual, limpiar
+      // el state para que un próximo openTable no arrastre la orden stale
+      // entre sucursales. Sin esto, el viewmodel reintenta cargar el mismo
+      // orderId out-of-scope cada vez que el usuario interactúa.
+      _tableCache.remove(tableId);
+      final baseMessage =
+          loadError ??
+          'Esta orden no está disponible en este negocio.\n'
+              'Vuelve a la pantalla de mesas e intenta de nuevo.';
       state = state.copyWith(
         loading: false,
-        error:
-            loadError ??
-            'Orden no encontrada (Probable error RLS o de permisos)',
+        clearOrder: true,
+        items: const <OrderItem>[],
+        checks: const <OrderCheck>[],
+        clearSelectedCheck: true,
+        clearCustomer: true,
+        clearSessionNote: true,
+        error: '$baseMessage\n$diag',
       );
       return;
     }
@@ -2311,11 +2389,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }
 
   double _courtesyLineAmount(OrderItem item) {
-    final modifiersTotal = item.modifiers.fold<double>(
+    // Costo de modifiers por UNA unidad del item. Multiplicamos por qty
+    // despues para alinearnos con la formula de fn_compute_item_totals
+    // (migration 20260509_0004).
+    final modifiersPerUnit = item.modifiers.fold<double>(
       0,
       (sum, modifier) => sum + (modifier.price * modifier.qty),
     );
-    final estimatedSubtotal = (item.unitPrice * item.quantity) + modifiersTotal;
+    final estimatedSubtotal = item.quantity * (item.unitPrice + modifiersPerUnit);
 
     final taxRate = item.subtotal > 0
         ? (item.tax / item.subtotal)

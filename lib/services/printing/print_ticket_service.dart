@@ -1031,10 +1031,11 @@ class PrintTicketService {
     return consolidatedByKey.values.toList(growable: false);
   }
 
-  /// Suma las cantidades de modificadores coincidentes cuando dos ítems con
-  /// el mismo set de modificadores se fusionan en la consolidación.
-  /// Sin esto, `catalogGrossAmount` aplica el precio del modificador una sola
-  /// vez a una línea con `quantity>1`, produciendo un total menor al real.
+  /// Cuando 2 items con el mismo set de modificadores se fusionan en la
+  /// consolidacion, mantenemos los modificadores de uno solo (no sumamos
+  /// `qty`). La fmla nueva de `catalogGrossAmount` (qty * (unit + mods))
+  /// ya multiplica los modifiers por el qty consolidado del parent, asi
+  /// que no hay que pre-amplificarlos aqui.
   static List<OrderItemModifier> _sumMatchingModifiers(
     List<OrderItemModifier> a,
     List<OrderItemModifier> b,
@@ -1042,21 +1043,7 @@ class PrintTicketService {
     if (a.length != b.length) {
       return [...a, ...b];
     }
-    final merged = <OrderItemModifier>[];
-    for (var i = 0; i < a.length; i++) {
-      final ma = a[i];
-      final mb = b[i];
-      merged.add(
-        OrderItemModifier(
-          id: ma.id,
-          itemId: ma.itemId,
-          name: ma.name,
-          qty: ma.qty + mb.qty,
-          price: ma.price,
-        ),
-      );
-    }
-    return merged;
+    return List<OrderItemModifier>.from(a);
   }
 
   static List<OrderItem> _separatePrintableItems(List<OrderItem> items) {

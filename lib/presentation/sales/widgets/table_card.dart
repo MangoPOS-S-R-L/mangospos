@@ -319,11 +319,14 @@ class _TableCardState extends State<TableCard> {
       );
     }
 
-    // Mesa disponible - texto con 60% opacidad
+    // Mesa disponible. Si la card esta deshabilitada (caja cerrada o sin
+    // permisos) el texto activo "Toca para asignar" engaña al cajero.
+    // Mostramos un placeholder neutro que coincida con la accion real.
+    final emptyText = widget.enabled ? 'Toca para asignar' : 'Caja cerrada';
     return Padding(
       padding: const EdgeInsets.only(top: 4),
       child: Text(
-        'Toca para asignar',
+        emptyText,
         style: AppTextStyles.tableEmptyPrompt.copyWith(
           color: AppColors.foregroundMuted, // foreground con 60% opacidad
         ),

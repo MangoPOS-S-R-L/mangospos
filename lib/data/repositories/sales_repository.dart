@@ -8,6 +8,15 @@ import '../models/sales_models.dart';
 import '../utils/business_id_resolver.dart';
 import '../utils/payment_amount_utils.dart';
 
+/// Excepción tipada para señalizar que la orden consultada no pertenece
+/// al `businessId` activo. Los métodos de lectura la atrapan y devuelven
+/// resultados vacíos en lugar de propagar el error a la UI.
+class OrderOutOfScopeException implements Exception {
+  const OrderOutOfScopeException();
+  @override
+  String toString() => 'ORDER_OUT_OF_SCOPE';
+}
+
 /// 🥭 MangoPOS - Sales Repository
 /// Repositorio completo para el módulo de ventas
 class SalesRepository {
@@ -59,7 +68,7 @@ class SalesRepository {
         .maybeSingle();
 
     if (row == null) {
-      throw Exception('ORDER_OUT_OF_SCOPE');
+      throw const OrderOutOfScopeException();
     }
   }
 
@@ -680,7 +689,13 @@ class SalesRepository {
           },
         );
       } catch (rpcError) {
-        // Fallback temporal si el RPC aún no está migrado.
+        // Detectar ITEM_NOT_FOUND (P0001) del RPC y exponerlo limpio. Sin
+        // esto, el fallback tira PGRST116 y la UI ve un mensaje opaco con
+        // "result contains 0 rows" en vez de "el item ya no existe".
+        if (rpcError.toString().contains('ITEM_NOT_FOUND')) {
+          throw Exception('ITEM_NOT_FOUND');
+        }
+        // Fallback solo si el RPC fallo por otro motivo (ej. RPC no migrado).
         final updated = await _client
             .from('order_items')
             .update({
@@ -693,7 +708,7 @@ class SalesRepository {
             .select('id')
             .maybeSingle();
         if (updated == null) {
-          throw Exception('ITEM_NOT_UPDATED');
+          throw Exception('ITEM_NOT_FOUND');
         }
         await updateItemDiscountAndNotes(
           itemId: itemId,
@@ -702,6 +717,13 @@ class SalesRepository {
         );
       }
     } catch (e) {
+      final raw = e.toString();
+      if (raw.contains('ITEM_NOT_FOUND') || raw.contains('PGRST116')) {
+        throw Exception(
+          'El producto ya no existe en la orden. Refresca la mesa para ver '
+          'el estado actual.',
+        );
+      }
       throw Exception('Error al actualizar item: $e');
     }
   }
@@ -808,6 +830,8 @@ class SalesRepository {
       if (data == null) return null;
 
       return Order.fromMap(data);
+    } on OrderOutOfScopeException {
+      return null;
     } catch (e) {
       throw Exception('Error al obtener orden: $e');
     }
@@ -914,6 +938,15 @@ class SalesRepository {
         customerName: payload['customer_name']?.toString(),
         note: payload['note']?.toString(),
       );
+    } on OrderOutOfScopeException {
+      return (
+        order: null,
+        items: const <OrderItem>[],
+        checks: const <OrderCheck>[],
+        customerId: null,
+        customerName: null,
+        note: null,
+      );
     } catch (e) {
       throw Exception('Error al obtener bundle de orden: $e');
     }
@@ -1007,6 +1040,8 @@ class SalesRepository {
             ),
           )
           .toList(growable: false);
+    } on OrderOutOfScopeException {
+      return const <OrderItem>[];
     } catch (e) {
       throw Exception('Error al obtener items: $e');
     }
@@ -1324,6 +1359,8 @@ class SalesRepository {
           .order('position', ascending: true);
 
       return data.map((json) => OrderCheck.fromMap(json)).toList();
+    } on OrderOutOfScopeException {
+      return const <OrderCheck>[];
     } catch (e) {
       throw Exception('Error al obtener checks: $e');
     }

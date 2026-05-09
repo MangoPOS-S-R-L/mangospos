@@ -3734,8 +3734,17 @@ class _CartLineItem extends ConsumerWidget {
                         children: modifiers
                             .map((modifier) {
                               final hasExtraCost = modifier.price > 0.009;
-                              final qtyLabel = modifier.qty > 1
-                                  ? '${modifier.qty.toStringAsFixed(modifier.qty % 1 == 0 ? 0 : 1)}x '
+                              // qty efectiva = item.quantity * modifier.qty.
+                              // Asi el chip muestra "7x Ceresa (+RD$ 1050.00)"
+                              // cuando hay 7 items con 1 ceresa cada uno —
+                              // alineado con la formula per-unit del backend.
+                              final itemQty = item.quantity <= 0
+                                  ? 1.0
+                                  : item.quantity;
+                              final effectiveQty = itemQty * modifier.qty;
+                              final totalCost = modifier.price * effectiveQty;
+                              final qtyLabel = effectiveQty > 1.0001
+                                  ? '${effectiveQty.toStringAsFixed(effectiveQty % 1 == 0 ? 0 : 1)}x '
                                   : '';
                               final isComboChoice = modifier.name.contains(
                                 ': ',
@@ -3758,7 +3767,7 @@ class _CartLineItem extends ConsumerWidget {
                                 ),
                                 child: Text(
                                   hasExtraCost
-                                      ? '$qtyLabel${modifier.name} (+RD\$ ${modifier.price.toStringAsFixed(2)})'
+                                      ? '$qtyLabel${modifier.name} (+RD\$ ${totalCost.toStringAsFixed(2)})'
                                       : '$qtyLabel${modifier.name}',
                                   style: TextStyle(
                                     fontSize: 11,

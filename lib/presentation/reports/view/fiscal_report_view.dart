@@ -5,6 +5,7 @@ import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
 import 'package:mangopos/presentation/reports/viewmodel/reports_viewmodel.dart';
+import 'package:mangopos/presentation/reports/widgets/fiscal_documents_detail_card.dart';
 import 'package:mangopos/presentation/reports/widgets/report_scaffold.dart';
 import 'package:mangopos/presentation/reports/widgets/report_widgets.dart';
 
@@ -53,63 +54,14 @@ class _FiscalReportBody extends StatelessWidget {
     }
   }
 
-  static List<String> _collectTaxLabels(
-      List<Map<String, dynamic>> documents) {
-    final labels = <String>{};
-    for (final doc in documents) {
-      final breakdown = doc['tax_breakdown'];
-      if (breakdown is List) {
-        for (final item in breakdown) {
-          final row = item is Map<String, dynamic>
-              ? item
-              : Map<String, dynamic>.from(item as Map);
-          final label = row['label']?.toString() ?? '';
-          final rate = (row['rate'] as num?)?.toDouble() ?? 0;
-          final display = rate > 0
-              ? '$label (${rate.toStringAsFixed(rate.truncateToDouble() == rate ? 0 : 2)}%)'
-              : label;
-          if (display.isNotEmpty) labels.add(display);
-        }
-      }
-      if (((doc['service_fee'] as num?)?.toDouble() ?? 0) > 0) {
-        labels.add('Propina de ley');
-      }
-    }
-    return labels.toList(growable: false);
-  }
-
-  static double _taxAmountForLabel(Map<String, dynamic> doc, String label) {
-    if (label == 'Propina de ley') {
-      return (doc['service_fee'] as num?)?.toDouble() ?? 0;
-    }
-    final breakdown = doc['tax_breakdown'];
-    if (breakdown is! List) return 0;
-    for (final item in breakdown) {
-      final row = item is Map<String, dynamic>
-          ? item
-          : Map<String, dynamic>.from(item as Map);
-      final itemLabel = row['label']?.toString() ?? '';
-      final rate = (row['rate'] as num?)?.toDouble() ?? 0;
-      final display = rate > 0
-          ? '$itemLabel (${rate.toStringAsFixed(rate.truncateToDouble() == rate ? 0 : 2)}%)'
-          : itemLabel;
-      if (display == label) {
-        return (row['tax_amount'] as num?)?.toDouble() ?? 0;
-      }
-    }
-    return 0;
-  }
-
   @override
   Widget build(BuildContext context) {
     final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
-    final dateFormat = DateFormat('dd/MM/yyyy hh:mm a');
     final metrics = viewModel.getFiscalMetricCards();
     final typeRows = viewModel.getFiscalTypeRows();
     final taxBreakdownRows = viewModel.getFiscalTaxBreakdownRows();
     final documents = viewModel.getFilteredFiscalDocuments();
     final availableTypes = viewModel.getAvailableFiscalTypes();
-    final taxLabels = _collectTaxLabels(documents);
     final selectedType = state.fiscalTypeFilter;
 
     return ListView(
@@ -238,145 +190,12 @@ class _FiscalReportBody extends StatelessWidget {
           },
         ),
         const SizedBox(height: AppSpacing.sectionGap),
-        ReportSurfaceCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const ReportSectionLabel(
-                title: 'Detalle de comprobantes',
-                subtitle:
-                    'Tabla lista para auditoría diaria y exportación; respeta el filtro de tipo seleccionado.',
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              if (documents.isEmpty)
-                const ReportEmptyPlaceholder(
-                  icon: Icons.description_outlined,
-                  message:
-                      'No hay comprobantes fiscales en el rango seleccionado.',
-                )
-              else
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: DataTable(
-                    headingRowColor: WidgetStateProperty.all(
-                      MangoColors.bgLight,
-                    ),
-                    headingTextStyle: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.foreground,
-                      fontSize: 12,
-                    ),
-                    dataRowMinHeight: 44,
-                    dataRowMaxHeight: 58,
-                    columnSpacing: 20,
-                    horizontalMargin: 12,
-                    columns: [
-                      const DataColumn(label: Text('NCF')),
-                      const DataColumn(label: Text('Tipo')),
-                      const DataColumn(label: Text('Cliente')),
-                      const DataColumn(label: Text('RNC/Cédula')),
-                      const DataColumn(
-                          label: Text('Subtotal'), numeric: true),
-                      ...taxLabels.map(
-                        (label) => DataColumn(
-                            label: Text(label), numeric: true),
-                      ),
-                      const DataColumn(
-                          label: Text('Total'), numeric: true),
-                      const DataColumn(label: Text('Estado')),
-                      const DataColumn(label: Text('Fecha')),
-                    ],
-                    rows: documents.map((doc) {
-                      final ncfNumber =
-                          doc['ncf_number']?.toString() ?? '';
-                      final ncfType =
-                          doc['ncf_type']?.toString() ?? '';
-                      final customerName =
-                          doc['customer_name']?.toString() ??
-                              'CONSUMIDOR FINAL';
-                      final customerRnc =
-                          doc['customer_rnc']?.toString() ?? '-';
-                      final subtotal =
-                          (doc['subtotal'] as num?)?.toDouble() ?? 0;
-                      final total =
-                          (doc['total'] as num?)?.toDouble() ?? 0;
-                      final status =
-                          doc['status']?.toString() ?? 'active';
-                      final issuedAt = DateTime.tryParse(
-                              doc['issued_at']?.toString() ?? '') ??
-                          DateTime.now();
-                      final isVoid = status != 'active';
-
-                      return DataRow(
-                        color: isVoid
-                            ? WidgetStateProperty.all(
-                                AppColors.destructive
-                                    .withValues(alpha: 0.04),
-                              )
-                            : null,
-                        cells: [
-                          DataCell(
-                            Text(
-                              ncfNumber,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                          DataCell(Text(_ncfTypeName(ncfType))),
-                          DataCell(
-                            ConstrainedBox(
-                              constraints:
-                                  const BoxConstraints(maxWidth: 180),
-                              child: Text(
-                                customerName,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ),
-                          DataCell(
-                            Text(customerRnc.isEmpty
-                                ? '-'
-                                : customerRnc),
-                          ),
-                          DataCell(Text(currency.format(subtotal))),
-                          ...taxLabels.map(
-                            (label) => DataCell(
-                              Text(
-                                _taxAmountForLabel(doc, label) > 0
-                                    ? currency.format(
-                                        _taxAmountForLabel(
-                                            doc, label),
-                                      )
-                                    : '-',
-                              ),
-                            ),
-                          ),
-                          DataCell(
-                            Text(
-                              currency.format(total),
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                          DataCell(
-                            ReportStatusTag(
-                              label: isVoid ? 'Anulado' : 'Activo',
-                              tone: isVoid
-                                  ? AppColors.destructive
-                                  : MangoColors.successGreen,
-                            ),
-                          ),
-                          DataCell(Text(
-                              dateFormat.format(issuedAt.toLocal()))),
-                        ],
-                      );
-                    }).toList(),
-                  ),
-                ),
-            ],
-          ),
+        FiscalDocumentsDetailCard(
+          documents: documents,
+          subtitle:
+              'Tabla lista para auditoría diaria y exportación; respeta el filtro de tipo seleccionado.',
+          emptyMessage:
+              'No hay comprobantes fiscales en el rango seleccionado.',
         ),
       ],
     );

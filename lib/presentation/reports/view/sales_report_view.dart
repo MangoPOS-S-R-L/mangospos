@@ -8,6 +8,7 @@ import 'package:mangopos/core/theme/app_spacing.dart';
 import 'package:mangopos/presentation/reports/services/reports_csv_export_service.dart';
 import 'package:mangopos/presentation/reports/services/reports_export_service.dart';
 import 'package:mangopos/presentation/reports/viewmodel/reports_viewmodel.dart';
+import 'package:mangopos/presentation/reports/widgets/fiscal_documents_detail_card.dart';
 import 'package:mangopos/presentation/reports/widgets/report_scaffold.dart';
 import 'package:mangopos/presentation/reports/widgets/report_widgets.dart';
 
@@ -371,6 +372,13 @@ class _SalesReportBody extends StatelessWidget {
             countLabel: 'Documentos',
             isFullReport: true,
           ),
+          const SizedBox(height: AppSpacing.sectionGap),
+          // Detalle por comprobante: cada NCF listado con cliente, RNC,
+          // impuestos por tipo y tag de estado (Activo / Anulado).
+          // Mismo widget que usa el reporte de Comprobantes Fiscales.
+          FiscalDocumentsDetailCard(
+            documents: viewModel.getFiscalDocuments(),
+          ),
         ];
       case SalesSubReport.byModifiers:
         return [
@@ -410,6 +418,7 @@ class _SalesReportBody extends StatelessWidget {
         final productTotals = productSalesRows.fold<Map<String, double>>(
           <String, double>{
             'quantity': 0,
+            'projection': 0,
             'grossSales': 0,
             'discounts': 0,
             'courtesies': 0,
@@ -420,6 +429,8 @@ class _SalesReportBody extends StatelessWidget {
           (totals, row) {
             totals['quantity'] =
                 (totals['quantity'] ?? 0) + row.quantitySold;
+            totals['projection'] =
+                (totals['projection'] ?? 0) + row.projectedQuantity;
             totals['grossSales'] =
                 (totals['grossSales'] ?? 0) + row.grossSales;
             totals['discounts'] =
@@ -1078,6 +1089,7 @@ class _ProductSalesDataTable extends StatelessWidget {
               const DataColumn(label: Text('Producto')),
               const DataColumn(label: Text('Categoría')),
               const DataColumn(numeric: true, label: Text('Cantidad')),
+              const DataColumn(numeric: true, label: Text('Proy. mes')),
               _moneyColumn('Brutas'),
               _moneyColumn('Descuentos'),
               _moneyColumn('Cortesías'),
@@ -1101,6 +1113,19 @@ class _ProductSalesDataTable extends StatelessWidget {
                     DataCell(Text(row.category)),
                     DataCell(
                         Text(row.quantitySold.toStringAsFixed(2))),
+                    DataCell(
+                      Text(
+                        row.projectedQuantity > 0
+                            ? row.projectedQuantity.toStringAsFixed(2)
+                            : '-',
+                        style: TextStyle(
+                          color: row.projectedQuantity > 0
+                              ? const Color(0xFF6B7280)
+                              : AppColors.mutedForeground,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
                     DataCell(Text(currency.format(row.grossSales))),
                     DataCell(Text(currency.format(row.discounts))),
                     DataCell(Text(currency.format(row.courtesies))),
@@ -1138,6 +1163,10 @@ class _ProductSalesDataTable extends StatelessWidget {
                   label: 'Cantidad',
                   value:
                       (totals['quantity'] ?? 0).toStringAsFixed(2)),
+              ReportTotalPill(
+                  label: 'Proy. mes',
+                  value:
+                      (totals['projection'] ?? 0).toStringAsFixed(2)),
               ReportTotalPill(
                   label: 'Brutas',
                   value:

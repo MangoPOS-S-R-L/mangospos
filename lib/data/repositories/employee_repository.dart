@@ -190,10 +190,13 @@ class EmployeeRepository {
     String? emergencyPhone,
     String? pin,
     String? password,
+    String? primaryRole,
     List<String> roleIds = const [],
   }) async {
-    final insert = {
-      'business_id': businessId,
+    // Single atomic RPC: crea auth.users + user_businesses + employees
+    // + employee_roles + user_roles en una transacción. Si algo falla,
+    // postgres revierte todo y no quedan filas huérfanas.
+    final employeeData = <String, dynamic>{
       'first_name': firstName,
       'last_name': lastName,
       'email': email,
@@ -202,12 +205,12 @@ class EmployeeRepository {
       'gender': gender,
       'address': address,
       'status': status,
-      'hire_date': hireDate?.toIso8601String(),
+      'hire_date': hireDate?.toIso8601String().split('T').first,
       'contract_type': contractType,
       'department': department,
       'position': position,
       'work_schedule': workSchedule,
-      'salary_base': salaryBase,
+      'salary_base': salaryBase?.toString(),
       'pay_frequency': payFrequency,
       'bank_name': bankName,
       'bank_account': bankAccount,
@@ -215,50 +218,23 @@ class EmployeeRepository {
       'emergency_relation': emergencyRelation,
       'emergency_phone': emergencyPhone,
       'pin': pin,
-    };
+    }..removeWhere((_, value) => value == null);
 
-    // Remover valores nulos
-    insert.removeWhere((key, value) => value == null);
+    final res = await _client.rpc(
+      'fn_create_employee_with_access',
+      params: {
+        'p_business_id': businessId,
+        'p_email': email,
+        'p_password': (password != null && password.isNotEmpty) ? password : null,
+        'p_employee_data': employeeData,
+        'p_primary_role': primaryRole,
+        'p_role_ids': roleIds.isEmpty ? null : roleIds,
+      },
+    );
 
-    // Si se proporciona contraseña, creamos el usuario de Auth primero
-    String? createdAuthUserId;
-    if (password != null && password.isNotEmpty) {
-      try {
-        final res = await _client.rpc(
-          'create_new_user',
-          params: {
-            'email': email,
-            'password': password,
-            'user_metadata': {
-              'first_name': firstName,
-              'last_name': lastName,
-              'business_id':
-                  businessId, // << IMPORTANTE: Guardamos el ID del negocio
-            },
-          },
-        );
-        createdAuthUserId = res as String;
-        // Asignamos el ID de auth creado al empleado
-        insert['user_id'] = createdAuthUserId;
-      } catch (e) {
-        // Si falla la creación del usuario Auth, lanzamos error (o decidimos continuar sin Auth)
-        throw Exception('Error al crear usuario de acceso: $e');
-      }
-    }
-
-    final inserted = await _client
-        .from('employees')
-        .insert(insert)
-        .select()
-        .single();
-
-    final employee = Employee.fromMap(inserted);
-
-    if (roleIds.isNotEmpty) {
-      await updateEmployeeRoles(employeeId: employee.id, roleIds: roleIds);
-    }
-
-    return employee;
+    final result = Map<String, dynamic>.from(res as Map);
+    final employeeMap = Map<String, dynamic>.from(result['employee'] as Map);
+    return Employee.fromMap(employeeMap);
   }
 
   Future<void> updateEmployee({

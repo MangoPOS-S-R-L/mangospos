@@ -37,6 +37,19 @@ class _ReportScaffoldState extends ConsumerState<ReportScaffold> {
   String? _lastBusinessId;
 
   @override
+  void initState() {
+    super.initState();
+    // Cada vez que el usuario entra a un reporte, recargamos los datos
+    // contra la fecha actual. El provider es global (no autoDispose),
+    // así que sin esto seguiría mostrando el snapshot del primer load,
+    // que puede ser de hace horas o de ayer si el preset es "Hoy".
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(reportsViewModelProvider.notifier).load();
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final session = ref.watch(sessionProvider);
     final state = ref.watch(reportsViewModelProvider);
@@ -91,7 +104,11 @@ class _ReportScaffoldState extends ConsumerState<ReportScaffold> {
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                      if (state.loading)
+                      // Solo mostramos el indicador del header en la
+                      // primera carga (cuando no hay data aún). Refreshes
+                      // posteriores corren en background sin mostrar nada
+                      // — la data se actualiza in-place cuando termina.
+                      if (state.loading && state.salesSummary == null)
                         Padding(
                           padding: const EdgeInsets.only(right: AppSpacing.sm),
                           child: SizedBox(

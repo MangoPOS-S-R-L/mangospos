@@ -137,6 +137,13 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   final String? _cashierSessionId;
   final Ref _ref;
 
+  /// Guard sincronico antes de cualquier `await` para bloquear
+  /// double-tap / re-fire en el mismo frame. `state.isProcessing` es
+  /// equivalente conceptualmente, pero el rebuild que lo expone al boton
+  /// llega en el siguiente frame y deja una ventana de race minima.
+  /// Este flag es field privado: las dos invocaciones lo ven sincrono.
+  bool _localProcessing = false;
+
   PaymentSplitViewModel(
     this._salesRepo,
     this._orderId,
@@ -169,6 +176,11 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
 
     if (raw.contains('ORDER_OUT_OF_SCOPE')) {
       return 'La orden ya no pertenece al negocio activo. Recarga la mesa e intenta de nuevo.';
+    }
+
+    if (raw.contains('ORDER_ALREADY_CLOSED') ||
+        raw.contains('CHECK_ALREADY_CLOSED')) {
+      return 'Esta cuenta ya fue cobrada. Refresca el historial para ver el comprobante.';
     }
 
     if (raw.contains('CASH_SESSION_REQUIRED') ||
@@ -372,7 +384,13 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       return null;
     }
 
-    if (state.isProcessing) return null;
+    // Guard sincronico: chequea el flag local ANTES de tocar `state`. Riverpod
+    // expone `state.isProcessing` recien tras el rebuild del proximo frame, lo
+    // que dejaba una ventana de race con doble-tap. El backend ya tiene guard
+    // atomico (20260509_0001) que retorna el payment existente, pero esto
+    // evita lanzar el RPC duplicado innecesariamente.
+    if (_localProcessing || state.isProcessing) return null;
+    _localProcessing = true;
 
     state = state.copyWith(
       isProcessing: true,
@@ -539,6 +557,8 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
         error: _friendlyPaymentError(e),
       );
       return null;
+    } finally {
+      _localProcessing = false;
     }
   }
 
