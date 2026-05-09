@@ -19,6 +19,8 @@ import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
 import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dart';
 import 'package:mangopos/presentation/sales/state/sales_state.dart';
+import 'package:mangopos/presentation/sales/state/sales_zoom_provider.dart';
+import 'package:mangopos/presentation/sales/widgets/sales_zoom_control.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
 import 'package:mangopos/presentation/split_bill/widgets/split_bill_modal.dart';
@@ -4278,49 +4280,66 @@ class _CatalogAreaState extends ConsumerState<_CatalogArea>
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
-          child: _SearchField(
-            controller: _searchController,
-            onChanged: (value) {
-              final menuState = ref.read(menuBrowserVmProvider);
-              final notifier = ref.read(menuBrowserVmProvider.notifier);
-              if (value.trim().isEmpty) {
-                if (_mainTabController.index == 2) {
-                  if (menuState.productsMode != MenuProductsMode.favorites ||
-                      menuState.products.isEmpty) {
-                    notifier.loadFavoriteProducts();
-                  }
-                } else if (_mainTabController.index == 0) {
-                  if (menuState.categories.isEmpty) {
-                    notifier.loadAll();
-                  }
-                } else {
-                  final selectedCategoryId = menuState.selectedCategoryId;
-                  if (selectedCategoryId != null &&
-                      selectedCategoryId.isNotEmpty) {
-                    if (menuState.productsMode != MenuProductsMode.category ||
-                        menuState.loadedCategoryId != selectedCategoryId ||
-                        menuState.products.isEmpty) {
-                      notifier.loadProductsByCategory(selectedCategoryId);
+          child: Row(
+            children: [
+              Expanded(
+                child: _SearchField(
+                  controller: _searchController,
+                  onChanged: (value) {
+                    final menuState = ref.read(menuBrowserVmProvider);
+                    final notifier = ref.read(
+                      menuBrowserVmProvider.notifier,
+                    );
+                    if (value.trim().isEmpty) {
+                      if (_mainTabController.index == 2) {
+                        if (menuState.productsMode !=
+                                MenuProductsMode.favorites ||
+                            menuState.products.isEmpty) {
+                          notifier.loadFavoriteProducts();
+                        }
+                      } else if (_mainTabController.index == 0) {
+                        if (menuState.categories.isEmpty) {
+                          notifier.loadAll();
+                        }
+                      } else {
+                        final selectedCategoryId =
+                            menuState.selectedCategoryId;
+                        if (selectedCategoryId != null &&
+                            selectedCategoryId.isNotEmpty) {
+                          if (menuState.productsMode !=
+                                  MenuProductsMode.category ||
+                              menuState.loadedCategoryId !=
+                                  selectedCategoryId ||
+                              menuState.products.isEmpty) {
+                            notifier.loadProductsByCategory(
+                              selectedCategoryId,
+                            );
+                          }
+                        } else {
+                          if (menuState.productsMode !=
+                                  MenuProductsMode.all ||
+                              menuState.products.isEmpty) {
+                            notifier.loadAllProducts();
+                          }
+                        }
+                      }
+                      return;
                     }
-                  } else {
-                    if (menuState.productsMode != MenuProductsMode.all ||
-                        menuState.products.isEmpty) {
-                      notifier.loadAllProducts();
-                    }
-                  }
-                }
-                return;
-              }
 
-              final q = value.trim();
-              if (menuState.productsMode != MenuProductsMode.search ||
-                  menuState.search != q) {
-                notifier.searchProducts(q);
-              }
-              if (_mainTabController.index != 1) {
-                _mainTabController.animateTo(1);
-              }
-            },
+                    final q = value.trim();
+                    if (menuState.productsMode != MenuProductsMode.search ||
+                        menuState.search != q) {
+                      notifier.searchProducts(q);
+                    }
+                    if (_mainTabController.index != 1) {
+                      _mainTabController.animateTo(1);
+                    }
+                  },
+                ),
+              ),
+              const SizedBox(width: 12),
+              const SalesZoomControl(),
+            ],
           ),
         ),
         const SizedBox(height: 12),
@@ -5719,6 +5738,7 @@ class _CategoriesGrid extends ConsumerWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final textScale = MediaQuery.textScalerOf(context).scale(1);
+        final zoom = ref.watch(salesZoomProvider);
         final categoryCardExtent = (190 + ((textScale - 1) * 24)).clamp(
           190,
           214,
@@ -5728,8 +5748,8 @@ class _CategoriesGrid extends ConsumerWidget {
             GridView.builder(
               padding: const EdgeInsets.all(16),
               gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-                maxCrossAxisExtent: 220, // cards pequeñas
-                mainAxisExtent: categoryCardExtent.toDouble(),
+                maxCrossAxisExtent: 220 * zoom, // cards pequeñas
+                mainAxisExtent: categoryCardExtent.toDouble() * zoom,
                 crossAxisSpacing: 12,
                 mainAxisSpacing: 12,
               ),
@@ -5921,6 +5941,7 @@ class _ProductsGrid extends ConsumerWidget {
     }
 
     final textScale = MediaQuery.textScalerOf(context).scale(1);
+    final zoom = ref.watch(salesZoomProvider);
     final productCardExtent = (206 + ((textScale - 1) * 32)).clamp(206, 238);
 
     return Stack(
@@ -5928,8 +5949,8 @@ class _ProductsGrid extends ConsumerWidget {
         GridView.builder(
           padding: const EdgeInsets.all(16),
           gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent: 220, // mismo ancho que categorías
-            mainAxisExtent: productCardExtent.toDouble(),
+            maxCrossAxisExtent: 220 * zoom, // mismo ancho que categorías
+            mainAxisExtent: productCardExtent.toDouble() * zoom,
             crossAxisSpacing: 12,
             mainAxisSpacing: 12,
           ),
@@ -5939,10 +5960,10 @@ class _ProductsGrid extends ConsumerWidget {
             return GestureDetector(
               onTap: () => onProductTap(product),
               child: Container(
-                constraints: const BoxConstraints(
-                  minHeight: 140,
-                  minWidth: 160,
-                  maxWidth: 220,
+                constraints: BoxConstraints(
+                  minHeight: 140 * zoom,
+                  minWidth: 160 * zoom,
+                  maxWidth: 220 * zoom,
                 ),
                 decoration: BoxDecoration(
                   color: _salesSurface,
@@ -5958,7 +5979,7 @@ class _ProductsGrid extends ConsumerWidget {
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    _ProductAvatar(imageUrl: product.imageUrl),
+                    _ProductAvatar(imageUrl: product.imageUrl, zoom: zoom),
                     const SizedBox(height: 10),
                     Text(
                       product.name,
@@ -6004,13 +6025,19 @@ class _ProductsGrid extends ConsumerWidget {
 
 class _ProductAvatar extends StatelessWidget {
   final String? imageUrl;
-  const _ProductAvatar({this.imageUrl});
+
+  /// Factor de zoom que se aplica al avatar (default 1.0 = 96px).
+  /// Se propaga desde el grid del catalogo via `salesZoomProvider`.
+  final double zoom;
+
+  const _ProductAvatar({this.imageUrl, this.zoom = 1.0});
 
   @override
   Widget build(BuildContext context) {
+    final size = 96 * zoom;
     return Container(
-      width: 96,
-      height: 96,
+      width: size,
+      height: size,
       decoration: BoxDecoration(
         color: _salesTabActiveBg,
         shape: BoxShape.circle,
@@ -6023,7 +6050,7 @@ class _ProductAvatar extends StatelessWidget {
             : null,
       ),
       child: imageUrl == null
-          ? const Icon(Icons.fastfood, color: _salesTextHint, size: 32)
+          ? Icon(Icons.fastfood, color: _salesTextHint, size: 32 * zoom)
           : null,
     );
   }

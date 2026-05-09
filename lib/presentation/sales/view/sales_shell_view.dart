@@ -12,6 +12,7 @@ import 'package:mangopos/app/theme/breakpoints.dart';
 import 'package:mangopos/app/theme/sizes.dart';
 import 'package:mangopos/core/printing/printer_heartbeat_scheduler.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
+import 'package:mangopos/presentation/cashier/widgets/open_cash_dialog.dart';
 import 'package:mangopos/presentation/sales/state/sales_state.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/sales/view/theme/sales_theme.dart';
@@ -504,49 +505,104 @@ class _SalesNavItem extends StatelessWidget {
 /// PRD 6 — banner "Caja cerrada" responsive.
 /// Regular/Wide: card con texto completo.
 /// Compact: icono centrado con tooltip que preserva el mensaje.
-class _CashClosedBanner extends StatelessWidget {
+///
+/// Si el usuario tiene permiso `caja.apertura`, el banner es clickeable y
+/// abre el modal de apertura de caja. Sin permiso, solo informa el estado.
+/// Esto evita el viaje Caja > Abrir > volver para owners/cajeros que solo
+/// quieren empezar a vender.
+class _CashClosedBanner extends ConsumerWidget {
   final bool compact;
   const _CashClosedBanner({required this.compact});
 
   static const _message = 'Caja cerrada: no se pueden abrir ventas';
+  static const _messageInteractive = 'Caja cerrada — toca para abrir';
+
+  void _openCashDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const OpenCashDialog(),
+    );
+  }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final red = Colors.red;
+    final canOpenCash =
+        ref.read(sessionProvider.notifier).hasPermission('caja.apertura');
+    final message = canOpenCash ? _messageInteractive : _message;
+
     if (compact) {
-      return Tooltip(
-        message: _message,
-        child: Container(
-          margin: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-          height: TouchTargets.minSize,
-          decoration: BoxDecoration(
-            color: red.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: red.withValues(alpha: 0.25)),
-          ),
-          child: Icon(Icons.lock_outline, size: 20, color: red),
-        ),
-      );
-    }
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      final iconBox = Container(
+        margin: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+        height: TouchTargets.minSize,
         decoration: BoxDecoration(
           color: red.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(color: red.withValues(alpha: 0.25)),
         ),
-        child: const Text(
-          _message,
-          style: TextStyle(
-            fontSize: FontSizes.caption,
-            fontWeight: FontWeight.w600,
-            color: Colors.red,
-          ),
+        child: Icon(
+          canOpenCash ? Icons.lock_open : Icons.lock_outline,
+          size: 20,
+          color: red,
         ),
+      );
+      final tooltipped = Tooltip(message: message, child: iconBox);
+      if (!canOpenCash) return tooltipped;
+      return InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: () => _openCashDialog(context),
+        child: tooltipped,
+      );
+    }
+
+    final card = Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: red.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: red.withValues(alpha: 0.25)),
       ),
+      child: Row(
+        children: [
+          Icon(
+            canOpenCash ? Icons.lock_open : Icons.lock_outline,
+            size: 16,
+            color: red,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              message,
+              style: const TextStyle(
+                fontSize: FontSizes.caption,
+                fontWeight: FontWeight.w600,
+                color: Colors.red,
+              ),
+            ),
+          ),
+          if (canOpenCash) ...[
+            const SizedBox(width: 4),
+            const Icon(
+              Icons.chevron_right,
+              size: 16,
+              color: Colors.red,
+            ),
+          ],
+        ],
+      ),
+    );
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      child: canOpenCash
+          ? InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => _openCashDialog(context),
+              child: card,
+            )
+          : card,
     );
   }
 }

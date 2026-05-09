@@ -7,7 +7,10 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
+import 'package:mangopos/presentation/cashier/widgets/open_cash_dialog.dart';
+import 'package:mangopos/presentation/sales/state/sales_zoom_provider.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
+import 'package:mangopos/presentation/sales/widgets/sales_zoom_control.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
 import 'package:mangopos/presentation/sales/widgets/transfer_session_dialog.dart';
@@ -484,31 +487,81 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
 
     return Column(
       children: [
+        // Toolbar del top con el zoom control. Le permite al cajero ajustar
+        // el tamano del grid de mesas (mas/menos columnas) sin salir de la
+        // pantalla. Persistente via shared_preferences.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: const [SalesZoomControl()],
+          ),
+        ),
         if (!widget.canOpenTables)
-          Container(
-            margin: const EdgeInsets.fromLTRB(24, 16, 24, 0),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: Colors.red.withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.red.withValues(alpha: 0.2)),
-            ),
-            child: const Row(
-              children: [
-                Icon(Icons.lock_outline, size: 16, color: Colors.red),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Caja cerrada. Abre caja para abrir mesas.',
-                    style: TextStyle(
-                      color: Colors.red,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
+          Builder(
+            builder: (innerContext) {
+              // Si el usuario tiene `caja.apertura`, el banner es clickeable
+              // y abre el modal directo desde aqui — evita el viaje
+              // Caja > Abrir > volver. Owners y cajeros con permiso lo ven
+              // como CTA. Sin permiso, queda como aviso pasivo.
+              final canOpenCash = ref
+                  .read(sessionProvider.notifier)
+                  .hasPermission('caja.apertura');
+              final card = Container(
+                margin: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
                 ),
-              ],
-            ),
+                decoration: BoxDecoration(
+                  color: Colors.red.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.red.withValues(alpha: 0.2)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      canOpenCash ? Icons.lock_open : Icons.lock_outline,
+                      size: 16,
+                      color: Colors.red,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        canOpenCash
+                            ? 'Caja cerrada — toca para abrir'
+                            : 'Caja cerrada. Abre caja para abrir mesas.',
+                        style: const TextStyle(
+                          color: Colors.red,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    if (canOpenCash) ...[
+                      const SizedBox(width: 4),
+                      const Icon(
+                        Icons.chevron_right,
+                        size: 18,
+                        color: Colors.red,
+                      ),
+                    ],
+                  ],
+                ),
+              );
+              if (!canOpenCash) return card;
+              return InkWell(
+                borderRadius: BorderRadius.circular(10),
+                onTap: () {
+                  showDialog(
+                    context: innerContext,
+                    barrierDismissible: false,
+                    builder: (_) => const OpenCashDialog(),
+                  );
+                },
+                child: card,
+              );
+            },
           ),
         // Eliminamos los indicadores de estado aquí, ya que están en el AppBar
         // y se actualizarán dinámicamente según la zona seleccionada
@@ -516,6 +569,11 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
         Expanded(
           child: LayoutBuilder(
             builder: (context, constraints) {
+              // Zoom factor: lee `salesZoomProvider`. Aplica el multiplicador
+              // sobre el ancho base 220 para que el cajero pueda ajustar la
+              // densidad del grid (mas columnas con zoom out, menos con
+              // zoom in). Persistente via shared_preferences.
+              final zoom = ref.watch(salesZoomProvider);
               // Calcular número óptimo de columnas
               // Usando 220px como referencia para favorecer más columnas (cards más estrechas)
               final availableWidth =
@@ -523,8 +581,8 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
 
               int columns =
                   ((availableWidth + SalesTheme.gridGap) /
-                          (220.0 +
-                              SalesTheme.gridGap)) // 220px en lugar de 240px
+                          ((220.0 * zoom) +
+                              SalesTheme.gridGap)) // 220px * zoom
                       .floor()
                       .clamp(
                         1,
