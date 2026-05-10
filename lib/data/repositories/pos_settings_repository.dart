@@ -13,7 +13,44 @@ class PosSettingsRepository {
   static const Duration _receiptModeCacheTtl = Duration(minutes: 5);
   static final Map<String, _CachedReceiptMode> _receiptModeCache = {};
 
+  /// Modo compacto: un solo modal con efectivo + tarjeta + transferencia.
+  /// Comportamiento actual del POS.
+  static const String cashCloseCompact = 'compact';
+
+  /// Modo detallado: wizard de 3 pasos (efectivo / tarjeta + transferencia /
+  /// revision). Ambos modos son a ciegas durante el conteo.
+  static const String cashCloseDetailed = 'detailed';
+
   final SupabaseClient _client;
+
+  Future<String> getCashCloseMode(String businessId) async {
+    try {
+      final row = await _client
+          .from('business_settings')
+          .select('cash_close_mode')
+          .eq('business_id', businessId)
+          .maybeSingle();
+
+      final raw = row?['cash_close_mode']?.toString();
+      return raw == cashCloseDetailed ? cashCloseDetailed : cashCloseCompact;
+    } catch (_) {
+      return cashCloseCompact;
+    }
+  }
+
+  Future<void> setCashCloseMode({
+    required String businessId,
+    required String mode,
+  }) async {
+    final normalized = mode == cashCloseDetailed
+        ? cashCloseDetailed
+        : cashCloseCompact;
+
+    await _client.from('business_settings').upsert({
+      'business_id': businessId,
+      'cash_close_mode': normalized,
+    }, onConflict: 'business_id');
+  }
 
   Future<bool> getPromptPeopleCountOnTableOpen(String businessId) async {
     try {

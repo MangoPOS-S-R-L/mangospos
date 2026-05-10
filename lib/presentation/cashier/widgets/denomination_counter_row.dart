@@ -66,11 +66,20 @@ class _DenominationCounterRowState extends State<DenominationCounterRow> {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: MangoColors.cardBorder),
       ),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 124,
-            child: Text(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minWidth: constraints.maxWidth),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      SizedBox(
+                        width: 124,
+                        child: Text(
               formatRD(widget.denomination.value),
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.w800,
@@ -142,15 +151,23 @@ class _DenominationCounterRowState extends State<DenominationCounterRow> {
             ),
             icon: const Icon(Icons.add_circle_outline),
           ),
-          const Spacer(),
-          Text(
-            formatRD(widget.denomination.subtotal),
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w800,
-              color: MangoColors.darkGray,
-            ),
-          ),
         ],
+      ),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 16),
+                    child: Text(
+                      formatRD(widget.denomination.subtotal),
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: MangoColors.darkGray,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
   }

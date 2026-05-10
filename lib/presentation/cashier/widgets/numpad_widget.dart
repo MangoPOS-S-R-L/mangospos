@@ -35,9 +35,9 @@ class NumpadWidget extends StatelessWidget {
       itemCount: keys.length,
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
-        mainAxisSpacing: 8,
-        crossAxisSpacing: 8,
-        childAspectRatio: 1.55,
+        mainAxisSpacing: 6,
+        crossAxisSpacing: 6,
+        childAspectRatio: 2.4,
       ),
       itemBuilder: (context, index) {
         final value = keys[index];
@@ -55,8 +55,10 @@ class NumpadWidget extends StatelessWidget {
                 ? Colors.red.withValues(alpha: 0.08)
                 : Colors.white,
             foregroundColor: isAction ? Colors.red : MangoColors.darkGray,
+            padding: EdgeInsets.zero,
+            minimumSize: const Size(0, 32),
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(10),
               side: BorderSide(
                 color: isAction
                     ? Colors.red.withValues(alpha: 0.25)
@@ -67,8 +69,8 @@ class NumpadWidget extends StatelessWidget {
           child: Text(
             label,
             style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
               color: isAction ? Colors.red : MangoColors.darkGray,
             ),
           ),

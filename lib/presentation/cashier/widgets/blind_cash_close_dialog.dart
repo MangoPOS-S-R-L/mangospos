@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/presentation/cashier/services/print_service.dart';
@@ -7,8 +8,10 @@ import 'package:mangopos/presentation/cashier/state/cash_close_formatters.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/blind_cash_close_viewmodel.dart';
 import 'package:mangopos/presentation/cashier/widgets/close_summary_table.dart';
 import 'package:mangopos/presentation/cashier/widgets/denomination_counter_row.dart';
+import 'package:mangopos/presentation/cashier/detailed_wizard/widgets/zoom_control.dart';
 import 'package:mangopos/presentation/cashier/widgets/numpad_widget.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:mangopos/core/storage/storage_service.dart';
 
 class BlindCashCloseDialog extends ConsumerStatefulWidget {
   final String sessionId;
@@ -30,6 +33,44 @@ class BlindCashCloseDialog extends ConsumerStatefulWidget {
 class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
   bool _processingClose = false;
   bool _processingPrint = false;
+  double _zoomFactor = 1.0;
+  bool _autoPrintTried = false;
+  late final FocusNode _dialogFocusNode = FocusNode();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadZoomFactor();
+  }
+
+  Future<void> _loadZoomFactor() async {
+    try {
+      final storage = await StorageService.getInstance();
+      final savedZoom = await storage.read('system_zoom_factor_blind_close');
+      if (savedZoom != null && mounted) {
+        setState(() {
+          _zoomFactor = double.tryParse(savedZoom) ?? 1.0;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading zoom factor: $e');
+    }
+  }
+
+  Future<void> _saveZoomFactor(double factor) async {
+    try {
+      final storage = await StorageService.getInstance();
+      await storage.write('system_zoom_factor_blind_close', factor.toString());
+    } catch (e) {
+      debugPrint('Error saving zoom factor: $e');
+    }
+  }
+
+  @override
+  void dispose() {
+    _dialogFocusNode.dispose();
+    super.dispose();
+  }
 
   Future<void> _showCloseErrorModal(
     BlindCashCloseState state,
@@ -61,20 +102,46 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
         !_processingClose &&
         !_processingPrint;
 
+    // Auto-print al llegar al step result (una sola vez por dialog).
+    if (state.step == BlindCashCloseStep.result && !_autoPrintTried) {
+      _autoPrintTried = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _printResult(state, silent: true);
+      });
+    }
+
+    final mq = MediaQuery.of(context);
     return PopScope(
       canPop: canCloseDialog,
-      child: Dialog(
+      child: Focus(
+        focusNode: _dialogFocusNode,
+        autofocus: true,
+        onKeyEvent: (node, event) =>
+            _handleKeyEvent(event, state, vm, canCloseDialog),
+        child: Builder(
+          builder: (context) => MediaQuery(
+            data: mq.copyWith(
+              textScaler: mq.textScaler.clamp(
+                minScaleFactor: _zoomFactor,
+                maxScaleFactor: _zoomFactor,
+              ),
+            ),
+            child: Dialog(
         insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
         backgroundColor: Colors.transparent,
         elevation: 0,
         child: ConstrainedBox(
           constraints: BoxConstraints(
-            maxWidth: MediaQuery.of(context).size.width < 1200
-                ? MediaQuery.of(context).size.width - 48
-                : 1180,
-            maxHeight: MediaQuery.of(context).size.height < 880
-                ? MediaQuery.of(context).size.height - 40
-                : 860,
+            maxWidth: ((MediaQuery.of(context).size.width < 1200
+                        ? MediaQuery.of(context).size.width - 48
+                        : 1180.0) *
+                    _zoomFactor)
+                .clamp(0.0, MediaQuery.of(context).size.width - 48),
+            maxHeight: ((MediaQuery.of(context).size.height < 880
+                        ? MediaQuery.of(context).size.height - 40
+                        : 860.0) *
+                    _zoomFactor)
+                .clamp(0.0, MediaQuery.of(context).size.height - 40),
           ),
           child: Container(
             decoration: BoxDecoration(
@@ -92,13 +159,14 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
             child: Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
+                mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _header(context, state),
                   const SizedBox(height: 14),
                   const Divider(height: 1, color: MangoColors.cardBorder),
                   const SizedBox(height: 14),
-                  Expanded(
+                  Flexible(
                     child: state.step == BlindCashCloseStep.count
                         ? _buildCountStep(context, state, vm)
                         : _buildResultStep(context, state),
@@ -108,6 +176,9 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
             ),
           ),
         ),
+          ),
+        ),
+      ),
       ),
     );
   }
@@ -157,6 +228,16 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
             ],
           ),
         ),
+        if (MediaQuery.of(context).size.width >= 600) ...[
+          ZoomControl(
+            factor: _zoomFactor,
+            onChanged: (v) {
+              setState(() => _zoomFactor = v);
+              _saveZoomFactor(v);
+            },
+          ),
+          const SizedBox(width: 10),
+        ],
         OutlinedButton.icon(
           onPressed: canCloseDialog
               ? () {
@@ -186,45 +267,62 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
     BlindCashCloseViewModel vm,
   ) {
     final isWide = MediaQuery.of(context).size.width >= 1040;
+    final isTall = MediaQuery.of(context).size.height >= 700;
+    final useExpanded = isWide && isTall;
+    
     final summaryCard = _countSummary(state);
     final countPanel = _countPanel(state, vm);
     final paymentPanel = _paymentPanel(state, vm);
 
-    return Column(
-      children: [
-        Expanded(
-          child: isWide
-              ? Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(flex: 6, child: countPanel),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      flex: 5,
-                      child: SingleChildScrollView(
-                        child: Column(
-                          children: [
-                            paymentPanel,
-                            const SizedBox(height: 12),
-                            summaryCard,
-                          ],
-                        ),
-                      ),
+    Widget content;
+    if (isWide) {
+      content = Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(flex: 6, child: countPanel),
+          const SizedBox(width: 16),
+          Expanded(
+            flex: 5,
+            child: useExpanded
+                ? SingleChildScrollView(
+                    child: Column(
+                      children: [
+                        paymentPanel,
+                        const SizedBox(height: 12),
+                        summaryCard,
+                      ],
                     ),
-                  ],
-                )
-              : SingleChildScrollView(
-                  child: Column(
+                  )
+                : Column(
                     children: [
-                      countPanel,
-                      const SizedBox(height: 12),
                       paymentPanel,
                       const SizedBox(height: 12),
                       summaryCard,
                     ],
                   ),
-                ),
-        ),
+          ),
+        ],
+      );
+    } else {
+      content = Column(
+        children: [
+          countPanel,
+          const SizedBox(height: 12),
+          paymentPanel,
+          const SizedBox(height: 12),
+          summaryCard,
+        ],
+      );
+    }
+
+    if (!useExpanded) {
+      content = SingleChildScrollView(child: content);
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Flexible(child: content),
         const SizedBox(height: 12),
         SizedBox(
           width: double.infinity,
@@ -247,6 +345,24 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
   }
 
   Widget _countPanel(BlindCashCloseState state, BlindCashCloseViewModel vm) {
+    final isWide = MediaQuery.of(context).size.width >= 1040;
+    final isTall = MediaQuery.of(context).size.height >= 700;
+    final useExpanded = isWide && isTall;
+    
+    final listView = ListView.builder(
+      shrinkWrap: !useExpanded,
+      physics: !useExpanded ? const NeverScrollableScrollPhysics() : null,
+      itemCount: state.denominations.length,
+      itemBuilder: (context, index) {
+        final d = state.denominations[index];
+        return DenominationCounterRow(
+          denomination: d,
+          onIncrement: () => vm.increment(d.value),
+          onDecrement: () => vm.decrement(d.value),
+          onCountChanged: (count) => vm.setCount(d.value, count),
+        );
+      },
+    );
     return _panel(
       child: Padding(
         padding: const EdgeInsets.all(14),
@@ -261,21 +377,10 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
               ),
             ),
             const SizedBox(height: 8),
-            SizedBox(
-              height: 420,
-              child: ListView.builder(
-                itemCount: state.denominations.length,
-                itemBuilder: (context, index) {
-                  final d = state.denominations[index];
-                  return DenominationCounterRow(
-                    denomination: d,
-                    onIncrement: () => vm.increment(d.value),
-                    onDecrement: () => vm.decrement(d.value),
-                    onCountChanged: (count) => vm.setCount(d.value, count),
-                  );
-                },
-              ),
-            ),
+            if (useExpanded)
+              Expanded(child: listView)
+            else
+              listView,
           ],
         ),
       ),
@@ -283,6 +388,20 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
   }
 
   Widget _paymentPanel(BlindCashCloseState state, BlindCashCloseViewModel vm) {
+    String formatInputString(String value) {
+      if (value.isEmpty) return 'RD\$ 0.00';
+      final parts = value.split('.');
+      final intPart = parts[0].replaceAllMapped(
+        RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
+        (Match m) => '${m[1]},',
+      );
+      if (parts.length == 1) {
+        return 'RD\$ $intPart.00';
+      } else {
+        return 'RD\$ $intPart.${parts[1]}';
+      }
+    }
+
     Widget amountField({
       required String label,
       required String value,
@@ -319,7 +438,7 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
               ),
               const SizedBox(height: 4),
               Text(
-                formatRD(CashCloseCalculator.parseAmount(value)),
+                formatInputString(value),
                 style: TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.w900,
@@ -352,14 +471,20 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
               label: 'Total Tarjetas',
               value: state.cardInput,
               active: state.activeInput == BlindCashInputTarget.card,
-              onTap: () => vm.setActiveInput(BlindCashInputTarget.card),
+              onTap: () {
+                _dialogFocusNode.requestFocus();
+                vm.setActiveInput(BlindCashInputTarget.card);
+              },
             ),
             const SizedBox(height: 10),
             amountField(
               label: 'Total Transferencias',
               value: state.transferInput,
               active: state.activeInput == BlindCashInputTarget.transfer,
-              onTap: () => vm.setActiveInput(BlindCashInputTarget.transfer),
+              onTap: () {
+                _dialogFocusNode.requestFocus();
+                vm.setActiveInput(BlindCashInputTarget.transfer);
+              },
             ),
             const SizedBox(height: 12),
             const Text(
@@ -376,10 +501,10 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
 
   Widget _countSummary(BlindCashCloseState state) {
     final items = [
-      ('Efectivo', state.totalCounted),
-      ('Tarjetas', state.numericCard),
-      ('Transferencias', state.numericTransfer),
-      ('Total reportado', state.totalReported),
+      ('Efectivo', state.totalCounted, false),
+      ('Tarjetas', state.numericCard, true),
+      ('Transferencias', state.numericTransfer, true),
+      ('Total reportado', state.totalReported, true),
     ];
 
     return _panel(
@@ -404,7 +529,7 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
                     Text(e.$1),
                     const Spacer(),
                     Text(
-                      formatRD(e.$2),
+                      e.$3 ? formatRDigital(e.$2) : formatRD(e.$2),
                       style: TextStyle(
                         fontWeight: FontWeight.w800,
                         color: e.$1 == 'Total reportado'
@@ -441,11 +566,11 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
             ),
             const SizedBox(height: 12),
             Text('Efectivo contado: ${formatRD(state.totalCounted)}'),
-            Text('Total tarjetas: ${formatRD(state.numericCard)}'),
-            Text('Total transferencias: ${formatRD(state.numericTransfer)}'),
+            Text('Total tarjetas: ${formatRDigital(state.numericCard)}'),
+            Text('Total transferencias: ${formatRDigital(state.numericTransfer)}'),
             const Divider(),
             Text(
-              'TOTAL REPORTADO: ${formatRD(state.totalReported)}',
+              'TOTAL REPORTADO: ${formatRDigital(state.totalReported)}',
               style: const TextStyle(fontWeight: FontWeight.w800),
             ),
           ],
@@ -480,7 +605,7 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
         : (result.hasSurplus ? 'Sobrante detectado' : 'Faltante detectado');
     final statusDetail = result.isBalanced
         ? 'Efectivo, tarjetas y transferencias coinciden exactamente.'
-        : '${result.hasSurplus ? 'A favor' : 'En contra'}: ${formatRD(result.totalDifference.abs())}';
+        : '${result.hasSurplus ? 'A favor' : 'En contra'}: ${formatRDigital(result.totalDifference.abs())}';
 
     return SingleChildScrollView(
       child: Column(
@@ -528,7 +653,7 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
             spacing: 12,
             runSpacing: 12,
             children: [
-              _statCard('Total ventas', formatRD(state.input.totalSales)),
+              _statCard('Total ventas', formatRDigital(state.input.totalSales)),
               _statCard(
                 'Transacciones',
                 state.input.transactionCount.toString(),
@@ -707,7 +832,121 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
     }
   }
 
-  Future<void> _printResult(BlindCashCloseState state) async {
+  /// Maneja key events del dialog con tres reglas, en orden:
+  ///
+  ///   1. Esc/F2/Ctrl+Enter siempre disparan acción y retornan `handled`,
+  ///      sin importar el foco — son atajos globales del flujo.
+  ///   2. Si el foco está en una TextField (e.g., una denominación), las
+  ///      teclas pasan al campo retornando `ignored` — el IME procesa el
+  ///      dígito y actualiza el text controller.
+  ///   3. Si NO hay TextField enfocado y hay un input activo (Tarjeta o
+  ///      Transferencia), digit/period/backspace se reenvían a
+  ///      `vm.appendNumpad` y retornan `handled`.
+  ///
+  /// Esto asegura paridad: tanto denominaciones (TextField) como
+  /// Tarjeta/Transferencia (display + activeInput) responden al teclado
+  /// físico sin pisarse.
+  KeyEventResult _handleKeyEvent(
+    KeyEvent event,
+    BlindCashCloseState state,
+    BlindCashCloseViewModel vm,
+    bool canCloseDialog,
+  ) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+
+    final key = event.logicalKey;
+
+    // 1) Atajos globales (siempre fire, ignoran foco de TextField).
+    if (key == LogicalKeyboardKey.escape) {
+      if (canCloseDialog) {
+        ref
+            .read(blindCashCloseProvider(widget.input).notifier)
+            .reset();
+        Navigator.of(context).pop();
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    }
+    final isCtrl = HardwareKeyboard.instance.isControlPressed;
+    final isConfirmKey = key == LogicalKeyboardKey.f2 ||
+        ((key == LogicalKeyboardKey.enter ||
+                key == LogicalKeyboardKey.numpadEnter) &&
+            isCtrl);
+    if (isConfirmKey) {
+      if (state.step == BlindCashCloseStep.count &&
+          !_processingClose &&
+          !_processingPrint) {
+        _onConfirmCount(state, vm);
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    }
+
+    // 2) Si hay TextField con foco, dejar pasar las teclas al IME.
+    if (_hasFocusedTextField()) {
+      return KeyEventResult.ignored;
+    }
+
+    // 3) Reenvío al input activo (Tarjeta o Transferencia).
+    if (state.step != BlindCashCloseStep.count ||
+        state.activeInput == null) {
+      return KeyEventResult.ignored;
+    }
+    final char = _digitOrSymbolFromKey(key);
+    if (char == null) return KeyEventResult.ignored;
+    vm.appendNumpad(char);
+    return KeyEventResult.handled;
+  }
+
+  /// True si el `primaryFocus` actual está dentro de un `EditableText`
+  /// (i.e., una `TextField` está siendo editada).
+  bool _hasFocusedTextField() {
+    final focused = FocusManager.instance.primaryFocus;
+    final ctx = focused?.context;
+    if (ctx == null) return false;
+    if (ctx.widget is EditableText) return true;
+    return ctx.findAncestorWidgetOfExactType<EditableText>() != null;
+  }
+
+  /// Mapea una `LogicalKeyboardKey` a su carácter '0'..'9', '.' o
+  /// 'backspace'. Retorna null si la tecla no aplica al numpad.
+  String? _digitOrSymbolFromKey(LogicalKeyboardKey key) {
+    if (key == LogicalKeyboardKey.backspace) return 'backspace';
+    if (key == LogicalKeyboardKey.period ||
+        key == LogicalKeyboardKey.numpadDecimal) {
+      return '.';
+    }
+    // Top-row digits.
+    if (key == LogicalKeyboardKey.digit0) return '0';
+    if (key == LogicalKeyboardKey.digit1) return '1';
+    if (key == LogicalKeyboardKey.digit2) return '2';
+    if (key == LogicalKeyboardKey.digit3) return '3';
+    if (key == LogicalKeyboardKey.digit4) return '4';
+    if (key == LogicalKeyboardKey.digit5) return '5';
+    if (key == LogicalKeyboardKey.digit6) return '6';
+    if (key == LogicalKeyboardKey.digit7) return '7';
+    if (key == LogicalKeyboardKey.digit8) return '8';
+    if (key == LogicalKeyboardKey.digit9) return '9';
+    // Numpad digits.
+    if (key == LogicalKeyboardKey.numpad0) return '0';
+    if (key == LogicalKeyboardKey.numpad1) return '1';
+    if (key == LogicalKeyboardKey.numpad2) return '2';
+    if (key == LogicalKeyboardKey.numpad3) return '3';
+    if (key == LogicalKeyboardKey.numpad4) return '4';
+    if (key == LogicalKeyboardKey.numpad5) return '5';
+    if (key == LogicalKeyboardKey.numpad6) return '6';
+    if (key == LogicalKeyboardKey.numpad7) return '7';
+    if (key == LogicalKeyboardKey.numpad8) return '8';
+    if (key == LogicalKeyboardKey.numpad9) return '9';
+    return null;
+  }
+
+  Future<void> _printResult(
+    BlindCashCloseState state, {
+    bool silent = false,
+  }) async {
     setState(() => _processingPrint = true);
     try {
       final service = CashClosePrintService(Supabase.instance.client);
@@ -717,15 +956,26 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
         denominations: state.denominations,
         printedAt: DateTime.now(),
       );
+      if (!silent && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Cierre reimpreso correctamente'),
+            backgroundColor: MangoColors.successGreen,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('No se pudo imprimir: $e'),
-          backgroundColor: Colors.red.shade600,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      if (!silent) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No se pudo imprimir: $e'),
+            backgroundColor: Colors.red.shade600,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
     } finally {
       if (mounted) {
         setState(() => _processingPrint = false);

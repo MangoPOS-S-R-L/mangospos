@@ -652,17 +652,16 @@ class CashierViewModel extends ChangeNotifier {
   }
 
   /// Silent background refresh — loads all data in parallel without showing
-  /// a loading spinner. Emits a single notifyListeners at the end.
+  /// a loading spinner. Emits a single notifyListeners al final.
+  ///
+  /// NO invalidamos `_lastSession` antes del fetch para evitar el flicker
+  /// "abierta → cerrada → abierta" cada 30 s.
+  ///
+  /// Tradeoff: si la caja fue cerrada en otro dispositivo desde el último
+  /// refresh, la UI seguirá mostrando "abierta" hasta que termine este fetch
+  /// (~varios segundos). Caso raro; `init()` (que sí invalida) se llama en
+  /// cambios de business y aperturas explícitas, donde el loading es OK.
   Future<void> refreshSilently() async {
-    // Mismo razonamiento que init(): si el cache tiene una sesion 'open' que
-    // ya fue cerrada en otra pantalla/dispositivo, la UI mostraria botones
-    // de venta habilitados durante todo el fetch (~5s). Invalidar al inicio
-    // hace que la UI muestre "caja cerrada" hasta confirmacion. Si caja
-    // realmente sigue abierta, el flicker dura lo que tarde el query.
-    if (_currentRegisterId != null && _businessId != null) {
-      _lastSession = null;
-      notifyListeners();
-    }
     try {
       if (_currentRegisterId != null && _businessId != null) {
         // Misma resolucion que init(): caja es per-register (cualquier user

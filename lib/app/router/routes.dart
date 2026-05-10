@@ -72,6 +72,7 @@ class AppRoutes {
   static const settingsFiscalReceipts = '$settings/fiscal-receipts';
   static const settingsBranches = '$settings/branches';
   static const settingsCashRegisters = '$settings/cash-registers';
+  static const settingsCashCloseMode = '$settings/cash-close-mode';
   static const settingsCurrencies = '$settings/currencies';
   static const settingsRegional = '$settings/regional';
   static const inventoryKardex = '$settings/inventory-kardex';

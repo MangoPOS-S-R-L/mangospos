@@ -54,6 +54,7 @@ import '../../presentation/promos/view/discounts_view.dart';
 import '../../presentation/products/view/products_view.dart';
 import '../../presentation/branches/view/branch_management_view.dart';
 import '../../presentation/settings/cash_registers/view/cash_registers_view.dart';
+import '../../presentation/settings/cash_close_mode/cash_close_mode_view.dart';
 import '../../presentation/settings/currencies/view/currencies_view.dart';
 import '../../presentation/settings/regional/view/regional_view.dart';
 import 'package:mangopos/core/utils/logger.dart';
@@ -521,6 +522,10 @@ class AppRouter {
           GoRoute(
             path: AppRoutes.settingsCashRegisters,
             builder: (context, state) => const CashRegistersView(),
+          ),
+          GoRoute(
+            path: AppRoutes.settingsCashCloseMode,
+            builder: (context, state) => const CashCloseModeView(),
           ),
           GoRoute(
             path: AppRoutes.settingsCurrencies,

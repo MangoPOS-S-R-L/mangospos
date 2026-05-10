@@ -224,6 +224,13 @@ class SettingsView extends ConsumerWidget {
             route: AppRoutes.cashierClosures,
           ),
           _SettingsOption(
+            title: 'Modo de cierre de caja',
+            subtitle: 'Clásico (con monto esperado) o a ciegas',
+            icon: Icons.shield_outlined,
+            color: Color(0xFFEDE9FE),
+            route: AppRoutes.settingsCashCloseMode,
+          ),
+          _SettingsOption(
             title: 'Gestión de Notas de Crédito',
             subtitle: 'Anulaciones y devoluciones',
             icon: Icons.note_alt_rounded,

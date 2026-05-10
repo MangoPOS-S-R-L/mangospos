@@ -14,6 +14,9 @@ import 'package:mangopos/presentation/cashier/widgets/open_cash_dialog.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/data/utils/payment_amount_utils.dart';
 import 'package:mangopos/data/repositories/cashier_repository.dart';
+import 'package:mangopos/data/repositories/pos_settings_repository.dart';
+import 'package:mangopos/core/business/business_resolver.dart';
+import 'package:mangopos/presentation/cashier/detailed_wizard/cash_close_detailed_wizard.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:async';
 import 'package:mangopos/app/widgets/skeleton_loading.dart';
@@ -185,17 +188,77 @@ class _CashierViewState extends ConsumerState<CashierView>
       final confirm = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
-          title: const Text('Órdenes abiertas'),
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+          contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+          actionsPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: MangoColors.primaryOrange.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.warning_amber_rounded,
+                  color: MangoColors.primaryOrange,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 10),
+              const Text(
+                'Órdenes abiertas',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 17,
+                  color: MangoColors.darkGray,
+                ),
+              ),
+            ],
+          ),
           content: Text(
             'Hay $pending orden(es) activas sin cobrar o anular. ¿Deseas cerrar la caja de todas formas?',
+            style: const TextStyle(
+              color: MangoColors.darkGray,
+              fontSize: 14,
+              height: 1.4,
+            ),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Cancelar'),
+              style: TextButton.styleFrom(
+                foregroundColor: MangoColors.darkGray,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 10,
+                ),
+              ),
+              child: const Text(
+                'Cancelar',
+                style: TextStyle(fontWeight: FontWeight.w500),
+              ),
             ),
-            FilledButton(
+            ElevatedButton(
               onPressed: () => Navigator.pop(dialogContext, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: MangoColors.primaryOrange,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 10,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                textStyle: const TextStyle(fontWeight: FontWeight.w600),
+              ),
               child: const Text('Continuar'),
             ),
           ],
@@ -227,7 +290,38 @@ class _CashierViewState extends ConsumerState<CashierView>
 
     if (!mounted) return;
 
-    showDialog(
+    // Sub-fase H · router strangler-fig: lee cash_close_mode del business y
+    // monta el modo correcto. compact = dialog modal único existente;
+    // detailed = wizard fullscreen de 3 pasos.
+    final businessId = await BusinessResolver.ensure('auto');
+    final mode = await ref
+        .read(posSettingsRepositoryProvider)
+        .getCashCloseMode(businessId);
+
+    if (!mounted) return;
+
+    if (mode == PosSettingsRepository.cashCloseDetailed) {
+      await _openDetailedWizard(
+        session: session,
+        businessId: businessId,
+        input: input,
+        forceWithOpenTables: forceWithOpenTables,
+      );
+    } else {
+      await _openCompactDialog(
+        session: session,
+        input: input,
+        forceWithOpenTables: forceWithOpenTables,
+      );
+    }
+  }
+
+  Future<void> _openCompactDialog({
+    required Map<String, dynamic> session,
+    required CashCloseInput input,
+    required bool forceWithOpenTables,
+  }) async {
+    await showDialog(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => BlindCashCloseDialog(
@@ -249,6 +343,16 @@ class _CashierViewState extends ConsumerState<CashierView>
                   notes: notes,
                   forceWithOpenTables: forceWithOpenTables,
                 );
+            // Audit del modo usado (no bloquea si falla — se reintenta luego).
+            unawaited(
+              ref
+                  .read(cashierRepositoryProvider)
+                  .markSessionCloseMode(
+                    sessionId: session['id'].toString(),
+                    mode: PosSettingsRepository.cashCloseCompact,
+                  )
+                  .catchError((_) {}),
+            );
             try {
               await ref.read(cashierViewModelProvider).init();
             } catch (e) {
@@ -286,6 +390,108 @@ class _CashierViewState extends ConsumerState<CashierView>
         },
       ),
     );
+  }
+
+  Future<void> _openDetailedWizard({
+    required Map<String, dynamic> session,
+    required String businessId,
+    required CashCloseInput input,
+    required bool forceWithOpenTables,
+  }) async {
+    final sessionId = session['id'].toString();
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    if (userId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No hay usuario autenticado.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+    final openedAt = DateTime.tryParse(
+      session['opened_at']?.toString() ?? '',
+    );
+
+    final viewportSize = MediaQuery.of(context).size;
+    final maxHeight = viewportSize.height * 0.90;
+    final maxWidth = viewportSize.width < 760
+        ? viewportSize.width - 32
+        : 720.0;
+
+    final didSign = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => Dialog(
+        insetPadding: const EdgeInsets.all(16),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: maxWidth,
+            maxHeight: maxHeight,
+          ),
+          child: CashCloseDetailedWizard(
+            cashRegisterSessionId: sessionId,
+            input: input,
+            cashierName: input.cashierName,
+            openedAt: openedAt,
+            onCloseConfirmed: (snapshot) async {
+              final repo = ref.read(cashierRepositoryProvider);
+              await repo.recordDetailedCashClose(
+                sessionId: sessionId,
+                businessId: businessId,
+                userId: userId,
+                cashAmount: snapshot.cashAmount,
+                cardAmount: snapshot.cardAmount,
+                transferAmount: snapshot.transferAmount,
+                denominations: snapshot.denominations,
+                openingFloat: snapshot.openingFloat,
+                supervisorNote: snapshot.supervisorNote,
+              );
+              final notes =
+                  'Cierre detallado | Efectivo: ${snapshot.cashAmount} | '
+                  'Tarjeta: ${snapshot.cardAmount} | '
+                  'Transferencia: ${snapshot.transferAmount} | '
+                  'Total reportado: ${snapshot.result.totalReported}';
+              await repo.closeSession(
+                sessionId: sessionId,
+                endAmount: snapshot.cashAmount.toDouble(),
+                notes: notes,
+                forceWithOpenTables: forceWithOpenTables,
+              );
+              unawaited(
+                repo
+                    .markSessionCloseMode(
+                      sessionId: sessionId,
+                      mode: PosSettingsRepository.cashCloseDetailed,
+                    )
+                    .catchError((_) {}),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (didSign == true) {
+      try {
+        await ref.read(cashierViewModelProvider).init();
+      } catch (e) {
+        if (!SupabaseConfig.isTransientAuthRefreshError(e) &&
+            !SupabaseConfig.isAuthRefreshSchemaMismatchError(e)) {
+          rethrow;
+        }
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Caja cerrada correctamente'),
+          backgroundColor: MangoColors.successGreen,
+        ),
+      );
+      GoRouter.of(context).replace(AppRoutes.cashier);
+    }
   }
 
   Future<CashCloseInput> _buildCloseInput(Map<String, dynamic> session) async {

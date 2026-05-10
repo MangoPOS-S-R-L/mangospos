@@ -25,11 +25,13 @@ class CloseSummaryTable extends StatelessWidget {
         concept: 'Tarjetas',
         expected: input.expectedCard,
         reported: result.numericCard,
+        isDigital: true,
       ),
       _SummaryRowData(
         concept: 'Transferencias',
         expected: input.expectedTransfer,
         reported: result.numericTransfer,
+        isDigital: true,
       ),
       _SummaryRowData(
         concept: 'CIERRE CAJA',
@@ -40,6 +42,7 @@ class CloseSummaryTable extends StatelessWidget {
         concept: 'TOTAL GENERAL',
         expected: input.expectedTotal,
         reported: result.totalReported,
+        isDigital: true,
       ),
     ];
 
@@ -69,10 +72,10 @@ class CloseSummaryTable extends StatelessWidget {
               decoration: const BoxDecoration(color: Colors.white),
               children: [
                 _BodyCell(row.concept, isBold: row.concept == 'TOTAL GENERAL'),
-                _BodyCell(formatRD(row.expected), alignEnd: true),
-                _BodyCell(formatRD(row.reported), alignEnd: true),
+                _BodyCell(row.isDigital ? formatRDigital(row.expected) : formatRD(row.expected), alignEnd: true),
+                _BodyCell(row.isDigital ? formatRDigital(row.reported) : formatRD(row.reported), alignEnd: true),
                 _BodyCell(
-                  '${diff >= 0 ? '+' : '-'} ${formatRD(diff.abs())}',
+                  '${diff >= 0 ? '+' : '-'} ${row.isDigital ? formatRDigital(diff.abs()) : formatRD(diff.abs())}',
                   alignEnd: true,
                   color: diff == 0
                       ? MangoColors.successGreen
@@ -92,11 +95,13 @@ class _SummaryRowData {
   final String concept;
   final num expected;
   final num reported;
+  final bool isDigital;
 
   const _SummaryRowData({
     required this.concept,
     required this.expected,
     required this.reported,
+    this.isDigital = false,
   });
 }
 

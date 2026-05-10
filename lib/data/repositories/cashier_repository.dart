@@ -149,6 +149,49 @@ class CashierRepository {
     }
   }
 
+  /// Inserta el desglose firmado del cierre detallado.
+  ///
+  /// La tabla tiene UNIQUE en `cash_register_session_id` y un trigger de
+  /// inmutabilidad post-firma. Si la sesión ya tiene un row firmado,
+  /// PostgreSQL rechaza con violation o con el error del trigger.
+  Future<void> recordDetailedCashClose({
+    required String sessionId,
+    required String businessId,
+    required String userId,
+    required int cashAmount,
+    required double cardAmount,
+    required double transferAmount,
+    required Map<String, dynamic> denominations,
+    required double openingFloat,
+    String? supervisorNote,
+  }) async {
+    await _client.from('cash_count_blind').insert({
+      'cash_register_session_id': sessionId,
+      'business_id': businessId,
+      'cash_amount': cashAmount,
+      'card_amount': cardAmount,
+      'transfer_amount': transferAmount,
+      'denominations': denominations,
+      'opening_float': openingFloat,
+      'supervisor_note': supervisorNote,
+      'signed_by_user_id': userId,
+    });
+  }
+
+  /// Marca el modo de UX usado al cerrar la sesión.
+  ///
+  /// Idempotente: si ya estaba seteado, se sobrescribe (no rompe nada porque
+  /// el CHECK acepta los dos valores).
+  Future<void> markSessionCloseMode({
+    required String sessionId,
+    required String mode,
+  }) async {
+    await _client
+        .from('cash_register_sessions')
+        .update({'close_mode_used': mode})
+        .eq('id', sessionId);
+  }
+
   Future<Map<String, dynamic>> getSessionSummary(String sessionId) async {
     final response = Map<String, dynamic>.from(
       await _client.rpc(
