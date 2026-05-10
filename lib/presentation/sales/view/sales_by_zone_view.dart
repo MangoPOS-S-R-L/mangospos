@@ -21,6 +21,15 @@ import 'package:mangopos/presentation/sales/view/theme/sales_theme.dart';
 import 'package:mangopos/presentation/sales/widgets/table_card.dart';
 import 'package:mangopos/app/widgets/skeleton_loading.dart';
 
+/// Una mesa con sesion abierta pero sin orders ni items abiertos esta
+/// "ocupada fantasma" — el cajero la abrio, no agrego productos y se
+/// salio. La consideramos disponible visualmente; el sweep del
+/// viewmodel cierra la sesion huerfana en background.
+bool _isEffectivelyEmpty(TableStatus ts) {
+  return ts.sessionId == null ||
+      (ts.itemsCount == 0 && ts.ordersCount == 0);
+}
+
 class SalesByZoneView extends ConsumerStatefulWidget {
   final String businessId;
   const SalesByZoneView({super.key, required this.businessId});
@@ -152,7 +161,12 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
     if (currentZoneId != null && statusByZone.containsKey(currentZoneId)) {
       final currentZoneTables = statusByZone[currentZoneId]!;
       for (final table in currentZoneTables) {
-        if (table.sessionId == null) {
+        // Una mesa con sesion abierta pero sin items+orders es "ocupada
+        // fantasma" — el cajero la abrio, no agrego nada y salio. La
+        // cuenta como disponible para que el contador refleje el estado
+        // real, y la limpieza periodica del viewmodel cierra la sesion
+        // huerfana en background.
+        if (_isEffectivelyEmpty(table)) {
           availableCount++;
         } else {
           occupiedCount++;
@@ -904,9 +918,9 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
 
   /// Convierte TableStatus a VentasTable para el  nuevo TableCard
   ventas.VentasTable _convertTableStatusToVentasTable(TableStatus ts) {
-    // Determinar el estado basado en sessionId y status
+    // Determinar el estado basado en sessionId, items/orders, y status
     ventas.TableStatus status;
-    if (ts.sessionId == null) {
+    if (_isEffectivelyEmpty(ts)) {
       status = ventas.TableStatus.disponible;
     } else {
       final statusRaw = (ts.status ?? '').toLowerCase();

@@ -73,11 +73,20 @@ class CashierViewModel extends ChangeNotifier {
   Future<void> init() async {
     _isLoading = true;
     _error = null;
-    // Limpia el estado cacheado antes del fetch. Sin esto, isCashOpen sigue
-    // retornando true desde un _lastSession stale durante los ~5s que tarda
-    // el refresh, dejando "Venta rapida" y "Delivery" habilitados con caja
-    // realmente cerrada.
-    _lastSession = null;
+    // NO limpiamos `_lastSession` aqui aposta. Antes lo nulleabamos para
+    // evitar mostrar "abierta" stale durante el fetch (~5s), pero eso
+    // hacia que en cada navegacion la UI parpadeara "Caja cerrada"
+    // durante 2-5s aun cuando la caja estaba realmente abierta. El
+    // riesgo de cross-device close (cache "abierta" + realidad
+    // "cerrada") esta cubierto por:
+    //   1) `ensureCashOpenFast` (TTL 12s) que se llama al entrar a las
+    //      pantallas de venta — revalida si la ultima validacion es
+    //      vieja.
+    //   2) `processPayment` RPC server-side, que retorna
+    //      `CASH_SESSION_REQUIRED` si la caja no esta abierta.
+    // Resultado: la UI muestra el ultimo estado conocido mientras
+    // refresca en background; si cambia, el `notifyListeners()` final
+    // actualiza sin flash.
     notifyListeners();
     try {
       final client = Supabase.instance.client;
@@ -120,14 +129,17 @@ class CashierViewModel extends ChangeNotifier {
           // del local (mesero/cajero/admin pueden vender si hay caja abierta).
           // El cierre sigue restringido al dueño (validado en cashier_view +
           // RPC fn_close_cash_session).
-          final registerSession = await _repository
-              .getActiveSessionForRegister(_currentRegisterId!);
+          final registerSession = await _repository.getActiveSessionForRegister(
+            _currentRegisterId!,
+          );
           if (registerSession != null) {
             _lastSession = registerSession.toMap();
           } else {
             // Fallback: última sesión del usuario (cerrada o abierta) para
             // mostrar histórico cuando no hay caja activa.
-            _lastSession = await _repository.getLastSession(_currentRegisterId!);
+            _lastSession = await _repository.getLastSession(
+              _currentRegisterId!,
+            );
           }
 
           _lastCashOpenValidationAt = AppTime.nowAst();
@@ -181,7 +193,11 @@ class CashierViewModel extends ChangeNotifier {
   Future<Map<String, dynamic>?> _fetchTodaySummary() async {
     try {
       if (_businessId == null) {
-        return {'total_income': 0.0, 'total_expenses': 0.0, 'transaction_count': 0};
+        return {
+          'total_income': 0.0,
+          'total_expenses': 0.0,
+          'transaction_count': 0,
+        };
       }
 
       final client = Supabase.instance.client;
@@ -200,7 +216,10 @@ class CashierViewModel extends ChangeNotifier {
       double totalIncome = 0.0;
       int transactionCount = paymentsData.length;
       for (var payment in paymentsData) {
-        totalIncome += netPaymentAmount(payment['amount'], payment['change_amount']);
+        totalIncome += netPaymentAmount(
+          payment['amount'],
+          payment['change_amount'],
+        );
       }
 
       double totalExpenses = 0.0;
@@ -237,7 +256,11 @@ class CashierViewModel extends ChangeNotifier {
       };
     } catch (e) {
       debugPrint('Error loading today summary: $e');
-      return {'total_income': 0.0, 'total_expenses': 0.0, 'transaction_count': 0};
+      return {
+        'total_income': 0.0,
+        'total_expenses': 0.0,
+        'transaction_count': 0,
+      };
     }
   }
 
@@ -253,7 +276,9 @@ class CashierViewModel extends ChangeNotifier {
 
       final paymentsData = await client
           .from('payments')
-          .select('id, amount, change_amount, payment_method_id, created_at, order_id')
+          .select(
+            'id, amount, change_amount, payment_method_id, created_at, order_id',
+          )
           .gte('created_at', startOfDay)
           .lt('created_at', endOfDay)
           .eq('status', 'completed')
@@ -294,7 +319,8 @@ class CashierViewModel extends ChangeNotifier {
                       .maybeSingle();
 
                   if (tableData != null) {
-                    final code = tableData['code'] ?? tableData['label'] ?? '??';
+                    final code =
+                        tableData['code'] ?? tableData['label'] ?? '??';
                     description = 'Venta Mesa $code';
                   }
                 }
@@ -305,7 +331,10 @@ class CashierViewModel extends ChangeNotifier {
           }
         }
 
-        final amount = netPaymentAmount(payment['amount'], payment['change_amount']);
+        final amount = netPaymentAmount(
+          payment['amount'],
+          payment['change_amount'],
+        );
         movements.add({
           'type': 'income',
           'description': description,
@@ -381,7 +410,11 @@ class CashierViewModel extends ChangeNotifier {
         final client = Supabase.instance.client;
         final now = AppTime.nowAst();
         final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
-        final startOfWeekDate = DateTime(startOfWeek.year, startOfWeek.month, startOfWeek.day);
+        final startOfWeekDate = DateTime(
+          startOfWeek.year,
+          startOfWeek.month,
+          startOfWeek.day,
+        );
         final endOfWeekDate = startOfWeekDate.add(const Duration(days: 7));
 
         final payments = await client
@@ -394,7 +427,10 @@ class CashierViewModel extends ChangeNotifier {
 
         List<double> weeklySales = List.filled(7, 0.0);
         for (var payment in payments) {
-          final amount = netPaymentAmount(payment['amount'], payment['change_amount']);
+          final amount = netPaymentAmount(
+            payment['amount'],
+            payment['change_amount'],
+          );
           final dateStr = payment['created_at'] as String;
           final date = AppTime.tryParseServerToAst(dateStr);
           if (date == null) continue;
@@ -420,7 +456,15 @@ class CashierViewModel extends ChangeNotifier {
         double bestDayAmount = 0.0;
         if (maxIdx != -1) {
           bestDayAmount = maxVal;
-          const days = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+          const days = [
+            'Lunes',
+            'Martes',
+            'Miércoles',
+            'Jueves',
+            'Viernes',
+            'Sábado',
+            'Domingo',
+          ];
           bestDayName = days[maxIdx];
         }
 
@@ -460,7 +504,8 @@ class CashierViewModel extends ChangeNotifier {
   /// Pure data fetcher for active sessions — returns data map without mutating state.
   Future<Map<String, dynamic>?> _fetchActiveSessions() async {
     try {
-      if (_businessId == null) return {'sessions': [], 'totals': <String, double>{}};
+      if (_businessId == null)
+        return {'sessions': [], 'totals': <String, double>{}};
 
       final cacheKey = 'active_sessions_v1_$_businessId';
 
@@ -475,7 +520,9 @@ class CashierViewModel extends ChangeNotifier {
           final orderRows = List<Map<String, dynamic>>.from(
             await client
                 .from('orders')
-                .select('id,session_id,status_ext,subtotal,tax,service_fee,discounts,total,created_at,closed_at')
+                .select(
+                  'id,session_id,status_ext,subtotal,tax,service_fee,discounts,total,created_at,closed_at',
+                )
                 .inFilter('session_id', sessionIds)
                 .isFilter('closed_at', null)
                 .not('status_ext', 'in', '(paid,void)'),
@@ -505,7 +552,9 @@ class CashierViewModel extends ChangeNotifier {
             final itemRows = List<Map<String, dynamic>>.from(
               await client
                   .from('order_items')
-                  .select('id,order_id,product_id,product_name,sku,qty,quantity,unit_price,subtotal,discounts,tax,total,check_id,is_takeout,status,notes,tax_mode,tax_rate,created_at')
+                  .select(
+                    'id,order_id,product_id,product_name,sku,qty,quantity,unit_price,subtotal,discounts,tax,total,check_id,is_takeout,status,notes,tax_mode,tax_rate,created_at',
+                  )
                   .inFilter('order_id', orderIds)
                   .not('status', 'in', '(paid,void)'),
             );
@@ -521,7 +570,9 @@ class CashierViewModel extends ChangeNotifier {
               final item = OrderItem.fromMap(itemRow);
               final orderId = item.orderId.trim();
               if (orderId.isEmpty) continue;
-              itemsByOrderId.putIfAbsent(orderId, () => <OrderItem>[]).add(item);
+              itemsByOrderId
+                  .putIfAbsent(orderId, () => <OrderItem>[])
+                  .add(item);
             }
 
             for (final checkRow in checkRows) {
@@ -530,7 +581,9 @@ class CashierViewModel extends ChangeNotifier {
               if (orderId == null || orderId.isEmpty) continue;
               if (checkRow['is_closed'] != true) continue;
               if (checkId == null || checkId.isEmpty) continue;
-              closedCheckIdsByOrderId.putIfAbsent(orderId, () => <String>{}).add(checkId);
+              closedCheckIdsByOrderId
+                  .putIfAbsent(orderId, () => <String>{})
+                  .add(checkId);
             }
           }
 
@@ -539,26 +592,34 @@ class CashierViewModel extends ChangeNotifier {
             if (sessionId == null || sessionId.isEmpty) continue;
             final order = ordersById[orderId];
             if (order == null) continue;
-            final closedCheckIds = closedCheckIdsByOrderId[orderId] ?? const <String>{};
-            final pendingItems = (itemsByOrderId[orderId] ?? const <OrderItem>[])
-                .where((item) => !closedCheckIds.contains(item.checkId))
-                .toList(growable: false);
-            final pendingTotal = summarizeOrderPricing(order, pendingItems).total;
-            sessionTotals[sessionId] = (sessionTotals[sessionId] ?? 0) + pendingTotal;
+            final closedCheckIds =
+                closedCheckIdsByOrderId[orderId] ?? const <String>{};
+            final pendingItems =
+                (itemsByOrderId[orderId] ?? const <OrderItem>[])
+                    .where((item) => !closedCheckIds.contains(item.checkId))
+                    .toList(growable: false);
+            final pendingTotal = summarizeOrderPricing(
+              order,
+              pendingItems,
+            ).total;
+            sessionTotals[sessionId] =
+                (sessionTotals[sessionId] ?? 0) + pendingTotal;
           }
         }
 
         final serializedSessions = sessions
-            .map((s) => {
-                  'id': s.id,
-                  'business_id': s.businessId,
-                  'opened_by': s.openedBy,
-                  'opened_at': s.openedAt.toIso8601String(),
-                  'people_count': s.peopleCount,
-                  'origin': s.origin,
-                  'table_name': s.tableName,
-                  'zone_name': s.zoneName,
-                })
+            .map(
+              (s) => {
+                'id': s.id,
+                'business_id': s.businessId,
+                'opened_by': s.openedBy,
+                'opened_at': s.openedAt.toIso8601String(),
+                'people_count': s.peopleCount,
+                'origin': s.origin,
+                'table_name': s.tableName,
+                'zone_name': s.zoneName,
+              },
+            )
             .toList();
 
         return {'sessions': serializedSessions, 'totals': sessionTotals};
@@ -589,7 +650,9 @@ class CashierViewModel extends ChangeNotifier {
   }
 
   void _applyWeeklyData(Map<String, dynamic> data) {
-    _weeklySales = List<double>.from(data['weekly_sales'] ?? List.filled(7, 0.0));
+    _weeklySales = List<double>.from(
+      data['weekly_sales'] ?? List.filled(7, 0.0),
+    );
     _totalWeeklySales = (data['total_weekly_sales'] as num?)?.toDouble() ?? 0.0;
     _weeklyAverage = (data['weekly_average'] as num?)?.toDouble() ?? 0.0;
     _bestDayAmount = (data['best_day_amount'] as num?)?.toDouble() ?? 0.0;
@@ -619,19 +682,24 @@ class CashierViewModel extends ChangeNotifier {
       final deviceName = DeviceUtils.getDeviceName();
 
       // Final check before sending to DB to provide better error message
-      final existingDeviceSession = await _repository.getDeviceActiveSession(deviceId);
+      final existingDeviceSession = await _repository.getDeviceActiveSession(
+        deviceId,
+      );
       if (existingDeviceSession != null) {
         throw const CashRegisterException(
           errorCode: 'DEVICE_ALREADY_OPEN',
-          message: 'No se puede abrir otra caja ya que hay una caja abierta actualmente en este dispositivo.',
+          message:
+              'No se puede abrir otra caja ya que hay una caja abierta actualmente en este dispositivo.',
         );
       }
 
-      final existingUserSession = await _repository.getCurrentUserActiveSession();
+      final existingUserSession = await _repository
+          .getCurrentUserActiveSession();
       if (existingUserSession != null) {
         throw const CashRegisterException(
           errorCode: 'USER_ALREADY_OPEN',
-          message: 'Ya tienes una sesión de caja abierta en otro dispositivo o caja.',
+          message:
+              'Ya tienes una sesión de caja abierta en otro dispositivo o caja.',
         );
       }
 
@@ -662,20 +730,29 @@ class CashierViewModel extends ChangeNotifier {
   /// (~varios segundos). Caso raro; `init()` (que sí invalida) se llama en
   /// cambios de business y aperturas explícitas, donde el loading es OK.
   Future<void> refreshSilently() async {
+    // NO nulleamos `_lastSession` aqui aposta. Ver comentario largo en
+    // `init()`: nullear causaba el flash "Caja cerrada" en cada
+    // navegacion. La proteccion contra stale "open" esta en
+    // `ensureCashOpenFast` (TTL 12s) y la validacion server-side de
+    // `processPayment`. Aqui solo hacemos fetch y emitimos un unico
+    // `notifyListeners` al final con el estado real.
     try {
       if (_currentRegisterId != null && _businessId != null) {
         // Misma resolucion que init(): caja es per-register (cualquier user
         // del local). Si no hay activa, fallback al historico del usuario
         // para mostrar el ultimo cierre en el panel.
-        final registerSession = await _repository
-            .getActiveSessionForRegister(_currentRegisterId!);
+        final registerSession = await _repository.getActiveSessionForRegister(
+          _currentRegisterId!,
+        );
         if (registerSession != null) {
           _lastSession = registerSession.toMap();
         } else {
           _lastSession = await _repository.getLastSession(_currentRegisterId!);
         }
         _lastCashOpenValidationAt = AppTime.nowAst();
-        _pendingTables = await _salesRepository.getOpenTablesCount(_businessId!);
+        _pendingTables = await _salesRepository.getOpenTablesCount(
+          _businessId!,
+        );
         await _loadDashboardData(silent: true);
         notifyListeners();
       }
@@ -719,8 +796,9 @@ class CashierViewModel extends ChangeNotifier {
 
       // Buscar caja activa por register (compartida entre empleados del local).
       // Si no hay activa, caer a última sesión del usuario para mostrar histórico.
-      final registerSession = await _repository
-          .getActiveSessionForRegister(_currentRegisterId!);
+      final registerSession = await _repository.getActiveSessionForRegister(
+        _currentRegisterId!,
+      );
       if (registerSession != null) {
         _lastSession = registerSession.toMap();
       } else {

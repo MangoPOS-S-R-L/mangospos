@@ -57,10 +57,31 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
   /// pago montado mientras corre el callback (e.g. el popup
   /// "Imprimir copia" que el caller monta encima). Solo después
   /// hacemos pop, devolviendo los payments al .then() del caller.
+  ///
+  /// Mientras corre el callback, marcamos `isPrinting=true` en el
+  /// viewmodel para que la UI bloquee los botones de cerrar/cancelar y
+  /// muestre estado "Imprimiendo...". El cajero NO debe poder liberar
+  /// la mesa antes de ver el ticket: si el callback falla, su propio
+  /// dialog de reintentar se encarga; cuando ese dialog resuelve,
+  /// recien aqui hacemos pop.
   Future<void> _finishWithPayments(List<Payment> payments) async {
     final hook = widget.onConfirmed;
     if (hook != null) {
-      await hook(payments);
+      final vm = ref.read(
+        paymentSplitProvider((
+          widget.orderId,
+          widget.totalAmount,
+          widget.checkId,
+          widget.customerId,
+          widget.fiscalType,
+        )).notifier,
+      );
+      vm.setPrinting(true);
+      try {
+        await hook(payments);
+      } finally {
+        if (mounted) vm.setPrinting(false);
+      }
     }
     if (!mounted) return;
     Navigator.pop(context, payments);
@@ -146,6 +167,15 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
     }
 
     if (event is! KeyDownEvent) return;
+
+    // Mientras se imprime, ignoramos TODA tecla. El pago ya esta grabado
+    // y la mesa se libera al cerrar; si dejamos pasar dígitos / Enter / *
+    // el cajero podria editar montos visualmente o disparar una segunda
+    // confirmPayment (que el servidor rechazaria con ORDER_ALREADY_CLOSED
+    // pero genera un toast de error confuso). El feedback de "Imprimiendo..."
+    // ya esta en el boton — no hay nada util que el cajero pueda teclear.
+    if (state.isPrinting) return;
+
     final char = event.character?.toLowerCase();
 
     if (logicalKey == LogicalKeyboardKey.escape) {
@@ -268,7 +298,7 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
               ),
           child: Column(
             children: [
-              _buildHeader(context),
+              _buildHeader(context, isPrinting: state.isPrinting),
               const Divider(height: 1, color: _kBorder),
               Expanded(
                 child: isMobile
@@ -330,7 +360,7 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
     );
   }
 
-  Widget _buildHeader(BuildContext context) {
+  Widget _buildHeader(BuildContext context, {required bool isPrinting}) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
@@ -368,8 +398,13 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
           ),
           const Spacer(),
           IconButton(
-            icon: const Icon(Icons.close, color: Colors.black54),
-            onPressed: () => Navigator.of(context).pop(),
+            icon: Icon(
+              Icons.close,
+              color: isPrinting ? Colors.black26 : Colors.black54,
+            ),
+            // Bloqueado durante impresion: el pago ya esta grabado y
+            // si se cierra aqui se libera la mesa sin ticket.
+            onPressed: isPrinting ? null : () => Navigator.of(context).pop(),
           ),
         ],
       ),
@@ -934,10 +969,10 @@ class _RightPanel extends StatelessWidget {
   });
 
   /// PRD 6 § 4.7 — explica al cajero por qué "Confirmar pago" está disabled.
-  /// Si está procesando, no mostramos nada (el botón ya muestra "Procesando…").
-  /// Si está habilitado, retorna null.
+  /// Si está procesando o imprimiendo, no mostramos nada (el botón ya
+  /// muestra el estado en su label). Si está habilitado, retorna null.
   static String? _resolveDisabledReason(PaymentSplitState state) {
-    if (state.isProcessing) return null;
+    if (state.isProcessing || state.isPrinting) return null;
     if (state.transactions.isEmpty) {
       return 'Agrega al menos un pago para confirmar';
     }
@@ -952,7 +987,10 @@ class _RightPanel extends StatelessWidget {
     final canConfirm =
         state.transactions.isNotEmpty &&
         state.isComplete &&
-        !state.isProcessing;
+        !state.isProcessing &&
+        !state.isPrinting;
+    final isBusy = state.isProcessing || state.isPrinting;
+    final busyLabel = state.isPrinting ? 'Imprimiendo...' : 'Procesando...';
 
     // PRD 6 § 4.7 — razón por la que el botón está disabled, mostrada
     // inline al lado para que el cajero sepa qué falta sin adivinar.
@@ -997,7 +1035,7 @@ class _RightPanel extends StatelessWidget {
                   borderRadius: BorderRadius.circular(12),
                 ),
               ),
-              icon: state.isProcessing
+              icon: isBusy
                   ? const SizedBox(
                       width: 18,
                       height: 18,
@@ -1008,7 +1046,7 @@ class _RightPanel extends StatelessWidget {
                     )
                   : const Icon(Icons.check_circle_outline),
               label: Text(
-                state.isProcessing ? 'Procesando...' : 'Confirmar pago',
+                isBusy ? busyLabel : 'Confirmar pago',
                 style: const TextStyle(
                   fontWeight: FontWeight.w700,
                   fontSize: 15,
@@ -1044,7 +1082,9 @@ class _RightPanel extends StatelessWidget {
             width: double.infinity,
             height: 48,
             child: OutlinedButton(
-              onPressed: onClose,
+              // Mientras se imprime, no se puede cancelar — el pago ya
+              // esta grabado y la mesa se libera al cerrar el modal.
+              onPressed: isBusy ? null : onClose,
               style: OutlinedButton.styleFrom(
                 side: const BorderSide(color: _kBorder),
                 shape: RoundedRectangleBorder(
@@ -1062,7 +1102,7 @@ class _RightPanel extends StatelessWidget {
             width: double.infinity,
             height: 46,
             child: TextButton.icon(
-              onPressed: () => Navigator.pop(context, false),
+              onPressed: isBusy ? null : () => Navigator.pop(context, false),
               style: TextButton.styleFrom(
                 foregroundColor: Colors.black87,
                 shape: RoundedRectangleBorder(
@@ -1100,7 +1140,10 @@ class _MobileLayout extends StatelessWidget {
     final canConfirm =
         state.transactions.isNotEmpty &&
         state.isComplete &&
-        !state.isProcessing;
+        !state.isProcessing &&
+        !state.isPrinting;
+    final isBusy = state.isProcessing || state.isPrinting;
+    final busyLabel = state.isPrinting ? 'Imprimiendo...' : 'Procesando...';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1138,7 +1181,7 @@ class _MobileLayout extends StatelessWidget {
                 borderRadius: BorderRadius.circular(12),
               ),
             ),
-            icon: state.isProcessing
+            icon: isBusy
                 ? const SizedBox(
                     width: 18,
                     height: 18,
@@ -1149,7 +1192,7 @@ class _MobileLayout extends StatelessWidget {
                   )
                 : const Icon(Icons.check),
             label: Text(
-              state.isProcessing ? 'Procesando...' : 'Confirmar pago',
+              isBusy ? busyLabel : 'Confirmar pago',
               style: const TextStyle(fontWeight: FontWeight.w700),
             ),
           ),
@@ -1182,7 +1225,9 @@ class _MobileLayout extends StatelessWidget {
           width: double.infinity,
           height: 48,
           child: OutlinedButton(
-            onPressed: () => Navigator.pop(context),
+            // Mientras imprime, bloqueamos el cierre — el pago ya esta
+            // grabado y la mesa se libera al cerrar el modal.
+            onPressed: isBusy ? null : () => Navigator.pop(context),
             style: OutlinedButton.styleFrom(
               side: const BorderSide(color: _kBorder),
               shape: RoundedRectangleBorder(

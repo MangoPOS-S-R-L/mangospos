@@ -1341,7 +1341,12 @@ class _CartView extends ConsumerWidget {
             }
           } catch (e) {
             if (context.mounted) {
-              _showReimpresionDialog(
+              // AWAIT explicito: este Future no resuelve hasta que el
+              // cajero o bien reimprime con exito, o bien elige
+              // "Continuar sin imprimir". Esto mantiene el modal de
+              // pago abierto mientras tanto — el cajero NO puede salir
+              // por accidente sin haber visto el ticket.
+              await _showReimpresionDialog(
                 context: context,
                 ref: ref,
                 type: 'invoice',
@@ -2604,20 +2609,24 @@ class _CartView extends ConsumerWidget {
                                           );
                                         } catch (e) {
                                           if (context.mounted) {
-                                            _showReimpresionDialog(
-                                              context: context,
-                                              ref: ref,
-                                              type: 'precheck',
-                                              data: preCheckData,
-                                              orderObj: orderState.order!,
-                                              orderItems: displayedItems,
-                                              tableName:
-                                                  preCheckData['tableName']
-                                                      as String?,
-                                              waiterName:
-                                                  preCheckData['waiterName']
-                                                      as String?,
-                                              errorMsg: e.toString(),
+                                            // Precuenta: no bloquea otra
+                                            // operacion, fire-and-forget.
+                                            unawaited(
+                                              _showReimpresionDialog(
+                                                context: context,
+                                                ref: ref,
+                                                type: 'precheck',
+                                                data: preCheckData,
+                                                orderObj: orderState.order!,
+                                                orderItems: displayedItems,
+                                                tableName:
+                                                    preCheckData['tableName']
+                                                        as String?,
+                                                waiterName:
+                                                    preCheckData['waiterName']
+                                                        as String?,
+                                                errorMsg: e.toString(),
+                                              ),
                                             );
                                           }
                                         }
@@ -2950,8 +2959,13 @@ class _CartView extends ConsumerWidget {
               );
       }
 
-      final printTimeout = const Duration(seconds: 3);
+      // USB tipicamente confirma en <2s, pero algunos drivers (Star /
+      // Bixolon viejas via USB-serial) tardan mas — damos 15s. Network
+      // pasa por el agente: 3s alcanza para un ack TCP local.
       final isUsbPrinter = printer.printerType == PrinterType.usb;
+      final printTimeout = isUsbPrinter
+          ? const Duration(seconds: 15)
+          : const Duration(seconds: 3);
 
       final printFuture = Future(() async {
         if (ticket != null) {
@@ -2985,24 +2999,24 @@ class _CartView extends ConsumerWidget {
       unawaited(
         printFuture.catchError((error, stackTrace) {
           debugPrint(
-            'Impresión en ${printer.name} falló después del timeout: $error',
+            'Impresión en ${printer.name} falló: $error',
           );
         }),
       );
 
-      try {
-        await printFuture.timeout(
-          printTimeout,
-          onTimeout: () => throw TimeoutException('Timeout'),
-        );
-      } on TimeoutException {
-        if (!isUsbPrinter) {
-          throw Exception('Timeout');
-        }
-        debugPrint(
-          'La impresora USB ${assignedPrinter.name} sigue procesando el ticket tras $printTimeout. Ignoramos el timeout.',
-        );
-      }
+      // Tiramos timeout SIEMPRE — antes USB se "tragaba" el timeout y
+      // el flujo continuaba como si hubiera impreso, mostrando el
+      // dialog de exito sin que saliera el ticket. Resultado: el
+      // cajero cerraba la mesa sin imprimir. Ahora si vence, el caller
+      // muestra el dialog de "Reintentar / Continuar sin imprimir".
+      await printFuture.timeout(
+        printTimeout,
+        onTimeout: () => throw TimeoutException(
+          isUsbPrinter
+              ? 'La impresora USB no respondio en ${printTimeout.inSeconds}s'
+              : 'La impresora de red no respondio en ${printTimeout.inSeconds}s',
+        ),
+      );
 
       if (showSnackBar && context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -3094,7 +3108,14 @@ class _CartView extends ConsumerWidget {
     return null;
   }
 
-  void _showReimpresionDialog({
+  /// Devuelve un Future que resuelve cuando el cajero decide
+  /// definitivamente: imprimio con exito (Reintentar OK), o eligio
+  /// "Continuar sin imprimir" para cerrar el flujo aceptando la
+  /// perdida del ticket. Mientras el cajero siga reintentando, este
+  /// Future NO resuelve — esto mantiene abierto el modal padre que lo
+  /// awaitea (PaymentSplitDialog) y evita que la mesa se libere
+  /// silenciosamente sin haber visto el ticket.
+  Future<void> _showReimpresionDialog({
     required BuildContext context,
     required WidgetRef ref,
     required String type,
@@ -3112,160 +3133,170 @@ class _CartView extends ConsumerWidget {
       orderId: orderObj?.id,
       checkId: data['checkId']?.toString(),
     );
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => Dialog(
-        backgroundColor: Colors.white,
-        surfaceTintColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        child: Container(
-          width: 440,
-          padding: const EdgeInsets.all(32.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Icon Container
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFEF2F2),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: const Color(0xFFFEE2E2), width: 2),
-                ),
-                child: const Icon(
-                  Icons.print_disabled_rounded,
-                  color: Color(0xFFEF4444),
-                  size: 48,
-                ),
-              ),
-              const SizedBox(height: 24),
+    final completer = Completer<void>();
 
-              // Title
-              const Text(
-                'Fallo de Impresión',
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.w800,
-                  color: _salesTextPrimary,
-                  letterSpacing: -0.5,
+    void resolve() {
+      if (!completer.isCompleted) completer.complete();
+    }
+
+    void open() {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => PopScope(
+          // Bloqueamos Esc / back-button del SO. Si Flutter dejara
+          // popear este dialog, el `completer` quedaria sin resolver
+          // y el modal de pago padre — que esta awaiteando — se
+          // quedaria con `isPrinting=true` para siempre. Las dos
+          // unicas vias de salida deben ser los botones del dialog.
+          canPop: false,
+          child: Dialog(
+            backgroundColor: Colors.white,
+          surfaceTintColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          child: Container(
+            width: 440,
+            padding: const EdgeInsets.all(32.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFEF2F2),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: const Color(0xFFFEE2E2),
+                      width: 2,
+                    ),
+                  ),
+                  child: const Icon(
+                    Icons.print_disabled_rounded,
+                    color: Color(0xFFEF4444),
+                    size: 48,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-
-              // Message
-              const Text(
-                'No pudimos procesar la impresión. ¿Deseas intentar enviar el trabajo nuevamente?',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 15,
-                  color: _salesTextSecondary,
-                  height: 1.4,
+                const SizedBox(height: 24),
+                const Text(
+                  'Fallo de Impresión',
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w800,
+                    color: _salesTextPrimary,
+                    letterSpacing: -0.5,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 16),
-
-              const SizedBox(height: 32),
-
-              // Actions
-              Row(
-                children: [
-                  Expanded(
-                    child: TextButton(
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        onFinish?.call();
-                      },
-                      style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
+                const SizedBox(height: 12),
+                const Text(
+                  'El pago se proceso pero no pudimos imprimir el ticket. Reintenta — si sigue fallando, puedes continuar sin imprimir, pero la mesa se liberara igual.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 15,
+                    color: _salesTextSecondary,
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 32),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextButton(
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          onFinish?.call();
+                          resolve();
+                        },
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
                         ),
-                      ),
-                      child: const Text(
-                        'Cancelar',
-                        style: TextStyle(
-                          color: _salesTextSecondary,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 16,
+                        child: const Text(
+                          'Continuar sin imprimir',
+                          style: TextStyle(
+                            color: _salesTextSecondary,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 15,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: () async {
-                        final now = DateTime.now().millisecondsSinceEpoch;
-                        final ts = ref
-                            .read(_salesActionLocksProvider)[retryPrintLockKey];
-                        if (ts != null &&
-                            now - ts < _kLockMaxAge.inMilliseconds) {
-                          return;
-                        }
-                        Navigator.pop(ctx);
-                        await _runLockedAction(
-                          ref,
-                          retryPrintLockKey,
-                          () async {
-                            try {
-                              await _handlePrintFlow(
-                                context,
-                                ref,
-                                type,
-                                data,
-                                orderObj: orderObj,
-                                orderItems: orderItems,
-                                payments: payments,
-                                tableName: tableName,
-                                waiterName: waiterName,
-                                showSnackBar: true,
-                              );
-                              onFinish?.call();
-                            } catch (e) {
-                              if (!context.mounted) return;
-                              _showReimpresionDialog(
-                                context: context,
-                                ref: ref,
-                                type: type,
-                                data: data,
-                                orderObj: orderObj,
-                                orderItems: orderItems,
-                                payments: payments,
-                                tableName: tableName,
-                                waiterName: waiterName,
-                                errorMsg: e.toString(),
-                                onFinish: onFinish,
-                              );
-                            }
-                          },
-                        );
-                      },
-                      style: FilledButton.styleFrom(
-                        backgroundColor: _salesTotalColor,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: () async {
+                          final now = DateTime.now().millisecondsSinceEpoch;
+                          final ts = ref.read(
+                            _salesActionLocksProvider,
+                          )[retryPrintLockKey];
+                          if (ts != null &&
+                              now - ts < _kLockMaxAge.inMilliseconds) {
+                            return;
+                          }
+                          Navigator.pop(ctx);
+                          await _runLockedAction(
+                            ref,
+                            retryPrintLockKey,
+                            () async {
+                              try {
+                                await _handlePrintFlow(
+                                  context,
+                                  ref,
+                                  type,
+                                  data,
+                                  orderObj: orderObj,
+                                  orderItems: orderItems,
+                                  payments: payments,
+                                  tableName: tableName,
+                                  waiterName: waiterName,
+                                  showSnackBar: true,
+                                );
+                                onFinish?.call();
+                                resolve();
+                              } catch (e) {
+                                if (!context.mounted) {
+                                  resolve();
+                                  return;
+                                }
+                                // Reabrir mismo dialog para otra
+                                // ronda. El completer NO resuelve
+                                // hasta que el cajero decida.
+                                open();
+                              }
+                            },
+                          );
+                        },
+                        style: FilledButton.styleFrom(
+                          backgroundColor: _salesTotalColor,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          elevation: 0,
                         ),
-                        elevation: 0,
-                      ),
-                      child: const Text(
-                        'Reintentar',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 16,
+                        child: const Text(
+                          'Reintentar',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 16,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                ],
-              ),
-            ],
+                  ],
+                ),
+              ],
+            ),
+          ),
           ),
         ),
-      ),
-    );
+      );
+    }
+
+    open();
+    return completer.future;
   }
 }
 

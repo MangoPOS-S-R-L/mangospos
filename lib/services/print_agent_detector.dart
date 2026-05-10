@@ -61,9 +61,12 @@ class PrintAgentDetector {
 
   Future<http.Response?> _probe(String baseUrl, String path) async {
     try {
+      // Localhost responde en <50ms cuando el agente esta vivo. 1s da
+      // margen para procesos USB-bound; 3s era defensivo de mas — en
+      // post-update hacia 12s de timeouts antes de caer al cache.
       return await http
           .get(Uri.parse('$baseUrl$path'))
-          .timeout(const Duration(seconds: 3));
+          .timeout(const Duration(seconds: 1));
     } catch (_) {
       return null;
     }
@@ -84,20 +87,27 @@ class PrintAgentDetector {
     return const [];
   }
 
-  /// 1) localhost en puertos conocidos 2) cache 3) escaneo LAN
+  /// 1) cache (escrito por `LocalPrintService.primeBaseUrl` o por la
+  /// ultima deteccion exitosa) 2) localhost en puertos conocidos
+  /// 3) escaneo LAN.
+  ///
+  /// Orden invertido vs. la version original: antes el cache se probaba
+  /// DESPUES de los 4 puertos, lo que en post-update hacia 4 × 1s de
+  /// timeouts antes de usar el cache que main.dart ya habia poblado.
+  /// Ahora el caso happy-path (cache fresco) toma ~50-200ms.
   Future<String?> scanLocalFirst() async {
+    final cached = await _getCached();
+    if (cached != null) {
+      final c = await testAgent(cached);
+      if (c.ok) return cached;
+    }
+
     for (final port in _candidatePorts) {
       final local = await testAgent('http://127.0.0.1:$port');
       if (local.ok) {
         await _setCached(local.baseUrl);
         return local.baseUrl;
       }
-    }
-
-    final cached = await _getCached();
-    if (cached != null) {
-      final c = await testAgent(cached);
-      if (c.ok) return cached;
     }
 
     final lan = await _scanLan();
