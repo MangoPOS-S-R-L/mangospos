@@ -361,10 +361,60 @@ class SalesRepositoryImproved {
           return recovered;
         }
       }
+
+      // Recovery cuando el unique index bloquea un retry idempotente del
+      // mismo split. Ver doc en `SalesRepository.processPayment`.
+      final isUniqueViolation =
+          (e is PostgrestException && e.code == '23505') ||
+          msg.contains('23505') ||
+          msg.contains('payments_unique_completed_per_check_method');
+      if (isUniqueViolation) {
+        final recovered = await _recoverCompletedPaymentAfterUniqueViolation(
+          orderId: orderId,
+          checkId: checkId,
+          splitSequence: splitSequence,
+          amount: amount,
+        );
+        if (recovered != null) {
+          return recovered;
+        }
+      }
+
       throw Exception(
         'No se pudo procesar el pago de forma atomica. La operacion fue cancelada: $e',
       );
     }
+  }
+
+  Future<Payment?> _recoverCompletedPaymentAfterUniqueViolation({
+    required String orderId,
+    String? checkId,
+    required int splitSequence,
+    required double amount,
+  }) async {
+    try {
+      dynamic query = _client
+          .from('payments')
+          .select()
+          .eq('order_id', orderId)
+          .eq('status', 'completed')
+          .eq('split_sequence', splitSequence);
+
+      query = checkId == null
+          ? query.isFilter('check_id', null)
+          : query.eq('check_id', checkId);
+
+      final rows = await query.order('created_at', ascending: false).limit(5);
+
+      for (final row in rows) {
+        final payment = Payment.fromMap(Map<String, dynamic>.from(row as Map));
+        if ((payment.amount - amount).abs() <= 0.01) {
+          return payment;
+        }
+      }
+    } catch (_) {}
+
+    return null;
   }
 
   Future<Payment?> _recoverCompletedPaymentAfterNcfCollision({

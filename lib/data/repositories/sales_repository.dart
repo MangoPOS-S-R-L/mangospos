@@ -111,7 +111,11 @@ class SalesRepository {
   }
 
   /// Anular un pago puntual. Si el pago corresponde a una subcuenta,
-  /// reabre solamente ese check; de lo contrario mantiene la anulacion total.
+  /// reabre solamente ese check. Si es un pago full-order (check_id null) y
+  /// hay otros payments completed en la misma orden — es decir, un split por
+  /// múltiples métodos — sólo anula ESE pago y deja a la orden en
+  /// partially_paid. Si es el único pago, mantiene la anulación total
+  /// (annulOrder).
   Future<void> annulPayment({
     required String paymentId,
     required String orderId,
@@ -121,6 +125,7 @@ class SalesRepository {
     final trimmedPaymentId = paymentId.trim();
     final trimmedOrderId = orderId.trim();
     final trimmedCheckId = checkId?.trim();
+    final hasCheck = trimmedCheckId != null && trimmedCheckId.isNotEmpty;
 
     if (trimmedPaymentId.isEmpty) {
       throw Exception('PAYMENT_ID_REQUIRED');
@@ -129,9 +134,22 @@ class SalesRepository {
       throw Exception('ORDER_ID_REQUIRED');
     }
 
-    if (trimmedCheckId == null || trimmedCheckId.isEmpty) {
-      await annulOrder(orderId: trimmedOrderId, reason: reason);
-      return;
+    // Para pagos full-order: detectar split por métodos. Si no hay pagos
+    // hermanos, mantener anulación total (legacy). Si hay hermanos, caer al
+    // flujo de anulación parcial sin tocar items.
+    if (!hasCheck) {
+      final siblingsRaw = await _client
+          .from('payments')
+          .select('id')
+          .eq('order_id', trimmedOrderId)
+          .isFilter('check_id', null)
+          .eq('status', 'completed')
+          .neq('id', trimmedPaymentId);
+      final hasSiblings = (siblingsRaw as List).isNotEmpty;
+      if (!hasSiblings) {
+        await annulOrder(orderId: trimmedOrderId, reason: reason);
+        return;
+      }
     }
 
     try {
@@ -190,17 +208,24 @@ class SalesRepository {
           .update({'status': 'cancelled'})
           .eq('payment_id', trimmedPaymentId);
 
-      await _client
-          .from('order_items')
-          .update({'status': 'served'})
-          .eq('order_id', trimmedOrderId)
-          .eq('check_id', trimmedCheckId)
-          .eq('status', 'paid');
+      // Reabrir items y check sólo para el flujo basado en checks. En split
+      // full-order los items pertenecen a la orden entera (no a un check);
+      // los dejamos como 'paid' — siguen asociados a los otros pagos del
+      // split, y la orden vuelve a `partially_paid` para que el cajero
+      // pueda registrar otro pago que cubra el monto anulado.
+      if (hasCheck) {
+        await _client
+            .from('order_items')
+            .update({'status': 'served'})
+            .eq('order_id', trimmedOrderId)
+            .eq('check_id', trimmedCheckId)
+            .eq('status', 'paid');
 
-      await _client
-          .from('order_checks')
-          .update({'is_closed': false, 'closed_at': null})
-          .eq('id', trimmedCheckId);
+        await _client
+            .from('order_checks')
+            .update({'is_closed': false, 'closed_at': null})
+            .eq('id', trimmedCheckId);
+      }
 
       await _client
           .from('orders')
@@ -1441,10 +1466,63 @@ class SalesRepository {
           return recovered;
         }
       }
+
+      // Recovery cuando el unique index bloquea un retry idempotente del
+      // mismo split: (order_id, check_id, payment_method_id, split_sequence)
+      // ya existe completed. El RPC propaga 23505 — el cliente lo recupera
+      // devolviendo la fila previa, como si el insert hubiera sido exitoso.
+      // Caso típico: doble-tap del usuario o retry por timeout de red.
+      final isUniqueViolation =
+          (e is PostgrestException && e.code == '23505') ||
+          msg.contains('23505') ||
+          msg.contains('payments_unique_completed_per_check_method');
+      if (isUniqueViolation) {
+        final recovered = await _recoverCompletedPaymentAfterUniqueViolation(
+          orderId: orderId,
+          checkId: checkId,
+          splitSequence: splitSequence,
+          amount: amount,
+        );
+        if (recovered != null) {
+          return recovered;
+        }
+      }
+
       throw Exception(
         'No se pudo procesar el pago de forma atomica. La operacion fue cancelada: $e',
       );
     }
+  }
+
+  Future<Payment?> _recoverCompletedPaymentAfterUniqueViolation({
+    required String orderId,
+    String? checkId,
+    required int splitSequence,
+    required double amount,
+  }) async {
+    try {
+      dynamic query = _client
+          .from('payments')
+          .select()
+          .eq('order_id', orderId)
+          .eq('status', 'completed')
+          .eq('split_sequence', splitSequence);
+
+      query = checkId == null
+          ? query.isFilter('check_id', null)
+          : query.eq('check_id', checkId);
+
+      final rows = await query.order('created_at', ascending: false).limit(5);
+
+      for (final row in rows) {
+        final payment = Payment.fromMap(Map<String, dynamic>.from(row as Map));
+        if ((payment.amount - amount).abs() <= 0.01) {
+          return payment;
+        }
+      }
+    } catch (_) {}
+
+    return null;
   }
 
   Future<Payment?> _recoverCompletedPaymentAfterNcfCollision({
