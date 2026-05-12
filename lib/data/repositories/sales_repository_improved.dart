@@ -300,6 +300,9 @@ class SalesRepositoryImproved {
   // ============================================================
 
   /// Procesar pago con manejo especial de errores
+  ///
+  /// `splitSequence` distingue múltiples pagos del mismo método sobre la
+  /// misma orden/check. Ver doc en `SalesRepository.processPayment`.
   Future<Payment> processPayment({
     required String orderId,
     String? checkId,
@@ -312,8 +315,8 @@ class SalesRepositoryImproved {
     String? cashierSessionId,
     double changeAmount = 0,
     bool closeOrder = true,
+    int splitSequence = 0,
   }) async {
-    // Intentamos usar el RPC optimizado (v2)
     try {
       final response = await _client.rpc(
         SalesQueries.rpcProcessPayment,
@@ -328,6 +331,8 @@ class SalesRepositoryImproved {
           'p_customer_rnc': customerRnc,
           'p_requested_ncf_type': fiscalType,
           'p_cashier_session_id': cashierSessionId,
+          'p_close_order': closeOrder,
+          'p_split_sequence': splitSequence,
         },
       );
 

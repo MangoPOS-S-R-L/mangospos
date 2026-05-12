@@ -1371,6 +1371,13 @@ class SalesRepository {
   // ============================================================
 
   /// Procesar pago
+  ///
+  /// `splitSequence` distingue múltiples pagos del mismo método sobre la
+  /// misma orden/check (caso: tres clientes pagando 1000 cash cada uno
+  /// en una orden compartida). El cliente Dart pasa 0, 1, 2... para cada
+  /// split intencional; double-tap reusa el mismo valor y choca contra el
+  /// unique index. Default 0 mantiene compatibilidad con callers que sólo
+  /// emiten un payment por (order, check, method).
   Future<Payment> processPayment({
     required String orderId,
     String? checkId,
@@ -1383,9 +1390,20 @@ class SalesRepository {
     String? cashierSessionId,
     double changeAmount = 0,
     bool closeOrder = true,
+    int splitSequence = 0,
   }) async {
     try {
-      // Intentamos usar el RPC optimizado (v2) que tiene mayor timeout configurado
+      // Intentamos usar el RPC optimizado (v3) que tiene mayor timeout configurado.
+      //
+      // `p_close_order` controla si el RPC debe cerrar la orden tras insertar
+      // este payment. Para split full-order, el caller pasa false para los
+      // splits 1..N-1 (la orden queda abierta) y true para el último (cierra).
+      // Para pagos single-method o split-via-checks, el default true mantiene
+      // el comportamiento previo.
+      //
+      // `p_split_sequence` permite múltiples pagos del mismo método sobre
+      // la misma orden sin chocar contra el unique index (ej: tres clientes
+      // pagando cash separadamente).
       final response = await _client.rpc(
         SalesQueries.rpcProcessPayment,
         params: {
@@ -1399,6 +1417,8 @@ class SalesRepository {
           'p_customer_rnc': customerRnc,
           'p_requested_ncf_type': fiscalType,
           'p_cashier_session_id': cashierSessionId,
+          'p_close_order': closeOrder,
+          'p_split_sequence': splitSequence,
         },
       );
 

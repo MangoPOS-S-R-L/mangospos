@@ -786,7 +786,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         .map((row) => Map<String, dynamic>.from(row as Map))
         .map(
           (row) => SalesBreakdownRow(
-            label: row['label']?.toString() ?? 'Ajuste',
+            label: row['label']?.toString() ?? 'Descuento',
             amount: (row['amount'] as num?)?.toDouble() ?? 0,
             quantity: (row['quantity'] as num?)?.toDouble() ?? 0,
             count: (row['count'] as num?)?.toInt() ?? 0,

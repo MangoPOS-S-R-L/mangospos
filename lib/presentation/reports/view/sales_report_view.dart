@@ -206,7 +206,7 @@ class _SalesReportBody extends StatelessWidget {
                           '${(summary['payments_count'] as num?)?.toInt() ?? 0} transacciones',
                     ),
                     CommercialStatTile(
-                      label: 'Ajustes aplicados',
+                      label: 'Descuentos',
                       value: currency.format(totalAdjustments),
                       hint:
                           '${(summary['discounted_lines_count'] as num?)?.toInt() ?? 0} líneas impactadas',
@@ -400,7 +400,7 @@ class _SalesReportBody extends StatelessWidget {
           _SalesCommercialReportCard(
             title: 'Descuentos y cortesías',
             subtitle:
-                'Controla el impacto comercial de ajustes y concesiones.',
+                'Controla el impacto comercial de descuentos y concesiones.',
             icon: Icons.local_offer_outlined,
             color: const Color(0xFFDC2626),
             rows: viewModel.getDiscountRows(),

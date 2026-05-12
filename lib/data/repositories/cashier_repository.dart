@@ -553,7 +553,27 @@ class CashierRepository {
     return List<Map<String, dynamic>>.from(data);
   }
 
-  /// Get global sales history for a business with pagination and optional filters.
+  /// Lista paginada de comprobantes (fiscal_documents) — 1 row por factura.
+  ///
+  /// Source de verdad: `fiscal_documents`. Cada comprobante representa una
+  /// factura emitida (con su NCF). Esta tabla distingue correctamente los
+  /// dos flujos de split del POS:
+  ///
+  ///   - **Split bill (check-based)**: una orden con N sub-cuentas
+  ///     (`order_checks`). Cada check, al pagarse, emite SU PROPIO NCF →
+  ///     N fiscal_documents → N filas en este listado.
+  ///
+  ///   - **Split payment (full-order)**: una orden sin checks, cobrada con
+  ///     varios métodos (efectivo + tarjeta + transferencia). UNA sola
+  ///     factura, N payments asociados → 1 fila en este listado, los
+  ///     métodos se muestran como agregado ("Mixto: Efectivo + Tarjeta").
+  ///
+  /// `check_id` se preserva en el row tomándolo del payment representativo
+  /// (`fd.payment_id`) — así la reimpresión filtra correctamente cuando es
+  /// un comprobante de un check vs de una orden completa.
+  ///
+  /// Payments sin `fiscal_document_id` (raros, sólo si el trigger falló)
+  /// NO aparecen en este listado.
   Future<({List<Map<String, dynamic>> payments, int totalCount})> getGlobalSalesHistoryPaged({
     required String businessId,
     int page = 1,
@@ -566,12 +586,13 @@ class CashierRepository {
     final toIndex = fromIndex + pageSize - 1;
 
     var query = _client
-        .from('payments')
+        .from('fiscal_documents')
         .select(
-          'id, order_id, check_id, payment_method_id, amount, change_amount, reference, status, session_id, created_at, business_id, fiscal_document_id, fiscal_documents(ncf_number, ncf_type, customer_rnc, customer_name)',
+          'id, business_id, order_id, payment_id, ncf_number, ncf_type, '
+          'customer_name, customer_rnc, total, status, ecf_status, '
+          'is_electronic, created_at',
         )
-        .eq('business_id', businessId)
-        .inFilter('status', ['completed', 'void', 'cancelled']);
+        .eq('business_id', businessId);
 
     if (from != null) {
       query = query.gte('created_at', from.toIso8601String());
@@ -581,24 +602,30 @@ class CashierRepository {
     }
 
     if (searchTerm != null && searchTerm.isNotEmpty) {
-      // Pre-fetch payment IDs from fiscal_documents matching NCF or customer fields
-      final fiscalRaw = await _client
-          .from('fiscal_documents')
-          .select('payment_id')
+      final term = searchTerm.replaceAll(',', '\\,');
+      // Pre-fetch fd_ids por reference de payments (campos opcionales como
+      // número de autorización de tarjeta). Después se agregan a la cláusula OR.
+      final fdIdsByRefRaw = await _client
+          .from('payments')
+          .select('fiscal_document_id')
           .eq('business_id', businessId)
-          .or('ncf_number.ilike.%$searchTerm%,customer_name.ilike.%$searchTerm%,customer_rnc.ilike.%$searchTerm%');
-
-      final fiscalIds = List<Map<String, dynamic>>.from(fiscalRaw)
-          .map((r) => r['payment_id']?.toString())
+          .not('fiscal_document_id', 'is', null)
+          .ilike('reference', '%$searchTerm%');
+      final fdIdsByRef = List<Map<String, dynamic>>.from(fdIdsByRefRaw)
+          .map((row) => row['fiscal_document_id']?.toString())
           .whereType<String>()
           .toSet()
           .toList(growable: false);
 
-      if (fiscalIds.isNotEmpty) {
-        query = query.or('reference.ilike.%$searchTerm%,id.in.(${fiscalIds.join(',')})');
-      } else {
-        query = query.ilike('reference', '%$searchTerm%');
+      final clauses = <String>[
+        'ncf_number.ilike.%$term%',
+        'customer_name.ilike.%$term%',
+        'customer_rnc.ilike.%$term%',
+      ];
+      if (fdIdsByRef.isNotEmpty) {
+        clauses.add('id.in.(${fdIdsByRef.join(',')})');
       }
+      query = query.or(clauses.join(','));
     }
 
     final response = await query
@@ -606,32 +633,34 @@ class CashierRepository {
         .range(fromIndex, toIndex)
         .count(CountOption.exact);
 
-    // Filtra payments cancelados sin fiscal_document — son huerfanos del bug
-    // de duplicacion pre-20260509_0001. Una anulacion legitima (cancelar
-    // venta valida) conserva fiscal_document_id apuntando al NCF original,
-    // asi que esos siguen listandose como ventas anuladas.
-    final paymentsRaw = List<Map<String, dynamic>>.from(response.data)
-        .where((p) {
-          if (p['status']?.toString() != 'cancelled') return true;
-          return p['fiscal_document_id'] != null;
-        })
-        .toList(growable: false);
+    final fdRows = List<Map<String, dynamic>>.from(response.data);
     final totalCount = response.count;
 
-    if (paymentsRaw.isEmpty) return (payments: <Map<String, dynamic>>[], totalCount: totalCount);
+    if (fdRows.isEmpty) {
+      return (
+        payments: <Map<String, dynamic>>[],
+        totalCount: totalCount,
+      );
+    }
 
-    // Enrich data as in getSessionPaymentsDetailed
-    final orderIds = paymentsRaw
-        .map((p) => p['order_id']?.toString())
+    // Pre-resolución: orders → table_sessions → waiter (igual que antes),
+    // y payments asociados a cada fd (para `check_id`, métodos agregados,
+    // y fallback de id de acción).
+    final orderIds = fdRows
+        .map((fd) => fd['order_id']?.toString())
         .whereType<String>()
         .toSet()
         .toList(growable: false);
-    
+
     final tableSessionsRaw = orderIds.isEmpty
         ? []
         : await _client
             .from('orders')
-            .select('id, session_id, table_sessions!inner(id, customer_name, table_id, business_id, opened_by, waiter:profiles!opened_by(full_name))')
+            .select(
+              'id, session_id, table_sessions!inner('
+              'id, customer_name, table_id, business_id, opened_by, '
+              'waiter:profiles!opened_by(full_name))',
+            )
             .inFilter('id', orderIds);
 
     final tableSessionsByOrderId = {
@@ -653,24 +682,106 @@ class CashierRepository {
             .inFilter('id', tableIds);
     final tablesById = {for (final t in tablesRaw) t['id'].toString(): t};
 
-    final enriched = paymentsRaw.map((payment) {
-      final orderId = payment['order_id']?.toString();
-      final tableSession = orderId == null ? null : tableSessionsByOrderId[orderId] as Map?;
-      final tableCode = tableSession == null ? null : tablesById[tableSession['table_id']?.toString()]?['code'];
-      final fiscal = payment['fiscal_documents'];
-      final fiscalData = fiscal is List && fiscal.isNotEmpty
-          ? fiscal.first
-          : (fiscal is Map ? fiscal : null);
+    // Payments por fd: necesarios para preservar check_id (split bill) y
+    // mostrar agregado de métodos en split payment.
+    final fdIds = fdRows.map((fd) => fd['id'].toString()).toList(growable: false);
+    final paymentsForFdsRaw = fdIds.isEmpty
+        ? []
+        : await _client
+            .from('payments')
+            .select(
+              'id, fiscal_document_id, check_id, payment_method_id, '
+              'amount, change_amount, status, '
+              'payment_methods(code, name)',
+            )
+            .inFilter('fiscal_document_id', fdIds);
+    final paymentsByFd = <String, List<Map<String, dynamic>>>{};
+    for (final row in paymentsForFdsRaw) {
+      final fdId = row['fiscal_document_id']?.toString();
+      if (fdId == null) continue;
+      paymentsByFd.putIfAbsent(fdId, () => []).add(
+        Map<String, dynamic>.from(row),
+      );
+    }
+
+    final enriched = fdRows.map((fd) {
+      final fdId = fd['id'].toString();
+      final orderId = fd['order_id']?.toString();
+      final tableSession = orderId == null
+          ? null
+          : tableSessionsByOrderId[orderId] as Map?;
+      final tableCode = tableSession == null
+          ? null
+          : tablesById[tableSession['table_id']?.toString()]?['code'];
+      final waiter = (tableSession?['waiter'] as Map?)?['full_name']
+          ?.toString();
+
+      final relatedPayments = paymentsByFd[fdId] ?? const [];
+
+      // Representative payment: preferimos el que apunta `fd.payment_id`
+      // (el que creó el NCF). Si por alguna razón no está en el set
+      // recuperado, caemos al primero de la lista.
+      final pivotPaymentId = fd['payment_id']?.toString();
+      final pivot = relatedPayments.firstWhere(
+        (p) => p['id']?.toString() == pivotPaymentId,
+        orElse: () => relatedPayments.isNotEmpty
+            ? relatedPayments.first
+            : const <String, dynamic>{},
+      );
+      final actionPaymentId = (pivot['id']?.toString()) ?? pivotPaymentId;
+      final checkId = pivot['check_id']?.toString();
+
+      // Status para la UI (mantiene el contrato del consumer existente):
+      //   - fd.status == 'cancelled' → 'cancelled' (tachado, indicador rojo).
+      //   - de lo contrario, derivamos de los payments: si TODOS están
+      //     anulados, 'cancelled'; si no, 'completed'.
+      final fdStatus = fd['status']?.toString();
+      final allPaymentsCancelled = relatedPayments.isNotEmpty &&
+          relatedPayments.every((p) {
+            final s = p['status']?.toString();
+            return s == 'cancelled' || s == 'void';
+          });
+      final uiStatus = (fdStatus == 'cancelled' || allPaymentsCancelled)
+          ? 'cancelled'
+          : 'completed';
+
+      // Agregado de métodos para mostrar en el listado.
+      final methodNames = relatedPayments
+          .map((p) => (p['payment_methods'] as Map?)?['name']?.toString())
+          .whereType<String>()
+          .toSet()
+          .toList(growable: false);
+      final methodSummary = switch (methodNames.length) {
+        0 => null,
+        1 => methodNames.first,
+        _ => 'Mixto (${methodNames.join(' + ')})',
+      };
 
       return {
-        ...payment,
-        'net_amount': netPaymentAmount(payment['amount'], payment['change_amount']),
-        'customer_name': fiscalData?['customer_name'] ?? tableSession?['customer_name'],
-        'customer_tax_id': fiscalData?['customer_rnc'],
-        'ncf_number': fiscalData?['ncf_number'],
-        'ncf_type_name': fiscalData?['ncf_type'],
+        // Ancla para acciones (reimprimir, anular). Cae al payment que creó
+        // el NCF; si no, al primer payment relacionado. La lógica de
+        // annulación existente sigue funcionando sobre este id.
+        'id': actionPaymentId,
+        'fiscal_document_id': fdId,
+        'order_id': fd['order_id'],
+        // check_id viene del representative payment. Para split bill apunta
+        // al check específico; para split payment es null. Esto preserva el
+        // flujo de reimpresión por cuenta dividida.
+        'check_id': checkId,
+        'business_id': fd['business_id'],
+        'amount': fd['total'],
+        'net_amount': fd['total'],
+        'status': uiStatus,
+        'created_at': fd['created_at'],
+        'customer_name': fd['customer_name'] ?? tableSession?['customer_name'],
+        'customer_tax_id': fd['customer_rnc'],
+        'ncf_number': fd['ncf_number'],
+        'ncf_type_name': fd['ncf_type'],
+        'ecf_status': fd['ecf_status'],
+        'is_electronic': fd['is_electronic'],
         'table_code': tableCode,
-        'waiter_name': (tableSession?['waiter'] as Map?)?['full_name']?.toString() ?? 'Servicio',
+        'waiter_name': waiter ?? 'Servicio',
+        'payment_method_summary': methodSummary,
       };
     }).toList();
 

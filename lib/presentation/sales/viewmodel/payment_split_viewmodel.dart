@@ -426,6 +426,11 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
         return null;
       }
 
+      // NO consolidamos transactions: si el cajero agrega cash 1000 tres
+      // veces (caso: tres clientes pagando 1000 cada uno), cada entrada se
+      // persiste como un row independiente. El `split_sequence` distingue
+      // intencionales (índice creciente) de doble-tap (mismo índice → 23505
+      // recovered). Ver migration 20260510_0004.
       debugPrint(
         '💰 Confirming Payment: ${state.transactions.length} transactions',
       );
@@ -470,6 +475,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
               fiscalType: _fiscalType,
               cashierSessionId: cashierSessionId,
               reference: null,
+              splitSequence: i,
             )
             .catchError((e) {
               debugPrint('❌ Error in processPayment: $e');
@@ -596,6 +602,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     }
   }
   */
+
 }
 
 final paymentSplitProvider =
