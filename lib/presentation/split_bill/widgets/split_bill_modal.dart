@@ -804,16 +804,26 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                               ),
                             ),
                           ),
-                          OutlinedButton.icon(
-                            onPressed: viewModel.toggleEqualSplit,
-                            icon: const Icon(Icons.safety_divider, size: 18),
-                            label: const Text('Dividir en partes iguales'),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: _primary,
-                              side: const BorderSide(color: _primary),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 20,
-                                vertical: 14,
+                          Tooltip(
+                            message: state.hasActiveDivision
+                                ? 'Ya hay una división activa. Deshaz '
+                                    'primero con "Unir todo" para volver '
+                                    'a dividir desde cero.'
+                                : 'Reparte automáticamente los productos '
+                                    'entre N sub-cuentas.',
+                            child: OutlinedButton.icon(
+                              onPressed: state.hasActiveDivision
+                                  ? null
+                                  : viewModel.toggleEqualSplit,
+                              icon: const Icon(Icons.safety_divider, size: 18),
+                              label: const Text('Dividir en partes iguales'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: _primary,
+                                side: const BorderSide(color: _primary),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 20,
+                                  vertical: 14,
+                                ),
                               ),
                             ),
                           ),
@@ -920,6 +930,12 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                                 : () => viewModel.clearCustomerFromCheck(
                                     check.id,
                                   ),
+                            onSelectNcfType: (ncfType) async {
+                              await viewModel.setNcfTypeForCheck(
+                                check.id,
+                                ncfType,
+                              );
+                            },
                             onDelete: () async {
                               if (!await _ensureCanDeleteItem()) return;
                               await viewModel.deleteCheck(check.id);
@@ -1464,6 +1480,7 @@ class _CheckCard extends StatelessWidget {
   final Function(String) onToggleSelection;
   final VoidCallback onAssignCustomer;
   final VoidCallback? onClearCustomer;
+  final Future<void> Function(String? ncfType)? onSelectNcfType;
   final VoidCallback onDelete;
   final Function(String) onRemoveItem;
   final VoidCallback onPrintPrecheck;
@@ -1477,11 +1494,29 @@ class _CheckCard extends StatelessWidget {
     required this.onToggleSelection,
     required this.onAssignCustomer,
     required this.onClearCustomer,
+    this.onSelectNcfType,
     required this.onDelete,
     required this.onRemoveItem,
     required this.onPrintPrecheck,
     required this.primaryColor,
   });
+
+  /// Tipos de comprobante comunes en RD para selector inline.
+  /// Si el negocio usa tipos adicionales, el cajero puede dejar en "default"
+  /// y configurarlo en el modal de pago final.
+  static const Map<String, String> _ncfTypeOptions = {
+    'B01': 'Crédito Fiscal (B01)',
+    'B02': 'Consumidor (B02)',
+    'B14': 'Régimen Especial (B14)',
+    'B15': 'Gubernamental (B15)',
+    'E31': 'e-CF Crédito Fiscal (E31)',
+    'E32': 'e-CF Consumidor (E32)',
+  };
+
+  String _ncfLabel(String? type) {
+    if (type == null || type.trim().isEmpty) return 'Default del negocio';
+    return _ncfTypeOptions[type] ?? type;
+  }
 
   String _formatQty(double quantity) {
     final normalized = double.parse(quantity.toStringAsFixed(2));
@@ -1618,6 +1653,106 @@ class _CheckCard extends StatelessWidget {
                     ],
                   ),
                 ),
+                if (onSelectNcfType != null) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF9FAFB),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xFFE5E7EB)),
+                    ),
+                    child: Wrap(
+                      spacing: 10,
+                      runSpacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.receipt_long_rounded,
+                              size: 16,
+                              color: Color(0xFF6B7280),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              _ncfLabel(check.requestedNcfType),
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight:
+                                    check.requestedNcfType?.isNotEmpty == true
+                                        ? FontWeight.w600
+                                        : FontWeight.w500,
+                                color:
+                                    check.requestedNcfType?.isNotEmpty == true
+                                        ? const Color(0xFF111827)
+                                        : const Color(0xFF6B7280),
+                              ),
+                            ),
+                          ],
+                        ),
+                        PopupMenuButton<String>(
+                          tooltip: 'Cambiar tipo de comprobante',
+                          onSelected: (value) async {
+                            // Sentinel "__clear__" => limpia (usa default).
+                            final next = value == '__clear__' ? null : value;
+                            await onSelectNcfType!(next);
+                          },
+                          itemBuilder: (_) => [
+                            for (final entry in _ncfTypeOptions.entries)
+                              PopupMenuItem<String>(
+                                value: entry.key,
+                                child: Text(entry.value),
+                              ),
+                            const PopupMenuDivider(),
+                            const PopupMenuItem<String>(
+                              value: '__clear__',
+                              child: Text('Default del negocio'),
+                            ),
+                          ],
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              border: Border.all(
+                                color: primaryColor.withOpacity(0.28),
+                              ),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.edit_note_rounded,
+                                  size: 16,
+                                  color: primaryColor,
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  check.requestedNcfType?.isNotEmpty == true
+                                      ? 'Cambiar comprobante'
+                                      : 'Elegir comprobante',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: primaryColor,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

@@ -250,15 +250,22 @@ class ZonesRepository {
         ordersById[orderId] = Order.fromMap(order);
       }
 
-      // Use items to calculate the real total using our harmonized logic
+      // Use items to calculate the real total using our harmonized logic.
       // This ensures inclusive pricing is respected and matches the order screen.
+      //
+      // Excluimos 'paid' y 'void': los items pagados ya no representan deuda
+      // pendiente de la mesa. Si la mesa tenía dos productos de 275 y el
+      // cajero cobró uno via split bill (item → status='paid'), la card
+      // debe mostrar 275 (lo que queda por cobrar), no 550. Sin este
+      // filtro, items paid seguían sumando al total mostrado fuera de la
+      // mesa, creando la ilusión de un "lag" (en realidad era data stale).
       final itemsMap = <String, List<OrderItem>>{};
-      
+
       final itemsRows = await sb
           .from('order_items')
           .select()
           .inFilter('order_id', orderIds)
-          .neq('status', 'void') as List;
+          .not('status', 'in', '(paid,void)') as List;
 
       final itemIds = itemsRows.map((r) => r['id'] as String).toList();
       final modifiersMap = <String, List<OrderItemModifier>>{};

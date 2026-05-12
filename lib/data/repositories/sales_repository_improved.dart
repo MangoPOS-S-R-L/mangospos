@@ -316,6 +316,7 @@ class SalesRepositoryImproved {
     double changeAmount = 0,
     bool closeOrder = true,
     int splitSequence = 0,
+    bool closeCheck = true,
   }) async {
     try {
       final response = await _client.rpc(
@@ -333,6 +334,7 @@ class SalesRepositoryImproved {
           'p_cashier_session_id': cashierSessionId,
           'p_close_order': closeOrder,
           'p_split_sequence': splitSequence,
+          'p_close_check': closeCheck,
         },
       );
 

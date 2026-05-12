@@ -816,16 +816,22 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       return;
     }
 
-    // Si hay un check seleccionado, usar su posición (salvo que checkPos sea explícito > 1)
+    // Si hay un check seleccionado y SIGUE ABIERTO, usar su posición. Si está
+    // cerrado (ej. ya cobrado), caer al principal (C1) — agregar items a un
+    // check cerrado deja items huérfanos que el cajero no puede tocar y
+    // confunde el cálculo de "lo pendiente" en la mesa.
     int effectiveCheckPos = checkPos;
     if (checkPos == 1 && state.selectedCheckId != null) {
       try {
         final check = state.checks.firstWhere(
-          (c) => c.id == state.selectedCheckId,
+          (c) => c.id == state.selectedCheckId && !c.isClosed,
         );
         effectiveCheckPos = check.position;
       } catch (_) {
-        // Si no se encuentra, default a 1
+        // Check no encontrado o cerrado → item va al principal.
+        // Limpiar selectedCheckId para que la UI no siga mostrándolo
+        // como filtro activo cuando ya no aplica.
+        state = state.copyWith(clearSelectedCheck: true);
       }
     }
 
@@ -1161,6 +1167,17 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
     try {
       await ref.read(salesRepositoryProvider).deleteItem(itemId: itemId);
+
+      // Fase 1 Toast redesign: si el item borrado era el último de un
+      // sub-check, cerrar ese check automáticamente. El principal (C1) y los
+      // checks con items restantes se quedan como estaban.
+      final deletedCheckId = targetItem?.checkId;
+      if (deletedCheckId != null && deletedCheckId.isNotEmpty) {
+        await ref
+            .read(salesRepositoryProvider)
+            .closeEmptyCheckIfApplicable(deletedCheckId);
+      }
+
       refreshOrder();
     } catch (e) {
       final businessId = _activeBusinessId;

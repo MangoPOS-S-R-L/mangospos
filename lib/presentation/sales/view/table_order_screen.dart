@@ -230,9 +230,18 @@ Future<String?> _loadWaiterName(WidgetRef ref, String orderId) async {
 
 Future<FiscalDocument?> _loadFiscalDocument(
   WidgetRef ref,
-  String orderId,
-) async {
+  String orderId, {
+  String? fiscalDocumentId,
+}) async {
   try {
+    // Si conocemos el fd_id (vino con el payment recién cobrado), lo
+    // cargamos directo por id — único camino fiable cuando la orden
+    // tiene múltiples fds (split bill, multi-method).
+    if (fiscalDocumentId != null && fiscalDocumentId.isNotEmpty) {
+      return await ref
+          .read(salesRepositoryProvider)
+          .getFiscalDocumentById(fiscalDocumentId);
+    }
     return await ref
         .read(salesRepositoryProvider)
         .getOrderFiscalDocument(orderId);
@@ -1219,7 +1228,24 @@ class _CartView extends ConsumerWidget {
           if (context.mounted) context.go(AppRoutes.salesByZone);
         }
       } else {
-        ref.read(currentOrderProvider.notifier).refreshOrder();
+        // Cobro de una sub-cuenta (split bill). Refrescar y verificar si
+        // era la última sub-cuenta abierta: en ese caso el backend ya
+        // cerró la orden (fn_process_payment_v3 → fn_close_order_and_table
+        // cuando v_open_items_count == 0), así que navegamos afuera para
+        // no dejar al cajero atascado en una mesa cerrada vacía.
+        () async {
+          await ref.read(currentOrderProvider.notifier).refreshOrder();
+          final refreshed = ref.read(currentOrderProvider).order;
+          final orderClosed = refreshed == null ||
+              refreshed.closedAt != null ||
+              refreshed.status == 'paid' ||
+              refreshed.status == 'closed' ||
+              refreshed.status == 'void' ||
+              refreshed.status == 'cancelled';
+          if (orderClosed && context.mounted) {
+            context.go(AppRoutes.salesByZone);
+          }
+        }();
       }
     }
 
@@ -1246,7 +1272,19 @@ class _CartView extends ConsumerWidget {
           final printOrder = prePaymentOrder;
 
           final businessProfile = await _loadBusinessReceiptProfile(ref);
-          final fiscalDoc = await _loadFiscalDocument(ref, order.id);
+          // Pasar el fd_id del payment recién cobrado para obtener EL fd
+          // correcto. Una orden con split bill o multi-method tiene N fds
+          // y getOrderFiscalDocument no puede elegir el correcto solo por
+          // order_id. Post migration 0007, el RPC retorna payment con
+          // fiscal_document_id seteado correctamente.
+          final fdIdFromPayment = payments.isNotEmpty
+              ? payments.last.fiscalDocumentId
+              : null;
+          final fiscalDoc = await _loadFiscalDocument(
+            ref,
+            order.id,
+            fiscalDocumentId: fdIdFromPayment,
+          );
           final waiterName =
               await _loadWaiterName(ref, order.id) ??
               ref.read(sessionProvider).userName;
@@ -1460,27 +1498,34 @@ class _CartView extends ConsumerWidget {
               return;
             }
           }
-          var qtyToDistribute = targetTotalQty;
+          // Fase 1 Toast redesign: distribución discreta sin fracciones.
+          // - Si reducimos: caminar de la primera a la última fila, mantener
+          //   cada fila completa mientras quepa; cuando ya no cabe, truncar
+          //   esa fila al sobrante (entero) y borrar las restantes.
+          // - Si aumentamos: dejar cada fila intacta; el delta se suma a la
+          //   última fila.
+          // El target se redondea a entero porque el modal sólo permite
+          // unidades enteras post-rediseño; el round es defensa.
+          final isReducing = targetTotalQty < originalTotalQty;
+          var remaining = targetTotalQty.round();
 
           for (var index = 0; index < items.length; index++) {
             final current = items[index];
             final isLast = index == items.length - 1;
-            double nextQty;
+            final currentQtyInt = current.quantity.round();
+            int nextQtyInt;
 
-            if (targetTotalQty >= originalTotalQty) {
-              nextQty = isLast ? qtyToDistribute : current.quantity;
-            } else {
-              final remainingAfterCurrent = qtyToDistribute - current.quantity;
-              if (remainingAfterCurrent >= 0) {
-                nextQty = current.quantity;
+            if (isReducing) {
+              if (remaining >= currentQtyInt) {
+                nextQtyInt = currentQtyInt;
               } else {
-                nextQty = qtyToDistribute.clamp(0, current.quantity).toDouble();
+                nextQtyInt = remaining < 0 ? 0 : remaining;
               }
+            } else {
+              nextQtyInt = isLast ? remaining : currentQtyInt;
             }
 
-            if (isLast) {
-              nextQty = qtyToDistribute.clamp(0, double.infinity).toDouble();
-            }
+            final nextQty = nextQtyInt.toDouble();
 
             final base = current.subtotal + current.tax;
             final discountShare = totalBase > 0
@@ -1511,15 +1556,28 @@ class _CartView extends ConsumerWidget {
               );
             }
 
-            qtyToDistribute -= nextQty;
+            remaining -= nextQtyInt;
+            if (remaining < 0) remaining = 0;
           }
 
           await ref.read(currentOrderProvider.notifier).refreshOrder();
         },
         onDelete: (reason) async {
-          await ref
-              .read(currentOrderProvider.notifier)
-              .deleteItem(item.id, reason: reason);
+          // Fase 1 Toast redesign: si el modal se abrió desde TODAS (varias
+          // filas del mismo producto agrupadas porque están en distintos
+          // checks), borrar todo el grupo. Si se abrió desde una sub-cuenta
+          // (groupedItems == null o de tamaño 1), borrar sólo la fila actual.
+          // Esto evita el bug histórico donde "Eliminar" desde TODAS dejaba
+          // fantasmas en los otros checks.
+          final orderNotifier = ref.read(currentOrderProvider.notifier);
+          final group = groupedItems;
+          if (group != null && group.length > 1) {
+            for (final row in group) {
+              await orderNotifier.deleteItem(row.id, reason: reason);
+            }
+          } else {
+            await orderNotifier.deleteItem(item.id, reason: reason);
+          }
         },
         onBeforeDelete: () => _ensureCanDeleteOrderItem(
           context,
@@ -2831,9 +2889,20 @@ class _CartView extends ConsumerWidget {
         DateTime? ecfSignedAt;
         if (type == 'invoice') {
           try {
-            final fiscalDoc = await ref
-                .read(salesRepositoryProvider)
-                .getOrderFiscalDocument(orderObj.id);
+            // Cargar el fd del payment más reciente si está disponible
+            // (split bill / multi-method tiene N fds por orden y
+            // getOrderFiscalDocument no puede elegir el correcto solo
+            // por order_id). Fallback al de la orden si no hay payments.
+            final fdIdFromPayments = (payments != null && payments.isNotEmpty)
+                ? payments.last.fiscalDocumentId
+                : null;
+            final fiscalDoc = fdIdFromPayments != null
+                ? await ref
+                    .read(salesRepositoryProvider)
+                    .getFiscalDocumentById(fdIdFromPayments)
+                : await ref
+                    .read(salesRepositoryProvider)
+                    .getOrderFiscalDocument(orderObj.id);
             if (fiscalDoc != null && fiscalDoc.isElectronic) {
               isElectronicCf = true;
               ecfSecurityCode = fiscalDoc.ecfSecurityCode;

@@ -172,6 +172,28 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         }
       }
 
+      // Si estamos cobrando una sub-cuenta y el cajero asignó cliente/NCF
+      // a ese check antes del cobro, los heredamos como pre-llenado del
+      // modal. El cajero puede cambiarlos antes de confirmar el pago.
+      // Si el check no tiene asignación, caemos al default del business.
+      String? prefilledCustomerId;
+      String? prefilledCustomerRnc;
+      String? prefilledNcfType = selectedNcfType;
+
+      if (check != null) {
+        if (check.customerId != null && check.customerId!.isNotEmpty) {
+          prefilledCustomerId = check.customerId;
+        }
+        if (check.customerRnc != null && check.customerRnc!.isNotEmpty) {
+          prefilledCustomerRnc = check.customerRnc;
+        }
+        if (check.requestedNcfType != null &&
+            check.requestedNcfType!.isNotEmpty &&
+            availableNcfTypes.contains(check.requestedNcfType)) {
+          prefilledNcfType = check.requestedNcfType;
+        }
+      }
+
       state = state.copyWith(
         loading: false,
         order: order,
@@ -180,7 +202,9 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         paymentMethods: methods,
         cashSession: cashSession,
         availableNcfTypes: availableNcfTypes,
-        selectedNcfType: selectedNcfType,
+        selectedNcfType: prefilledNcfType,
+        customerId: prefilledCustomerId,
+        customerRnc: prefilledCustomerRnc,
         ecfEnabled: ecfEnabled,
         error: _connectivity.isConnected
             ? null

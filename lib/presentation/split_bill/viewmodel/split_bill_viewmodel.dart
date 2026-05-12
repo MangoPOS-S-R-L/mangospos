@@ -99,12 +99,23 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
       // may include service fee or have rounding drift for inclusive items).
       final reconciledChecks = _recalculateChecksTotals(visibleChecks, visibleItems);
 
+      // reservedPositions incluye TODAS las positions ya en uso en BD,
+      // tanto abiertas como cerradas. _getNextPosition lo consulta para
+      // no asignar position de un check cerrado (que fn_get_or_create_check
+      // retornaría como existente, redirigiendo el item al check cerrado
+      // y disparando el guard 0004 que lo manda a NULL — la sub-cuenta
+      // "nueva" desaparece silenciosamente).
+      final reservedPositions = <int>{
+        for (final check in existingChecks) check.position,
+      };
+
       state = state.copyWith(
         loading: false,
         order: effectiveOrder,
         allItems: visibleItems,
         checks: reconciledChecks,
         pendingDeletedCheckIds: <String>{},
+        reservedPositions: reservedPositions,
       );
       _snapshotItemAssignments(visibleItems);
     } catch (e) {
@@ -146,12 +157,19 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
   }
 
   int _getNextPosition() {
-    // Si no hay checks visibles, la siguiente es 2 (C1 es main oculto)
-    if (state.checks.isEmpty) return 2;
-    final maxPos = state.checks
-        .map((c) => c.position)
-        .reduce((a, b) => a > b ? a : b);
-    return maxPos + 1;
+    // Empezamos en 2 (C1 es principal oculto). Saltamos positions que ya
+    // están reservadas en BD (checks abiertos visibles + checks cerrados
+    // del state, + las explícitas en reservedPositions cargadas en
+    // initialize).
+    final inUse = <int>{
+      ...state.reservedPositions,
+      ...state.checks.map((c) => c.position),
+    };
+    var candidate = 2;
+    while (inUse.contains(candidate)) {
+      candidate += 1;
+    }
+    return candidate;
   }
 
   Future<void> assignCustomerToCheck({
@@ -180,6 +198,32 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
         );
       } catch (e) {
         _setErrorWithAutoDismiss('Error asignando cliente: $e');
+      }
+    }
+  }
+
+  /// Asigna o limpia el tipo de comprobante de una sub-cuenta.
+  /// Pasa `ncfType=null` para volver al default del business al cobrar.
+  Future<void> setNcfTypeForCheck(String checkId, String? ncfType) async {
+    final normalized = ncfType?.trim();
+    final newValue = (normalized == null || normalized.isEmpty) ? null : normalized;
+
+    final updatedChecks = state.checks
+        .map((check) {
+          if (check.id != checkId) return check;
+          return newValue == null
+              ? check.copyWith(clearNcfType: true)
+              : check.copyWith(requestedNcfType: newValue);
+        })
+        .toList(growable: false);
+
+    state = state.copyWith(checks: updatedChecks, error: null);
+
+    if (_isUuid(checkId)) {
+      try {
+        await _salesRepo.setCheckNcfType(checkId: checkId, ncfType: newValue);
+      } catch (e) {
+        _setErrorWithAutoDismiss('Error asignando comprobante: $e');
       }
     }
   }
@@ -601,16 +645,73 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
   }
 
   /// Aplicar división igualitaria en backend y refrescar estado local.
+  ///
+  /// Pre-validaciones:
+  ///   1. Si ya hay división activa (items abiertos en sub-cuentas abiertas),
+  ///      bloquear con mensaje. El cajero debe deshacer primero. Esto evita
+  ///      que un segundo "Dividir en partes iguales" machaque asignaciones
+  ///      manuales (drag & drop) o re-fraccione items ya distribuidos.
+  ///   2. Si total de unidades abiertas < personas, bloquear (no se puede
+  ///      repartir 2 productos entre 4 personas sin fraccionar).
   Future<void> applyEqualSplit() async {
     if (state.order == null) return;
     if (state.equalSplitPeople < 2) return;
+
+    if (state.hasActiveDivision) {
+      state = state.copyWith(
+        loading: false,
+        error:
+            'La mesa ya tiene una división activa. Si quieres redistribuir '
+            'desde cero, primero deshaz la división actual con "Unir todo" '
+            'y vuelve a dividir. Si solo quieres mover items entre '
+            'sub-cuentas, hazlo arrastrándolos uno por uno.',
+      );
+      return;
+    }
+
+    final totalUnits = state.allItems
+        .where((i) => i.status != 'paid' && i.status != 'void')
+        .fold<double>(0, (sum, item) => sum + item.quantity);
+    final totalUnitsInt = totalUnits.round();
+    final people = state.equalSplitPeople;
+
+    if (totalUnitsInt < people) {
+      state = state.copyWith(
+        loading: false,
+        error:
+            'No se puede dividir $totalUnitsInt producto(s) entre $people '
+            'persona(s): no hay suficientes unidades para repartir una a '
+            'cada cuenta. Reduce el número de personas o agrega más '
+            'productos a la mesa antes de dividir.',
+      );
+      return;
+    }
+
+    // Solo unidades enteras: el cajero del MangoPOS decidió mantener split
+    // estrictamente entero. Si los productos no se reparten de forma
+    // exacta entre las personas, rechazamos en vez de generar fracciones.
+    // Ej: 5 productos entre 3 personas = 1.67 cada uno → bloqueado.
+    if (totalUnitsInt % people != 0) {
+      final base = totalUnitsInt ~/ people;
+      final remainder = totalUnitsInt - (base * people);
+      state = state.copyWith(
+        loading: false,
+        error:
+            'No se puede dividir $totalUnitsInt producto(s) entre $people '
+            'persona(s) de forma exacta (quedan $remainder de sobra). '
+            'Para mantener cantidades enteras: usa un número de personas '
+            'que divida exacto, o asigna los productos manualmente '
+            'arrastrándolos a cada sub-cuenta.',
+      );
+      return;
+    }
 
     try {
       state = state.copyWith(loading: true, error: null);
 
       await _salesRepo.splitItemsEqually(
         orderId: state.order!.id,
-        people: state.equalSplitPeople,
+        people: people,
       );
 
       // Refrescar snapshot local desde backend para mostrar cantidades fraccionadas reales.
@@ -623,9 +724,17 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
       );
     } catch (e) {
       if (!mounted) return;
+      final msg = e.toString();
+      final friendly =
+          msg.contains('PEOPLE_OUT_OF_RANGE')
+              ? 'El sistema permite dividir entre 2 y 4 personas.'
+              : msg.contains('ORDER_NOT_FOUND')
+                  ? 'La orden ya no existe o fue cerrada.'
+                  : 'No se pudo dividir la cuenta. Intentá de nuevo o '
+                    'recargá la mesa. Detalle técnico: $e';
       state = state.copyWith(
         loading: false,
-        error: 'Error al dividir en partes iguales: $e',
+        error: friendly,
       );
     }
   }

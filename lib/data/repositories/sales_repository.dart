@@ -37,7 +37,9 @@ class SalesRepository {
 
     final raw = await _client
         .from('order_item_tax_lines')
-        .select('id, order_item_id, tax_id, tax_name, tax_rate, amount, created_at')
+        .select(
+          'id, order_item_id, tax_id, tax_name, tax_rate, amount, created_at',
+        )
         .inFilter('order_item_id', itemIds)
         .order('created_at', ascending: true);
 
@@ -608,8 +610,10 @@ class SalesRepository {
             final ao = a is Map ? (a['sort_order'] as num?)?.toInt() ?? 0 : 0;
             final bo = b is Map ? (b['sort_order'] as num?)?.toInt() ?? 0 : 0;
             if (ao != bo) return ao.compareTo(bo);
-            final an = (a is Map ? a['name'] : '')?.toString().toLowerCase() ?? '';
-            final bn = (b is Map ? b['name'] : '')?.toString().toLowerCase() ?? '';
+            final an =
+                (a is Map ? a['name'] : '')?.toString().toLowerCase() ?? '';
+            final bn =
+                (b is Map ? b['name'] : '')?.toString().toLowerCase() ?? '';
             return an.compareTo(bn);
           });
           group['modifiers'] = modifiers;
@@ -862,6 +866,24 @@ class SalesRepository {
     }
   }
 
+  /// True si alguna fila del bundle trae qty no entera. Sirve para disparar
+  /// el consolidate lazy (Fase 0 Toast redesign).
+  bool _orderBundleHasFractionalQty(dynamic response) {
+    if (response is! Map) return false;
+    final items = (response['items'] as List?) ?? const [];
+    for (final row in items) {
+      if (row is! Map) continue;
+      final raw = row['qty'] ?? row['quantity'];
+      if (raw == null) continue;
+      final qty = raw is num ? raw.toDouble() : double.tryParse('$raw');
+      if (qty == null) continue;
+      if ((qty - qty.roundToDouble()).abs() > 0.001) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /// Obtener bundle de orden en una sola llamada RPC:
   /// order + items + checks + customer(session)
   Future<
@@ -878,10 +900,31 @@ class SalesRepository {
     try {
       await _assertOrderInBusinessScope(orderId, businessId: businessId);
 
-      final response = await _client.rpc(
+      var response = await _client.rpc(
         SalesQueries.rpcGetOrderBundle,
         params: {'p_order_id': orderId},
       );
+
+      // Fase 0 del rediseño Toast: si la orden trae filas con qty fraccional
+      // heredadas del legacy fn_split_items_equally, las consolidamos a
+      // entero on-the-fly y recargamos. Es idempotente: la RPC vuelve a 0
+      // filas tocadas en órdenes ya limpias, por lo que el costo es 1 RPC
+      // extra sólo en órdenes afectadas.
+      if (_orderBundleHasFractionalQty(response)) {
+        try {
+          await _client.rpc(
+            SalesQueries.rpcConsolidateOrderToInteger,
+            params: {'p_order_id': orderId},
+          );
+          response = await _client.rpc(
+            SalesQueries.rpcGetOrderBundle,
+            params: {'p_order_id': orderId},
+          );
+        } catch (_) {
+          // Si el consolidate falla (DB sin la migration, permisos, etc.),
+          // seguimos con la data fraccional original — la UI ya la tolera.
+        }
+      }
 
       if (response == null) {
         return (
@@ -942,8 +985,7 @@ class SalesRepository {
             (item) => item.copyWith(
               modifiers:
                   modifiersByItem[item.id] ?? const <OrderItemModifier>[],
-              taxLines:
-                  taxLinesByItem[item.id] ?? const <OrderItemTaxLine>[],
+              taxLines: taxLinesByItem[item.id] ?? const <OrderItemTaxLine>[],
             ),
           )
           .toList(growable: false);
@@ -1060,8 +1102,7 @@ class SalesRepository {
             (item) => item.copyWith(
               modifiers:
                   modifiersByItem[item.id] ?? const <OrderItemModifier>[],
-              taxLines:
-                  taxLinesByItem[item.id] ?? const <OrderItemTaxLine>[],
+              taxLines: taxLinesByItem[item.id] ?? const <OrderItemTaxLine>[],
             ),
           )
           .toList(growable: false);
@@ -1107,7 +1148,88 @@ class SalesRepository {
         .eq('id', orderId);
   }
 
+  /// Asigna (o limpia) el cliente y el tipo de comprobante a una sub-cuenta
+  /// antes de que se cobre. Al pagar el check, el RPC `fn_process_payment_v3`
+  /// hereda estos valores automáticamente si el modal de pago no los pisa.
+  ///
+  /// Pasa `customerId=null` y `customerRnc=null` para limpiar el cliente.
+  /// Pasa `requestedNcfType=null` para volver al default del business.
+  Future<OrderCheck> setCheckCustomerAndNcf({
+    required String checkId,
+    String? customerId,
+    String? customerRnc,
+    String? requestedNcfType,
+  }) async {
+    try {
+      final response = await _client.rpc(
+        SalesQueries.rpcSetCheckCustomerAndNcf,
+        params: {
+          'p_check_id': checkId,
+          'p_customer_id': customerId,
+          'p_customer_rnc': customerRnc,
+          'p_requested_ncf_type': requestedNcfType,
+        },
+      );
+
+      if (response is Map) {
+        return OrderCheck.fromMap(Map<String, dynamic>.from(response));
+      }
+      throw Exception('Respuesta inválida del RPC setCheckCustomerAndNcf');
+    } catch (e) {
+      final msg = e.toString();
+      if (msg.contains('CHECK_NOT_FOUND')) {
+        throw Exception('La sub-cuenta ya no existe.');
+      }
+      if (msg.contains('CHECK_ALREADY_CLOSED')) {
+        throw Exception(
+          'La sub-cuenta ya fue cobrada y no se puede modificar.',
+        );
+      }
+      throw Exception(
+        'Error al asignar cliente/comprobante a la sub-cuenta: $e',
+      );
+    }
+  }
+
   /// Eliminar un check y sus items
+  /// Cierra (soft-close) un sub-check si quedó sin items abiertos. Pensado
+  /// para llamarse tras un delete de item: si fue el último, el check se
+  /// marca `is_closed=true` para que la UI no lo siga mostrando.
+  /// No toca el principal (position=1). Idempotente: si el check ya está
+  /// cerrado o no existe, devuelve false sin error.
+  Future<bool> closeEmptyCheckIfApplicable(String checkId) async {
+    try {
+      final check = await _client
+          .from('order_checks')
+          .select('id, position, is_closed, order_id')
+          .eq('id', checkId)
+          .maybeSingle();
+      if (check == null) return false;
+      final position = (check['position'] as num?)?.toInt() ?? 0;
+      if (position <= 1) return false;
+      if (check['is_closed'] == true) return false;
+
+      final remainingRaw = await _client
+          .from('order_items')
+          .select('id')
+          .eq('check_id', checkId)
+          .not('status', 'in', '("paid","void")');
+      final remaining = (remainingRaw as List).length;
+      if (remaining > 0) return false;
+
+      await _client
+          .from('order_checks')
+          .update({
+            'is_closed': true,
+            'closed_at': DateTime.now().toIso8601String(),
+          })
+          .eq('id', checkId);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> deleteCheck(String checkId) async {
     final check = await _client
         .from('order_checks')
@@ -1362,10 +1484,36 @@ class SalesRepository {
     try {
       await _client
           .from('order_checks')
-          .update({'customer_id': null, 'customer_name': null})
+          .update({
+            'customer_id': null,
+            'customer_name': null,
+            'customer_rnc': null,
+          })
           .eq('id', checkId);
     } catch (e) {
       throw Exception('Error al limpiar cliente del check: $e');
+    }
+  }
+
+  /// Asigna el tipo de comprobante a una sub-cuenta. Al pagar ese check, el
+  /// RPC `fn_process_payment_v3` hereda este tipo si el modal de pago no lo
+  /// sobrescribe. Pasa `ncfType=null` para volver al default del business.
+  Future<void> setCheckNcfType({
+    required String checkId,
+    String? ncfType,
+  }) async {
+    try {
+      final normalized = ncfType?.trim();
+      await _client
+          .from('order_checks')
+          .update({
+            'requested_ncf_type': (normalized == null || normalized.isEmpty)
+                ? null
+                : normalized,
+          })
+          .eq('id', checkId);
+    } catch (e) {
+      throw Exception('Error al asignar comprobante al check: $e');
     }
   }
 
@@ -1626,6 +1774,23 @@ class SalesRepository {
       return FiscalDocument.fromMap(data);
     } catch (e) {
       throw Exception('Error al obtener documento fiscal: $e');
+    }
+  }
+
+  /// Obtener documento fiscal por ID
+  Future<FiscalDocument?> getFiscalDocumentById(String documentId) async {
+    try {
+      final data = await _client
+          .from('fiscal_documents')
+          .select()
+          .eq('id', documentId)
+          .maybeSingle();
+
+      if (data == null) return null;
+
+      return FiscalDocument.fromMap(data);
+    } catch (e) {
+      throw Exception('Error al obtener documento fiscal por ID: $e');
     }
   }
 

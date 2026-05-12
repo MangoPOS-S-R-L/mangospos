@@ -557,7 +557,7 @@ class _PaymentTableRow extends ConsumerWidget {
               children: [
                 IconButton(
                   icon: const Icon(Icons.visibility_outlined, size: 20),
-                  onPressed: () => _showDetailDialog(context, ref, orderId),
+                  onPressed: () => _showDetailDialog(context, ref, payment),
                   tooltip: 'Ver detalle',
                   color: MangoColors.muted,
                 ),
@@ -567,8 +567,7 @@ class _PaymentTableRow extends ConsumerWidget {
                     onPressed: () => _reprintInvoice(
                       context,
                       ref,
-                      orderId,
-                      checkId: checkId,
+                      payment,
                     ),
                     tooltip: 'Reimprimir',
                     color: Colors.blue,
@@ -611,10 +610,16 @@ class _PaymentTableRow extends ConsumerWidget {
   void _reprintInvoice(
     BuildContext context,
     WidgetRef ref,
-    String orderId, {
-    String? checkId,
-  }) async {
+    Map<String, dynamic> payment,
+  ) async {
+    final orderId = payment['order_id']?.toString() ?? '';
     if (orderId.isEmpty) return;
+
+    // El scope del fd: si tiene check_id, la factura es de una sub-cuenta;
+    // si es NULL, es full-order (puede ser cobro simple sin split, o el
+    // remainder de una orden con sub-cuentas ya cobradas).
+    final fdCheckId = payment['check_id']?.toString();
+    final fdId = payment['fiscal_document_id']?.toString();
 
     try {
       final scaffold = ScaffoldMessenger.of(context);
@@ -657,24 +662,66 @@ class _PaymentTableRow extends ConsumerWidget {
           'payment_method_code': method?['code'],
         });
       }).toList();
-      var printOrder = bundle.order!;
-      var printItems = List<OrderItem>.from(allItems);
-      var printPayments = List<Payment>.from(payments);
 
-      final trimmedCheckId = checkId?.trim();
-      if (trimmedCheckId != null && trimmedCheckId.isNotEmpty) {
+      // FILTRO POR SCOPE DEL FD:
+      //   - fd.check_id != NULL (sub-cuenta): items y payments del check.
+      //   - fd.check_id == NULL (full-order o remainder): items con
+      //     check_id IS NULL O items en sub-cuentas SIN fd propio (caso:
+      //     sub-cuenta auto-cerrada por items que pasaron a paid via un
+      //     cobro full-order, donde el check no emitió fd propio).
+      List<OrderItem> printItems;
+      List<Payment> printPayments;
+      Order printOrder;
+
+      if (fdCheckId != null && fdCheckId.isNotEmpty) {
         printItems = allItems
-            .where((item) => item.checkId == trimmedCheckId)
+            .where((item) => item.checkId == fdCheckId)
             .toList(growable: false);
         printPayments = payments
-            .where((payment) => payment.checkId == trimmedCheckId)
+            .where((payment) => payment.checkId == fdCheckId)
             .toList(growable: false);
         try {
-          final check = bundle.checks.firstWhere((c) => c.id == trimmedCheckId);
+          final check = bundle.checks.firstWhere((c) => c.id == fdCheckId);
           printOrder = check.toOrder(createdAt: bundle.order!.createdAt);
         } catch (_) {
           printOrder = bundle.order!;
         }
+      } else {
+        // Full-order: cargar otros fds de la orden para saber qué checks
+        // ya tienen su propio fd. Items de esos checks NO pertenecen a
+        // este fd full-order; el resto (check_id NULL o checks sin fd) sí.
+        final allFdsRaw = await Supabase.instance.client
+            .from('fiscal_documents')
+            .select('check_id, status')
+            .eq('order_id', orderId);
+        final otherCheckFdIds = List<Map<String, dynamic>>.from(allFdsRaw)
+            .where((f) => f['check_id'] != null && f['status'] == 'active')
+            .map((f) => f['check_id'].toString())
+            .toSet();
+
+        printItems = allItems.where((item) {
+          if (item.status == 'void') return false;
+          if (item.checkId == null) return true;
+          return !otherCheckFdIds.contains(item.checkId);
+        }).toList(growable: false);
+
+        printPayments = payments
+            .where((payment) => payment.checkId == null)
+            .toList(growable: false);
+
+        // Construir un "printOrder" cuyos totales reflejen el fd, no la
+        // orden completa. Usamos los campos del payment Map (que vienen
+        // del JOIN con fiscal_documents en getGlobalSalesHistoryPaged).
+        final fdSubtotal = (payment['subtotal'] as num?)?.toDouble() ?? 0;
+        final fdItbis = (payment['itbis_amount'] as num?)?.toDouble() ?? 0;
+        final fdServiceFee = (payment['service_fee'] as num?)?.toDouble() ?? 0;
+        final fdTotal = (payment['total'] as num?)?.toDouble() ?? 0;
+        printOrder = bundle.order!.copyWith(
+          subtotal: fdSubtotal,
+          tax: fdItbis,
+          serviceFee: fdServiceFee,
+          total: fdTotal,
+        );
       }
 
       // Loading business profile (simplified, usually from a provider)
@@ -757,7 +804,13 @@ class _PaymentTableRow extends ConsumerWidget {
       String? ecfSecurityCode;
       DateTime? ecfSignedAt;
       try {
-        final fiscalDoc = await salesRepo.getOrderFiscalDocument(orderId);
+        // Cargar el fd EXACTO del payment, no "el último de la orden".
+        // En split bill una orden tiene N fds; getOrderFiscalDocument
+        // devolvería cualquiera. Usar el id del fd (el `payment['id']`
+        // del listado, que es el fd.id, no payment.id).
+        final fiscalDoc = fdId != null && fdId.isNotEmpty
+            ? await salesRepo.getFiscalDocumentById(fdId)
+            : await salesRepo.getOrderFiscalDocument(orderId);
         if (fiscalDoc != null && fiscalDoc.isElectronic) {
           isElectronicCf = true;
           ecfSecurityCode = fiscalDoc.ecfSecurityCode;
@@ -1142,64 +1195,386 @@ class _PaymentTableRow extends ConsumerWidget {
   void _showDetailDialog(
     BuildContext context,
     WidgetRef ref,
-    String orderId,
+    Map<String, dynamic> payment,
   ) async {
+    final orderId = payment['order_id']?.toString() ?? '';
     if (orderId.isEmpty) return;
+
+    // check_id del fd asociado al payment. Si != null, el fd corresponde a
+    // una sub-cuenta y solo mostramos los items de ese check. Si es null,
+    // el fd es full-order y mostramos items con check_id IS NULL (los que
+    // se cobraron en el pago full-order final).
+    final fdCheckId = payment['check_id']?.toString();
+
+    final ncf = payment['ncf_number']?.toString() ?? 'Sin NCF';
+    final ncfType = payment['ncf_type']?.toString() ?? '';
+    final customerName =
+        payment['customer_name']?.toString().trim().isNotEmpty == true
+        ? payment['customer_name']!.toString()
+        : 'Consumidor Final';
+    final customerRnc = payment['customer_rnc']?.toString() ?? '';
+    final createdAt = AppTime.tryParseServerToAst(payment['created_at']);
+    final dateStr = createdAt == null
+        ? '-'
+        : DateFormat('dd/MM/yyyy hh:mm a').format(createdAt);
+
+    final subtotal = (payment['subtotal'] as num?)?.toDouble() ?? 0;
+    final itbis = (payment['itbis_amount'] as num?)?.toDouble() ?? 0;
+    final serviceFee = (payment['service_fee'] as num?)?.toDouble() ?? 0;
+    final total = (payment['total'] as num?)?.toDouble() ?? 0;
 
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text(
-          'Productos Orden #${orderId.substring(0, 8).toUpperCase()}',
-        ),
-        content: FutureBuilder<List<OrderItem>>(
-          future: ref
-              .read(salesRepositoryProvider)
-              .getOrderItems(
-                orderId,
-                businessId: ref.read(sessionProvider).activeBusinessId,
-              ),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const SizedBox(
-                height: 100,
-                child: Center(child: CircularProgressIndicator()),
-              );
-            }
-            if (snapshot.hasError) {
-              return SizedBox(
-                height: 100,
-                child: Center(child: Text('Error: ${snapshot.error}')),
-              );
-            }
-            final items = snapshot.data ?? [];
-            return SizedBox(
-              width: 400,
-              child: items.isEmpty
-                  ? const Text('No se encontraron productos.')
-                  : ListView.separated(
-                      shrinkWrap: true,
-                      itemCount: items.length,
-                      separatorBuilder: (_, _) => const Divider(),
-                      itemBuilder: (context, i) {
-                        final item = items[i];
-                        return ListTile(
-                          title: Text(item.productName),
-                          trailing: Text('x${_formatQty(item.quantity)}'),
-                          subtitle: Text(
-                            'Total: ${currency.format(item.total)}',
+      builder: (context) => Dialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 460, maxHeight: 720),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // --- ENCABEZADO ESTILO FACTURA ---
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'FACTURA',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 1.2,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          ncf,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: MangoColors.muted,
+                          ),
+                        ),
+                        if (ncfType.isNotEmpty)
+                          Text(
+                            'Tipo: $ncfType',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: MangoColors.muted,
+                            ),
+                          ),
+                      ],
+                    ),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          dateStr,
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Orden #${orderId.substring(0, 8).toUpperCase()}',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: MangoColors.muted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                const Divider(),
+                // --- CLIENTE ---
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Cliente: $customerName',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (customerRnc.isNotEmpty)
+                      Text(
+                        'RNC/Cédula: $customerRnc',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: MangoColors.muted,
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                const Divider(),
+                const SizedBox(height: 4),
+                // --- ITEMS ---
+                const Row(
+                  children: [
+                    Expanded(
+                      flex: 5,
+                      child: Text(
+                        'Producto',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: MangoColors.muted,
+                        ),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 40,
+                      child: Text(
+                        'Cant.',
+                        textAlign: TextAlign.right,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: MangoColors.muted,
+                        ),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 90,
+                      child: Text(
+                        'Total',
+                        textAlign: TextAlign.right,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: MangoColors.muted,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Flexible(
+                  child: FutureBuilder<
+                      ({List<OrderItem> items, Set<String> otherFdCheckIds})>(
+                    future: () async {
+                      final businessIdLocal =
+                          ref.read(sessionProvider).activeBusinessId;
+                      final itemsFuture = ref
+                          .read(salesRepositoryProvider)
+                          .getOrderItems(
+                            orderId,
+                            businessId: businessIdLocal,
+                          );
+                      // Cargar los OTROS fds de la orden para saber qué
+                      // checks ya tienen su propio fd. Esto es clave para
+                      // que el fd full-order remainder muestre los items
+                      // que NO están en sub-cuentas con fd propio.
+                      final otherFdsFuture = Supabase.instance.client
+                          .from('fiscal_documents')
+                          .select('check_id, status')
+                          .eq('order_id', orderId);
+                      final results = await Future.wait<dynamic>([
+                        itemsFuture,
+                        otherFdsFuture,
+                      ]);
+                      final loadedItems = results[0] as List<OrderItem>;
+                      final fds = List<Map<String, dynamic>>.from(
+                        results[1] as List,
+                      );
+                      final otherFdCheckIds = fds
+                          .where((f) =>
+                              f['check_id'] != null &&
+                              f['status'] == 'active')
+                          .map((f) => f['check_id'].toString())
+                          .toSet();
+                      return (
+                        items: loadedItems,
+                        otherFdCheckIds: otherFdCheckIds,
+                      );
+                    }(),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState ==
+                          ConnectionState.waiting) {
+                        return const SizedBox(
+                          height: 100,
+                          child: Center(child: CircularProgressIndicator()),
+                        );
+                      }
+                      if (snapshot.hasError) {
+                        return SizedBox(
+                          height: 80,
+                          child: Center(
+                            child: Text(
+                              'Error: ${snapshot.error}',
+                              style: const TextStyle(color: Colors.red),
+                            ),
                           ),
                         );
+                      }
+                      final data = snapshot.data;
+                      final all = data?.items ?? const <OrderItem>[];
+                      final otherFdCheckIds =
+                          data?.otherFdCheckIds ?? const <String>{};
+                      // Filtro por scope del fd:
+                      //   - fd.check_id != NULL → solo items del check.
+                      //   - fd.check_id == NULL (full-order o remainder):
+                      //     items con check_id NULL (cobro directo al
+                      //     principal) O items en sub-cuentas que NO
+                      //     tienen su propio fd (caso: sub-cuenta cerrada
+                      //     por auto-close cuando sus items pasaron a paid
+                      //     vía cobro full-order).
+                      final items = all.where((i) {
+                        if (i.status == 'void') return false;
+                        if (fdCheckId != null && fdCheckId.isNotEmpty) {
+                          return i.checkId == fdCheckId;
+                        }
+                        if (i.checkId == null) return true;
+                        return !otherFdCheckIds.contains(i.checkId);
+                      }).toList();
+
+                      if (items.isEmpty) {
+                        return const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 16),
+                          child: Text(
+                            'No se encontraron productos para esta factura.',
+                            style: TextStyle(color: MangoColors.muted),
+                          ),
+                        );
+                      }
+
+                      return ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: items.length,
+                        separatorBuilder: (_, _) => const Divider(height: 12),
+                        itemBuilder: (context, i) {
+                          final item = items[i];
+                          return Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                flex: 5,
+                                child: Text(
+                                  item.productName,
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                              SizedBox(
+                                width: 40,
+                                child: Text(
+                                  _formatQty(item.quantity),
+                                  textAlign: TextAlign.right,
+                                  style: const TextStyle(fontSize: 13),
+                                ),
+                              ),
+                              SizedBox(
+                                width: 90,
+                                child: Text(
+                                  currency.format(item.total),
+                                  textAlign: TextAlign.right,
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Divider(),
+                // --- TOTALES ---
+                _invoiceTotalRow('Subtotal', subtotal, currency),
+                if (itbis > 0)
+                  _invoiceTotalRow('ITBIS', itbis, currency),
+                if (serviceFee > 0)
+                  _invoiceTotalRow('Servicio (10%)', serviceFee, currency),
+                const SizedBox(height: 4),
+                _invoiceTotalRow('TOTAL', total, currency, isTotal: true),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _reprintInvoice(context, ref, payment);
                       },
+                      icon: const Icon(Icons.print_outlined, size: 18),
+                      label: const Text('Reimprimir'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: MangoColors.successGreen,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 10,
+                        ),
+                      ),
                     ),
-            );
-          },
+                    ElevatedButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: MangoColors.primaryOrange,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 10,
+                        ),
+                      ),
+                      child: const Text('Cerrar'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cerrar'),
+      ),
+    );
+  }
+
+  Widget _invoiceTotalRow(
+    String label,
+    double amount,
+    NumberFormat currency, {
+    bool isTotal = false,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: isTotal ? 14 : 12,
+              fontWeight: isTotal ? FontWeight.w800 : FontWeight.w500,
+              color: isTotal ? null : MangoColors.muted,
+            ),
+          ),
+          const SizedBox(width: 16),
+          SizedBox(
+            width: 100,
+            child: Text(
+              currency.format(amount),
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                fontSize: isTotal ? 16 : 12,
+                fontWeight: isTotal ? FontWeight.w800 : FontWeight.w600,
+              ),
+            ),
           ),
         ],
       ),

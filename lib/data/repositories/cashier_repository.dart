@@ -588,9 +588,10 @@ class CashierRepository {
     var query = _client
         .from('fiscal_documents')
         .select(
-          'id, business_id, order_id, payment_id, ncf_number, ncf_type, '
-          'customer_name, customer_rnc, total, status, ecf_status, '
-          'is_electronic, created_at',
+          'id, business_id, order_id, payment_id, check_id, ncf_number, '
+          'ncf_type, customer_name, customer_rnc, '
+          'subtotal, taxable_amount, itbis_amount, service_fee, total, '
+          'status, ecf_status, is_electronic, created_at',
         )
         .eq('business_id', businessId);
 
@@ -771,11 +772,21 @@ class CashierRepository {
         'business_id': fd['business_id'],
         'amount': fd['total'],
         'net_amount': fd['total'],
+        // Desglose del fd para el modal de detalle / reimpresión. Antes
+        // estos campos solo se cargaban por separado; ahora viajan junto
+        // a la fila para que el modal pueda mostrar la factura completa.
+        'subtotal': fd['subtotal'],
+        'taxable_amount': fd['taxable_amount'],
+        'itbis_amount': fd['itbis_amount'],
+        'service_fee': fd['service_fee'],
+        'total': fd['total'],
         'status': uiStatus,
         'created_at': fd['created_at'],
         'customer_name': fd['customer_name'] ?? tableSession?['customer_name'],
         'customer_tax_id': fd['customer_rnc'],
+        'customer_rnc': fd['customer_rnc'],
         'ncf_number': fd['ncf_number'],
+        'ncf_type': fd['ncf_type'],
         'ncf_type_name': fd['ncf_type'],
         'ecf_status': fd['ecf_status'],
         'is_electronic': fd['is_electronic'],

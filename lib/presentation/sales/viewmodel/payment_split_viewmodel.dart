@@ -323,11 +323,27 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       return;
     }
 
+    // Guarda dura: si ya se cubrió el total (con o sin cambio del último
+    // payment), no se permiten más transacciones. Esto evita el caso
+    // donde el cajero agrega de más sin querer y termina cobrando 600
+    // sobre una orden de 500.
+    if (state.remaining <= 0.01) {
+      state = state.copyWith(
+        validationError:
+            'Ya se cubrió el total. Si necesitas modificar, elimina '
+            'una transacción primero.',
+      );
+      return;
+    }
+
     final allowsChange = state.activeMethod == PaymentMethodType.cash;
     final exceedsRemaining = amount - state.remaining > 0.01;
     if (exceedsRemaining && !allowsChange) {
       state = state.copyWith(
-        validationError: 'El monto excede lo pendiente para este método.',
+        validationError:
+            'Tarjeta/transferencia no pueden exceder lo pendiente '
+            '(RD\$ ${state.remaining.toStringAsFixed(2)}). Usa efectivo '
+            'si el cliente quiere pagar con un monto mayor.',
       );
       return;
     }
@@ -468,6 +484,11 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
               amount: tx.amount,
               changeAmount: isLast ? state.change : 0,
               closeOrder: isLast && _checkId == null,
+              // Para split methods dentro de un check: solo cerrar el
+              // check en la última transacción. Las intermedias dejan el
+              // check abierto para que las siguientes puedan insertarse
+              // sin chocar contra "CHECK_ALREADY_CLOSED".
+              closeCheck: isLast && _checkId != null,
               customerId: _customerId,
               customerRnc: isLast
                   ? _ref.read(currentOrderProvider).customerTaxId

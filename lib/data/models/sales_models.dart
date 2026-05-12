@@ -424,6 +424,8 @@ class OrderCheck extends Equatable {
   final double total;
   final String? customerId;
   final String? customerName;
+  final String? customerRnc;
+  final String? requestedNcfType;
   final List<OrderItem> items;
 
   const OrderCheck({
@@ -439,6 +441,8 @@ class OrderCheck extends Equatable {
     required this.total,
     this.customerId,
     this.customerName,
+    this.customerRnc,
+    this.requestedNcfType,
     this.items = const [],
   });
 
@@ -456,6 +460,8 @@ class OrderCheck extends Equatable {
       total: (map['total'] ?? 0).toDouble(),
       customerId: map['customer_id']?.toString(),
       customerName: map['customer_name']?.toString(),
+      customerRnc: map['customer_rnc']?.toString(),
+      requestedNcfType: map['requested_ncf_type']?.toString(),
       items: [],
     );
   }
@@ -473,7 +479,10 @@ class OrderCheck extends Equatable {
     double? total,
     String? customerId,
     String? customerName,
+    String? customerRnc,
+    String? requestedNcfType,
     bool clearCustomer = false,
+    bool clearNcfType = false,
     List<OrderItem>? items,
   }) {
     return OrderCheck(
@@ -489,6 +498,10 @@ class OrderCheck extends Equatable {
       total: total ?? this.total,
       customerId: clearCustomer ? null : (customerId ?? this.customerId),
       customerName: clearCustomer ? null : (customerName ?? this.customerName),
+      customerRnc: clearCustomer ? null : (customerRnc ?? this.customerRnc),
+      requestedNcfType: clearNcfType
+          ? null
+          : (requestedNcfType ?? this.requestedNcfType),
       items: items ?? this.items,
     );
   }
@@ -521,6 +534,8 @@ class OrderCheck extends Equatable {
     total,
     customerId,
     customerName,
+    customerRnc,
+    requestedNcfType,
     items,
   ];
 }

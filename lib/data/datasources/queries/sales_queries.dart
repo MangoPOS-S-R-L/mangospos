@@ -162,6 +162,17 @@ class SalesQueries {
   static const String rpcCreateSplitBill = 'fn_create_split_bill';
   static const String rpcSplitItemsEqually = 'fn_split_items_equally';
 
+  /// Fase 0 Toast redesign: consolidar fracciones pre-existentes a qty entero.
+  /// Idempotente. Se invoca lazy desde getOrderBundle si detectamos fracciones.
+  static const String rpcConsolidateOrderToInteger =
+      'fn_consolidate_order_to_integer';
+
+  /// Asignación temprana de cliente + tipo de comprobante a una sub-cuenta.
+  /// Sirve para que el cajero configure quién paga el check antes del cobro.
+  /// Al pagar, el payment hereda esos valores automáticamente.
+  static const String rpcSetCheckCustomerAndNcf =
+      'fn_set_check_customer_and_ncf';
+
   /// Obtener bundle completo de orden (order + items + checks + customer)
   static const String rpcGetOrderBundle = 'fn_get_order_bundle';
 

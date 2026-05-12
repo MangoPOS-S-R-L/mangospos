@@ -24,6 +24,13 @@ class SplitBillState extends Equatable {
   final bool splitApplied;
   final Set<String> pendingDeletedCheckIds;
 
+  /// Positions de checks que YA están reservadas en BD (incluyendo checks
+  /// cerrados/cobrados). Necesario para que `_getNextPosition` no asigne
+  /// una position que ya está ocupada por un check cerrado — eso causaba
+  /// que al "Aplicar División" la nueva sub-cuenta cayera silenciosamente
+  /// en el check cerrado existente.
+  final Set<int> reservedPositions;
+
   const SplitBillState({
     this.loading = false,
     this.error,
@@ -35,6 +42,7 @@ class SplitBillState extends Equatable {
     this.equalSplitPeople = 2,
     this.splitApplied = false,
     this.pendingDeletedCheckIds = const {},
+    this.reservedPositions = const {},
   });
 
   SplitBillState copyWith({
@@ -48,6 +56,7 @@ class SplitBillState extends Equatable {
     int? equalSplitPeople,
     bool? splitApplied,
     Set<String>? pendingDeletedCheckIds,
+    Set<int>? reservedPositions,
   }) {
     return SplitBillState(
       loading: loading ?? this.loading,
@@ -61,6 +70,7 @@ class SplitBillState extends Equatable {
       splitApplied: splitApplied ?? this.splitApplied,
       pendingDeletedCheckIds:
           pendingDeletedCheckIds ?? this.pendingDeletedCheckIds,
+      reservedPositions: reservedPositions ?? this.reservedPositions,
     );
   }
 
@@ -88,6 +98,32 @@ class SplitBillState extends Equatable {
         pendingDeletedCheckIds.isNotEmpty;
   }
 
+  /// True si la mesa YA tiene una división activa: hay items abiertos
+  /// (no paid, no void) asignados a sub-cuentas abiertas (position > 1,
+  /// is_closed=false).
+  ///
+  /// Cuando es true, el botón "Dividir en partes iguales" se deshabilita
+  /// para evitar machacar la asignación actual por accidente. El cajero
+  /// debe "Deshacer división" primero si quiere re-distribuir desde cero.
+  ///
+  /// Items ya pagados y sub-cuentas ya cerradas se ignoran a propósito —
+  /// si un pago parcial está hecho pero quedan abiertos, el cajero puede
+  /// reorganizar lo que queda sin tocar lo cobrado.
+  bool get hasActiveDivision {
+    final openSubChecks = {
+      for (final check in checks)
+        if (check.position > 1 && !check.isClosed) check.id,
+    };
+    if (openSubChecks.isEmpty) return false;
+
+    for (final item in allItems) {
+      if (item.checkId == null) continue;
+      if (item.status == 'paid' || item.status == 'void') continue;
+      if (openSubChecks.contains(item.checkId)) return true;
+    }
+    return false;
+  }
+
   @override
   List<Object?> get props => [
     loading,
@@ -100,5 +136,6 @@ class SplitBillState extends Equatable {
     equalSplitPeople,
     splitApplied,
     pendingDeletedCheckIds,
+    reservedPositions,
   ];
 }
