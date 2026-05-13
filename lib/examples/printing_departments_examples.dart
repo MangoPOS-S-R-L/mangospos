@@ -154,7 +154,7 @@ class PrintingDepartmentsExamples {
     );
 
     print('\n✅ Trabajos de impresión creados:');
-    jobs.forEach((area, jobId) {
+    jobs.dispatchIds.forEach((area, jobId) {
       print('  • $area → Job ID: $jobId');
     });
 
@@ -383,7 +383,7 @@ class PrintingDepartmentsExamples {
     );
 
     print('  ✓ Trabajos creados:');
-    jobs.forEach((area, jobId) {
+    jobs.dispatchIds.forEach((area, jobId) {
       print('    • $area');
     });
 

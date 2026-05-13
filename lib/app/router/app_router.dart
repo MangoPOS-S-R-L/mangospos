@@ -37,7 +37,6 @@ import '../../presentation/dashboard/dashboard_view.dart';
 import '../../presentation/shell/main_shell.dart';
 import '../../presentation/cashier/view/cashier_view.dart';
 import '../../presentation/cashier/view/cash_closures_view.dart';
-import '../../presentation/cashier/cash_sessions_health/cash_sessions_health_view.dart';
 import '../../presentation/cashier/view/income_expense_view.dart';
 import '../../presentation/cashier/view/sales_history_view.dart';
 import '../../presentation/kitchen/view/kitchen_view.dart';
@@ -391,10 +390,8 @@ class AppRouter {
             path: AppRoutes.cashierIncomeExpense,
             builder: (context, state) => const IncomeExpenseView(),
           ),
-          GoRoute(
-            path: AppRoutes.cashierSessionsHealth,
-            builder: (context, state) => const CashSessionsHealthView(),
-          ),
+          // 2026-05-13: removida la ruta cashierSessionsHealth del cliente.
+          // El dashboard NOC se traslada a mango_administrador. Ver PRD-12.
           GoRoute(
             path: AppRoutes.kitchen,
             builder: (context, state) => const KitchenView(),

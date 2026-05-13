@@ -23,7 +23,8 @@ class AppRoutes {
   static const cashierHistory = '$cashier/history';
   static const cashierClosures = '$cashier/closures';
   static const cashierIncomeExpense = '$cashier/income-expense';
-  static const cashierSessionsHealth = '$cashier/sessions-health';
+  // 2026-05-13: removida cashierSessionsHealth — el NOC se traslada a
+  // mango_administrador (ver PRD-12).
   static const kitchen = '/kitchen';
   static const reservations = '/reservations';
   static const customers = '/customers';

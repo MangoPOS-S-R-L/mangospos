@@ -321,6 +321,10 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
                           label: 'ocupada',
                           color: SalesTheme.warning,
                         ),
+                        const SizedBox(width: 16),
+                        // Control de zoom de grids (persistente vía
+                        // shared_preferences).
+                        const SalesZoomControl(),
                         const SizedBox(width: 12),
                         // Botón refresh
                         IconButton(
@@ -501,16 +505,9 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
 
     return Column(
       children: [
-        // Toolbar del top con el zoom control. Le permite al cajero ajustar
-        // el tamano del grid de mesas (mas/menos columnas) sin salir de la
-        // pantalla. Persistente via shared_preferences.
-        Padding(
-          padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: const [SalesZoomControl()],
-          ),
-        ),
+        // 2026-05-13: el control de zoom se mudó al AppBar superior
+        // (al lado de los indicadores disponible/ocupada), para que sea
+        // accesible globalmente sin duplicarse en cada zone grid.
         if (!widget.canOpenTables)
           Builder(
             builder: (innerContext) {

@@ -1133,22 +1133,9 @@ class _ActionCardsSection extends StatelessWidget {
           onPressed: () => context.go(AppRoutes.cashierClosures),
         ),
       );
-      // Dashboard Salud de cajas (Sprint Caja Pro Fase D). Reuso del
-      // mismo permiso de cierres ya que es la auditoría natural del
-      // admin/manager. El cajero puro no lo ve.
-      coreCards.add(
-        _ActionCard(
-          icon: Icons.monitor_heart_outlined,
-          iconColor: MangoColors.successGreen,
-          iconBgColor: const Color(0xFFEFFDF4),
-          title: 'Salud de cajas',
-          subtitle: 'Sesiones abiertas, saldo vivo y forzar cierre',
-          buttonText: 'Ver',
-          buttonColor: MangoColors.successGreen,
-          enabled: true,
-          onPressed: () => context.go(AppRoutes.cashierSessionsHealth),
-        ),
-      );
+      // 2026-05-13: removida la card "Salud de cajas" de la app POS.
+      // El dashboard NOC cross-tenant (con force-close, semáforo,
+      // alertas) se traslada a mango_administrador. Ver PRD-12.
     }
 
     return LayoutBuilder(

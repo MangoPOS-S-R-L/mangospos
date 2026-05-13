@@ -13,7 +13,6 @@ import 'package:mangopos/app/theme/sizes.dart';
 import 'package:mangopos/core/business/business_features_provider.dart';
 import 'package:mangopos/core/printing/printer_heartbeat_scheduler.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
-import 'package:mangopos/presentation/cashier/widgets/live_cash_balance_card.dart';
 import 'package:mangopos/presentation/cashier/widgets/open_cash_dialog.dart';
 import 'package:mangopos/presentation/sales/state/sales_state.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
@@ -98,10 +97,11 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
                 const SizedBox(height: 24),
                 if (!isCashOpen)
                   _CashClosedBanner(compact: compact),
-                // Sprint Caja Pro — widget de saldo vivo. Se auto-oculta
-                // cuando la caja está cerrada (chequeo interno).
-                if (isCashOpen)
-                  LiveCashBalanceCard(compact: compact),
+                // 2026-05-13: removido el widget "Saldo en caja" de la
+                // app POS. El cajero no debe ver el monto esperado
+                // mientras opera (rompe el principio del cierre a
+                // ciegas). La visibilidad operativa cross-tenant la
+                // tiene mango_administrador (NOC). Ver PRD-12.
                 Expanded(
                   child: ListView(
                     padding: navPadding,

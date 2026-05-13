@@ -247,7 +247,16 @@ class ZonesRepository {
         if (sessionId == null || sessionId.isEmpty) continue;
 
         sessionIdByOrderId[orderId] = sessionId;
-        ordersById[orderId] = Order.fromMap(order);
+        // PRD 2 fix (2026-05-13): forzar serviceFee=0 igual que hace
+        // sales_viewmodel.dart:415. El "10% De Ley" vive en
+        // `oi.tax_lines` per ítem, así que `orders.service_fee` cached
+        // (calculado por triggers backend que a veces aplican 10% sobre
+        // subtotal completo aunque solo algunos items lo paguen) genera
+        // double-counting si se suma aparte. El detail screen lo
+        // ignoraba, el zone view no — por eso la card mostraba ~10%
+        // de más vs la pantalla de la mesa.
+        ordersById[orderId] =
+            Order.fromMap(order).copyWith(serviceFee: 0);
       }
 
       // Use items to calculate the real total using our harmonized logic.
