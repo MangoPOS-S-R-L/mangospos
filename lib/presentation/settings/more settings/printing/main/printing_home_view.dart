@@ -62,6 +62,14 @@ class PrintingHomeView extends ConsumerWidget {
         color: const Color(0xFFFFF7ED),
         route: AppRoutes.printingDiagnostics,
       ),
+      _PrintingCardData(
+        title: 'Salud de impresión',
+        subtitle: 'Semáforo de impresoras y cola pendiente',
+        icon: Icons.monitor_heart_outlined,
+        iconColor: const Color(0xFF22C55E),
+        color: const Color(0xFFEFFDF4),
+        route: AppRoutes.printingHealth,
+      ),
     ];
 
     return Container(

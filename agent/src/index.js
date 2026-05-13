@@ -19,8 +19,14 @@ const { startCloudSocket } = require('./socket/cloud');
 const { startLocalApiServer } = require('./http/server');
 const queueWorker = require('./queue/worker');
 const mdnsAdvertiser = require('./discovery/mdns_advertiser');
+const membershipCache = require('./http/membership_cache');
 
 logger.info(`Iniciando MangoPOS Print Agent [${AGENT_ID}]`);
+
+// Sprint 6 — Cache de membresías (user_id → business_ids) para que la
+// validación JWT pueda chequear si el usuario realmente pertenece al
+// negocio del agent sin tirar una query a Supabase por cada request.
+membershipCache.start();
 
 // Worker de la cola — arranca antes que cualquier path que encole, así
 // no perdemos jobs si llegan inmediatamente.
@@ -61,6 +67,11 @@ const handleShutdown = async (signal) => {
         await queueWorker.stop();
     } catch (e) {
         logger.warn(`Error cerrando worker: ${e.message}`);
+    }
+    try {
+        membershipCache.stop();
+    } catch (e) {
+        logger.warn(`Error deteniendo membership cache: ${e.message}`);
     }
     process.exit(0);
 };

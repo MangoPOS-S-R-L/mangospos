@@ -1820,10 +1820,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     state = const CurrentOrderState();
   }
 
-  // Method to confirm order (send to kitchen)
-  Future<void> confirmOrder({String? tableName, String? waiterName}) async {
+  /// Confirma la orden enviándola a cocina. Retorna el [KitchenSendResult]
+  /// para que la UI pueda mostrar snackbar amigable cuando alguna área
+  /// escala al worker. Retorna `null` si no había orden o si la orden
+  /// fue al path local (offline / orden local sin sincronizar).
+  Future<KitchenSendResult?> confirmOrder({String? tableName, String? waiterName}) async {
     final orderId = state.order?.id;
-    if (orderId == null) return;
+    if (orderId == null) return null;
     // No ponemos loading: true aquí para evitar el parpadeo de la pantalla completa.
     // El usuario verá el item aparecer inmediatamente cuando _loadOrderDetail termine.
     // state = state.copyWith(loading: true);
@@ -1860,10 +1863,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           loading: false,
           error: 'Comanda impresa/localmente. Pendiente de sincronizar.',
         );
-        return;
+        return null;
       }
 
-      await ref
+      final result = await ref
           .read(printingServiceProvider)
           .sendOrderToKitchen(
             orderId: orderId,
@@ -1872,6 +1875,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             fallbackWaiterName: waiterName ?? session.userName,
           );
       refreshOrder();
+      return result;
     } catch (e) {
       state = state.copyWith(loading: false, error: e.toString());
       rethrow;

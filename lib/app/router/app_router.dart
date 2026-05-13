@@ -17,6 +17,7 @@ import 'package:mangopos/presentation/settings/more%20settings/printing/products
 import 'package:mangopos/presentation/settings/more%20settings/printing/receipts/view/printing_receipts_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/orders/view/printing_orders_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/diagnostics/view/printing_diagnostics_view.dart';
+import 'package:mangopos/presentation/settings/more%20settings/printing/health/view/printing_health_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/view/taxes_view.dart';
 import 'package:mangopos/presentation/settings/business_profile/business_profile_screen.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/zones_tables/view/zones_tables_view.dart';
@@ -675,6 +676,12 @@ class AppRouter {
                 path: AppRoutes.printingDiagnostics,
                 builder: (context, state) =>
                     const PrintingDiagnosticsView(businessId: 'auto'),
+              ),
+              // Sprint 5 — /settings/printing/health
+              GoRoute(
+                path: AppRoutes.printingHealth,
+                builder: (context, state) =>
+                    const PrintingHealthView(businessId: 'auto'),
               ),
             ],
           ),

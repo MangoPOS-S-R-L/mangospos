@@ -12,6 +12,42 @@ import 'pos_settings_repository.dart';
 import 'printing_repository.dart';
 import 'sales_repository.dart';
 
+/// Resultado del intento de impresión de una comanda por área. Mismo
+/// espíritu que [PrintOutcome] pero a nivel cocina:
+///   - `directSuccess`: al menos una impresora del área aceptó el job
+///     directo (TCP/USB/agent local).
+///   - `escalatedToCloud`: todas las impresoras del área fallaron en
+///     directo y el job se encoló en Supabase. El worker lo procesará
+///     con retry/failover.
+enum KitchenPrintOutcome {
+  directSuccess,
+  escalatedToCloud,
+}
+
+/// Resultado consolidado de enviar una orden completa a cocina. La UI
+/// usa `escalatedAreas` para mostrar el snackbar amigable cuando una o
+/// más áreas tuvieron que escalar al worker.
+class KitchenSendResult {
+  /// areaCode → dispatch id local (legacy).
+  final Map<String, String> dispatchIds;
+
+  /// Áreas que imprimieron directo (path feliz).
+  final List<String> directAreas;
+
+  /// Áreas donde la(s) impresora(s) no respondió y el job entró al
+  /// cloud queue. La UI puede informar al cajero sin alarmas.
+  final List<String> escalatedAreas;
+
+  const KitchenSendResult({
+    required this.dispatchIds,
+    required this.directAreas,
+    required this.escalatedAreas,
+  });
+
+  bool get hadAnyEscalation => escalatedAreas.isNotEmpty;
+  bool get allDirect => escalatedAreas.isEmpty && directAreas.isNotEmpty;
+}
+
 /// 🖨️ Servicio de Impresión con Agrupación por Departamento
 /// Maneja la lógica de envío de órdenes a diferentes áreas de impresión
 class NoAssignedKitchenPrinterException implements Exception {
@@ -80,8 +116,14 @@ class PrintingService {
     _salesRepo = SalesRepository(_client);
   }
 
-  /// Enviar orden a cocina con agrupación automática por departamento
-  Future<Map<String, String>> sendOrderToKitchen({
+  /// Enviar orden a cocina con agrupación automática por departamento.
+  ///
+  /// Retorna [KitchenSendResult] con detalle por área para que la UI
+  /// pueda diferenciar:
+  ///   - Áreas que imprimieron directo (camino feliz).
+  ///   - Áreas que escalaron al worker (la impresora no respondió pero
+  ///     el ticket está en cola — snackbar amigable, no alarma).
+  Future<KitchenSendResult> sendOrderToKitchen({
     required String orderId,
     required String businessId,
     String? fallbackTableName,
@@ -158,6 +200,8 @@ class PrintingService {
       await _salesRepo.sendToKitchen(orderId);
 
       final createdJobs = <String, String>{}; // areaCode -> local dispatch id
+      final directAreas = <String>[];
+      final escalatedAreas = <String>[];
 
       for (final entry in itemsByArea.entries) {
         final areaCode = entry.key;
@@ -188,7 +232,7 @@ class PrintingService {
           receiptItemDisplayMode: receiptItemDisplayMode,
         );
 
-        await _dispatchKitchenTicket(
+        final outcome = await _dispatchKitchenTicket(
           printers: printers,
           bytes: ticket.escPosCommands,
           areaCode: areaCode,
@@ -203,9 +247,19 @@ class PrintingService {
           businessId: businessId,
           orderId: orderId,
         );
+
+        if (outcome == KitchenPrintOutcome.escalatedToCloud) {
+          escalatedAreas.add(areaCode);
+        } else {
+          directAreas.add(areaCode);
+        }
       }
 
-      return createdJobs;
+      return KitchenSendResult(
+        dispatchIds: createdJobs,
+        directAreas: directAreas,
+        escalatedAreas: escalatedAreas,
+      );
     } on NoAssignedKitchenPrinterException {
       rethrow;
     } on ItemsWithoutPrintAreaException {
@@ -217,7 +271,7 @@ class PrintingService {
     }
   }
 
-  Future<void> _dispatchKitchenTicket({
+  Future<KitchenPrintOutcome> _dispatchKitchenTicket({
     required List<PrinterConfig> printers,
     required List<int> bytes,
     required String areaCode,
@@ -229,11 +283,12 @@ class PrintingService {
     String? orderId,
   }) async {
     final errors = <String>[];
-    String? firstPrintedPrinterId;
+    String? firstDirectPrinterId;
+    bool anyEscalated = false;
 
     for (final printer in printers) {
       try {
-        await _printKitchenTicketToPrinter(
+        final outcome = await _printKitchenTicketToPrinter(
           printer: printer,
           bytes: bytes,
           areaCode: areaCode,
@@ -241,31 +296,46 @@ class PrintingService {
           businessId: businessId,
           orderId: orderId,
         );
-        firstPrintedPrinterId ??= printer.id;
+        if (outcome == KitchenPrintOutcome.directSuccess) {
+          firstDirectPrinterId ??= printer.id;
+        } else {
+          anyEscalated = true;
+        }
       } catch (e) {
         errors.add('${printer.name}: $e');
       }
     }
 
-    if (firstPrintedPrinterId != null) {
+    if (firstDirectPrinterId != null) {
       if (errors.isNotEmpty) {
         debugPrint(
-          '⚠️ Impresión parcial en área $areaCode. Impresora exitosa: $firstPrintedPrinterId. Errores: ${errors.join(' | ')}',
+          '⚠️ Impresión parcial en área $areaCode. Impresora exitosa: $firstDirectPrinterId. Errores: ${errors.join(' | ')}',
         );
       }
-      return;
+      return KitchenPrintOutcome.directSuccess;
+    }
+
+    if (anyEscalated) {
+      // Nadie imprimió directo pero al menos una pudo escalar al cloud
+      // queue. El cajero verá un snackbar amigable.
+      return KitchenPrintOutcome.escalatedToCloud;
     }
 
     if (errors.isNotEmpty) {
       throw Exception(errors.join(' | '));
     }
+
+    // No había impresoras configuradas pero tampoco hubo errores. Tratamos
+    // como directo (la orden se envió a cocina sin imprimir físicamente
+    // — caso típico de "área sin impresora asignada").
+    return KitchenPrintOutcome.directSuccess;
   }
 
   /// Convierte bytes ESC/POS a hex string para almacenar en print_jobs.
   String _bytesToHex(List<int> bytes) =>
       bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
-  Future<void> _printKitchenTicketToPrinter({
+  Future<KitchenPrintOutcome> _printKitchenTicketToPrinter({
     required PrinterConfig printer,
     required List<int> bytes,
     required String areaCode,
@@ -295,7 +365,7 @@ class PrintingService {
               port: printer.port ?? 9100,
               data: bytes,
             );
-            return;
+            return KitchenPrintOutcome.directSuccess;
           }
           try {
             await _printingRepo.printRawDirectTcp(
@@ -313,7 +383,7 @@ class PrintingService {
               data: bytes,
             );
           }
-          return;
+          return KitchenPrintOutcome.directSuccess;
         case 'usb':
           debugPrint(
             '🖨️ Ruta seleccionada -> LOCAL/USB assigned printer ${printer.name} (${printer.id}) path=${printer.devicePath ?? 'n/a'}',
@@ -329,7 +399,7 @@ class PrintingService {
               data: bytes,
               meta: const {'source': 'kitchen_order'},
             );
-            return;
+            return KitchenPrintOutcome.directSuccess;
           }
 
           try {
@@ -345,7 +415,7 @@ class PrintingService {
               meta: const {'source': 'kitchen_order'},
             );
           }
-          return;
+          return KitchenPrintOutcome.directSuccess;
         case 'bluetooth':
           debugPrint(
             '🖨️ Ruta seleccionada -> BLUETOOTH direct GATT ${printer.name} (${printer.id})',
@@ -363,7 +433,7 @@ class PrintingService {
             );
           }
           await BluetoothPrintService.printRaw(remoteId: btId, data: bytes);
-          return;
+          return KitchenPrintOutcome.directSuccess;
         default:
           throw Exception('Tipo de impresora no soportado: ${printer.type}.');
       }
@@ -394,6 +464,7 @@ class PrintingService {
         // Importante: NO rethrow. El job ya está encolado; el cajero NO
         // ve error. Se imprimirá cuando la impresora vuelva o falla tras
         // 5 retries (entonces aparece en dashboard como failed).
+        return KitchenPrintOutcome.escalatedToCloud;
       } catch (cloudErr) {
         debugPrint(
           '❌ Cloud queue fallback FALLÓ: $cloudErr (intento directo: $e)',

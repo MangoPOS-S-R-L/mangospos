@@ -781,16 +781,181 @@ class PrintingRepository {
     }
   }
 
-  /// Reintentar trabajo fallido
+  /// Reintentar trabajo fallido. Sprint 5: además de resetear status,
+  /// limpia retry_count y next_retry_at para que el worker lo tome ya
+  /// en el próximo tick (sin esperar el backoff acumulado).
   Future<void> retryJob(String jobId) async {
     try {
       await _client
           .from('print_jobs')
-          .update({'status': 'pending', 'error': null})
+          .update({
+            'status': 'pending',
+            'error': null,
+            'last_error': null,
+            'retry_count': 0,
+            'next_retry_at': null,
+            'claimed_by': null,
+            'claimed_at': null,
+          })
           .eq('id', jobId);
     } catch (e) {
       throw Exception('Error al reintentar trabajo: $e');
     }
+  }
+
+  /// Sprint 5 — Cancela un job. Útil cuando el cajero decide no insistir
+  /// en una impresora rota (paper out, sin tinta, etc.) y prefiere
+  /// reimprimir manualmente desde el historial.
+  Future<void> cancelJob(String jobId) async {
+    try {
+      await _client
+          .from('print_jobs')
+          .update({
+            'status': 'cancelled',
+            'claimed_by': null,
+            'claimed_at': null,
+            'next_retry_at': null,
+          })
+          .eq('id', jobId);
+    } catch (e) {
+      throw Exception('Error al cancelar trabajo: $e');
+    }
+  }
+
+  /// Sprint 5 — Trae las impresoras del negocio con métricas de los
+  /// jobs en la última hora. Sirve para el dashboard de salud. Devuelve
+  /// una lista de Maps con: id, name, type, online, last_seen,
+  /// host_device_id, fallback_printer_id, pending_count, failed_count.
+  ///
+  /// Hace 2 queries en paralelo (printers + print_jobs agregados) y
+  /// hace el join client-side, porque PostgREST no soporta GROUP BY en
+  /// la API.
+  Future<List<Map<String, dynamic>>> getPrintersHealth(
+    String businessId,
+  ) async {
+    try {
+      final printersFuture = _client
+          .from('printers')
+          .select(
+            'id, name, type, online, last_seen, host_device_id, '
+            'fallback_printer_id, paper_width',
+          )
+          .eq('business_id', businessId)
+          .order('name', ascending: true);
+
+      final since = DateTime.now()
+          .toUtc()
+          .subtract(const Duration(hours: 1))
+          .toIso8601String();
+      final jobsFuture = _client
+          .from('print_jobs')
+          .select('printer_id, status, retry_count')
+          .eq('business_id', businessId)
+          .gte('created_at', since)
+          .inFilter('status', ['pending', 'failed', 'printing']);
+
+      final responses = await Future.wait([printersFuture, jobsFuture]);
+      final printers = List<Map<String, dynamic>>.from(responses[0] as List);
+      final jobs = List<Map<String, dynamic>>.from(responses[1] as List);
+
+      // Contar por printer_id.
+      final pendingByPrinter = <String, int>{};
+      final failedByPrinter = <String, int>{};
+      final printingByPrinter = <String, int>{};
+      for (final job in jobs) {
+        final pid = job['printer_id']?.toString();
+        if (pid == null || pid.isEmpty) continue;
+        final status = job['status']?.toString() ?? '';
+        final retryCount = (job['retry_count'] as num?)?.toInt() ?? 0;
+        if (status == 'pending') {
+          pendingByPrinter[pid] = (pendingByPrinter[pid] ?? 0) + 1;
+        } else if (status == 'failed' && retryCount >= 5) {
+          // status='failed' con retry_count < 5 es transitorio (en
+          // backoff). Solo contamos como failed terminal los que
+          // agotaron retries.
+          failedByPrinter[pid] = (failedByPrinter[pid] ?? 0) + 1;
+        } else if (status == 'failed') {
+          // Failed transitorio = pendiente de retry. Lo mostramos como
+          // pending para no alarmar.
+          pendingByPrinter[pid] = (pendingByPrinter[pid] ?? 0) + 1;
+        } else if (status == 'printing') {
+          printingByPrinter[pid] = (printingByPrinter[pid] ?? 0) + 1;
+        }
+      }
+
+      return printers.map((p) {
+        final id = p['id']?.toString() ?? '';
+        return {
+          ...p,
+          'pending_count': pendingByPrinter[id] ?? 0,
+          'failed_count': failedByPrinter[id] ?? 0,
+          'printing_count': printingByPrinter[id] ?? 0,
+        };
+      }).toList(growable: false);
+    } catch (e) {
+      throw Exception('Error al obtener salud de impresoras: $e');
+    }
+  }
+
+  /// Sprint 5 — Lista los jobs recientes (no terminados) del negocio.
+  /// Incluye pending, failed (con o sin retry pendiente), printing.
+  /// Lo usa el dashboard para mostrar la cola viva.
+  Future<List<Map<String, dynamic>>> getActivePrintJobs(
+    String businessId, {
+    int limit = 100,
+  }) async {
+    try {
+      final data = await _client
+          .from('print_jobs')
+          .select(
+            'id, business_id, printer_id, area_code, kind, status, '
+            'retry_count, last_error, error, next_retry_at, created_at, '
+            'claimed_at, original_printer_id, failover_count, '
+            'printers!print_jobs_printer_id_fkey(name, type)',
+          )
+          .eq('business_id', businessId)
+          .inFilter('status', ['pending', 'failed', 'printing'])
+          .order('created_at', ascending: false)
+          .limit(limit);
+
+      return List<Map<String, dynamic>>.from(data as List);
+    } catch (e) {
+      throw Exception('Error al obtener jobs activos: $e');
+    }
+  }
+
+  /// Sprint 5 — Suscripción realtime al stream de print_jobs del
+  /// negocio. La pantalla de salud se refresca al recibir cualquier
+  /// cambio. Caller debe llamar `.unsubscribe()` al desmontar.
+  RealtimeChannel subscribePrintJobsHealth(
+    String businessId,
+    void Function() onChange,
+  ) {
+    final ch = _client.channel('print_jobs_health:$businessId')
+      ..onPostgresChanges(
+        event: PostgresChangeEvent.all,
+        schema: 'public',
+        table: 'print_jobs',
+        filter: PostgresChangeFilter(
+          type: PostgresChangeFilterType.eq,
+          column: 'business_id',
+          value: businessId,
+        ),
+        callback: (_) => onChange(),
+      )
+      ..onPostgresChanges(
+        event: PostgresChangeEvent.all,
+        schema: 'public',
+        table: 'printers',
+        filter: PostgresChangeFilter(
+          type: PostgresChangeFilterType.eq,
+          column: 'business_id',
+          value: businessId,
+        ),
+        callback: (_) => onChange(),
+      )
+      ..subscribe();
+    return ch;
   }
 
   // ============================================================

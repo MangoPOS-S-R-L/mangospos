@@ -2444,18 +2444,44 @@ class _CartView extends ConsumerWidget {
                                       ) ??
                                       ref.read(sessionProvider).userName;
                                   if (!context.mounted) return;
-                                  await ref
+                                  final kitchenResult = await ref
                                       .read(currentOrderProvider.notifier)
                                       .confirmOrder(
                                         tableName: tableCode,
                                         waiterName: waiterName,
                                       );
                                   if (!context.mounted) return;
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text('Orden enviada a cocina'),
-                                    ),
-                                  );
+                                  // Si alguna área tuvo que escalar al
+                                  // worker, mostramos snackbar amigable
+                                  // amarillo en lugar del verde de éxito.
+                                  if (kitchenResult != null &&
+                                      kitchenResult.hadAnyEscalation) {
+                                    final areas =
+                                        kitchenResult.escalatedAreas.join(', ');
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        backgroundColor:
+                                            const Color(0xFFF59E0B),
+                                        duration: const Duration(seconds: 4),
+                                        content: Text(
+                                          'Orden enviada a cocina. Las '
+                                          'impresoras de $areas no '
+                                          'respondieron, el sistema lo '
+                                          'está intentando de otra forma '
+                                          '— las comandas saldrán en '
+                                          'unos segundos.',
+                                        ),
+                                      ),
+                                    );
+                                  } else {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        backgroundColor: Color(0xFF22C55E),
+                                        content:
+                                            Text('Orden enviada a cocina'),
+                                      ),
+                                    );
+                                  }
 
                                   // Auto-close para delivery externo (ya pagado)
                                   final dt = orderState.deliveryType;
