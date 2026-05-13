@@ -148,6 +148,43 @@ Future<String?> _getLocalIp() async {
   return null;
 }
 
+/// Sprint 2.2 — Escanea la LAN buscando print agents que anuncien
+/// `_mangoprint._tcp` por mDNS y, si encuentra exactamente uno del
+/// negocio activo, lo prima como baseUrl. Si hay varios, los deja en
+/// `LocalPrintService.lastDiscoveredAgents` para que la UI elija
+/// (Sprint 2.3). Si mDNS falla o no encuentra nada, no-op — el flujo
+/// legacy de resolución (DB / localhost) sigue activo.
+Future<void> _discoverHubsViaMdns() async {
+  try {
+    // Resolver business_id del usuario activo para filtrar hubs de
+    // otros negocios en la misma red (food court / coworking).
+    String? businessId;
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user != null) {
+        final membership = await Supabase.instance.client
+            .from('business_members')
+            .select('business_id')
+            .eq('user_id', user.id)
+            .limit(1)
+            .maybeSingle();
+        businessId = membership?['business_id']?.toString();
+      }
+    } catch (e) {
+      // Si la consulta falla, igual escaneamos — solo perdemos el filtro
+      // por negocio. Mejor descubrir hubs que abortar por un error de DB.
+      debugPrint('[mDNS] No se pudo resolver business_id: $e');
+    }
+
+    final agents = await LocalPrintService.discoverAndPrime(
+      businessIdFilter: businessId,
+    );
+    debugPrint('[mDNS] Escaneo completo: ${agents.length} hub(s) encontrados.');
+  } catch (e) {
+    debugPrint('[mDNS] Fallo inesperado en discovery: $e');
+  }
+}
+
 /// Publishes the agent URL (with LAN IP) to business_settings so tablets can find it.
 Future<void> _publishAgentUrlToDb() async {
   try {
@@ -568,6 +605,17 @@ Future<void> _initializeBackgroundServices() async {
       unawaited(_publishAgentUrlToDb());
     }
     unawaited(LocalPrintService().warmup());
+
+    // Sprint 2.2 — Sondeo mDNS en paralelo para detectar print hubs
+    // disponibles en la LAN. Casos:
+    //   - Tablet sin agent embebido descubre el caja principal y se
+    //     auto-configura (si encuentra exactamente uno).
+    //   - Si hay varios hubs (food court / multi-caja), la UI de
+    //     Sprint 2.3 podrá listarlos desde `LocalPrintService
+    //     .lastDiscoveredAgents`.
+    //   - Si mDNS está bloqueado por la red, el flujo legacy
+    //     (business_settings.agent_url / localhost) sigue funcionando.
+    unawaited(_discoverHubsViaMdns());
 
     // Cache
     await CacheManager.initialize();

@@ -465,7 +465,7 @@ class _DocumentAssignmentCard extends StatelessWidget {
               style: const TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w700,
-                color: Color(0xFF4280E9),
+                color: MangoColors.primaryOrange,
               ),
             ),
           ),
@@ -477,7 +477,7 @@ class _DocumentAssignmentCard extends StatelessWidget {
                 onPressed: busy ? null : onAddOrReplace,
                 style: TextButton.styleFrom(
                   backgroundColor: const Color(0xFFEAF1FB),
-                  foregroundColor: const Color(0xFF4280E9),
+                  foregroundColor: MangoColors.primaryOrange,
                   padding: const EdgeInsets.symmetric(vertical: 12),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10),
@@ -527,8 +527,8 @@ class _DocumentAssignmentCard extends StatelessWidget {
                       OutlinedButton(
                         onPressed: onConfigure,
                         style: OutlinedButton.styleFrom(
-                          foregroundColor: const Color(0xFF4280E9),
-                          side: const BorderSide(color: Color(0xFF4280E9)),
+                          foregroundColor: MangoColors.primaryOrange,
+                          side: const BorderSide(color: MangoColors.primaryOrange),
                           minimumSize: const Size(44, 38),
                           padding: EdgeInsets.zero,
                           shape: RoundedRectangleBorder(
@@ -581,7 +581,7 @@ class _DocumentAssignmentCard extends StatelessWidget {
                       PrintingActionButton(
                         label: replaceLabel,
                         icon: Icons.replay_outlined,
-                        foreground: const Color(0xFF4280E9),
+                        foreground: MangoColors.primaryOrange,
                         background: const Color(0xFFEAF1FB),
                         onPressed: busy ? null : onAddOrReplace,
                       ),

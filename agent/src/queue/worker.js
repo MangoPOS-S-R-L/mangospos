@@ -1,48 +1,173 @@
-// PRD 7 Fase 1.1 — Worker secuencial de la cola.
+// Worker de la cola — Sprint 4: dispatch concurrente por impresora.
 //
-// Loop simple: poll → si hay queued → markPrinting → processPrintJob →
-// markDone/markFailed → repeat. Exactamente UNA operación de impresión
-// activa a la vez (PRD §6.2 RF-07).
+// HISTORIAL:
+//   - Sprint 1.2 (legado, ahora reemplazado en cloud): worker secuencial
+//     que procesaba 1 job a la vez. 5 tickets simultáneos para 2
+//     impresoras = ~25s de cola aunque la 2da impresora estuviera
+//     ociosa.
+//   - Sprint 4: para CLOUD jobs el worker claim varios jobs por tick
+//     (MAX_CLAIM_PER_TICK) y los DESPACHA al `printer_dispatcher`, que
+//     mantiene una cola POR impresora. Cada impresora corre serial
+//     (ESC/POS no tolera 2 sockets simultáneos), pero las impresoras
+//     distintas corren en paralelo.
+//   - SQLITE fallback sigue siendo serial (legacy, bajo volumen).
 //
-// Sin reintentos en esta fase (Fase 2 agrega backoff exponencial).
-// Sin paralelismo: un solo worker garantiza que dos comandos ESC/POS
-// nunca se entrelacen en la misma impresora.
+// FUENTES (en orden de prioridad):
+//
+//   1. CLOUD QUEUE (Supabase print_jobs vía fn_claim_next_print_job)
+//      — fuente de verdad cuando CLOUD_WORKER_ENABLED y haya conexión.
+//      Cada tick claim hasta MAX_CLAIM_PER_TICK jobs y los dispatch al
+//      printer_dispatcher (paralelo por impresora).
+//
+//   2. SQLITE LOCAL (queue/store.js)
+//      — legacy / fallback secuencial. Cubre:
+//        a) CLOUD_WORKER_ENABLED=false (rollout gradual: agent corriendo
+//           viejo, frontend aún POST a /print).
+//        b) Supabase no responde (offline temporario): el job ya entró
+//           via HTTP /print (que también escribe SQLite local).
+//
+// Reclaim stale: cada RECLAIM_INTERVAL_MS llamamos fn_reclaim_stale_print_jobs
+// para recuperar jobs en 'printing' con claim viejo (>60s sin ACK).
 
-const { logger } = require('../config');
-const queue = require('./store');
+const { logger, CLOUD_WORKER_ENABLED } = require('../config');
+const sqliteQueue = require('./store');
+const cloudStore = require('./cloud_store');
+const printerDispatcher = require('./printer_dispatcher');
 const { processPrintJob } = require('../print/job_processor');
 
-const POLL_INTERVAL_MS = 250;
+const POLL_INTERVAL_MS = 500;
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000; // 1h
+const RECLAIM_INTERVAL_MS = 60 * 1000; // 60s
+
+// Sprint 4 — cuántos jobs claimar por tick. Más alto = más throughput
+// inicial pero más jobs marcados 'printing' simultáneamente si el
+// agent crashea. 5 es balance razonable para LANs con varias
+// impresoras.
+const MAX_CLAIM_PER_TICK = 5;
 
 let running = false;
 let stopRequested = false;
 let pruneTimer = null;
+let reclaimTimer = null;
 
-const tick = async () => {
-    const job = queue.nextQueued();
+/**
+ * Resuelve la config completa de la impresora destino de un job.
+ *
+ * Si el job apunta a un printer_id (UUID en BD), consulta `printers`
+ * para traer vid/pid/device_path/encoding. Para network sin printer_id,
+ * arma config básica con ip+port del row.
+ */
+const resolvePrinterCfg = async (jobRow) => {
+    let printerCfg = {
+        type: 'network',
+        ip: jobRow.ip,
+        port: jobRow.port || 9100,
+    };
+    if (jobRow.printer_id) {
+        const fetched = await cloudStore.fetchPrinter(jobRow.printer_id);
+        if (fetched) {
+            printerCfg = {
+                type: fetched.type || 'network',
+                ip: fetched.ip_address || jobRow.ip,
+                port: fetched.port || jobRow.port || 9100,
+                name: fetched.name,
+                device_path: fetched.device_path,
+                mac: fetched.mac,
+                encoding: fetched.encoding,
+                paper_width: fetched.paper_width,
+            };
+        }
+    }
+    return printerCfg;
+};
+
+/**
+ * Sprint 4 — Claim hasta MAX_CLAIM_PER_TICK jobs y los despacha al
+ * dispatcher por impresora. Las impresoras procesan en paralelo.
+ *
+ * @returns {number} jobs claimados este tick (0 si la cola está vacía).
+ */
+const tickCloud = async () => {
+    let claimed = 0;
+    while (claimed < MAX_CLAIM_PER_TICK) {
+        const jobRow = await cloudStore.claimNext();
+        if (!jobRow) break;
+
+        const jobId = jobRow.id;
+        logger.info(
+            `[worker] CLOUD claim ${jobId} (kind=${jobRow.kind || 'unknown'}, ` +
+            `area=${jobRow.area_code || '-'}, retry=${jobRow.retry_count || 0})`,
+        );
+
+        const printerCfg = await resolvePrinterCfg(jobRow);
+        const accepted = printerDispatcher.dispatch(jobRow, printerCfg);
+
+        if (!accepted) {
+            // Dispatcher rechazó por tope global. Liberamos el claim
+            // para que otro agent (o nosotros en el próximo tick cuando
+            // bajen los counters) lo tome.
+            await cloudStore.complete(
+                jobId,
+                false,
+                'agent saturado: tope de impresoras concurrentes alcanzado',
+            );
+            logger.warn(`[worker] dispatcher rechazó ${jobId}, devuelto a la cola`);
+            // No incrementamos claimed para no salir del while; pero
+            // tampoco insistimos si el tope sigue alcanzado — el ACK
+            // failure ya cambió retry/next_retry_at, así que en el
+            // próximo claimNext probablemente saltemos al siguiente.
+            break;
+        }
+        claimed++;
+    }
+    return claimed;
+};
+
+/**
+ * Procesa un job de la cola SQLite local (legacy/fallback).
+ */
+const tickSqlite = async () => {
+    const job = sqliteQueue.nextQueued();
     if (!job) return false;
 
-    queue.markPrinting(job.jobId);
-    logger.info(`[worker] Procesando ${job.jobId} (ticket ${job.ticketId})`);
+    sqliteQueue.markPrinting(job.jobId);
+    logger.info(`[worker] SQLITE procesando ${job.jobId} (ticket ${job.ticketId})`);
 
     try {
-        // El payload del job contiene la estructura legacy de processPrintJob
-        // (printer + content). Lo desempaquetamos y le ponemos el id que
-        // necesita el orquestador para sus logs.
         const internalJob = {
             id: job.jobId,
             ...job.payload,
         };
         await processPrintJob(internalJob);
-        queue.markDone(job.jobId);
-        logger.info(`[worker] Done ${job.jobId}`);
+        sqliteQueue.markDone(job.jobId);
+        logger.info(`[worker] SQLITE done ${job.jobId}`);
     } catch (err) {
         const msg = err?.message || String(err);
-        queue.markFailed(job.jobId, msg);
-        logger.error(`[worker] Failed ${job.jobId}: ${msg}`);
+        sqliteQueue.markFailed(job.jobId, msg);
+        logger.error(`[worker] SQLITE failed ${job.jobId}: ${msg}`);
     }
     return true;
+};
+
+/**
+ * Un tick: prueba cloud primero, después SQLite. Cloud dispatchea al
+ * pool (no-bloqueante); SQLite procesa serial inline (legacy).
+ *
+ * @returns {boolean} true si despachó/procesó al menos un job.
+ */
+const tick = async () => {
+    let did = false;
+    if (cloudStore.isEnabled()) {
+        const claimed = await tickCloud();
+        if (claimed > 0) did = true;
+    }
+    // Sprint 4 — SQLite sigue serial. Solo lo tocamos si el dispatcher
+    // está ocioso, para no pelearnos por las mismas impresoras físicas.
+    if (printerDispatcher.inFlightCount() === 0) {
+        const processed = await tickSqlite();
+        if (processed) did = true;
+    }
+    return did;
 };
 
 const loop = async () => {
@@ -63,18 +188,39 @@ const loop = async () => {
 
 const start = () => {
     if (running) return;
-    queue.init();
+    sqliteQueue.init();
+    if (CLOUD_WORKER_ENABLED) {
+        cloudStore.init();
+    }
+    printerDispatcher.start();
     running = true;
     stopRequested = false;
-    logger.info('[worker] Iniciando worker secuencial de impresion.');
+    logger.info(
+        `[worker] Iniciando. cloud=${cloudStore.isEnabled()} sqlite=enabled ` +
+        `max_claim_per_tick=${MAX_CLAIM_PER_TICK} ` +
+        `max_concurrent_printers=${printerDispatcher.MAX_CONCURRENT_PRINTERS}`,
+    );
     loop();
 
-    // Prune diario de jobs viejos en estado terminal.
+    // Prune diario de jobs viejos en SQLite (estado terminal).
     pruneTimer = setInterval(() => {
-        try { queue.pruneOld(7); } catch (e) {
+        try { sqliteQueue.pruneOld(7); } catch (e) {
             logger.warn(`[worker] prune error: ${e.message}`);
         }
     }, PRUNE_INTERVAL_MS);
+
+    // Reclaim stale jobs cada 60s (cloud queue).
+    reclaimTimer = setInterval(async () => {
+        if (!cloudStore.isEnabled()) return;
+        try {
+            const n = await cloudStore.reclaimStale(60);
+            if (n > 0) {
+                logger.info(`[worker] CLOUD reclaim: ${n} jobs huerfanos reseteados`);
+            }
+        } catch (e) {
+            logger.warn(`[worker] reclaim error: ${e.message}`);
+        }
+    }, RECLAIM_INTERVAL_MS);
 };
 
 const stop = async () => {
@@ -83,15 +229,31 @@ const stop = async () => {
         clearInterval(pruneTimer);
         pruneTimer = null;
     }
+    if (reclaimTimer) {
+        clearInterval(reclaimTimer);
+        reclaimTimer = null;
+    }
     // Esperar a que el loop termine la iteración actual (max 1 tick).
     let waited = 0;
     while (running && waited < 5000) {
         await new Promise((r) => setTimeout(r, 100));
         waited += 100;
     }
-    queue.close();
+    // Drain del dispatcher (hasta 10s, ver módulo).
+    await printerDispatcher.stop();
+    sqliteQueue.close();
 };
 
 const isRunning = () => running;
 
-module.exports = { start, stop, isRunning };
+/**
+ * Snapshot de estado para el endpoint HTTP /status. Sprint 4: incluye
+ * el detalle por impresora del dispatcher concurrente.
+ */
+const stats = () => ({
+    running,
+    cloudEnabled: cloudStore.isEnabled(),
+    dispatcher: printerDispatcher.stats(),
+});
+
+module.exports = { start, stop, isRunning, stats };

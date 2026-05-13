@@ -348,7 +348,7 @@ class _PrinterOverviewCard extends StatelessWidget {
                 label:
                     '${usageSummary.assignedAreas.toString().padLeft(2, '0')} Areas asignadas',
                 background: const Color(0xFFEAF1FB),
-                foreground: const Color(0xFF4280E9),
+                foreground: MangoColors.primaryOrange,
               ),
             ],
           ),
@@ -1008,9 +1008,9 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: const Color(0xFFEFF6FF),
+              color: const Color(0xFFFFF7ED),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFFBFDBFE)),
+              border: Border.all(color: const Color(0xFFFED7AA)),
             ),
             child: const Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1346,13 +1346,13 @@ class _HardwareIdBannerState extends ConsumerState<_HardwareIdBanner> {
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFFEFF6FF),
-        border: Border.all(color: const Color(0xFFBFDBFE)),
+        color: const Color(0xFFFFF7ED),
+        border: Border.all(color: const Color(0xFFFED7AA)),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
         children: [
-          const Icon(Icons.shield_outlined, color: Color(0xFF3C83F6)),
+          const Icon(Icons.shield_outlined, color: MangoColors.primaryOrange),
           const SizedBox(width: 12),
           const Expanded(
             child: Column(
@@ -1380,7 +1380,7 @@ class _HardwareIdBannerState extends ConsumerState<_HardwareIdBanner> {
           ElevatedButton(
             onPressed: _adopting ? null : _adopt,
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF3C83F6),
+              backgroundColor: MangoColors.primaryOrange,
               foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               shape: RoundedRectangleBorder(

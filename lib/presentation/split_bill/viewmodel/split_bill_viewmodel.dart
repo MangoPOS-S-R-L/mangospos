@@ -31,7 +31,40 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
   @override
   void dispose() {
     _errorDismissTimer?.cancel();
+    // Split bill UX (2026-05-13): si el cajero abrió el modal (que
+    // auto-explotó items qty>1 a unidades) y luego cerró sin aplicar,
+    // los items quedan exploded en BD. Re-consolidamos en background
+    // para que precuenta/recibos no muestren 2 filas de "1 Coca Cola"
+    // cuando deberían ser "2 Coca Cola". Fire-and-forget: no podemos
+    // await en dispose, pero capturamos las refs ANTES de super.dispose()
+    // y dejamos la tarea correr en background.
+    final repo = _salesRepo;
+    final checkIds = state.checks
+        .where((c) => !c.isClosed && _isUuid(c.id))
+        .map((c) => c.id)
+        .toList(growable: false);
+    if (checkIds.isNotEmpty && !state.splitApplied) {
+      unawaited(_consolidateChecksInBackground(repo, checkIds));
+    }
     super.dispose();
+  }
+
+  /// Helper fire-and-forget para consolidar varios checks en paralelo.
+  /// Se ejecuta DESPUÉS de dispose(), así que no toca `state` ni `_ref`.
+  /// Errores se loguean pero no se propagan (el modal ya no existe).
+  static Future<void> _consolidateChecksInBackground(
+    SalesRepository repo,
+    List<String> checkIds,
+  ) async {
+    for (final checkId in checkIds) {
+      try {
+        await repo.consolidateCheckItems(checkId: checkId);
+      } catch (e) {
+        debugPrint(
+          '[SplitBill] consolidate background para $checkId falló (no crítico): $e',
+        );
+      }
+    }
   }
 
   /// Sets error and auto-clears it after 5 seconds for non-critical errors.
@@ -56,6 +89,20 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
     state = state.copyWith(loading: true, error: null);
 
     try {
+      // Split bill UX (2026-05-13): divide items con qty>1 en filas
+      // unitarias ANTES de cargar el bundle, así el modal ve cada unidad
+      // como fila separada y permite mover una a la vez. Idempotente —
+      // si todos los items ya están en qty=1, es no-op. Si la red falla
+      // o el RPC no está aún en BD (rollout incompleto), seguimos con
+      // el flujo legacy en vez de bloquear al cajero.
+      try {
+        await _salesRepo.explodeItemsToUnits(orderId: order.id);
+      } catch (e) {
+        debugPrint(
+          '[SplitBill] explodeItemsToUnits falló (no crítico, fallback a flujo legacy): $e',
+        );
+      }
+
       // Carga compacta en una sola llamada RPC: order + checks + items abiertos.
       final bundle = await _salesRepo.getOrderBundle(
         order.id,

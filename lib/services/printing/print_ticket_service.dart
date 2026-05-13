@@ -89,6 +89,7 @@ class PrintTicketService {
     required String tableName,
     String? waiterName,
     String? cashierName,
+    String? customerName,
     String? businessName, // ya no se usa en el nuevo diseño, se ignora.
     String? areaCode,
     bool isReprint = false,
@@ -154,6 +155,17 @@ class PrintTicketService {
     // separado). Queda como linea propia abajo de la fecha.
     if (resolvedCashier != null && resolvedCashier.isNotEmpty) {
       gen.text('CAJERO: ${resolvedCashier.toUpperCase()}');
+    }
+    // CLIENTE: nombre que el mesero capturó al abrir la mesa
+    // (table_sessions.customer_name). Línea propia debajo de cajero
+    // para que cocina identifique el comensal de un vistazo. Se omite
+    // si la mesa no tiene cliente asignado (caso típico walk-in sin
+    // registro previo).
+    final resolvedCustomer = customerName?.trim();
+    if (resolvedCustomer != null && resolvedCustomer.isNotEmpty) {
+      gen.setBold(true);
+      gen.text('CLIENTE: ${resolvedCustomer.toUpperCase()}');
+      gen.setBold(false);
     }
     gen.doubleSeparator();
 

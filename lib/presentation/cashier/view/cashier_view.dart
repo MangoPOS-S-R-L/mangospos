@@ -594,6 +594,11 @@ class _CashierViewState extends ConsumerState<CashierView>
     );
   }
 
+  /// Nombre y apellido del cajero para mostrar en cierres de caja y
+  /// recibos impresos. NO usamos email como fallback: el cierre de caja
+  /// queda físicamente impreso y exponer info sensible del personal
+  /// (email corporativo) no corresponde. Si no hay nombre, mostramos
+  /// 'Cajero' genérico.
   String _resolveCashierName() {
     final user = Supabase.instance.client.auth.currentUser;
     final metadata = user?.userMetadata ?? const <String, dynamic>{};
@@ -601,10 +606,10 @@ class _CashierViewState extends ConsumerState<CashierView>
         (metadata['full_name'] ??
                 metadata['name'] ??
                 metadata['display_name'] ??
-                user?.email ??
-                'Admin')
+                '')
             .toString();
-    return rawName.trim().isEmpty ? 'Admin' : rawName.trim();
+    final trimmed = rawName.trim();
+    return trimmed.isEmpty ? 'Cajero' : trimmed;
   }
 
   CashCloseInput _emptyCloseInput() {

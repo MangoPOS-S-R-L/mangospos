@@ -427,7 +427,7 @@ class _PrintingAreaAssignmentsPageState
                                 onPressed: () => _selectPrinterForArea(area),
                                 style: TextButton.styleFrom(
                                   backgroundColor: const Color(0xFFEAF1FB),
-                                  foregroundColor: const Color(0xFF4280E9),
+                                  foregroundColor: const Color(0xFFF97316),
                                   padding: const EdgeInsets.symmetric(
                                     vertical: 12,
                                   ),
@@ -576,8 +576,8 @@ class _AssignedPrinterCard extends StatelessWidget {
             OutlinedButton(
               onPressed: onConfigure,
               style: OutlinedButton.styleFrom(
-                foregroundColor: const Color(0xFF4280E9),
-                side: const BorderSide(color: Color(0xFF4280E9)),
+                foregroundColor: const Color(0xFFF97316),
+                side: const BorderSide(color: Color(0xFFF97316)),
                 minimumSize: const Size(44, 38),
                 padding: EdgeInsets.zero,
                 shape: RoundedRectangleBorder(

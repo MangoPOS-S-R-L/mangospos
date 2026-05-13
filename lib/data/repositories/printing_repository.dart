@@ -11,6 +11,23 @@ import 'package:mangopos/core/services/local_print_service.dart';
 
 import '../models/printing_models.dart';
 
+/// Resultado del intento de impresión. Permite a la UI mostrar mensajes
+/// distintos según el camino que tomó el job:
+///   - `directSuccess`: imprimió por TCP/USB/agent local. El ticket
+///     físicamente salió (o está saliendo) en segundos.
+///   - `escalatedToCloud`: los caminos directos fallaron pero el job
+///     entró a la cola en Supabase. El worker del agent lo procesará
+///     con retry/failover. El cajero NO tiene que preocuparse — solo
+///     informarle que la impresión está en cola.
+///
+/// Caso "todo fallido" (cloud queue también rechaza) no es un valor del
+/// enum: `printEscPos` lanza excepción en ese escenario y la UI muestra
+/// el diálogo de reintentar.
+enum PrintOutcome {
+  directSuccess,
+  escalatedToCloud,
+}
+
 /// 🖨️ Repositorio de Impresión
 class PrintingRepository {
   final SupabaseClient _client;
@@ -150,6 +167,8 @@ class PrintingRepository {
     bool? isActive,
     int? paperWidth,
     String? encoding,
+    String? fallbackPrinterId,
+    bool clearFallback = false,
   }) async {
     try {
       final updates = <String, dynamic>{};
@@ -162,6 +181,13 @@ class PrintingRepository {
       if (isActive != null) updates['online'] = isActive;
       if (paperWidth != null) updates['paper_width'] = paperWidth;
       if (encoding != null) updates['encoding'] = encoding;
+      // Sprint 3 — `clearFallback` distingue "quitar respaldo" (NULL)
+      // de "no tocar el campo" (default). Si ambos vienen, gana clearFallback.
+      if (clearFallback) {
+        updates['fallback_printer_id'] = null;
+      } else if (fallbackPrinterId != null) {
+        updates['fallback_printer_id'] = fallbackPrinterId;
+      }
 
       if (updates.isEmpty) return;
       await _client.from('printers').update(updates).eq('id', printerId);
@@ -632,6 +658,108 @@ class PrintingRepository {
     }
   }
 
+  /// Sprint 1.3: API limpia para encolar un print job al cloud (Supabase).
+  ///
+  /// Se usa en el patrón híbrido: cliente Dart intenta imprimir directo
+  /// primero (TCP/USB/BT con latencia baja). Si falla, encola aquí. El
+  /// agent (Sprint 1.2) toma el job vía `fn_claim_next_print_job` y lo
+  /// imprime con retry/backoff exponencial.
+  ///
+  /// Resiliencia: si Supabase no responde, esta función THROW; el caller
+  /// debería tener fallback adicional (ej. HTTP POST al agent legacy).
+  ///
+  /// Idempotencia: si pasás `idempotencyKey` y ya existe un job activo
+  /// con esa key + business, el INSERT falla por unique constraint. El
+  /// caller debería atrapar la excepción y considerarlo "ya encolado" =
+  /// éxito. Esto evita doble impresión ante retry del cliente.
+  ///
+  /// Devuelve el row insertado (o el existente si idempotency duplicó).
+  Future<PrintJob> enqueuePrintJobToCloud({
+    required String businessId,
+    required String dataHex,
+    required String kind,
+    required String areaCode,
+    String? printerId,
+    String? ip,
+    int? port,
+    String? idempotencyKey,
+    int priority = 100,
+  }) async {
+    try {
+      final insertPayload = <String, dynamic>{
+        'business_id': businessId,
+        'data_hex': dataHex,
+        'kind': kind,
+        'area_code': areaCode,
+        'printer_id': printerId,
+        'ip': ip ?? '0.0.0.0',
+        'port': port ?? 9100,
+        'priority': priority,
+        'status': 'pending',
+        if (idempotencyKey != null) 'idempotency_key': idempotencyKey,
+      };
+
+      try {
+        final jobData = await _client
+            .from('print_jobs')
+            .insert(insertPayload)
+            .select()
+            .single();
+        return PrintJob.fromMap(jobData);
+      } on PostgrestException catch (e) {
+        // 23505 = unique_violation. Si el INSERT chocó contra el unique
+        // partial index idx_print_jobs_idempotency, significa que ya
+        // existe un job activo con la misma idempotency_key. Lo
+        // recuperamos y devolvemos como si lo hubiéramos creado — el
+        // caller no debe duplicar el ticket.
+        if (e.code == '23505' && idempotencyKey != null) {
+          final existing = await _client
+              .from('print_jobs')
+              .select()
+              .eq('business_id', businessId)
+              .eq('idempotency_key', idempotencyKey)
+              .neq('status', 'cancelled')
+              .order('created_at', ascending: false)
+              .limit(1)
+              .maybeSingle();
+          if (existing != null) {
+            return PrintJob.fromMap(existing);
+          }
+        }
+        rethrow;
+      }
+    } catch (e) {
+      throw Exception('Error al encolar trabajo en cloud queue: $e');
+    }
+  }
+
+  /// Sprint 1.3: marca un print_job como impreso exitosamente desde el
+  /// cliente. Útil cuando el cliente Dart imprimió directo (sin pasar
+  /// por el agent) y solo quiere registrar el éxito en la cola para
+  /// auditoría / dashboard.
+  ///
+  /// Backend equivalente: `fn_complete_print_job(job_id, true, null)`.
+  /// Aquí hacemos UPDATE directo porque es desde cliente con RLS y
+  /// queremos evitar permisos extra.
+  Future<void> markPrintJobPrinted(String jobId) async {
+    try {
+      await _client
+          .from('print_jobs')
+          .update({
+            'status': 'printed',
+            'printed_at': DateTime.now().toIso8601String(),
+            'claimed_by': null,
+            'claimed_at': null,
+            'last_error': null,
+          })
+          .eq('id', jobId);
+    } catch (e) {
+      // Fail-soft: si no podemos marcar printed, el dashboard quedará
+      // con un 'pending' fantasma, pero el ticket SÍ se imprimió. No
+      // bloqueamos al cajero por una telemetría que falla.
+    }
+  }
+
   /// Actualizar estado de trabajo
   Future<void> updateJobStatus({
     required String jobId,
@@ -843,10 +971,19 @@ class PrintingRepository {
     }
   }
 
-  Future<void> printEscPos({
+  Future<PrintOutcome> printEscPos({
     required PrinterConfig printer,
     required List<int> data,
     Duration timeout = const Duration(seconds: 5),
+    // Sprint 1.3.b: si el caller pasa `idempotencyKey`, habilita el
+    // fallback al cloud queue cuando TODOS los intentos directos fallan
+    // (TCP, agent HTTP, USB con retry, BT). El agent del Sprint 1.2
+    // retomará el job vía `fn_claim_next_print_job` con backoff
+    // exponencial. Sin idempotencyKey, comportamiento legacy: el error
+    // se propaga al caller.
+    String? idempotencyKey,
+    String kind = 'other',
+    String? areaCode,
   }) async {
     // PRD 5 F2.5: routing por host_device_id.
     // Si la impresora está vinculada a un device físico (USB/BT) que NO es
@@ -856,18 +993,61 @@ class PrintingRepository {
       final selfId =
           await DeviceIdentity.getOrCreateId(printer.businessId);
       if (hostId != selfId) {
-        // No propagamos `timeout` (5s default) — el remoto necesita más
-        // tiempo para abrir USB e imprimir físicamente. Usar el default
-        // generoso de _printViaRemoteHost.
-        await _printViaRemoteHost(
-          printer: printer,
-          data: data,
-          hostDeviceId: hostId,
-        );
-        return;
+        try {
+          // No propagamos `timeout` (5s default) — el remoto necesita más
+          // tiempo para abrir USB e imprimir físicamente. Usar el default
+          // generoso de _printViaRemoteHost.
+          await _printViaRemoteHost(
+            printer: printer,
+            data: data,
+            hostDeviceId: hostId,
+          );
+          return PrintOutcome.directSuccess;
+        } catch (e) {
+          // El host remoto está caído o no responde. Si tenemos
+          // idempotencyKey, escalamos al cloud queue. Sino, propagamos.
+          if (idempotencyKey == null) rethrow;
+          await _escalateToCloudQueue(
+            printer: printer,
+            data: data,
+            idempotencyKey: idempotencyKey,
+            kind: kind,
+            areaCode: areaCode,
+            originalError: e,
+          );
+          return PrintOutcome.escalatedToCloud;
+        }
       }
     }
 
+    try {
+      await _printEscPosLocal(printer: printer, data: data, timeout: timeout);
+      return PrintOutcome.directSuccess;
+    } catch (e) {
+      // FALLBACK FINAL: todos los caminos directos (TCP/agent/USB/BT)
+      // fallaron. Si tenemos contexto (idempotencyKey + businessId),
+      // escalamos al cloud queue. El agent procesará con retry exp.
+      if (idempotencyKey == null) rethrow;
+      await _escalateToCloudQueue(
+        printer: printer,
+        data: data,
+        idempotencyKey: idempotencyKey,
+        kind: kind,
+        areaCode: areaCode,
+        originalError: e,
+      );
+      return PrintOutcome.escalatedToCloud;
+    }
+  }
+
+  /// Body original de printEscPos extraído para envolverlo con cloud
+  /// fallback sin duplicar código. Hace los 3 intentos directos según
+  /// tipo de impresora (network TCP, USB con retry, BT directo).
+  Future<void> _printEscPosLocal({
+    required PrinterConfig printer,
+    required List<int> data,
+    required Duration timeout,
+  }) async {
     switch (printer.printerType) {
       case PrinterType.network:
         final ip = printer.ipAddress?.trim();
@@ -1020,6 +1200,54 @@ class PrintingRepository {
         }
         await BluetoothPrintService.printRaw(remoteId: btId, data: data);
         return;
+    }
+  }
+
+  /// Sprint 1.3.b: si todos los intentos directos fallan, escalamos el
+  /// job al cloud queue (Supabase print_jobs). El agent (Sprint 1.2) lo
+  /// retomará con backoff exponencial.
+  ///
+  /// Si el INSERT al cloud queue también falla (sin internet, RLS, etc),
+  /// propagamos el error ORIGINAL de los intentos directos — es el más
+  /// informativo para mostrar al cajero.
+  Future<void> _escalateToCloudQueue({
+    required PrinterConfig printer,
+    required List<int> data,
+    required String idempotencyKey,
+    required String kind,
+    String? areaCode,
+    required Object originalError,
+  }) async {
+    final businessId = printer.businessId.trim();
+    if (businessId.isEmpty) {
+      Error.throwWithStackTrace(originalError, StackTrace.current);
+    }
+    try {
+      await enqueuePrintJobToCloud(
+        businessId: businessId,
+        dataHex: data
+            .map((b) => b.toRadixString(16).padLeft(2, '0'))
+            .join(),
+        kind: kind,
+        areaCode: areaCode ?? 'cashier',
+        printerId: printer.id,
+        ip: printer.ipAddress,
+        port: printer.port,
+        idempotencyKey: idempotencyKey,
+      );
+      debugPrint(
+        '🆘 Cloud queue fallback OK para ${printer.name} '
+        '(kind=$kind, area=${areaCode ?? '-'}): agent retomará. '
+        '(intento directo: $originalError)',
+      );
+      // No rethrow: el job está encolado, el cajero NO ve error. Si la
+      // impresora vuelve, se imprime. Si falla 5 retries, queda en
+      // dashboard como failed (Sprint 5).
+    } catch (cloudErr) {
+      debugPrint(
+        '❌ Cloud queue fallback FALLÓ: $cloudErr (intento directo: $originalError)',
+      );
+      Error.throwWithStackTrace(originalError, StackTrace.current);
     }
   }
 

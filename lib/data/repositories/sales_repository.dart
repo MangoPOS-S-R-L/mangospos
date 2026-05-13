@@ -1319,6 +1319,26 @@ class SalesRepository {
     }
   }
 
+  /// Split bill UX (2026-05-13) — divide cada item abierto con qty>1 en
+  /// N filas de qty=1 para que cada unidad sea transferible
+  /// independientemente en el modal de dividir cuenta. Idempotente: si
+  /// todos los items ya están en qty=1, es no-op.
+  ///
+  /// Retorna el número de filas nuevas creadas (qty original - 1 por
+  /// cada item explotado). 0 = no había nada que dividir.
+  Future<int> explodeItemsToUnits({required String orderId}) async {
+    try {
+      final response = await _client.rpc(
+        SalesQueries.rpcExplodeItemsToUnits,
+        params: {'p_order_id': orderId},
+      );
+      if (response == null) return 0;
+      return (response as num).toInt();
+    } catch (e) {
+      throw Exception('Error al dividir productos en unidades: $e');
+    }
+  }
+
   /// Mover item a otro check
   Future<void> moveItemToCheck({
     required String itemId,

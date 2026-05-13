@@ -162,6 +162,11 @@ class SalesQueries {
   static const String rpcCreateSplitBill = 'fn_create_split_bill';
   static const String rpcSplitItemsEqually = 'fn_split_items_equally';
 
+  /// Split bill UX (2026-05-13): divide items con qty>1 en N filas qty=1
+  /// para que cada unidad sea transferible por separado en el modal de
+  /// dividir cuenta. Idempotente.
+  static const String rpcExplodeItemsToUnits = 'fn_explode_items_to_units';
+
   /// Fase 0 Toast redesign: consolidar fracciones pre-existentes a qty entero.
   /// Idempotente. Se invoca lazy desde getOrderBundle si detectamos fracciones.
   static const String rpcConsolidateOrderToInteger =

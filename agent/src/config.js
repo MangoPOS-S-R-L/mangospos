@@ -76,6 +76,33 @@ const JWT_SECRET = process.env.JWT_SECRET || process.env.SUPABASE_JWT_SECRET || 
 const RESTAURANT_ID = process.env.RESTAURANT_ID || process.env.BUSINESS_ID || null;
 const AUTH_ENABLED = !!JWT_SECRET;
 
+// Sprint 1.2 (refactor impresion Square+):
+//   SUPABASE_URL + SUPABASE_KEY habilitan el "cloud worker" que toma
+//   jobs directo de la tabla print_jobs (fuente de verdad). Si NO se
+//   configuran, el agent sigue funcionando solo con SQLite local (modo
+//   legacy). Esto permite rollout gradual.
+//
+//   AGENT_UUID: UUID de device_agents.id que representa este agente.
+//   Debe coincidir con el UUID que registra el cliente Flutter al
+//   arrancar en el mismo device. Si no se configura, el cloud worker
+//   queda deshabilitado.
+const SUPABASE_URL = process.env.SUPABASE_URL || null;
+const SUPABASE_KEY =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    null;
+const AGENT_UUID = process.env.AGENT_UUID || null;
+const CLOUD_WORKER_ENABLED = !!(SUPABASE_URL && SUPABASE_KEY && AGENT_UUID);
+
+if (!CLOUD_WORKER_ENABLED) {
+    logger.warn(
+        '[config] Cloud worker DESHABILITADO. Falta SUPABASE_URL, ' +
+        'SUPABASE_KEY o AGENT_UUID en .env. El agent procesará solo ' +
+        'jobs entrando via HTTP /print (SQLite local).',
+    );
+}
+
 module.exports = {
     // Nuevos exports (PRD 7).
     isPkg,
@@ -90,6 +117,11 @@ module.exports = {
     AUTH_ENABLED,
     LOCAL_PORT: 4000,
     PRINTER_WIDTH: 48,
+    // Sprint 1.2: cloud worker config.
+    SUPABASE_URL,
+    SUPABASE_KEY,
+    AGENT_UUID,
+    CLOUD_WORKER_ENABLED,
     // Legacy export (consumers en core/*).
     config,
 };

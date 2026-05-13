@@ -363,10 +363,12 @@ class SessionController extends Notifier<SessionState> {
           .select('full_name')
           .eq('id', user.id)
           .maybeSingle();
+      // NO usar user.email como fallback: este nombre puede terminar en
+      // tickets impresos / cierres de caja físicos, y exponer email
+      // corporativo es info sensible que no corresponde al cliente.
       final fullName =
           profileResp?['full_name'] as String? ??
           user.userMetadata?['full_name'] as String? ??
-          user.email ??
           'Usuario';
 
       final memberships = await client

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/presentation/settings/more settings/printing/printers/viewmodel/printers_viewmodel.dart';
@@ -15,7 +16,7 @@ Future<bool?> showPrinterConfigurationDialog(
   );
 }
 
-class _PrinterConfigurationDialog extends StatefulWidget {
+class _PrinterConfigurationDialog extends ConsumerStatefulWidget {
   const _PrinterConfigurationDialog({
     required this.printer,
     required this.vmCtrl,
@@ -25,12 +26,12 @@ class _PrinterConfigurationDialog extends StatefulWidget {
   final PrintingPrintersViewModel vmCtrl;
 
   @override
-  State<_PrinterConfigurationDialog> createState() =>
+  ConsumerState<_PrinterConfigurationDialog> createState() =>
       _PrinterConfigurationDialogState();
 }
 
 class _PrinterConfigurationDialogState
-    extends State<_PrinterConfigurationDialog> {
+    extends ConsumerState<_PrinterConfigurationDialog> {
   late final TextEditingController _nameCtrl;
   late final TextEditingController _ipCtrl;
   late final TextEditingController _macCtrl;
@@ -39,6 +40,9 @@ class _PrinterConfigurationDialogState
   late String _encoding;
   late int _paperWidth;
   late bool _isActive;
+  /// Sprint 3 — id de la impresora de respaldo elegida en el dropdown.
+  /// null = "Sin respaldo" → al guardar mandamos `clearFallback: true`.
+  String? _fallbackPrinterId;
   bool _saving = false;
 
   @override
@@ -53,6 +57,7 @@ class _PrinterConfigurationDialogState
     _encoding = printer.encoding;
     _paperWidth = printer.paperWidth == 58 ? 58 : 80;
     _isActive = printer.online;
+    _fallbackPrinterId = printer.fallbackPrinterId;
   }
 
   @override
@@ -66,6 +71,10 @@ class _PrinterConfigurationDialogState
 
   Future<void> _save() async {
     setState(() => _saving = true);
+    // Sprint 3 — distinguir "sin respaldo" (clearFallback) vs "asignar
+    // X como respaldo" (fallbackPrinterId). El viewmodel maneja ambas
+    // ramas; pasar las dos cosas en simultáneo no rompe (clearFallback
+    // gana en el repo).
     final ok = await widget.vmCtrl.updatePrinter(
       printerId: widget.printer.id,
       name: _nameCtrl.text,
@@ -76,6 +85,8 @@ class _PrinterConfigurationDialogState
       isActive: _isActive,
       paperWidth: _paperWidth,
       encoding: _encoding,
+      fallbackPrinterId: _fallbackPrinterId,
+      clearFallback: _fallbackPrinterId == null,
     );
     if (!mounted) return;
     setState(() => _saving = false);
@@ -175,7 +186,7 @@ class _PrinterConfigurationDialogState
                     child: FilledButton(
                       onPressed: _saving ? null : _save,
                       style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF4280E9),
+                        backgroundColor: const Color(0xFFF97316),
                         foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(vertical: 18),
                         shape: RoundedRectangleBorder(
@@ -360,6 +371,8 @@ class _PrinterConfigurationDialogState
           ],
         ),
         const SizedBox(height: 22),
+        _buildFallbackSection(),
+        const SizedBox(height: 22),
         const Text(
           'Estado de la impresora',
           style: TextStyle(
@@ -378,7 +391,7 @@ class _PrinterConfigurationDialogState
             const SizedBox(width: 10),
             Switch.adaptive(
               value: _isActive,
-              activeTrackColor: const Color(0xFF4280E9),
+              activeTrackColor: const Color(0xFFF97316),
               onChanged: (value) => setState(() => _isActive = value),
             ),
           ],
@@ -391,6 +404,74 @@ class _PrinterConfigurationDialogState
             height: 1.35,
           ),
         ),
+      ],
+    );
+  }
+
+  /// Sprint 3 — UI para elegir impresora de respaldo. La lista viene del
+  /// viewmodel (todas las impresoras del negocio), excluyendo self para
+  /// no permitir auto-fallback (la BD también lo bloquea via CHECK).
+  Widget _buildFallbackSection() {
+    final all = ref.watch(printingPrintersViewModelProvider).items;
+    final candidates =
+        all.where((p) => p.id != widget.printer.id).toList(growable: false);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Impresora de respaldo (failover)',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+            color: MangoColors.darkGray,
+          ),
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'Si esta impresora falla al imprimir un ticket, el sistema lo '
+          'redirige inmediatamente a la impresora de respaldo. Sólo 1 nivel: '
+          'si el respaldo también falla, entra al flujo normal de reintentos.',
+          style: TextStyle(
+            fontSize: 12,
+            color: MangoColors.muted,
+            height: 1.35,
+          ),
+        ),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<String?>(
+          initialValue: _fallbackPrinterId,
+          isExpanded: true,
+          decoration: const InputDecoration(
+            border: OutlineInputBorder(),
+            contentPadding:
+                EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+          ),
+          items: [
+            const DropdownMenuItem<String?>(
+              value: null,
+              child: Text('Sin respaldo'),
+            ),
+            ...candidates.map(
+              (p) => DropdownMenuItem<String?>(
+                value: p.id,
+                child: Text(
+                  '${p.name} · ${p.type.name.toUpperCase()}',
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ),
+          ],
+          onChanged: (value) => setState(() => _fallbackPrinterId = value),
+        ),
+        if (candidates.isEmpty)
+          const Padding(
+            padding: EdgeInsets.only(top: 6),
+            child: Text(
+              'No hay otras impresoras configuradas para usar como respaldo.',
+              style: TextStyle(fontSize: 11, color: MangoColors.muted),
+            ),
+          ),
       ],
     );
   }
@@ -464,7 +545,7 @@ class _DialogField extends StatelessWidget {
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(10),
                 borderSide: const BorderSide(
-                  color: Color(0xFF4280E9),
+                  color: Color(0xFFF97316),
                   width: 1.5,
                 ),
               ),
@@ -499,7 +580,7 @@ class _PaperWidthCard extends StatelessWidget {
           color: selected ? const Color(0xFFEFF4FF) : Colors.white,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: selected ? const Color(0xFF4280E9) : const Color(0xFFCFCFCF),
+            color: selected ? const Color(0xFFF97316) : const Color(0xFFCFCFCF),
             width: selected ? 1.5 : 1,
           ),
         ),

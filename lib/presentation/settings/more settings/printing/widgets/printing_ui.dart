@@ -138,7 +138,7 @@ class PrintingPrimaryButton extends StatelessWidget {
       icon: Icon(icon, size: 18),
       label: Text(label),
       style: FilledButton.styleFrom(
-        backgroundColor: const Color(0xFF4280E9),
+        backgroundColor: const Color(0xFFF97316),
         foregroundColor: Colors.white,
         padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18),
         textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
@@ -364,7 +364,7 @@ class PrintingStatusCluster extends StatelessWidget {
       children: [
         Icon(
           online ? Icons.wifi_rounded : Icons.portable_wifi_off_rounded,
-          color: const Color(0xFF4280E9),
+          color: const Color(0xFFF97316),
           size: 26,
         ),
         const SizedBox(width: 12),

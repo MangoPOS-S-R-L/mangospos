@@ -15,6 +15,7 @@ import 'package:mangopos/data/models/fiscal_models.dart';
 import 'package:mangopos/data/repositories/bank_accounts_repository.dart';
 import 'package:mangopos/data/repositories/business_profile_repository.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
+import 'package:mangopos/data/repositories/printing_repository.dart' show PrintOutcome;
 import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
 import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dart';
@@ -3030,17 +3031,66 @@ class _CartView extends ConsumerWidget {
 
       // USB tipicamente confirma en <2s, pero algunos drivers (Star /
       // Bixolon viejas via USB-serial) tardan mas — damos 15s. Network
-      // pasa por el agente: 3s alcanza para un ack TCP local.
+      // pasa por TCP directo en LAN: 2s alcanza para un ACK local. Si
+      // no responde en 2s casi seguro está caída — printEscPos escala
+      // al worker en background y le devolvemos el control rápido al
+      // cajero.
       final isUsbPrinter = printer.printerType == PrinterType.usb;
-      final printTimeout = isUsbPrinter
+      final tcpTimeout = isUsbPrinter
           ? const Duration(seconds: 15)
-          : const Duration(seconds: 3);
+          : const Duration(seconds: 2);
+      // Outer guard generoso: cubre directo + agent local + escalada a
+      // cloud queue. ~5s alcanza para que printEscPos resuelva en todos
+      // los escenarios sanos (no quiero que el outer mate la escalada
+      // como pasaba con el 3s anterior).
+      final outerTimeout = isUsbPrinter
+          ? const Duration(seconds: 18)
+          : const Duration(seconds: 5);
 
-      final printFuture = Future(() async {
+      // Sprint 1.3.b: armar idempotencyKey para que `printEscPos` pueda
+      // escalar al cloud queue si todos los intentos directos fallan.
+      // Sin esto, el comportamiento es legacy (error inmediato al
+      // cajero). Con esto, el agent retoma el job en background.
+      final orderIdForKey = orderObj?.id;
+      final idempotencyKey = orderIdForKey != null && orderIdForKey.isNotEmpty
+          ? 'print-$type-$orderIdForKey-${printer.id}'
+          : null;
+
+      // UX: snackbar INSTANTÁNEO al click, antes del await. El cajero
+      // ve "Imprimiendo..." con spinner — sensación de respuesta
+      // inmediata. Después actualizamos según el outcome real.
+      if (showSnackBar && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            duration: const Duration(seconds: 2),
+            content: Row(
+              children: [
+                const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor: AlwaysStoppedAnimation(Colors.white),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(child: Text('Imprimiendo en ${printer.name}...')),
+              ],
+            ),
+            backgroundColor: const Color(0xFF22C55E),
+          ),
+        );
+      }
+
+      final printFuture = Future<PrintOutcome>(() async {
         if (ticket != null) {
-          await printRepo.printEscPos(
+          return await printRepo.printEscPos(
             printer: printer,
             data: ticket.escPosCommands,
+            timeout: tcpTimeout,
+            idempotencyKey: idempotencyKey,
+            kind: type,
+            areaCode: 'cashier',
           );
         } else {
           if (!printer.isNetwork) {
@@ -3062,36 +3112,40 @@ class _CartView extends ConsumerWidget {
             },
             'content': {'type': type, 'data': data},
           });
+          return PrintOutcome.directSuccess;
         }
       });
-
-      unawaited(
-        printFuture.catchError((error, stackTrace) {
-          debugPrint(
-            'Impresión en ${printer.name} falló: $error',
-          );
-        }),
-      );
 
       // Tiramos timeout SIEMPRE — antes USB se "tragaba" el timeout y
       // el flujo continuaba como si hubiera impreso, mostrando el
       // dialog de exito sin que saliera el ticket. Resultado: el
       // cajero cerraba la mesa sin imprimir. Ahora si vence, el caller
       // muestra el dialog de "Reintentar / Continuar sin imprimir".
-      await printFuture.timeout(
-        printTimeout,
+      final outcome = await printFuture.timeout(
+        outerTimeout,
         onTimeout: () => throw TimeoutException(
           isUsbPrinter
-              ? 'La impresora USB no respondio en ${printTimeout.inSeconds}s'
-              : 'La impresora de red no respondio en ${printTimeout.inSeconds}s',
+              ? 'La impresora USB no respondio en ${outerTimeout.inSeconds}s'
+              : 'La impresora de red no respondio en ${outerTimeout.inSeconds}s',
         ),
       );
 
-      if (showSnackBar && context.mounted) {
+      // Follow-up amigable si tuvo que escalar al worker. El cajero ya
+      // vio "Imprimiendo..."; ahora le explicamos sin alarmas que la
+      // impresora directa no respondió pero el sistema se encarga.
+      if (outcome == PrintOutcome.escalatedToCloud &&
+          showSnackBar &&
+          context.mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Imprimiendo en ${assignedPrinter.name}...'),
-            backgroundColor: const Color(0xFF22C55E),
+            duration: const Duration(seconds: 4),
+            content: Text(
+              'La impresora "${printer.name}" no respondió. El sistema '
+              'lo está intentando de otra forma — el ticket saldrá en '
+              'unos segundos.',
+            ),
+            backgroundColor: const Color(0xFFF59E0B),
           ),
         );
       }

@@ -58,8 +58,8 @@ class PrintingHomeView extends ConsumerWidget {
         title: 'Diagnóstico',
         subtitle: 'Estado del agente, dispositivos e impresoras',
         icon: Icons.health_and_safety_outlined,
-        iconColor: const Color(0xFF3C83F6),
-        color: const Color(0xFFEFF6FF),
+        iconColor: const Color(0xFFF97316),
+        color: const Color(0xFFFFF7ED),
         route: AppRoutes.printingDiagnostics,
       ),
     ];

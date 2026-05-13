@@ -15,7 +15,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
+import 'package:mangopos/core/printing/agent_discovery.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
+import 'package:mangopos/core/services/local_print_service.dart';
 import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
 import 'package:mangopos/services/print_agent_detector.dart';
@@ -42,6 +44,13 @@ class _PrintingDiagnosticsViewState
   bool _localAgentReachable = false;
 
   List<Map<String, dynamic>> _deviceAgents = const [];
+
+  // Sprint 2.3 — Hubs detectados por mDNS en la LAN. La primera vez
+  // muestra lo que main.dart ya cacheó al arrancar; el botón "Re-escanear"
+  // dispara un scan fresco.
+  List<DiscoveredAgent> _lanHubs = const [];
+  DateTime? _lanScanAt;
+  bool _scanningLan = false;
 
   @override
   void initState() {
@@ -97,12 +106,155 @@ class _PrintingDiagnosticsViewState
         _localAgentUrl = agentUrl;
         _localAgentReachable = reachable;
         _deviceAgents = agents;
+        _lanHubs = LocalPrintService.lastDiscoveredAgents;
+        _lanScanAt = LocalPrintService.lastDiscoveredAt;
         _loading = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
     }
+  }
+
+  /// Sprint 2.3 — Re-escanea la LAN buscando hubs vía mDNS. Dispara
+  /// `LocalPrintService.discoverAndPrime` con el filtro del negocio
+  /// actual para excluir hubs de otros locales (food court / coworking).
+  Future<void> _rescanLanHubs() async {
+    if (_scanningLan) return;
+    setState(() => _scanningLan = true);
+    try {
+      final hubs = await LocalPrintService.discoverAndPrime(
+        businessIdFilter: _businessId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _lanHubs = hubs;
+        _lanScanAt = LocalPrintService.lastDiscoveredAt;
+      });
+      // Re-evaluar el estado del agente local — si encontró 1 hub,
+      // discoverAndPrime ya primió la URL, y la card de arriba debe
+      // mostrarla como operativa.
+      await _load();
+    } finally {
+      if (mounted) {
+        setState(() => _scanningLan = false);
+      }
+    }
+  }
+
+  /// Sprint 2.3 — Marca un hub específico como el activo. Prima la URL
+  /// localmente y, si el cajero pidió "compartir", la publica en
+  /// `business_settings.agent_url` para que otras tablets también lo
+  /// usen.
+  Future<void> _useHub(DiscoveredAgent agent, {bool publish = false}) async {
+    LocalPrintService.primeBaseUrl(agent.baseUrl);
+    if (publish && _businessId != null && _businessId!.isNotEmpty) {
+      await LocalPrintService.publishAgentUrl(agent.baseUrl, _businessId!);
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          publish
+              ? 'Hub activado y compartido con el negocio: ${agent.baseUrl}'
+              : 'Hub activado en este dispositivo: ${agent.baseUrl}',
+        ),
+        backgroundColor: const Color(0xFF22C55E),
+      ),
+    );
+    await _load();
+  }
+
+  /// Sprint 2.3 — Fallback manual: mDNS bloqueado por router corporativo,
+  /// o el cajero ya sabe la IP. Pide IP/puerto, valida formato y prima
+  /// la URL como hub activo.
+  Future<void> _enterManualHub() async {
+    final ipController = TextEditingController();
+    final portController = TextEditingController(text: '4000');
+    bool publishToBusiness = false;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('Ingresar IP del hub manualmente'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: ipController,
+                keyboardType: TextInputType.url,
+                decoration: const InputDecoration(
+                  labelText: 'IP o hostname',
+                  hintText: '192.168.1.50',
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: portController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Puerto',
+                  hintText: '4000',
+                ),
+              ),
+              const SizedBox(height: 12),
+              if (_businessId != null && _businessId!.isNotEmpty)
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  value: publishToBusiness,
+                  onChanged: (v) =>
+                      setLocal(() => publishToBusiness = v ?? false),
+                  title: const Text(
+                    'Compartir con todas las tablets del negocio',
+                    style: TextStyle(fontSize: 13),
+                  ),
+                  subtitle: const Text(
+                    'Guarda esta URL en business_settings para que otros dispositivos también la usen.',
+                    style: TextStyle(fontSize: 11),
+                  ),
+                ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Activar'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (saved != true) return;
+    final ip = ipController.text.trim();
+    final port = int.tryParse(portController.text.trim()) ?? 4000;
+    if (ip.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('IP requerida.')),
+        );
+      }
+      return;
+    }
+    final url = 'http://$ip:$port';
+    LocalPrintService.primeBaseUrl(url);
+    if (publishToBusiness && _businessId != null && _businessId!.isNotEmpty) {
+      await LocalPrintService.publishAgentUrl(url, _businessId!);
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Hub manual activado: $url'),
+        backgroundColor: const Color(0xFF22C55E),
+      ),
+    );
+    await _load();
   }
 
   @override
@@ -130,6 +282,24 @@ class _PrintingDiagnosticsViewState
             reachable: _localAgentReachable,
             loading: _loading,
             onRetest: _load,
+          ),
+
+          const SizedBox(height: 24),
+          _SectionTitle('Hubs en la LAN (mDNS)'),
+          Text(
+            'Print agents que se anuncian automáticamente. Si hay varios '
+            '(multi-caja / food court), elige cuál usar.',
+            style: TextStyle(fontSize: 12, color: MangoColors.muted),
+          ),
+          const SizedBox(height: 8),
+          _LanHubsCard(
+            hubs: _lanHubs,
+            lastScanAt: _lanScanAt,
+            scanning: _scanningLan,
+            activeBaseUrl: _localAgentUrl,
+            onRescan: _rescanLanHubs,
+            onUseHub: _useHub,
+            onManualEntry: _enterManualHub,
           ),
 
           const SizedBox(height: 24),
@@ -230,9 +400,9 @@ class _IdentityCard extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: const Color(0xFFEFF6FF),
+                color: const Color(0xFFFFF7ED),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFBFDBFE)),
+                border: Border.all(color: const Color(0xFFFED7AA)),
               ),
               child: const Text(
                 'Recomendación: adoptar el UUID de hardware desde la pestaña '
@@ -342,6 +512,275 @@ class _LocalAgentCard extends StatelessWidget {
             label: const Text('Reintentar'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _LanHubsCard extends StatelessWidget {
+  final List<DiscoveredAgent> hubs;
+  final DateTime? lastScanAt;
+  final bool scanning;
+
+  /// URL del hub actualmente primado. Sirve para marcar visualmente
+  /// cuál de la lista está en uso.
+  final String? activeBaseUrl;
+
+  final VoidCallback onRescan;
+  final Future<void> Function(DiscoveredAgent agent, {bool publish}) onUseHub;
+  final VoidCallback onManualEntry;
+
+  const _LanHubsCard({
+    required this.hubs,
+    required this.lastScanAt,
+    required this.scanning,
+    required this.activeBaseUrl,
+    required this.onRescan,
+    required this.onUseHub,
+    required this.onManualEntry,
+  });
+
+  String _scanLabel() {
+    if (lastScanAt == null) return 'Sin escaneos aún';
+    final secs = DateTime.now().difference(lastScanAt!).inSeconds;
+    if (secs < 5) return 'Recién escaneado';
+    if (secs < 60) return 'Hace ${secs}s';
+    final mins = secs ~/ 60;
+    return 'Hace ${mins}m';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: MangoColors.cardBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${hubs.length} hub(s) detectado(s) · ${_scanLabel()}',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: MangoColors.darkGray,
+                  ),
+                ),
+              ),
+              TextButton.icon(
+                onPressed: scanning ? null : onRescan,
+                icon: scanning
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh, size: 16),
+                label: Text(scanning ? 'Escaneando...' : 'Re-escanear LAN'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (hubs.isEmpty)
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFFBEB),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFFDE68A)),
+              ),
+              child: const Text(
+                'Ningún hub se anunció. Puede ser que mDNS esté bloqueado '
+                'por el router o que no haya un agent corriendo en la LAN. '
+                'Usa "Ingresar IP manualmente" para configurar el hub a mano.',
+                style: TextStyle(fontSize: 12, color: MangoColors.darkGray),
+              ),
+            )
+          else
+            ...hubs.map(
+              (h) => _HubTile(
+                agent: h,
+                active: activeBaseUrl == h.baseUrl,
+                onUse: () => onUseHub(h, publish: false),
+                onUseAndShare: () => onUseHub(h, publish: true),
+              ),
+            ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: onManualEntry,
+              icon: const Icon(Icons.edit, size: 16),
+              label: const Text('Ingresar IP manualmente'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HubTile extends StatelessWidget {
+  final DiscoveredAgent agent;
+  final bool active;
+  final VoidCallback onUse;
+  final VoidCallback onUseAndShare;
+
+  const _HubTile({
+    required this.agent,
+    required this.active,
+    required this.onUse,
+    required this.onUseAndShare,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: active ? const Color(0xFFEFFDF4) : const Color(0xFFF9FAFB),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: active ? const Color(0xFF22C55E) : MangoColors.cardBorder,
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            active ? Icons.check_circle : Icons.dns,
+            size: 18,
+            color: active ? const Color(0xFF22C55E) : MangoColors.muted,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  agent.name,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: MangoColors.darkGray,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                SelectableText(
+                  agent.baseUrl,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: MangoColors.muted,
+                  ),
+                ),
+                if (agent.version != null || agent.cloudQueue)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Wrap(
+                      spacing: 6,
+                      children: [
+                        if (agent.version != null)
+                          _Chip(
+                            label: 'v${agent.version}',
+                            color: const Color(0xFFFFEDD5),
+                            text: const Color(0xFF9A3412),
+                          ),
+                        if (agent.cloudQueue)
+                          const _Chip(
+                            label: 'cloud queue',
+                            color: Color(0xFFDCFCE7),
+                            text: Color(0xFF166534),
+                          ),
+                      ],
+                    ),
+                  ),
+                if (active)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 4),
+                    child: Text(
+                      'En uso en este dispositivo',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF166534),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          PopupMenuButton<String>(
+            tooltip: 'Activar este hub',
+            onSelected: (v) {
+              if (v == 'use') onUse();
+              if (v == 'share') onUseAndShare();
+            },
+            itemBuilder: (ctx) => const [
+              PopupMenuItem(
+                value: 'use',
+                child: Text('Usar solo en este dispositivo'),
+              ),
+              PopupMenuItem(
+                value: 'share',
+                child: Text('Usar y compartir con el negocio'),
+              ),
+            ],
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF97316),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Activar',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  Icon(Icons.arrow_drop_down, color: Colors.white, size: 16),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Chip extends StatelessWidget {
+  final String label;
+  final Color color;
+  final Color text;
+  const _Chip({required this.label, required this.color, required this.text});
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          color: text,
+        ),
       ),
     );
   }

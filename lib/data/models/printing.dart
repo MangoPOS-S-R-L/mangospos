@@ -51,6 +51,7 @@ class PrinterDevice {
     this.encoding = 'CP437',
     required this.createdAt,
     this.hostDeviceId,
+    this.fallbackPrinterId,
   });
 
   final String id;
@@ -71,6 +72,12 @@ class PrinterDevice {
   /// `PrinterConfig.hostDeviceId` al construir vía `fromConfig`.
   final String? hostDeviceId;
 
+  /// Sprint 3 — impresora de respaldo. Si esta impresora falla al
+  /// imprimir un job, `fn_complete_print_job` redirige el job a esta
+  /// secundaria automáticamente (failover inmediato, 1 nivel).
+  /// NULL = sin respaldo (sigue retries normales).
+  final String? fallbackPrinterId;
+
   factory PrinterDevice.fromMap(Map<String, dynamic> map) {
     final normalized = PrinterFieldMapper.normalize(map);
     return PrinterDevice(
@@ -88,6 +95,7 @@ class PrinterDevice {
       encoding: normalized['encoding'] as String,
       createdAt: normalized['created_at'] as DateTime,
       hostDeviceId: map['host_device_id'] as String?,
+      fallbackPrinterId: map['fallback_printer_id'] as String?,
     );
   }
 
@@ -107,6 +115,7 @@ class PrinterDevice {
       encoding: config.encoding,
       createdAt: config.createdAt,
       hostDeviceId: config.hostDeviceId,
+      fallbackPrinterId: config.fallbackPrinterId,
     );
   }
 
@@ -146,6 +155,8 @@ class PrinterDevice {
     int? paperWidth,
     String? encoding,
     DateTime? createdAt,
+    String? hostDeviceId,
+    String? fallbackPrinterId,
   }) {
     return PrinterDevice(
       id: id ?? this.id,
@@ -161,6 +172,8 @@ class PrinterDevice {
       paperWidth: paperWidth ?? this.paperWidth,
       encoding: encoding ?? this.encoding,
       createdAt: createdAt ?? this.createdAt,
+      hostDeviceId: hostDeviceId ?? this.hostDeviceId,
+      fallbackPrinterId: fallbackPrinterId ?? this.fallbackPrinterId,
     );
   }
 }
@@ -281,6 +294,10 @@ class PrinterConfig {
   /// el frontend lookups `device_agents.agent_url` y rutea via HTTP.
   final String? hostDeviceId;
 
+  /// Sprint 3 — impresora de respaldo (failover inmediato, 1 nivel).
+  /// NULL = sin respaldo.
+  final String? fallbackPrinterId;
+
   const PrinterConfig({
     required this.id,
     required this.businessId,
@@ -296,6 +313,7 @@ class PrinterConfig {
     this.lastSeen,
     required this.createdAt,
     this.hostDeviceId,
+    this.fallbackPrinterId,
   });
 
   factory PrinterConfig.fromMap(Map<String, dynamic> map) {
@@ -315,6 +333,7 @@ class PrinterConfig {
       lastSeen: normalized['last_seen'] as DateTime?,
       createdAt: normalized['created_at'] as DateTime,
       hostDeviceId: map['host_device_id'] as String?,
+      fallbackPrinterId: map['fallback_printer_id'] as String?,
     );
   }
 
@@ -345,6 +364,7 @@ class PrinterConfig {
       'last_seen': lastSeen?.toIso8601String(),
       'created_at': createdAt.toIso8601String(),
       'host_device_id': hostDeviceId,
+      'fallback_printer_id': fallbackPrinterId,
     };
   }
 }

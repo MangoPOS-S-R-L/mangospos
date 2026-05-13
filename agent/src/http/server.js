@@ -22,6 +22,7 @@ const { logger, baseDir, AGENT_ID, LOCAL_PORT } = require('../config');
 const { stopExistingAgentOnLocalPort } = require('../platform/windows');
 const { sendRawTcp, checkPrinterStatus } = require('../network/tcp');
 const queue = require('../queue/store');
+const queueWorker = require('../queue/worker');
 const discoveryService = require('../core/discovery');
 const { requireAuth, logStartupMode: logAuthStartupMode } = require('./auth');
 
@@ -54,7 +55,20 @@ const buildApp = () => {
         version: '1.0.0',
     });
     app.get('/health', (_req, res) => res.json(healthPayload()));
-    app.get('/status', (_req, res) => res.json({ ...healthPayload(), status: 'online' }));
+    // Sprint 4 — /status incluye el snapshot del dispatcher concurrente
+    // (impresoras activas, jobs en cola por impresora). Útil para que
+    // la pantalla de diagnóstico del frontend muestre throughput vivo.
+    app.get('/status', (_req, res) => {
+        let workerStats = null;
+        try {
+            workerStats = queueWorker.stats();
+        } catch (_) { /* worker no inicializado todavía */ }
+        res.json({
+            ...healthPayload(),
+            status: 'online',
+            worker: workerStats,
+        });
+    });
 
     // ── Auth gate (Fase 1.2) ────────────────────────────────────────
     // A partir de aquí, todos los endpoints requieren JWT válido

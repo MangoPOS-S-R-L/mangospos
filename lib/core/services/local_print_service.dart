@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../printing/agent_discovery.dart';
 import 'agent_auth.dart';
 
 class LocalPrintService {
@@ -25,6 +26,12 @@ class LocalPrintService {
   /// Cached agent URL loaded from business_settings.agent_url.
   static String? _dbAgentUrl;
   static DateTime? _dbAgentUrlAt;
+
+  /// Sprint 2.2 — Cache de la última lista de hubs descubiertos vía mDNS
+  /// para que la UI (sprint 2.3) pueda mostrar el selector sin reescanear.
+  /// Se refresca on-demand via [discoverAndPrime].
+  static List<DiscoveredAgent> _lastDiscovered = const [];
+  static DateTime? _lastDiscoveredAt;
 
   String? _resolvedBaseUrl;
   DateTime? _resolvedBaseUrlAt;
@@ -163,6 +170,60 @@ class LocalPrintService {
         debugPrint('[LocalPrintService] mirror primeBaseUrl to prefs: $e');
       }
     }());
+  }
+
+  /// Sprint 2.2 — Lista del último scan mDNS (vacía si nunca se escaneó
+  /// o si ningún hub respondió). La UI de selección (Sprint 2.3) la
+  /// consume para mostrar opciones al cajero.
+  static List<DiscoveredAgent> get lastDiscoveredAgents => _lastDiscovered;
+
+  /// Sprint 2.2 — Timestamp del último scan mDNS. La UI lo usa para
+  /// mostrar "última detección hace Xs" y para decidir si re-escanear.
+  static DateTime? get lastDiscoveredAt => _lastDiscoveredAt;
+
+  /// Sprint 2.2 — Escanea la LAN buscando print agents vía mDNS y, si
+  /// encuentra exactamente uno (o uno del [businessIdFilter]), lo prima
+  /// como baseUrl para que las próximas impresiones vayan directo sin
+  /// volver a probar localhost. Si hay varios, NO prima — deja que la
+  /// UI (Sprint 2.3) elija cuál usar.
+  ///
+  /// Retorna la lista descubierta. Resiliente: si mDNS falla, retorna
+  /// `[]` y el flujo legacy de [_resolveBaseUrl] (DB / localhost) sigue
+  /// funcionando.
+  static Future<List<DiscoveredAgent>> discoverAndPrime({
+    String? businessIdFilter,
+    Duration timeout = const Duration(seconds: 4),
+  }) async {
+    try {
+      final agents = await AgentDiscovery().discover(
+        timeout: timeout,
+        businessIdFilter: businessIdFilter,
+      );
+      _lastDiscovered = agents;
+      _lastDiscoveredAt = DateTime.now();
+
+      if (agents.length == 1) {
+        // Un solo hub en la LAN: auto-configurarse sin preguntar al cajero.
+        primeBaseUrl(agents.first.baseUrl);
+        debugPrint(
+          '[LocalPrintService] mDNS auto-prime -> ${agents.first.baseUrl} '
+          '(${agents.first.name})',
+        );
+      } else if (agents.isEmpty) {
+        debugPrint(
+          '[LocalPrintService] mDNS no encontró hubs. Cayendo a flujo legacy.',
+        );
+      } else {
+        debugPrint(
+          '[LocalPrintService] mDNS encontró ${agents.length} hubs. '
+          'Esperando selección manual (Sprint 2.3).',
+        );
+      }
+      return agents;
+    } catch (e) {
+      debugPrint('[LocalPrintService] discoverAndPrime falló: $e');
+      return const [];
+    }
   }
 
   static void clearPrimedBaseUrl() {

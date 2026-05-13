@@ -267,6 +267,8 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
     bool? isActive,
     int? paperWidth,
     String? encoding,
+    String? fallbackPrinterId,
+    bool clearFallback = false,
   }) async {
     final trimmedName = name.trim();
     if (trimmedName.isEmpty) {
@@ -291,6 +293,8 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         isActive: isActive,
         paperWidth: paperWidth,
         encoding: encoding?.trim().isEmpty == true ? null : encoding?.trim(),
+        fallbackPrinterId: fallbackPrinterId,
+        clearFallback: clearFallback,
       );
       await load(businessId: b, force: true);
       return true;

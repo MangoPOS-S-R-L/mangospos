@@ -182,6 +182,7 @@ class PrintingService {
           tableName: orderData['tableName']?.toString() ?? 'N/A',
           waiterName: orderData['waiterName']?.toString(),
           cashierName: _resolveCashierName(),
+          customerName: orderData['customerName']?.toString(),
           businessName: businessName,
           areaCode: areaCode,
           receiptItemDisplayMode: receiptItemDisplayMode,
@@ -196,8 +197,11 @@ class PrintingService {
             'body':
                 'Orden ${orderData['orderNumber'] ?? ''}\n'
                 'Mesa: ${orderData['tableName'] ?? 'N/A'}\n'
-                'Mesero: ${orderData['waiterName'] ?? 'N/A'}',
+                'Mesero: ${orderData['waiterName'] ?? 'N/A'}\n'
+                'Cliente: ${orderData['customerName'] ?? 'N/A'}',
           },
+          businessId: businessId,
+          orderId: orderId,
         );
       }
 
@@ -218,6 +222,11 @@ class PrintingService {
     required List<int> bytes,
     required String areaCode,
     required Map<String, dynamic> fallbackData,
+    // Sprint 1.3.b: necesarios para fallback al cloud queue cuando los
+    // intentos directos fallan. Si NO se pasan, el comportamiento es el
+    // legacy (los errores se propagan sin escalado a cloud).
+    String? businessId,
+    String? orderId,
   }) async {
     final errors = <String>[];
     String? firstPrintedPrinterId;
@@ -229,6 +238,8 @@ class PrintingService {
           bytes: bytes,
           areaCode: areaCode,
           fallbackData: fallbackData,
+          businessId: businessId,
+          orderId: orderId,
         );
         firstPrintedPrinterId ??= printer.id;
       } catch (e) {
@@ -250,98 +261,146 @@ class PrintingService {
     }
   }
 
+  /// Convierte bytes ESC/POS a hex string para almacenar en print_jobs.
+  String _bytesToHex(List<int> bytes) =>
+      bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
   Future<void> _printKitchenTicketToPrinter({
     required PrinterConfig printer,
     required List<int> bytes,
     required String areaCode,
     required Map<String, dynamic> fallbackData,
+    String? businessId,
+    String? orderId,
   }) async {
-    switch (printer.type) {
-      case 'network':
-        final ip = printer.ipAddress?.trim();
-        if (ip == null || ip.isEmpty) {
-          throw Exception('La impresora de red no tiene IP configurada.');
-        }
-        debugPrint(
-          '🖨️ Ruta seleccionada -> NETWORK assigned printer ${printer.name} (${printer.id}) @ $ip:${printer.port ?? 9100}',
-        );
-        if (kIsWeb) {
-          await _printingRepo.printRawViaAgent(
-            ip: ip,
-            port: printer.port ?? 9100,
-            data: bytes,
-          );
-          return;
-        }
-        try {
-          await _printingRepo.printRawDirectTcp(
-            ip: ip,
-            port: printer.port ?? 9100,
-            data: bytes,
-          );
-        } catch (e) {
+    // Sprint 1.3.b: el switch interno mantiene los 3 niveles de intento
+    // directo (TCP/agent HTTP, USB directo/agent, BT directo). Si TODOS
+    // los caminos directos fallan, el catch general escala el job al
+    // cloud queue — el agent (Sprint 1.2) lo retomará con backoff
+    // exponencial. Solo aplica si tenemos businessId (comportamiento
+    // legacy preservado cuando se llama sin contexto).
+    try {
+      switch (printer.type) {
+        case 'network':
+          final ip = printer.ipAddress?.trim();
+          if (ip == null || ip.isEmpty) {
+            throw Exception('La impresora de red no tiene IP configurada.');
+          }
           debugPrint(
-            '⚠️ Direct TCP failed for ${printer.name}, using LAN agent fallback: $e',
+            '🖨️ Ruta seleccionada -> NETWORK assigned printer ${printer.name} (${printer.id}) @ $ip:${printer.port ?? 9100}',
           );
-          await _printingRepo.printRawViaAgent(
-            ip: ip,
-            port: printer.port ?? 9100,
-            data: bytes,
-          );
-        }
-        return;
-      case 'usb':
-        debugPrint(
-          '🖨️ Ruta seleccionada -> LOCAL/USB assigned printer ${printer.name} (${printer.id}) path=${printer.devicePath ?? 'n/a'}',
-        );
-        if (kIsWeb) {
-          if (!await _printingRepo.isAgentUp()) {
-            throw Exception(
-              'La impresora USB está asignada, pero este flujo necesita el Agente Local activo en la PC donde está conectada.',
+          if (kIsWeb) {
+            await _printingRepo.printRawViaAgent(
+              ip: ip,
+              port: printer.port ?? 9100,
+              data: bytes,
+            );
+            return;
+          }
+          try {
+            await _printingRepo.printRawDirectTcp(
+              ip: ip,
+              port: printer.port ?? 9100,
+              data: bytes,
+            );
+          } catch (e) {
+            debugPrint(
+              '⚠️ Direct TCP failed for ${printer.name}, using LAN agent fallback: $e',
+            );
+            await _printingRepo.printRawViaAgent(
+              ip: ip,
+              port: printer.port ?? 9100,
+              data: bytes,
             );
           }
-          await _printingRepo.printRawViaAgentToPrinter(
-            printer: printer,
-            data: bytes,
-            meta: const {'source': 'kitchen_order'},
-          );
           return;
-        }
-
-        try {
-          await _printingRepo.printRawDirectUsb(printer: printer, data: bytes);
-        } catch (e) {
+        case 'usb':
           debugPrint(
-            '⚠️ Direct USB failed for ${printer.name}, using local agent fallback: $e',
+            '🖨️ Ruta seleccionada -> LOCAL/USB assigned printer ${printer.name} (${printer.id}) path=${printer.devicePath ?? 'n/a'}',
           );
-          if (!await _printingRepo.isAgentUp()) rethrow;
-          await _printingRepo.printRawViaAgentToPrinter(
-            printer: printer,
-            data: bytes,
-            meta: const {'source': 'kitchen_order'},
+          if (kIsWeb) {
+            if (!await _printingRepo.isAgentUp()) {
+              throw Exception(
+                'La impresora USB está asignada, pero este flujo necesita el Agente Local activo en la PC donde está conectada.',
+              );
+            }
+            await _printingRepo.printRawViaAgentToPrinter(
+              printer: printer,
+              data: bytes,
+              meta: const {'source': 'kitchen_order'},
+            );
+            return;
+          }
+
+          try {
+            await _printingRepo.printRawDirectUsb(printer: printer, data: bytes);
+          } catch (e) {
+            debugPrint(
+              '⚠️ Direct USB failed for ${printer.name}, using local agent fallback: $e',
+            );
+            if (!await _printingRepo.isAgentUp()) rethrow;
+            await _printingRepo.printRawViaAgentToPrinter(
+              printer: printer,
+              data: bytes,
+              meta: const {'source': 'kitchen_order'},
+            );
+          }
+          return;
+        case 'bluetooth':
+          debugPrint(
+            '🖨️ Ruta seleccionada -> BLUETOOTH direct GATT ${printer.name} (${printer.id})',
           );
-        }
-        return;
-      case 'bluetooth':
-        debugPrint(
-          '🖨️ Ruta seleccionada -> BLUETOOTH direct GATT ${printer.name} (${printer.id})',
+          // PRD 5 F3: impresión BT directa via flutter_blue_plus.
+          if (kIsWeb) {
+            throw Exception(
+              'La impresión Bluetooth no está disponible desde la Web.',
+            );
+          }
+          final btId = (printer.mac ?? printer.devicePath ?? '').trim();
+          if (btId.isEmpty) {
+            throw Exception(
+              'La impresora Bluetooth no tiene identificador para conectarse.',
+            );
+          }
+          await BluetoothPrintService.printRaw(remoteId: btId, data: bytes);
+          return;
+        default:
+          throw Exception('Tipo de impresora no soportado: ${printer.type}.');
+      }
+    } catch (e) {
+      // FALLBACK FINAL: si tenemos businessId, escalamos al cloud queue.
+      // El agent retomará con retry/backoff. Si no, propagamos error
+      // legacy.
+      if (businessId == null || businessId.isEmpty) {
+        rethrow;
+      }
+      try {
+        final idempotencyKey = (orderId != null && orderId.isNotEmpty)
+            ? 'kitchen-$orderId-$areaCode-${printer.id}'
+            : null;
+        await _printingRepo.enqueuePrintJobToCloud(
+          businessId: businessId,
+          dataHex: _bytesToHex(bytes),
+          kind: 'kitchen_order',
+          areaCode: areaCode,
+          printerId: printer.id,
+          ip: printer.ipAddress,
+          port: printer.port,
+          idempotencyKey: idempotencyKey,
         );
-        // PRD 5 F3: impresión BT directa via flutter_blue_plus.
-        if (kIsWeb) {
-          throw Exception(
-            'La impresión Bluetooth no está disponible desde la Web.',
-          );
-        }
-        final btId = (printer.mac ?? printer.devicePath ?? '').trim();
-        if (btId.isEmpty) {
-          throw Exception(
-            'La impresora Bluetooth no tiene identificador para conectarse.',
-          );
-        }
-        await BluetoothPrintService.printRaw(remoteId: btId, data: bytes);
-        return;
-      default:
-        throw Exception('Tipo de impresora no soportado: ${printer.type}.');
+        debugPrint(
+          '🆘 Cloud queue fallback OK para ${printer.name}: agent retomará. (original: $e)',
+        );
+        // Importante: NO rethrow. El job ya está encolado; el cajero NO
+        // ve error. Se imprimirá cuando la impresora vuelva o falla tras
+        // 5 retries (entonces aparece en dashboard como failed).
+      } catch (cloudErr) {
+        debugPrint(
+          '❌ Cloud queue fallback FALLÓ: $cloudErr (intento directo: $e)',
+        );
+        // Propagamos el error original (es más informativo para el cajero).
+        rethrow;
+      }
     }
   }
 
@@ -385,6 +444,7 @@ class PrintingService {
             *,
             table_sessions(
               people_count,
+              customer_name,
               dining_tables(code, label),
               waiter:profiles!waiter_user_id(full_name),
               opener:profiles!opened_by(full_name)
@@ -400,6 +460,12 @@ class PrintingService {
       final tableSession = data['table_sessions'] as Map<String, dynamic>?;
       final diningTable =
           tableSession?['dining_tables'] as Map<String, dynamic>?;
+
+      // Cliente de la mesa (table_sessions.customer_name). El mesero lo
+      // captura al abrir la mesa; se muestra en la comanda para que
+      // cocina identifique el cliente.
+      final customerName = (tableSession?['customer_name'] as String?)
+          ?.trim();
 
       // Resolver nombre de la mesa
       String? resolvedTableName;
@@ -431,6 +497,9 @@ class PrintingService {
             data['id'].toString().substring(0, 8).toUpperCase(),
         'tableName': resolvedTableName ?? fallbackTableName,
         'waiterName': resolvedWaiterName ?? fallbackWaiterName,
+        'customerName': (customerName != null && customerName.isNotEmpty)
+            ? customerName
+            : null,
         'peopleCount': tableSession?['people_count'] ?? 1,
         'createdAt': data['created_at'] != null
             ? DateTime.tryParse(data['created_at'].toString())
@@ -442,6 +511,7 @@ class PrintingService {
         'orderNumber': '',
         'tableName': null,
         'waiterName': null,
+        'customerName': null,
         'peopleCount': 1,
         'createdAt': DateTime.now().toIso8601String(),
       };
@@ -449,9 +519,14 @@ class PrintingService {
   }
 
   /// Resuelve el nombre del cajero/usuario activo para imprimir en el
-  /// header y footer de la comanda. Lee del `auth.currentUser` con
-  /// fallback a metadata fields y al email. Si no hay sesion devuelve
-  /// null y el ticket omite el bloque CAJERO.
+  /// header y footer de la comanda. Cascada: metadata.full_name →
+  /// metadata.name → metadata.display_name. Si nada de eso existe,
+  /// devolvemos null y el ticket omite el bloque CAJERO.
+  ///
+  /// NO usamos email como fallback: los tickets impresos son
+  /// documentos físicos que pueden quedar a la vista del cliente,
+  /// y exponer info sensible del personal (email corporativo) no
+  /// corresponde. Si no hay nombre, mejor omitir la línea.
   String? _resolveCashierName() {
     try {
       final user = _client.auth.currentUser;
@@ -460,7 +535,6 @@ class PrintingService {
       final raw = (metadata['full_name'] ??
               metadata['name'] ??
               metadata['display_name'] ??
-              user.email ??
               '')
           .toString()
           .trim();
@@ -562,6 +636,9 @@ class PrintingService {
         tableName: tableName,
         waiterName: waiterName,
         cashierName: _resolveCashierName(),
+        // Modo offline / pre-confirmación: el customer viene del state
+        // local que el cajero capturó al abrir la mesa.
+        customerName: localState.customerName,
         businessName: resolvedBusinessName,
         areaCode: areaCode,
         receiptItemDisplayMode: receiptItemDisplayMode,
@@ -581,6 +658,8 @@ class PrintingService {
               'Mesa: $tableName\n'
               'Mesero: ${waiterName ?? 'N/A'}',
         },
+        businessId: businessId,
+        orderId: order.id,
       );
     }
 
@@ -634,6 +713,7 @@ class PrintingService {
           tableName: orderData['tableName']?.toString() ?? 'N/A',
           waiterName: orderData['waiterName']?.toString(),
           cashierName: _resolveCashierName(),
+          customerName: orderData['customerName']?.toString(),
           businessName: businessName,
           areaCode: areaCode,
           isReprint: true,
@@ -648,6 +728,8 @@ class PrintingService {
             'title': 'REIMPRESIÓN ${orderData['tableName'] ?? 'COCINA'}',
             'body': 'Orden ${orderData['orderNumber'] ?? ''}',
           },
+          businessId: businessId,
+          orderId: orderId,
         );
       }
     } on ItemsWithoutPrintAreaException {
@@ -718,6 +800,7 @@ class PrintingService {
           tableName: orderData['tableName']?.toString() ?? 'N/A',
           waiterName: orderData['waiterName']?.toString(),
           cashierName: _resolveCashierName(),
+          customerName: orderData['customerName']?.toString(),
           businessName: businessName,
           areaCode: areaCode,
           isReprint: true,
@@ -735,6 +818,8 @@ class PrintingService {
                 'Mesa: ${orderData['tableName'] ?? 'N/A'}\n'
                 'Estado: LISTO',
           },
+          businessId: businessId,
+          orderId: orderId,
         );
       }
     } on ItemsWithoutPrintAreaException {
