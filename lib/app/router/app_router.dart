@@ -37,6 +37,7 @@ import '../../presentation/dashboard/dashboard_view.dart';
 import '../../presentation/shell/main_shell.dart';
 import '../../presentation/cashier/view/cashier_view.dart';
 import '../../presentation/cashier/view/cash_closures_view.dart';
+import '../../presentation/cashier/cash_sessions_health/cash_sessions_health_view.dart';
 import '../../presentation/cashier/view/income_expense_view.dart';
 import '../../presentation/cashier/view/sales_history_view.dart';
 import '../../presentation/kitchen/view/kitchen_view.dart';
@@ -55,6 +56,7 @@ import '../../presentation/promos/view/discounts_view.dart';
 import '../../presentation/products/view/products_view.dart';
 import '../../presentation/branches/view/branch_management_view.dart';
 import '../../presentation/settings/cash_registers/view/cash_registers_view.dart';
+import '../../presentation/settings/business_features/business_features_view.dart';
 import '../../presentation/settings/cash_close_mode/cash_close_mode_view.dart';
 import '../../presentation/settings/currencies/view/currencies_view.dart';
 import '../../presentation/settings/regional/view/regional_view.dart';
@@ -390,6 +392,10 @@ class AppRouter {
             builder: (context, state) => const IncomeExpenseView(),
           ),
           GoRoute(
+            path: AppRoutes.cashierSessionsHealth,
+            builder: (context, state) => const CashSessionsHealthView(),
+          ),
+          GoRoute(
             path: AppRoutes.kitchen,
             builder: (context, state) => const KitchenView(),
           ),
@@ -527,6 +533,10 @@ class AppRouter {
           GoRoute(
             path: AppRoutes.settingsCashCloseMode,
             builder: (context, state) => const CashCloseModeView(),
+          ),
+          GoRoute(
+            path: AppRoutes.settingsBusinessFeatures,
+            builder: (context, state) => const BusinessFeaturesView(),
           ),
           GoRoute(
             path: AppRoutes.settingsCurrencies,

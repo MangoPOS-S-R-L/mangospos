@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart'; // kIsWeb
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/business/business_features_provider.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/state/taxes_state.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/viewmodel/taxes_viewmodel.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -697,44 +698,56 @@ class _NewItemDialogState extends ConsumerState<_NewItemDialog> {
                     ),
                     const SizedBox(height: 12),
 
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _sku,
-                            decoration: InputDecoration(
-                              labelText: 'Referencia (SKU) (opcional)',
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              enabledBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(
-                                  color: MangoColors.cardBorder,
+                    // Feature flag `barcode_enabled`: si el negocio no
+                      // usa códigos de barras (restaurante por menú), el
+                      // campo se oculta. SKU sigue visible — es referencia
+                      // interna.
+                      Builder(
+                      builder: (ctx) {
+                        final barcodeEnabled =
+                            ref.watchBusinessFeatures().barcodeEnabled;
+                        return Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: _sku,
+                                decoration: InputDecoration(
+                                  labelText: 'Referencia (SKU) (opcional)',
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    borderSide: BorderSide(
+                                      color: MangoColors.cardBorder,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: TextField(
-                            controller: _barcode,
-                            decoration: InputDecoration(
-                              labelText: 'Código de barras (opcional)',
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              enabledBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(
-                                  color: MangoColors.cardBorder,
+                            if (barcodeEnabled) ...[
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: TextField(
+                                  controller: _barcode,
+                                  decoration: InputDecoration(
+                                    labelText: 'Código de barras (opcional)',
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    enabledBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      borderSide: BorderSide(
+                                        color: MangoColors.cardBorder,
+                                      ),
+                                    ),
+                                  ),
                                 ),
                               ),
-                            ),
-                          ),
-                        ),
-                      ],
+                            ],
+                          ],
+                        );
+                      },
                     ),
                     const SizedBox(height: 12),
 

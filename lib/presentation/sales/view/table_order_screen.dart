@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/breakpoints.dart';
 import 'package:mangopos/app/theme/sizes.dart';
+import 'package:mangopos/core/business/business_features_provider.dart';
 import 'package:mangopos/core/utils/display_name_utils.dart';
 import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/data/models/sales_models.dart';
@@ -1113,6 +1114,30 @@ class _CartView extends ConsumerWidget {
     String? customerId,
     String? customerName,
   }) async {
+    // Feature flag `kitchen_enabled`: si la cocina está apagada y hay
+    // items draft/pending, los marcamos `ready` antes de abrir el pago
+    // para no atascarnos en validaciones de estado. NO imprimimos
+    // comanda — el negocio no tiene cocina.
+    final features = ref.read(businessFeaturesProvider).value ??
+        BusinessFeatures.defaults;
+    if (!features.kitchenEnabled) {
+      final hasOpenItems = ref
+          .read(currentOrderProvider)
+          .items
+          .any((i) => i.status == 'draft' || i.status == 'pending' ||
+              i.status == 'preparing');
+      if (hasOpenItems) {
+        try {
+          await ref.read(salesRepositoryProvider).markOrderItemsAsReady(order.id);
+          if (!context.mounted) return;
+          await ref.read(currentOrderProvider.notifier).refreshOrder();
+        } catch (e) {
+          debugPrint('[order] markOrderItemsAsReady falló: $e');
+          // No abortamos el cobro; el flujo legacy puede validar abajo.
+        }
+      }
+    }
+
     var currentOrderState = ref.read(currentOrderProvider);
     final fiscalConfigError = _buildFiscalConfigError(currentOrderState);
     if (fiscalConfigError != null) {
@@ -2420,7 +2445,12 @@ class _CartView extends ConsumerWidget {
                   ),
                   const SizedBox(height: 8),
                 ],
-                if (draftItems.isNotEmpty) ...[
+                // Feature flag `kitchen_enabled`: si el negocio no
+                // tiene cocina (minimarket, kiosko), escondemos "Enviar
+                // a Cocina". Los items se marcan como `ready` al cobrar
+                // (vía markOrderItemsAsReady), saltándose la comanda.
+                if (draftItems.isNotEmpty &&
+                    ref.watchBusinessFeatures().kitchenEnabled) ...[
                   // BOTON ENVIAR A COCINA (Show if there are DRAFT items in CURRENT view? Or global?
                   // Spec says: "Enviar a Cocina: Comportamiento NO cambia. Envía productos pendientes."
                   // So we should probably allow sending order if there are drafts, regardless of filters.

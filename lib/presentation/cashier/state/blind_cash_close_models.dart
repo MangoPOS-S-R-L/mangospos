@@ -25,6 +25,44 @@ class DenominationCount extends Equatable {
   List<Object?> get props => [value, label, count];
 }
 
+/// Sprint Caja Pro — Una entrada individual del listado de
+/// depósitos / retiros / gastos manuales del turno. Aparece en la
+/// hoja de cierre (pantalla + papel) para auditar movimiento por
+/// movimiento.
+class CashMovementEntry extends Equatable {
+  final String type;       // 'deposit' | 'withdrawal' | 'expense'
+  final double amount;
+  final String? reasonLabel;
+  final String? description;
+  final DateTime createdAt;
+
+  const CashMovementEntry({
+    required this.type,
+    required this.amount,
+    this.reasonLabel,
+    this.description,
+    required this.createdAt,
+  });
+
+  /// Etiqueta legible corta del tipo. Útil para el ticket térmico
+  /// donde el ancho es limitado.
+  String get typeShortLabel {
+    switch (type) {
+      case 'deposit':
+        return 'Depósito';
+      case 'withdrawal':
+        return 'Retiro';
+      case 'expense':
+        return 'Gasto';
+      default:
+        return type;
+    }
+  }
+
+  @override
+  List<Object?> get props => [type, amount, reasonLabel, description, createdAt];
+}
+
 class CashCloseInput extends Equatable {
   final int expectedCash;
   final int expectedCard;
@@ -35,6 +73,19 @@ class CashCloseInput extends Equatable {
   final String businessName;
   final int startAmount;
 
+  // Sprint Caja Pro — desglose Toast-style. Cada uno se popla desde
+  // fn_get_cash_session_summary y se imprime en el ticket de cierre.
+  final int cashSalesNet;
+  final int totalDeposits;
+  final int totalWithdrawals;
+  final int totalExpenses;
+
+  /// Sprint Caja Pro — Listado detallado de movimientos manuales del
+  /// turno (deposit/withdrawal/expense). Se renderiza en la hoja de
+  /// cierre y en el ticket impreso para auditoría. Vacío = no hubo
+  /// movimientos manuales (solo ventas y apertura).
+  final List<CashMovementEntry> movements;
+
   const CashCloseInput({
     required this.expectedCash,
     required this.expectedCard,
@@ -44,6 +95,11 @@ class CashCloseInput extends Equatable {
     this.cashierName = 'Admin',
     this.businessName = 'MangoPOS Restaurant',
     this.startAmount = 0,
+    this.cashSalesNet = 0,
+    this.totalDeposits = 0,
+    this.totalWithdrawals = 0,
+    this.totalExpenses = 0,
+    this.movements = const [],
   });
 
   int get expectedTotal => expectedCash + expectedCard + expectedTransfer;
@@ -59,6 +115,11 @@ class CashCloseInput extends Equatable {
     cashierName,
     businessName,
     startAmount,
+    cashSalesNet,
+    totalDeposits,
+    totalWithdrawals,
+    totalExpenses,
+    movements,
   ];
 }
 

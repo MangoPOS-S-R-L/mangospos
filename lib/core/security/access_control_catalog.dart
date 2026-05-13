@@ -267,6 +267,15 @@ const accessPermissions = <AccessPermission>[
     description: 'Consulta ingresos, egresos y movimientos de caja.',
   ),
   AccessPermission(
+    code: 'caja.movimientos_crear',
+    label: 'Registrar ingresos / retiros / gastos',
+    categoryId: 'finance',
+    categoryLabel: 'Finanzas',
+    description:
+        'Permite registrar manualmente depósitos, retiros y gastos de '
+        'caja. Sin este permiso, el usuario solo puede consultarlos.',
+  ),
+  AccessPermission(
     code: 'caja.arqueo_ver',
     label: 'Ver arqueos',
     categoryId: 'finance',
@@ -651,6 +660,7 @@ final rolePresets = <String, RolePresetDefinition>{
       'caja.apertura',
       'caja.cierre',
       'caja.movimientos_ver',
+      'caja.movimientos_crear',
       'caja.arqueo_ver',
       'kds.acceso',
       'kds.ver_comandas',

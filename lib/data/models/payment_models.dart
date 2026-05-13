@@ -139,6 +139,11 @@ class CashTransaction extends Equatable {
   final String? relatedOrderId;
   final DateTime createdAt;
 
+  /// Sprint Caja Pro — code de la razón estructurada (catálogo
+  /// `cash_transaction_reasons`). NULL en transacciones legacy o
+  /// generadas por el sistema (ventas).
+  final String? reasonCode;
+
   const CashTransaction({
     required this.id,
     required this.sessionId,
@@ -147,6 +152,7 @@ class CashTransaction extends Equatable {
     this.description,
     this.relatedOrderId,
     required this.createdAt,
+    this.reasonCode,
   });
 
   factory CashTransaction.fromMap(Map<String, dynamic> map) {
@@ -158,6 +164,7 @@ class CashTransaction extends Equatable {
       description: map['description'],
       relatedOrderId: map['related_order_id'],
       createdAt: DateTime.tryParse(map['created_at'] ?? '') ?? DateTime.now(),
+      reasonCode: map['reason_code'] as String?,
     );
   }
 
@@ -170,6 +177,7 @@ class CashTransaction extends Equatable {
     description,
     relatedOrderId,
     createdAt,
+    reasonCode,
   ];
 }
 

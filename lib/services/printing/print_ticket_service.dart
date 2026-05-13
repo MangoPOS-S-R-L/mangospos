@@ -1415,6 +1415,94 @@ class PrintTicketService {
     }
   }
 
+  /// Sprint Caja Pro — Recibo de movimiento manual de caja
+  /// (ingreso, retiro o gasto). Se imprime al confirmar el movimiento
+  /// para que el cajero entregue copia física a quien recibe/firma.
+  static PrintTicket generateCashMovementReceipt({
+    required String businessName,
+    required String movementType, // 'deposit' | 'withdrawal' | 'expense'
+    required double amount,
+    required String reasonLabel,
+    String? description,
+    String? cashierName,
+    String? approvedByName,
+    String? sessionId,
+    DateTime? when,
+  }) {
+    final gen = EscPosGenerator(paperWidth: 80);
+    gen.initialize();
+
+    gen.lineFeed();
+    gen.setTextSize(width: 2, height: 2);
+    gen.setBold(true);
+    gen.textCentered(businessName);
+    gen.setBold(false);
+    gen.setTextSize();
+    gen.lineFeed();
+    gen.doubleSeparator();
+
+    final (title, prefix) = switch (movementType) {
+      'deposit'    => ('INGRESO A CAJA', '+ '),
+      'withdrawal' => ('RETIRO DE CAJA', '- '),
+      'expense'    => ('GASTO DE CAJA',  '- '),
+      _            => ('MOVIMIENTO',      ''),
+    };
+
+    gen.setTextSize(width: 2, height: 2);
+    gen.setBold(true);
+    gen.textCentered(title);
+    gen.setBold(false);
+    gen.setTextSize();
+    gen.separator();
+
+    final now = when ?? DateTime.now();
+    gen.text('Fecha: ${_formatDate(now)}');
+    gen.text('Hora:  ${_formatTime(now)}');
+    if (sessionId != null && sessionId.isNotEmpty) {
+      gen.text('Sesión: ${sessionId.substring(0, 8).toUpperCase()}');
+    }
+    if (cashierName != null && cashierName.isNotEmpty) {
+      gen.text('Cajero: ${cashierName.toUpperCase()}');
+    }
+    if (approvedByName != null && approvedByName.isNotEmpty) {
+      gen.text('Autorizado por: ${approvedByName.toUpperCase()}');
+    }
+    gen.separator();
+
+    gen.setBold(true);
+    gen.text('RAZÓN:');
+    gen.setBold(false);
+    gen.text(reasonLabel);
+    if (description != null && description.isNotEmpty) {
+      gen.lineFeed();
+      gen.setBold(true);
+      gen.text('Nota:');
+      gen.setBold(false);
+      gen.text(description);
+    }
+    gen.doubleSeparator();
+
+    gen.setBold(true);
+    gen.setTextSize(width: 2, height: 2);
+    gen.textRow('MONTO:', '$prefix RD\$ ${_formatMoney(amount)}');
+    gen.setTextSize();
+    gen.setBold(false);
+    gen.lineFeed();
+
+    gen.text('______________________________');
+    gen.textCentered('Firma');
+    gen.lineFeed();
+
+    gen.textCentered(_formatDateTime(now));
+    gen.lineFeed();
+    gen.cut();
+
+    return PrintTicket(
+      type: 'cash_movement',
+      escPosCommands: gen.getCommands(),
+    );
+  }
+
   /// Formatear fecha (solo día/mes/año)
   static String _formatDate(DateTime dt) {
     final ast = AppTime.astFromInstant(dt);

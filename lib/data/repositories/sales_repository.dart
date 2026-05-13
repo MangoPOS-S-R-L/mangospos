@@ -1279,6 +1279,27 @@ class SalesRepository {
     }
   }
 
+  /// Feature flag: cuando `kitchen_enabled = false`, los items se
+  /// marcan directamente como `ready` sin pasar por cocina. Para
+  /// negocios sin preparación (tiendas, kioskos, minimarkets).
+  ///
+  /// Update directo sobre order_items (sin RPC) porque
+  /// fn_confirm_order_to_kitchen genera print_jobs de comanda, que es
+  /// justo lo que queremos saltarnos.
+  Future<void> markOrderItemsAsReady(String orderId) async {
+    try {
+      await _client
+          .from('order_items')
+          .update({'status': 'ready'})
+          .eq('order_id', orderId)
+          .inFilter('status', ['draft', 'pending', 'preparing']);
+      // El status_ext de la orden lo gestionan otros triggers según el
+      // flujo de pago — no lo tocamos acá para no romper checks/payments.
+    } catch (e) {
+      throw Exception('Error al marcar items como listos: $e');
+    }
+  }
+
   // ============================================================
   // 📄 DIVISIÓN DE CUENTA (SPLIT BILL)
   // ============================================================

@@ -502,24 +502,178 @@ class CashierRepository {
         .toList(growable: false);
   }
 
+  /// Sprint Caja Pro — Crea un movimiento manual (deposit/withdrawal/
+  /// expense) vía RPC `fn_cash_transaction_create`. La RPC valida que
+  /// la sesión esté abierta, que la razón exista en el catálogo del
+  /// negocio, y que se haya pasado `approvedBy` si la razón o el monto
+  /// lo exigen.
+  ///
+  /// El INSERT directo a `cash_transactions` se mantuvo durante
+  /// la transición pero los nuevos call sites deben pasar `reasonCode`
+  /// y, cuando aplique, `approvedBy`.
   Future<CashTransaction> createManualTransaction({
     required String sessionId,
     required double amount,
     required String type,
+    required String reasonCode,
     String? description,
+    String? createdBy,
+    String? approvedBy,
   }) async {
-    final data = await _client
-        .from('cash_transactions')
-        .insert({
-          'session_id': sessionId,
-          'amount': amount,
-          'type': type,
-          'description': description,
-        })
-        .select()
-        .single();
+    try {
+      final response = await _client.rpc(
+        'fn_cash_transaction_create',
+        params: {
+          'p_session_id': sessionId,
+          'p_type': type,
+          'p_amount': amount,
+          'p_reason_code': reasonCode,
+          'p_description': description,
+          'p_created_by':
+              createdBy ?? _client.auth.currentUser?.id,
+          'p_approved_by': approvedBy,
+        },
+      );
+      if (response is Map) {
+        return CashTransaction.fromMap(Map<String, dynamic>.from(response));
+      }
+      // Fallback defensivo: si la RPC retorna lista (algunas configs).
+      if (response is List && response.isNotEmpty) {
+        return CashTransaction.fromMap(
+          Map<String, dynamic>.from(response.first as Map),
+        );
+      }
+      throw CashRegisterException(
+        errorCode: 'EMPTY_RESPONSE',
+        message: 'No se pudo registrar el movimiento.',
+      );
+    } catch (e) {
+      // Mapear errores comunes de la RPC a mensajes para el cajero.
+      final msg = e.toString();
+      if (msg.contains('APPROVAL_REQUIRED')) {
+        throw CashRegisterException(
+          errorCode: 'APPROVAL_REQUIRED',
+          message:
+              'Este movimiento requiere autorización con PIN de supervisor.',
+        );
+      }
+      if (msg.contains('REASON_NOT_FOUND')) {
+        throw CashRegisterException(
+          errorCode: 'REASON_NOT_FOUND',
+          message:
+              'La razón seleccionada no está configurada para este negocio.',
+        );
+      }
+      if (msg.contains('REASON_WRONG_TYPE')) {
+        throw CashRegisterException(
+          errorCode: 'REASON_WRONG_TYPE',
+          message: 'Esta razón no aplica al tipo de movimiento elegido.',
+        );
+      }
+      if (msg.contains('SESSION_NOT_OPEN')) {
+        throw CashRegisterException(
+          errorCode: 'SESSION_NOT_OPEN',
+          message: 'La caja ya no está abierta. Recargá la pantalla.',
+        );
+      }
+      rethrow;
+    }
+  }
 
-    return CashTransaction.fromMap(data);
+  /// Sprint Caja Pro Fase D — Marca la sesión cerrada con
+  /// `variance_flagged=true` para que el dashboard pueda filtrar
+  /// cierres que superaron el umbral configurado. Se llama post-close
+  /// como fire-and-forget; si falla no rompe el cierre.
+  Future<void> markSessionVarianceFlagged(String sessionId) async {
+    await _client
+        .from('cash_register_sessions')
+        .update({'variance_flagged': true})
+        .eq('id', sessionId);
+  }
+
+  /// Sprint Caja Pro Fase D — Lee el umbral configurado por el negocio
+  /// para alertar sobre varianza al cerrar. Si la diferencia absoluta
+  /// excede este monto, la UI pide confirmación + nota antes de cerrar.
+  /// 0 = sin umbral (no se alerta).
+  Future<double> getVarianceAlertThreshold(String businessId) async {
+    try {
+      final row = await _client
+          .from('business_settings')
+          .select('cash_variance_alert_threshold')
+          .eq('business_id', businessId)
+          .maybeSingle();
+      final v = row?['cash_variance_alert_threshold'];
+      if (v is num) return v.toDouble();
+      if (v is String) return double.tryParse(v) ?? 0;
+      return 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// Sprint Caja Pro Fase D — Lee la vista `v_cash_sessions_health`
+  /// para el dashboard del admin. Devuelve todas las sesiones del
+  /// negocio (abiertas y cerradas recientes) con saldo vivo + bandera
+  /// `needs_attention`.
+  Future<List<Map<String, dynamic>>> getCashSessionsHealth({
+    required String businessId,
+    bool openOnly = false,
+  }) async {
+    var query = _client
+        .from('v_cash_sessions_health')
+        .select()
+        .eq('business_id', businessId);
+    if (openOnly) {
+      query = query.eq('status', 'open');
+    }
+    final response = await query.order('opened_at', ascending: false);
+    return List<Map<String, dynamic>>.from(response);
+  }
+
+  /// Sprint Caja Pro Fase D — Force-close por manager/admin/owner.
+  /// El monto contado puede ser null (no se hizo arqueo físico) — el
+  /// backend deja `difference = null` en ese caso.
+  Future<Map<String, dynamic>> forceCloseSession({
+    required String sessionId,
+    double? endAmount,
+    required String reason,
+  }) async {
+    final response = await _client.rpc(
+      'fn_force_close_cash_session',
+      params: {
+        'p_session_id': sessionId,
+        'p_end_amount': endAmount,
+        'p_reason': reason,
+        'p_forced_by': _client.auth.currentUser?.id,
+      },
+    );
+    if (response is Map) return Map<String, dynamic>.from(response);
+    if (response is List && response.isNotEmpty) {
+      return Map<String, dynamic>.from(response.first as Map);
+    }
+    return <String, dynamic>{};
+  }
+
+  /// Sprint Caja Pro — Lista las razones activas configuradas para un
+  /// negocio. Si `appliesTo` se pasa, filtra solo las que aplican a ese
+  /// tipo de movimiento (o universales, que aplican a cualquier tipo).
+  Future<List<Map<String, dynamic>>> getCashTransactionReasons({
+    required String businessId,
+    String? appliesTo,
+  }) async {
+    var query = _client
+        .from('cash_transaction_reasons')
+        .select('id, code, label, applies_to, requires_pin')
+        .eq('business_id', businessId)
+        .eq('is_active', true);
+
+    final response = await query.order('label', ascending: true);
+    final all = List<Map<String, dynamic>>.from(response);
+    if (appliesTo == null) return all;
+    return all
+        .where((r) =>
+            r['applies_to'] == null || r['applies_to'] == appliesTo)
+        .toList(growable: false);
   }
 
   /// Get the receipt printer ID assigned to a cash register.

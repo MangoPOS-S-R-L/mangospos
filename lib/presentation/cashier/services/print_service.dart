@@ -109,6 +109,32 @@ class CashClosePrintService {
     gen.textRow('Total Ventas', formatRD(input.totalSales));
     gen.textRow('Transacciones', input.transactionCount.toString());
     gen.doubleSeparator();
+
+    // Sprint Caja Pro — Listado detallado de depósitos / retiros /
+    // gastos del turno. Cada uno con razón y monto para auditoría
+    // (entrega de dinero a contador, banco, etc.).
+    if (input.movements.isNotEmpty) {
+      _renderMovementsSection(
+        gen,
+        title: 'DEPOSITOS DEL TURNO',
+        entries: input.movements.where((m) => m.type == 'deposit').toList(),
+        sign: '+',
+      );
+      _renderMovementsSection(
+        gen,
+        title: 'RETIROS DEL TURNO',
+        entries:
+            input.movements.where((m) => m.type == 'withdrawal').toList(),
+        sign: '-',
+      );
+      _renderMovementsSection(
+        gen,
+        title: 'GASTOS DEL TURNO',
+        entries: input.movements.where((m) => m.type == 'expense').toList(),
+        sign: '-',
+      );
+    }
+
     gen.text('Cajero: ${input.cashierName}');
     gen.text(
       'Impreso: ${formatDateEsDo(printedAt)} ${formatTimeEsDo(printedAt)}',
@@ -194,5 +220,35 @@ class CashClosePrintService {
 
   String _shortMoney(num amount) {
     return formatRD(amount).replaceFirst('RD\$ ', '');
+  }
+
+  /// Sprint Caja Pro — Renderiza una sección de movimientos manuales
+  /// del turno (depósitos, retiros o gastos) con razón + monto + total.
+  /// Si no hay entradas la sección se omite por completo.
+  void _renderMovementsSection(
+    EscPosGenerator gen, {
+    required String title,
+    required List<CashMovementEntry> entries,
+    required String sign,
+  }) {
+    if (entries.isEmpty) return;
+    gen.setBold(true);
+    gen.text(title);
+    gen.setBold(false);
+    var total = 0.0;
+    for (final m in entries) {
+      total += m.amount;
+      final label =
+          (m.reasonLabel?.trim().isNotEmpty == true ? m.reasonLabel!.trim() : '—');
+      // Línea con razón a la izquierda + monto con signo a la derecha.
+      // 28 chars máximo en el label para no romper papel de 80mm.
+      final shortLabel = label.length > 28 ? '${label.substring(0, 25)}...' : label;
+      gen.textRow(shortLabel, '$sign ${_shortMoney(m.amount)}');
+    }
+    gen.separator();
+    gen.setBold(true);
+    gen.textRow('Subtotal $title', '$sign ${formatRD(total)}');
+    gen.setBold(false);
+    gen.doubleSeparator();
   }
 }

@@ -11,6 +11,7 @@ import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/utils/responsive_utils.dart';
 import 'package:mangopos/presentation/cashier/widgets/blind_cash_close_dialog.dart';
 import 'package:mangopos/presentation/cashier/widgets/open_cash_dialog.dart';
+import 'package:mangopos/presentation/cashier/widgets/variance_confirm_dialog.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/data/utils/payment_amount_utils.dart';
 import 'package:mangopos/data/repositories/cashier_repository.dart';
@@ -335,14 +336,26 @@ class _CashierViewState extends ConsumerState<CashierView>
               'Dif. transferencia: ${result.transferDifference} | Dif. total: ${result.totalDifference}';
 
           try {
-            await ref
-                .read(cashierRepositoryProvider)
-                .closeSession(
-                  sessionId: session['id'].toString(),
-                  endAmount: result.totalCounted.toDouble(),
-                  notes: notes,
-                  forceWithOpenTables: forceWithOpenTables,
-                );
+            // Sprint Caja Pro Fase D — chequeo de varianza antes de
+            // cerrar. Si la diferencia supera el umbral del negocio,
+            // se pide nota obligatoria al admin/manager. Si cancela,
+            // el cierre se aborta acá.
+            final businessId =
+                ref.read(sessionProvider).activeBusinessId ?? '';
+            final closeResponse = await closeSessionWithVarianceCheck(
+              context: context,
+              ref: ref,
+              businessId: businessId,
+              sessionId: session['id'].toString(),
+              endAmount: result.totalCounted.toDouble(),
+              expectedCash: input.expectedCash.toDouble(),
+              notes: notes,
+              forceWithOpenTables: forceWithOpenTables,
+            );
+            if (closeResponse == null) {
+              // Cancelado por el usuario en el dialog de varianza.
+              return;
+            }
             // Audit del modo usado (no bloquea si falla — se reintenta luego).
             unawaited(
               ref
@@ -454,12 +467,27 @@ class _CashierViewState extends ConsumerState<CashierView>
                   'Tarjeta: ${snapshot.cardAmount} | '
                   'Transferencia: ${snapshot.transferAmount} | '
                   'Total reportado: ${snapshot.result.totalReported}';
-              await repo.closeSession(
+              // Sprint Caja Pro Fase D — chequeo de varianza antes de
+              // cerrar. Si supera el umbral del negocio, abre dialog
+              // con nota obligatoria. Si el manager cancela, el cierre
+              // se aborta antes del closeSession real.
+              final closeResponse = await closeSessionWithVarianceCheck(
+                context: context,
+                ref: ref,
+                businessId: businessId,
                 sessionId: sessionId,
                 endAmount: snapshot.cashAmount.toDouble(),
+                expectedCash: input.expectedCash.toDouble(),
                 notes: notes,
                 forceWithOpenTables: forceWithOpenTables,
               );
+              if (closeResponse == null) {
+                throw const CashRegisterException(
+                  errorCode: 'VARIANCE_CANCELLED',
+                  message:
+                      'Cierre cancelado por el usuario en alerta de varianza.',
+                );
+              }
               unawaited(
                 repo
                     .markSessionCloseMode(
@@ -580,6 +608,37 @@ class _CashierViewState extends ConsumerState<CashierView>
 
     if (!hasRealData) return emptyInput;
 
+    // Sprint Caja Pro — listado detallado de movimientos manuales
+    // (deposit/withdrawal/expense) + razón resuelta. Se renderiza en
+    // la hoja de cierre y en el ticket impreso para auditoría.
+    final allTx = await repository.getSessionTransactions(sessionId);
+    final reasonsCatalog =
+        await repository.getCashTransactionReasons(businessId: vm.businessId ?? '');
+    final reasonByCode = <String, String>{
+      for (final r in reasonsCatalog) (r['code'] as String): (r['label'] as String),
+    };
+    final movements = allTx
+        .where((tx) =>
+            tx.type == 'deposit' ||
+            tx.type == 'withdrawal' ||
+            tx.type == 'expense')
+        .map((tx) {
+          // Resolver el label de la razón desde el catálogo cuando exista
+          // un reason_code; si no, caer al texto libre (description).
+          final code = tx.reasonCode;
+          final label = (code != null && reasonByCode[code] != null)
+              ? reasonByCode[code]
+              : tx.description;
+          return CashMovementEntry(
+            type: tx.type,
+            amount: tx.amount,
+            reasonLabel: label,
+            description: tx.description,
+            createdAt: tx.createdAt,
+          );
+        })
+        .toList(growable: false);
+
     return CashCloseInput(
       expectedCash: expectedCash,
       expectedCard: expectedCard,
@@ -591,6 +650,12 @@ class _CashierViewState extends ConsumerState<CashierView>
           ? vm.businessName
           : emptyInput.businessName,
       startAmount: startAmount,
+      // Sprint Caja Pro — desglose para el ticket de cierre.
+      cashSalesNet: toInt(summary['cash_sales_net']),
+      totalDeposits: toInt(summary['total_deposits']),
+      totalWithdrawals: toInt(summary['total_withdrawals']),
+      totalExpenses: toInt(summary['total_expenses']),
+      movements: movements,
     );
   }
 
@@ -1066,6 +1131,22 @@ class _ActionCardsSection extends StatelessWidget {
           buttonColor: MangoColors.primaryOrange,
           enabled: true,
           onPressed: () => context.go(AppRoutes.cashierClosures),
+        ),
+      );
+      // Dashboard Salud de cajas (Sprint Caja Pro Fase D). Reuso del
+      // mismo permiso de cierres ya que es la auditoría natural del
+      // admin/manager. El cajero puro no lo ve.
+      coreCards.add(
+        _ActionCard(
+          icon: Icons.monitor_heart_outlined,
+          iconColor: MangoColors.successGreen,
+          iconBgColor: const Color(0xFFEFFDF4),
+          title: 'Salud de cajas',
+          subtitle: 'Sesiones abiertas, saldo vivo y forzar cierre',
+          buttonText: 'Ver',
+          buttonColor: MangoColors.successGreen,
+          enabled: true,
+          onPressed: () => context.go(AppRoutes.cashierSessionsHealth),
         ),
       );
     }

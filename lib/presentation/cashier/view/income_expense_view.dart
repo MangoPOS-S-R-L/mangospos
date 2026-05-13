@@ -7,6 +7,9 @@ import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/data/models/payment_models.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
+import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
+import 'package:mangopos/services/printing/print_ticket_service.dart';
+import 'package:mangopos/services/session/session_controller.dart';
 
 class IncomeExpenseView extends ConsumerStatefulWidget {
   const IncomeExpenseView({super.key});
@@ -19,6 +22,7 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
   final TextEditingController _amountController = TextEditingController();
   final TextEditingController _descriptionController = TextEditingController();
   String _selectedType = 'deposit';
+  String? _selectedReasonCode;
   bool _isSubmitting = false;
   late Future<_ManualCashData?> _future;
 
@@ -56,6 +60,26 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
     }
 
     final session = CashRegisterSession.fromMap(activeSessionData);
+
+    // Sprint Caja Pro — resolver business_id desde el cash_register
+    // para cargar el catálogo de razones del negocio.
+    String businessId = '';
+    try {
+      final crRow = await repository.getRegisterPrinterId(
+        session.cashRegisterId,
+      );
+      // getRegisterPrinterId no devuelve business; vamos por otro path.
+      // Truco: el cash_register tiene business_id, lo leemos directo.
+      // (Si más adelante se usa BusinessResolver alcanza tambien.)
+      businessId = crRow ?? '';
+    } catch (_) {}
+    if (businessId.isEmpty) {
+      try {
+        final cashierVm2 = ref.read(cashierViewModelProvider);
+        businessId = cashierVm2.businessId ?? '';
+      } catch (_) {}
+    }
+
     final transactions = await repository.getSessionTransactions(session.id);
     final manualTransactions = transactions
         .where(
@@ -66,7 +90,16 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
         )
         .toList();
 
-    return _ManualCashData(session: session, transactions: manualTransactions);
+    final reasons = businessId.isEmpty
+        ? const <Map<String, dynamic>>[]
+        : await repository.getCashTransactionReasons(businessId: businessId);
+
+    return _ManualCashData(
+      session: session,
+      transactions: manualTransactions,
+      reasons: reasons,
+      businessId: businessId,
+    );
   }
 
   Future<void> _refresh() async {
@@ -80,6 +113,24 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
   Future<void> _submit(_ManualCashData data) async {
     if (_isSubmitting) return;
 
+    // Defensa en profundidad — el form no debería renderizarse sin este
+    // permiso, pero validamos también acá por si una versión vieja del
+    // widget (cache, hot reload) bypassa el gate.
+    final canCreate = ref
+        .read(sessionProvider.notifier)
+        .hasPermission('caja.movimientos_crear');
+    if (!canCreate) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No tenés permiso para registrar movimientos de caja.',
+          ),
+          backgroundColor: Color(0xFFEF4444),
+        ),
+      );
+      return;
+    }
+
     final amount = double.tryParse(_amountController.text.replaceAll(',', '.'));
     if (amount == null || amount <= 0) {
       ScaffoldMessenger.of(
@@ -88,11 +139,19 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
       return;
     }
 
+    // La descripción es opcional ahora — la razón estructurada la
+    // reemplaza para auditoría. Si el cajero igual la deja, la
+    // guardamos como nota libre adicional.
     final description = _descriptionController.text.trim();
-    if (description.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Agrega una descripción')));
+
+    final reasonCode = _selectedReasonCode;
+    if (reasonCode == null || reasonCode.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Selecciona una razón antes de continuar'),
+          backgroundColor: Color(0xFFEA580C),
+        ),
+      );
       return;
     }
 
@@ -107,11 +166,30 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
             sessionId: data.session.id,
             amount: amount,
             type: _selectedType,
-            description: description,
+            reasonCode: reasonCode,
+            description: description.isEmpty ? null : description,
           );
+
+      // Sprint Caja Pro — Print receipt fire-and-forget. Si falla la
+      // impresión NO bloqueamos el flujo: el movimiento ya quedó
+      // registrado en BD. Solo logueamos.
+      final reasonLabel = data.reasons
+          .firstWhere(
+            (r) => r['code'] == reasonCode,
+            orElse: () => <String, dynamic>{'label': reasonCode},
+          )['label']
+          ?.toString();
+      _printMovementReceipt(
+        movementType: _selectedType,
+        amount: amount,
+        reasonLabel: reasonLabel ?? reasonCode,
+        description: description.isEmpty ? null : description,
+        sessionId: data.session.id,
+      );
 
       _amountController.clear();
       _descriptionController.clear();
+      setState(() => _selectedReasonCode = null);
       await _refresh();
 
       if (!mounted) return;
@@ -246,7 +324,207 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
     );
   }
 
+  /// Sprint Caja Pro — Imprime el recibo del movimiento que acabamos
+  /// de registrar. Resuelve la impresora vinculada a la caja registradora
+  /// (`cash_registers.receipt_printer_id`) y, si no existe, busca una
+  /// del área `cashier`/`fiscal` como fallback. Fire-and-forget: si la
+  /// impresión falla no bloqueamos al cajero, el movimiento ya quedó
+  /// guardado.
+  Future<void> _printMovementReceipt({
+    required String movementType,
+    required double amount,
+    required String reasonLabel,
+    String? description,
+    required String sessionId,
+  }) async {
+    try {
+      final cashierVm = ref.read(cashierViewModelProvider);
+      final registerId = cashierVm.currentRegisterId;
+      final repo = ref.read(printingPrintersRepositoryProvider);
+
+      // 1. Impresora asignada al cash_register.
+      var printer = registerId == null
+          ? null
+          : await ref.read(cashierRepositoryProvider).getRegisterPrinterId(registerId)
+              .then((pid) async => pid == null
+                  ? null
+                  : await repo.getPrinter(pid));
+
+      // 2. Fallback: impresora de área cashier/fiscal.
+      if (printer == null) {
+        final session = ref.read(sessionProvider);
+        final businessId = session.activeBusinessId;
+        if (businessId == null || businessId.isEmpty) return;
+        printer = await repo.getAssignedPrinterForType(
+          businessId: businessId,
+          preferredAreaCodes: const ['cashier', 'fiscal'],
+          printsPrebills: false,
+          printsReceipts: true,
+        );
+      }
+      if (printer == null) return;
+
+      // 3. Generar y mandar.
+      final session = ref.read(sessionProvider);
+      final businessName = (session.activeBusinessName ?? 'MangoPOS').trim();
+      final cashierName = session.userName ?? '';
+
+      final ticket = PrintTicketService.generateCashMovementReceipt(
+        businessName: businessName.isEmpty ? 'MangoPOS' : businessName,
+        movementType: movementType,
+        amount: amount,
+        reasonLabel: reasonLabel,
+        description: description,
+        cashierName: cashierName,
+        sessionId: sessionId,
+        when: DateTime.now(),
+      );
+
+      await repo.printEscPos(
+        printer: printer,
+        data: ticket.escPosCommands,
+        kind: 'cash_movement',
+        areaCode: 'cashier',
+        idempotencyKey: 'cashmov-$sessionId-${DateTime.now().millisecondsSinceEpoch}',
+      );
+    } catch (e) {
+      // Fire-and-forget: solo logueamos.
+      debugPrint('[CashMovement] recibo no impreso: $e');
+    }
+  }
+
+  /// Sprint Caja Pro — Razón obligatoria. La validación final está en
+  /// la RPC (`fn_cash_transaction_create`) — acá solo filtramos las
+  /// razones del catálogo que aplican al tipo seleccionado.
+  Widget _buildReasonDropdown(_ManualCashData data) {
+    final filtered = data.reasons
+        .where((r) =>
+            r['applies_to'] == null ||
+            r['applies_to'] == _selectedType)
+        .toList(growable: false);
+
+    if (filtered.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFFBEB),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFFFDE68A)),
+        ),
+        child: const Text(
+          'No hay razones configuradas para este tipo de movimiento. '
+          'Pedile al admin que las configure en Ajustes.',
+          style: TextStyle(fontSize: 12, color: Color(0xFF92400E)),
+        ),
+      );
+    }
+
+    // Si la razón seleccionada no aplica al tipo actual, la limpiamos.
+    final stillValid = _selectedReasonCode != null &&
+        filtered.any((r) => r['code'] == _selectedReasonCode);
+    if (_selectedReasonCode != null && !stillValid) {
+      // Diferir el reset al próximo frame para no llamar setState en build.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _selectedReasonCode = null);
+      });
+    }
+
+    return DropdownButtonFormField<String>(
+      initialValue: stillValid ? _selectedReasonCode : null,
+      isExpanded: true,
+      decoration: const InputDecoration(
+        labelText: 'Razón del movimiento',
+        helperText: 'Obligatorio para auditoría',
+        border: OutlineInputBorder(),
+      ),
+      items: filtered.map((r) {
+        final requiresPin = r['requires_pin'] == true;
+        return DropdownMenuItem<String>(
+          value: r['code']?.toString(),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  r['label']?.toString() ?? r['code']?.toString() ?? '',
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (requiresPin)
+                const Padding(
+                  padding: EdgeInsets.only(left: 6),
+                  child: Icon(
+                    Icons.lock_outline,
+                    size: 14,
+                    color: Color(0xFFEA580C),
+                  ),
+                ),
+            ],
+          ),
+        );
+      }).toList(),
+      onChanged: (v) => setState(() => _selectedReasonCode = v),
+    );
+  }
+
   Widget _buildForm(_ManualCashData data) {
+    // Permiso de escritura. Si el usuario no lo tiene (típicamente un
+    // cajero sin acceso a movimientos), mostramos un aviso bloqueante
+    // en vez del formulario. La lista de movimientos sí sigue visible
+    // — el cajero puede consultarlos.
+    final canCreate = ref
+        .read(sessionProvider.notifier)
+        .hasPermission('caja.movimientos_crear');
+
+    if (!canCreate) {
+      return Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF7ED),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(
+                Icons.lock_outline,
+                color: MangoColors.primaryOrange,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Solo lectura',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w800,
+                        ),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'No tenés permiso para registrar depósitos, retiros o '
+                    'gastos. Pedile a un supervisor o administrador que '
+                    'haga el movimiento. Sí podés ver los movimientos '
+                    'existentes abajo.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: MangoColors.muted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -290,6 +568,9 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
             onSelectionChanged: (selection) {
               setState(() {
                 _selectedType = selection.first;
+                // Reset razón al cambiar de tipo — algunas razones solo
+                // aplican a un tipo específico.
+                _selectedReasonCode = null;
               });
             },
           ),
@@ -305,11 +586,14 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
             ),
           ),
           const SizedBox(height: 16),
+          // Sprint Caja Pro — razón obligatoria.
+          _buildReasonDropdown(data),
+          const SizedBox(height: 16),
           TextField(
             controller: _descriptionController,
             maxLines: 3,
             decoration: InputDecoration(
-              labelText: 'Descripción',
+              labelText: 'Descripción (opcional)',
               hintText: _hintForType(_selectedType),
               border: const OutlineInputBorder(),
             ),
@@ -435,8 +719,15 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
 class _ManualCashData {
   final CashRegisterSession session;
   final List<CashTransaction> transactions;
+  final List<Map<String, dynamic>> reasons;
+  final String businessId;
 
-  const _ManualCashData({required this.session, required this.transactions});
+  const _ManualCashData({
+    required this.session,
+    required this.transactions,
+    required this.reasons,
+    required this.businessId,
+  });
 }
 
 class _MetricCard extends StatelessWidget {

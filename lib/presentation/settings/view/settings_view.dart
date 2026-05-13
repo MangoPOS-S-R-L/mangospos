@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/business/business_features_provider.dart';
 import 'package:mangopos/core/cache/cache_manager.dart';
+import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/presentation/settings/widgets/system_update_dialog.dart';
 
@@ -135,6 +137,11 @@ class SettingsView extends ConsumerWidget {
   }
 
   List<Widget> _sections(BuildContext context, WidgetRef ref) {
+    // Feature flag de inventario: si el negocio eligió "sin inventario",
+    // toda la sección desaparece del menú de Ajustes para no saturar la
+    // UI con módulos que no se van a usar.
+    final inventoryMode = ref.watchBusinessFeatures().inventoryMode;
+    final inventoryEnabled = inventoryMode.isEnabled;
     return [
       _SettingsSection(
         title: 'Negocio',
@@ -229,6 +236,14 @@ class SettingsView extends ConsumerWidget {
             icon: Icons.shield_outlined,
             color: Color(0xFFEDE9FE),
             route: AppRoutes.settingsCashCloseMode,
+          ),
+          _SettingsOption(
+            title: 'Modos de negocio',
+            subtitle:
+                'Activa/desactiva ventas por zona, cocina, código de barras',
+            icon: Icons.tune,
+            color: Color(0xFFFFEDD5),
+            route: AppRoutes.settingsBusinessFeatures,
           ),
           _SettingsOption(
             title: 'Gestión de Notas de Crédito',
@@ -376,57 +391,60 @@ class SettingsView extends ConsumerWidget {
             ),
         ],
       ),
-      _SettingsSection(
-        title: 'Almacenes e Inventario',
-        items: const [
-          _SettingsOption(
-            title: 'Inventario',
-            subtitle: 'Insumos, recetas, almacenes y proveedores',
-            icon: Icons.inventory_2_rounded,
-            color: Color(0xFFFFE6D5),
-            route: AppRoutes.inventoryHome,
-          ),
-          _SettingsOption(
-            title: 'Kardex por Sucursal',
-            subtitle: 'Historial de movimientos por ubicación',
-            icon: Icons.list_rounded,
-            color: Color(0xFFFFE6D5),
-          ),
-          _SettingsOption(
-            title: 'Registro de Salida de Inventario',
-            subtitle: 'Control de salidas de stock',
-            icon: Icons.logout_rounded,
-            color: Color(0xFFFFF0D9),
-            route: AppRoutes.inventoryOutflow,
-          ),
-          _SettingsOption(
-            title: 'Mover Inventario entre Almacenes',
-            subtitle: 'Transferencias entre almacenes',
-            icon: Icons.swap_horiz_rounded,
-            color: Color(0xFFEAF0FF),
-          ),
-          _SettingsOption(
-            title: 'Cuadre de Stock',
-            subtitle: 'Ajustes de inventario',
-            icon: Icons.inventory_rounded,
-            color: Color(0xFFE6F7EE),
-            route: AppRoutes.inventoryReconciliation,
-          ),
-          _SettingsOption(
-            title: 'Mermas o Perecederos',
-            subtitle: 'Registro de pérdidas',
-            icon: Icons.warning_rounded,
-            color: Color(0xFFFFEDED),
-          ),
-          _SettingsOption(
-            title: 'Requerimientos',
-            subtitle: 'Solicitudes de stock',
-            icon: Icons.assignment_rounded,
-            color: Color(0xFFF1F1F1),
-            route: AppRoutes.inventoryRequirements,
-          ),
-        ],
-      ),
+      if (inventoryEnabled)
+        _SettingsSection(
+          title: inventoryMode == InventoryMode.advanced
+              ? 'Almacenes e Inventario (recetas)'
+              : 'Almacenes e Inventario',
+          items: const [
+            _SettingsOption(
+              title: 'Inventario',
+              subtitle: 'Insumos, recetas, almacenes y proveedores',
+              icon: Icons.inventory_2_rounded,
+              color: Color(0xFFFFE6D5),
+              route: AppRoutes.inventoryHome,
+            ),
+            _SettingsOption(
+              title: 'Kardex por Sucursal',
+              subtitle: 'Historial de movimientos por ubicación',
+              icon: Icons.list_rounded,
+              color: Color(0xFFFFE6D5),
+            ),
+            _SettingsOption(
+              title: 'Registro de Salida de Inventario',
+              subtitle: 'Control de salidas de stock',
+              icon: Icons.logout_rounded,
+              color: Color(0xFFFFF0D9),
+              route: AppRoutes.inventoryOutflow,
+            ),
+            _SettingsOption(
+              title: 'Mover Inventario entre Almacenes',
+              subtitle: 'Transferencias entre almacenes',
+              icon: Icons.swap_horiz_rounded,
+              color: Color(0xFFEAF0FF),
+            ),
+            _SettingsOption(
+              title: 'Cuadre de Stock',
+              subtitle: 'Ajustes de inventario',
+              icon: Icons.inventory_rounded,
+              color: Color(0xFFE6F7EE),
+              route: AppRoutes.inventoryReconciliation,
+            ),
+            _SettingsOption(
+              title: 'Mermas o Perecederos',
+              subtitle: 'Registro de pérdidas',
+              icon: Icons.warning_rounded,
+              color: Color(0xFFFFEDED),
+            ),
+            _SettingsOption(
+              title: 'Requerimientos',
+              subtitle: 'Solicitudes de stock',
+              icon: Icons.assignment_rounded,
+              color: Color(0xFFF1F1F1),
+              route: AppRoutes.inventoryRequirements,
+            ),
+          ],
+        ),
       _SettingsSection(
         title: 'Compras',
         items: const [

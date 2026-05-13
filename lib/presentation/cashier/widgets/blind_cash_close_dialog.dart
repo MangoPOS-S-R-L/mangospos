@@ -34,7 +34,6 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
   bool _processingClose = false;
   bool _processingPrint = false;
   double _zoomFactor = 1.0;
-  bool _autoPrintTried = false;
   late final FocusNode _dialogFocusNode = FocusNode();
 
   @override
@@ -102,13 +101,11 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
         !_processingClose &&
         !_processingPrint;
 
-    // Auto-print al llegar al step result (una sola vez por dialog).
-    if (state.step == BlindCashCloseStep.result && !_autoPrintTried) {
-      _autoPrintTried = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _printResult(state, silent: true);
-      });
-    }
+    // 2026-05-13: removido el auto-print al entrar al step result.
+    // El cierre formal ya imprime una vez al confirmarse (ver
+    // `_closeSession` más abajo), y hay un botón manual "Imprimir"
+    // para reimprimir si el cajero lo necesita. El auto-print extra
+    // generaba un duplicado al cerrar el modal.
 
     final mq = MediaQuery.of(context);
     return PopScope(
