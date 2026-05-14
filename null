@@ -1,6 +1,7 @@
 
-	                   4	D:\MangoPos\Dev\mangopos\installer\windows\support\
+	                   5	D:\MangoPos\Dev\mangopos\installer\windows\support\
 	    New File  		     101	Diagnose-MangoPOS.cmd
 	    New File  		    3285	Diagnose-MangoPOS.ps1
+	    New File  		     735	Purge-MangoPOS-LocalState.ps1
 	    New File  		     107	Repair-MangoPOS-Network.cmd
 	    New File  		    1190	Repair-MangoPOS-Network.ps1

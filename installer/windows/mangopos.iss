@@ -67,8 +67,12 @@ Filename: "{cmd}"; Parameters: "/c taskkill /F /IM mangopos-agent.exe /T >nul 2>
 Filename: "{cmd}"; Parameters: "/c taskkill /F /IM mangopos-agent-service.exe /T >nul 2>&1"; Flags: runhidden waituntilterminated; Check: ShouldInstallAgent
 Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "stop"; Flags: runhidden waituntilterminated; Check: ShouldStopExistingAgentService
 Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "uninstall"; Flags: runhidden waituntilterminated; Check: ShouldStopExistingAgentService
+Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall delete rule name=""MangoPOS Agent HTTP"" >nul 2>&1"; Flags: runhidden waituntilterminated; StatusMsg: "Configurando firewall (HTTP)..."
+Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall add rule name=""MangoPOS Agent HTTP"" dir=in action=allow protocol=TCP localport=4000 profile=any program=""{app}\Agent\mangopos-agent.exe"" enable=yes"; Flags: runhidden waituntilterminated
+Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall delete rule name=""MangoPOS Agent mDNS"" >nul 2>&1"; Flags: runhidden waituntilterminated; StatusMsg: "Configurando firewall (mDNS)..."
+Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall add rule name=""MangoPOS Agent mDNS"" dir=in action=allow protocol=UDP localport=5353 profile=any program=""{app}\Agent\mangopos-agent.exe"" enable=yes"; Flags: runhidden waituntilterminated
 Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "install"; Flags: runhidden waituntilterminated; Check: ShouldInstallAgent
-Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "start"; Flags: runhidden waituntilterminated postinstall skipifsilent; Description: "Iniciar agente LAN de impresion"; Check: ShouldInstallAgent
+Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "start"; Flags: runhidden waituntilterminated; StatusMsg: "Iniciando agente LAN de impresion..."; Check: ShouldInstallAgent
 Filename: "{app}\Support\Diagnose-MangoPOS.cmd"; Flags: shellexec postinstall skipifsilent; Tasks: rundiagnostics; Description: "Ejecutar diagnostico de conectividad"
 
 [UninstallRun]
@@ -76,11 +80,10 @@ Filename: "{cmd}"; Parameters: "/c taskkill /F /IM mangopos-agent.exe /T >nul 2>
 Filename: "{cmd}"; Parameters: "/c taskkill /F /IM mangopos-agent-service.exe /T >nul 2>&1"; Flags: runhidden waituntilterminated; RunOnceId: "KillMangoPOSAgentWrapper"
 Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "stop"; Flags: runhidden waituntilterminated; RunOnceId: "StopMangoPOSAgentService"
 Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "uninstall"; Flags: runhidden waituntilterminated; RunOnceId: "UninstallMangoPOSAgentService"
+Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall delete rule name=""MangoPOS Agent HTTP"" >nul 2>&1"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveFirewallRuleHTTP"
+Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall delete rule name=""MangoPOS Agent mDNS"" >nul 2>&1"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveFirewallRuleMdns"
 
 [Code]
-var
-  AgentInstallSkipped: Boolean;
-
 function IsSupportedWindows: Boolean;
 var
   Version: TWindowsVersion;
@@ -142,26 +145,23 @@ end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  AgentInstallSkipped := AgentServiceRunning or AgentHealthEndpointRunning;
-
-  if AgentInstallSkipped then
-  begin
-    Log('MangoPOS Agent already running. Installer will skip agent file copy/service reinstall.');
-  end
+  if AgentServiceRunning or AgentHealthEndpointRunning then
+    Log('MangoPOS Agent detectado en ejecucion. Sera detenido y reemplazado por la version del instalador.')
   else
-  begin
-    Log('MangoPOS Agent not detected as running. Installer will install/start bundled agent.');
-  end;
+    Log('MangoPOS Agent no detectado. Se instalara desde cero.');
 
   Result := '';
 end;
 
 function ShouldInstallAgent: Boolean;
 begin
-  Result := not AgentInstallSkipped;
+  // Siempre actualizamos el agente: si esta corriendo, los pasos previos
+  // del [Run] section lo detienen (taskkill + WinSW stop+uninstall) y
+  // los archivos se sobreescriben gracias al flag `ignoreversion`.
+  Result := True;
 end;
 
 function ShouldStopExistingAgentService: Boolean;
 begin
-  Result := ShouldInstallAgent and AgentServiceRegistered;
+  Result := AgentServiceRegistered;
 end;
