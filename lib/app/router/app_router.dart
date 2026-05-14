@@ -49,6 +49,7 @@ import '../../presentation/inventory/view/suppliers_view.dart';
 import '../../presentation/inventory/view/warehouses_view.dart';
 import '../../presentation/inventory/view/requirements_view.dart';
 import '../../presentation/inventory/view/stock_reconciliation_view.dart';
+import '../../presentation/inventory/view/transfers_view.dart';
 import '../../presentation/purchases/view/purchases_list_view.dart';
 import '../../presentation/purchases/view/purchases_register_view.dart';
 import '../../presentation/promos/view/discounts_view.dart';
@@ -570,6 +571,10 @@ class AppRouter {
           GoRoute(
             path: AppRoutes.inventoryReconciliation,
             builder: (context, state) => const StockReconciliationView(),
+          ),
+          GoRoute(
+            path: AppRoutes.inventoryTransfers,
+            builder: (context, state) => const TransfersView(),
           ),
           GoRoute(
             path: AppRoutes.purchasesList,

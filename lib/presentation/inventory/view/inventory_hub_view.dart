@@ -169,7 +169,7 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
                   title: 'Transferencias',
                   subtitle: 'Movimientos entre bodegas',
                   route: AppRoutes.inventoryTransfers,
-                  available: false,
+                  available: true,
                 ),
                 _HubCard(
                   icon: Icons.tune_outlined,

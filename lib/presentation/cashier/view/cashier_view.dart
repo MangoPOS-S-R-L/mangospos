@@ -13,7 +13,6 @@ import 'package:mangopos/presentation/cashier/widgets/blind_cash_close_dialog.da
 import 'package:mangopos/presentation/cashier/widgets/open_cash_dialog.dart';
 import 'package:mangopos/presentation/cashier/widgets/variance_confirm_dialog.dart';
 import 'package:mangopos/services/session/session_controller.dart';
-import 'package:mangopos/data/utils/payment_amount_utils.dart';
 import 'package:mangopos/data/repositories/cashier_repository.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
@@ -528,6 +527,13 @@ class _CashierViewState extends ConsumerState<CashierView>
     final repository = ref.read(cashierRepositoryProvider);
     final vm = ref.read(cashierViewModelProvider);
 
+    // Toast-level precision: el RPC `fn_get_cash_session_summary` (migración
+    // 20260514_0002) es la ÚNICA fuente de verdad para todos los esperados.
+    // No re-calculamos por método en el cliente — eso provocó desfases
+    // durante el ciclo de fixes del start_amount (sesión 4572afa5 mostró
+    // +6,470 fantasma porque el cliente sumaba sin start_amount mientras
+    // la DB ya lo incluía). Si el RPC devuelve un campo, lo respetamos
+    // tal cual; si falta, asumimos 0.
     final summary = await repository.getSessionSummary(sessionId);
 
     int toInt(dynamic value) {
@@ -537,66 +543,20 @@ class _CashierViewState extends ConsumerState<CashierView>
       return int.tryParse(value.toString()) ?? 0;
     }
 
-    int expectedCash = toInt(summary['expected_cash']);
-    if (expectedCash <= 0) {
-      expectedCash = toInt(summary['expected_amount']);
-    }
-    var expectedCard = toInt(summary['expected_card']);
-    var expectedTransfer = toInt(summary['expected_transfer']);
-    var totalSales = toInt(summary['total_sales_all_methods']);
-    var transactionCount = toInt(summary['transaction_count']);
-
-    final allPayments = await repository.getSessionPaymentsDetailed(sessionId);
-    // El historial trae 'completed', 'void' y 'cancelled' juntos. Para el
-    // calculo del cierre solo cuentan las completed — las anuladas no
-    // ingresaron al cajon ni cuentan como ventas reales del turno.
-    final payments = allPayments
-        .where((p) => p['status']?.toString() == 'completed')
-        .toList(growable: false);
-    int cardPayments = 0;
-    int transferPayments = 0;
-    int totalPaid = 0;
-
-    for (final payment in payments) {
-      final amount = netPaymentAmount(
-        payment['amount'],
-        payment['change_amount'],
-      ).round();
-      totalPaid += amount;
-      final code = (payment['method_code'] ?? '').toString().toLowerCase();
-      final methodName = (payment['method_name'] ?? '')
-          .toString()
-          .toLowerCase();
-
-      if (code == 'card' || methodName.contains('tarjet')) {
-        cardPayments += amount;
-      } else if (code == 'transfer' || methodName.contains('transfer')) {
-        transferPayments += amount;
-      }
-    }
-
-    if (cardPayments > 0 || expectedCard <= 0) {
-      expectedCard = cardPayments;
-    }
-    if (transferPayments > 0 || expectedTransfer <= 0) {
-      expectedTransfer = transferPayments;
-    }
-    if (totalPaid > 0 || totalSales <= 0) {
-      totalSales = totalPaid;
-    }
-    if (transactionCount <= 0) {
-      transactionCount = payments.length;
-    }
+    final expectedCash = toInt(summary['expected_cash']);
+    final expectedCard = toInt(summary['expected_card']);
+    final expectedTransfer = toInt(summary['expected_transfer']);
+    final totalSales = toInt(summary['total_sales_all_methods']);
+    final transactionCount = toInt(summary['transaction_count']);
 
     debugPrint(
       '[CashClose] session=$sessionId '
-      'expected_cash=${summary['expected_cash']} '
-      'expected_amount=${summary['expected_amount']} '
-      'expected_card=${summary['expected_card']} '
-      'expected_transfer=${summary['expected_transfer']} '
-      'total_sales_all_methods=${summary['total_sales_all_methods']} '
-      'transaction_count=${summary['transaction_count']} '
-      'payments=${payments.length}',
+      'expected_cash=$expectedCash '
+      'expected_card=$expectedCard '
+      'expected_transfer=$expectedTransfer '
+      'total_sales_all_methods=$totalSales '
+      'transaction_count=$transactionCount '
+      'start_amount=$startAmount',
     );
 
     final emptyInput = _emptyCloseInput();

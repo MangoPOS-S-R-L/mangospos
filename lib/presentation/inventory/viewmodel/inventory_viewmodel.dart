@@ -244,6 +244,8 @@ class InventoryViewModel extends ChangeNotifier {
     }
   }
 
+  /// Path legacy. Mantener para fallback si el RPC nuevo (`fn_inventory_adjust`)
+  /// aún no está desplegado. UI nueva debe llamar [adjustInventory].
   Future<void> reconcileStock({
     required String itemId,
     required double countedStock,
@@ -289,6 +291,57 @@ class InventoryViewModel extends ChangeNotifier {
       _state = _state.copyWith(
         saving: false,
         error: 'Error conciliando stock: $e',
+      );
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  /// Sprint Inventario V1.1: ajuste con razón estructurada. Calcula el delta
+  /// server-side (evita race conditions con ventas concurrentes) e inserta
+  /// el `reason_code` para reportes de mermas / robos / vencidos.
+  Future<void> adjustInventory({
+    required String itemId,
+    required double countedStock,
+    required String reasonCode,
+    String? notes,
+  }) async {
+    final businessId = _state.businessId;
+    final warehouseId = _state.selectedWarehouseId;
+    if (businessId == null || warehouseId == null) {
+      throw Exception('No hay negocio o almacen seleccionado');
+    }
+
+    InventoryItemSummary? item;
+    for (final current in _state.items) {
+      if (current.id == itemId) {
+        item = current;
+        break;
+      }
+    }
+    if (item == null) {
+      throw Exception('No se encontro el insumo para ajustar stock');
+    }
+
+    _state = _state.copyWith(saving: true, clearError: true);
+    notifyListeners();
+
+    try {
+      await _repository.adjustInventory(
+        businessId: businessId,
+        warehouseId: warehouseId,
+        itemId: itemId,
+        countedQuantity: countedStock,
+        reasonCode: reasonCode,
+        notes: notes,
+        costPerUnit: item.cost,
+      );
+      _state = _state.copyWith(saving: false);
+      await refresh();
+    } catch (e) {
+      _state = _state.copyWith(
+        saving: false,
+        error: 'Error ajustando inventario: $e',
       );
       notifyListeners();
       rethrow;

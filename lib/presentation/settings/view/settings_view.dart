@@ -297,20 +297,27 @@ class SettingsView extends ConsumerWidget {
             color: const Color(0xFFFFF0D9),
             route: AppRoutes.menuMenus.replaceFirst(':businessId', businessId),
           ),
-          _SettingsOption(
-            title: 'Recetas',
-            subtitle: 'Ingredientes y costos de recetas',
-            icon: Icons.receipt_rounded,
-            color: const Color(0xFFF1F1F1),
-            route: AppRoutes.menuRecipes,
-          ),
-          _SettingsOption(
-            title: 'Insumos',
-            subtitle: 'Materias primas e ingredientes',
-            icon: Icons.science_rounded,
-            color: const Color(0xFFFFEDED),
-            route: AppRoutes.inventoryOutflow,
-          ),
+          // Recetas: solo cuando inventory_mode = advanced. El modo
+          // 'basic' usa cardinalidad 1:1 menu→inventory auto-creada y
+          // no necesita editor de recetas. 'none' no toca inventario.
+          if (inventoryMode == InventoryMode.advanced)
+            _SettingsOption(
+              title: 'Recetas',
+              subtitle: 'Ingredientes y costos de recetas',
+              icon: Icons.receipt_rounded,
+              color: const Color(0xFFF1F1F1),
+              route: AppRoutes.menuRecipes,
+            ),
+          // Insumos: vinculado al módulo de inventario. Si está
+          // apagado (`none`), ocultamos también la entrada.
+          if (inventoryEnabled)
+            _SettingsOption(
+              title: 'Insumos',
+              subtitle: 'Materias primas e ingredientes',
+              icon: Icons.science_rounded,
+              color: const Color(0xFFFFEDED),
+              route: AppRoutes.inventoryOutflow,
+            ),
         ],
       ),
       _SettingsSection(

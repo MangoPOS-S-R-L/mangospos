@@ -1,6 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../presentation/inventory/state/inventory_state.dart';
+import '../../presentation/inventory/state/transfers_state.dart';
 import '../datasources/queries/inventory_queries.dart';
 
 class InventoryRepository {
@@ -326,6 +327,36 @@ class InventoryRepository {
     );
   }
 
+  /// Sprint Inventario V1.1: ajuste con razón estructurada (migración 0017).
+  /// Envuelve `fn_inventory_adjust` que calcula el delta server-side a partir
+  /// del stock actual con FOR UPDATE (evita race con ventas concurrentes) y
+  /// valida que el caller sea owner/admin/manager.
+  ///
+  /// [reasonCode] debe ser uno de: physical_count, breakage, expiration,
+  /// theft, donation, correction, other. Si es 'other', [notes] es obligatorio.
+  Future<void> adjustInventory({
+    required String businessId,
+    required String warehouseId,
+    required String itemId,
+    required double countedQuantity,
+    required String reasonCode,
+    String? notes,
+    double? costPerUnit,
+  }) async {
+    await _client.rpc(
+      InventoryQueries.rpcAdjustInventory,
+      params: {
+        'p_business_id': businessId,
+        'p_warehouse_id': warehouseId,
+        'p_item_id': itemId,
+        'p_counted_quantity': countedQuantity,
+        'p_reason_code': reasonCode,
+        'p_notes': notes,
+        'p_cost_per_unit': costPerUnit,
+      },
+    );
+  }
+
   // ── PRD 9 Fase 1C: Proveedores (CRUD completo) ─────────────────────
 
   Future<List<InventorySupplierDetail>> getAllSuppliers(
@@ -406,6 +437,110 @@ class InventoryRepository {
           'is_active': isActive,
         })
         .eq('id', supplierId);
+  }
+
+  // ── Sprint Inventario V1.1 Fase B — Transferencias entre bodegas ──
+
+  /// Lista transferencias desde `v_inventory_transfers_log`. Si [status]
+  /// se provee, filtra por status ('sent','received','cancelled').
+  Future<List<StockTransfer>> listTransfers({
+    required String businessId,
+    String? status,
+    int limit = 100,
+  }) async {
+    final query = _client
+        .from(InventoryQueries.viewTransfersLog)
+        .select()
+        .eq('business_id', businessId);
+    final filtered = status != null && status.isNotEmpty
+        ? query.eq('status', status)
+        : query;
+    final response = await filtered
+        .order('sent_at', ascending: false)
+        .limit(limit);
+    return List<Map<String, dynamic>>.from(response)
+        .map(StockTransfer.fromLogMap)
+        .toList(growable: false);
+  }
+
+  /// Carga los items de una transferencia con el nombre del insumo.
+  Future<List<StockTransferItem>> getTransferItems(String transferId) async {
+    final response = await _client
+        .from(InventoryQueries.tableStockTransferItems)
+        .select(
+          'id, item_id, quantity_sent, quantity_received, '
+          'cost_per_unit, variance_reason, '
+          'inventory_items(name, unit)',
+        )
+        .eq('stock_transfer_id', transferId)
+        .order('id');
+    return List<Map<String, dynamic>>.from(response)
+        .map(StockTransferItem.fromMap)
+        .toList(growable: false);
+  }
+
+  /// Envía mercancía desde [fromWarehouseId] hacia [toWarehouseId]. Llama a
+  /// `fn_inventory_transfer_send` que crea el header + 2 movements por item
+  /// (transfer_out origen, transfer_in IN_TRANSIT) en transacción atómica.
+  ///
+  /// [items] debe ser una lista de mapas con `item_id`, `quantity` y
+  /// opcionalmente `cost_per_unit`.
+  Future<Map<String, dynamic>> sendTransfer({
+    required String businessId,
+    required String fromWarehouseId,
+    required String toWarehouseId,
+    required List<Map<String, dynamic>> items,
+    String? notes,
+  }) async {
+    final response = await _client.rpc(
+      InventoryQueries.rpcTransferSend,
+      params: {
+        'p_business_id': businessId,
+        'p_from_warehouse_id': fromWarehouseId,
+        'p_to_warehouse_id': toWarehouseId,
+        'p_items': items,
+        'p_notes': notes,
+      },
+    );
+    return response is Map
+        ? Map<String, dynamic>.from(response)
+        : <String, dynamic>{};
+  }
+
+  /// Recibe una transferencia. [receivedItems] es lista de
+  /// `{transfer_item_id, quantity_received}`. Si recibido < enviado se
+  /// registra automáticamente la merma como ajuste sobre IN_TRANSIT.
+  Future<Map<String, dynamic>> receiveTransfer({
+    required String transferId,
+    required List<Map<String, dynamic>> receivedItems,
+    String? varianceNotes,
+  }) async {
+    final response = await _client.rpc(
+      InventoryQueries.rpcTransferReceive,
+      params: {
+        'p_transfer_id': transferId,
+        'p_received_items': receivedItems,
+        'p_variance_notes': varianceNotes,
+      },
+    );
+    return response is Map
+        ? Map<String, dynamic>.from(response)
+        : <String, dynamic>{};
+  }
+
+  /// Cancela una transferencia en status='sent' devolviendo la mercancía
+  /// desde IN_TRANSIT a la bodega origen.
+  Future<Map<String, dynamic>> cancelTransfer({
+    required String transferId,
+    String? reason,
+  }) async {
+    final response = await _client.rpc(
+      InventoryQueries.rpcTransferCancel,
+      params: {'p_transfer_id': transferId, 'p_reason': reason},
+    );
+    return response is Map
+        ? Map<String, dynamic>.from(response)
+        : <String, dynamic>{};
   }
 
   /// PRD 9 Fase 1: invoca la RPC `bootstrap_menu_to_inventory_links` que
