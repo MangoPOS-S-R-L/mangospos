@@ -693,13 +693,22 @@ class CashierViewModel extends ChangeNotifier {
         );
       }
 
-      final existingUserSession = await _repository
-          .getCurrentUserActiveSession();
+      // Escopear el chequeo al business actual: si el usuario es owner
+      // de varias sucursales, la migración 20260509_0002 le permite
+      // abrir caja simultánea en cada una. Filtrar sin business_id
+      // bloquearía aunque el backend lo permita. El RPC sigue siendo
+      // la autoridad final y rechaza si Rule B aplica para no-owners.
+      final businessIdScope = _businessId;
+      final existingUserSession = businessIdScope != null
+          ? await _repository.getCurrentUserActiveSessionForBusiness(
+              businessId: businessIdScope,
+            )
+          : await _repository.getCurrentUserActiveSession();
       if (existingUserSession != null) {
         throw const CashRegisterException(
           errorCode: 'USER_ALREADY_OPEN',
           message:
-              'Ya tienes una sesión de caja abierta en otro dispositivo o caja.',
+              'Ya tienes una sesión de caja abierta en esta sucursal.',
         );
       }
 

@@ -265,6 +265,34 @@ class CashierRepository {
     return CashRegisterSession.fromMap(data);
   }
 
+  /// Busca sesiones abiertas del usuario actual ESCOPEADAS a un business
+  /// específico. Necesario para que un owner con varias sucursales pueda
+  /// abrir caja en una sucursal aunque tenga caja abierta en otra (la
+  /// migración 20260509_0002 relajó Rule B server-side para owners). El
+  /// chequeo `getCurrentUserActiveSession()` sin filtro de business
+  /// bloquearía aunque el backend lo permita.
+  Future<CashRegisterSession?> getCurrentUserActiveSessionForBusiness({
+    required String businessId,
+  }) async {
+    final userId = _client.auth.currentUser?.id;
+    if (userId == null) return null;
+
+    // Inner join sobre cash_registers para filtrar por business_id.
+    final data = await _client
+        .from('cash_register_sessions')
+        .select('*, cash_registers!inner(business_id)')
+        .eq('user_id', userId)
+        .eq('status', 'open')
+        .eq('cash_registers.business_id', businessId)
+        .isFilter('closed_at', null)
+        .order('created_at', ascending: false)
+        .limit(1)
+        .maybeSingle();
+
+    if (data == null) return null;
+    return CashRegisterSession.fromMap(data);
+  }
+
   Future<CashRegisterSession?> getDeviceActiveSession(String deviceId) async {
     final data = await _client
         .from('cash_register_sessions')
