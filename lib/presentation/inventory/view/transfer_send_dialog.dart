@@ -6,6 +6,7 @@ import '../viewmodel/inventory_viewmodel.dart';
 import '../viewmodel/transfers_viewmodel.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
+import '../../../services/session/session_controller.dart';
 
 class TransferSendDialog extends ConsumerStatefulWidget {
   const TransferSendDialog({super.key});
@@ -15,6 +16,10 @@ class TransferSendDialog extends ConsumerStatefulWidget {
 }
 
 class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
+  // Sprint 2: tipo de transferencia.
+  bool _isCrossBusiness = false;
+  String? _targetBusinessId;
+
   String? _fromWarehouseId;
   String? _toWarehouseId;
   final TextEditingController _notesController = TextEditingController();
@@ -27,6 +32,11 @@ class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
   bool _submitting = false;
   String? _errorMessage;
   List<InventoryItemSummary> _sourceItems = const [];
+
+  /// Bodegas del business destino cuando es inter-sucursal.
+  bool _loadingTargetWarehouses = false;
+  List<InventoryWarehouseDetail> _targetWarehouses = const [];
+  String? _targetWarehousesError;
 
   @override
   void initState() {
@@ -71,23 +81,61 @@ class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
     }
   }
 
-  List<InventoryItemSummary> get _filteredItems {
-    final q = _searchController.text.trim().toLowerCase();
-    if (q.isEmpty) return _sourceItems;
-    return _sourceItems
+  Future<void> _loadTargetWarehouses(String targetBusinessId) async {
+    setState(() {
+      _loadingTargetWarehouses = true;
+      _targetWarehousesError = null;
+      _targetWarehouses = const [];
+      _toWarehouseId = null;
+    });
+    try {
+      final repo = ref.read(inventoryRepositoryProvider);
+      final list = await repo.getAllWarehouses(targetBusinessId);
+      // Excluir IN_TRANSIT y bodegas inactivas como destino válido.
+      final usable = list
+          .where((w) => w.isActive && !w.isInTransit)
+          .toList(growable: false);
+      if (!mounted) return;
+      setState(() {
+        _targetWarehouses = usable;
+        _loadingTargetWarehouses = false;
+        if (usable.length == 1) {
+          _toWarehouseId = usable.first.id;
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loadingTargetWarehouses = false;
+        _targetWarehousesError =
+            'No se pudieron cargar las bodegas del negocio destino: $e';
+      });
+    }
+  }
+
+  /// Sucursales donde el usuario tiene rol owner/admin/manager y que no son
+  /// la activa. Si la lista está vacía, no se puede hacer transferencia
+  /// inter-sucursal.
+  List<SessionBusiness> _candidateTargets(SessionState session) {
+    final active = session.activeBusinessId;
+    return session.availableBusinesses
         .where(
-          (i) =>
-              i.name.toLowerCase().contains(q) ||
-              i.sku.toLowerCase().contains(q),
+          (b) =>
+              b.id != active &&
+              (b.role == 'owner' || b.role == 'admin' || b.role == 'manager'),
         )
         .toList(growable: false);
   }
 
-  bool get _hasSelection =>
-      _quantities.values.any((q) => q > 0) &&
-      _fromWarehouseId != null &&
-      _toWarehouseId != null &&
-      _fromWarehouseId != _toWarehouseId;
+  bool get _hasSelection {
+    if (_quantities.values.every((q) => q <= 0)) return false;
+    if (_fromWarehouseId == null || _toWarehouseId == null) return false;
+    if (_isCrossBusiness) {
+      if (_targetBusinessId == null) return false;
+      return true; // origen y destino están en negocios distintos
+    }
+    return _fromWarehouseId != _toWarehouseId;
+  }
 
   Future<void> _submit() async {
     if (!_hasSelection) {
@@ -124,18 +172,27 @@ class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
     try {
-      await ref.read(transfersViewModelProvider).createTransfer(
+      await ref
+          .read(transfersViewModelProvider)
+          .createTransfer(
             fromWarehouseId: _fromWarehouseId!,
             toWarehouseId: _toWarehouseId!,
             items: items,
             notes: _notesController.text.trim().isEmpty
                 ? null
                 : _notesController.text.trim(),
+            targetBusinessId: _isCrossBusiness ? _targetBusinessId : null,
           );
       if (!mounted) return;
       navigator.pop();
       messenger.showSnackBar(
-        const SnackBar(content: Text('Transferencia enviada')),
+        SnackBar(
+          content: Text(
+            _isCrossBusiness
+                ? 'Transferencia inter-sucursal enviada'
+                : 'Transferencia enviada',
+          ),
+        ),
       );
     } catch (e) {
       if (!mounted) return;
@@ -147,7 +204,11 @@ class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
   }
 
   String _humanizeError(String raw) {
-    if (raw.contains('INSUFFICIENT_ROLE')) {
+    if (raw.contains('INSUFFICIENT_ROLE_TARGET')) {
+      return 'No tienes permisos en el negocio destino';
+    }
+    if (raw.contains('INSUFFICIENT_ROLE_SOURCE') ||
+        raw.contains('INSUFFICIENT_ROLE')) {
       return 'No tienes permisos para enviar transferencias';
     }
     if (raw.contains('SAME_WAREHOUSE')) {
@@ -158,7 +219,10 @@ class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
       return 'Bodega origen inválida';
     }
     if (raw.contains('TO_WAREHOUSE_NOT_FOUND')) {
-      return 'Bodega destino inválida';
+      return 'Bodega destino inválida (no pertenece al negocio destino)';
+    }
+    if (raw.contains('ITEM_NOT_FROM_SOURCE')) {
+      return 'Uno de los ítems no pertenece al negocio origen';
     }
     return 'Error: $raw';
   }
@@ -167,7 +231,21 @@ class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
   Widget build(BuildContext context) {
     final inv = ref.watch(inventoryViewModelProvider).state;
     final warehouses = inv.warehouses;
+    final session = ref.watch(sessionProvider);
+    final candidateTargets = _candidateTargets(session);
     final selectedCount = _quantities.values.where((q) => q > 0).length;
+
+    // Selección efectiva de bodegas destino según tipo. Normalizamos a una
+    // lista de records `(id, name)` porque InventoryWarehouse (intra) e
+    // InventoryWarehouseDetail (inter) son tipos distintos.
+    final List<({String id, String name})> destWarehouses = _isCrossBusiness
+        ? _targetWarehouses
+              .map((w) => (id: w.id, name: w.name))
+              .toList(growable: false)
+        : warehouses
+              .where((w) => w.id != _fromWarehouseId)
+              .map((w) => (id: w.id, name: w.name))
+              .toList(growable: false);
 
     return AlertDialog(
       backgroundColor: AppColors.card,
@@ -176,11 +254,69 @@ class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
       ),
       title: const Text('Nueva transferencia'),
       content: SizedBox(
-        width: 560,
-        height: 560,
+        width: 600,
+        height: 620,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            _TransferTypeSelector(
+              isCrossBusiness: _isCrossBusiness,
+              canSelectCross: candidateTargets.isNotEmpty,
+              onChanged: (cross) {
+                setState(() {
+                  _isCrossBusiness = cross;
+                  _toWarehouseId = null;
+                  if (!cross) {
+                    _targetBusinessId = null;
+                    _targetWarehouses = const [];
+                    _targetWarehousesError = null;
+                  }
+                });
+              },
+            ),
+            if (_isCrossBusiness && candidateTargets.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  'No tienes otra sucursal disponible con rol de '
+                  'administrador/supervisor.',
+                  style: TextStyle(
+                    color: AppColors.mutedForeground,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            if (_isCrossBusiness && candidateTargets.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              DropdownButtonFormField<String>(
+                initialValue: _targetBusinessId,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  labelText: 'Negocio destino',
+                  prefixIcon: Icon(Icons.storefront_outlined),
+                  border: OutlineInputBorder(),
+                ),
+                items: candidateTargets
+                    .map(
+                      (b) => DropdownMenuItem(
+                        value: b.id,
+                        child: Text(
+                          '${b.name}  ·  ${b.roleLabel}',
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    )
+                    .toList(growable: false),
+                onChanged: (v) async {
+                  setState(() {
+                    _targetBusinessId = v;
+                    _toWarehouseId = null;
+                  });
+                  if (v != null) await _loadTargetWarehouses(v);
+                },
+              ),
+            ],
+            const SizedBox(height: 12),
             Row(
               children: [
                 Expanded(
@@ -216,27 +352,60 @@ class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
                   ),
                 ),
                 Expanded(
-                  child: DropdownButtonFormField<String>(
-                    initialValue: _toWarehouseId,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Bodega destino',
-                      border: OutlineInputBorder(),
-                    ),
-                    items: warehouses
-                        .where((w) => w.id != _fromWarehouseId)
-                        .map(
-                          (w) => DropdownMenuItem(
-                            value: w.id,
-                            child: Text(w.name),
+                  child: _loadingTargetWarehouses
+                      ? const InputDecorator(
+                          decoration: InputDecoration(
+                            labelText: 'Bodega destino',
+                            border: OutlineInputBorder(),
+                          ),
+                          child: SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
                           ),
                         )
-                        .toList(growable: false),
-                    onChanged: (v) => setState(() => _toWarehouseId = v),
-                  ),
+                      : DropdownButtonFormField<String>(
+                          initialValue: _toWarehouseId,
+                          isExpanded: true,
+                          decoration: InputDecoration(
+                            labelText: _isCrossBusiness
+                                ? 'Bodega destino (otra sucursal)'
+                                : 'Bodega destino',
+                            border: const OutlineInputBorder(),
+                          ),
+                          items: destWarehouses
+                              .map(
+                                (w) => DropdownMenuItem(
+                                  value: w.id,
+                                  child: Text(w.name),
+                                ),
+                              )
+                              .toList(growable: false),
+                          onChanged: destWarehouses.isEmpty
+                              ? null
+                              : (v) => setState(() => _toWarehouseId = v),
+                        ),
                 ),
               ],
             ),
+            if (_targetWarehousesError != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _targetWarehousesError!,
+                style: TextStyle(color: Colors.red.shade700, fontSize: 12),
+              ),
+            ],
+            if (_isCrossBusiness &&
+                _targetBusinessId != null &&
+                !_loadingTargetWarehouses &&
+                _targetWarehouses.isEmpty &&
+                _targetWarehousesError == null) ...[
+              const SizedBox(height: 6),
+              Text(
+                'El negocio destino no tiene bodegas activas.',
+                style: TextStyle(color: AppColors.mutedForeground, fontSize: 12),
+              ),
+            ],
             const SizedBox(height: 12),
             TextField(
               controller: _searchController,
@@ -257,32 +426,32 @@ class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
                       child: CircularProgressIndicator(color: AppColors.primary),
                     )
                   : _fromWarehouseId == null
-                      ? Center(
-                          child: Text(
-                            'Selecciona una bodega origen para ver sus insumos.',
-                            style: TextStyle(color: AppColors.mutedForeground),
-                          ),
-                        )
-                      : ListView.builder(
-                          itemCount: _filteredItems.length,
-                          itemBuilder: (context, index) {
-                            final item = _filteredItems[index];
-                            final qty = _quantities[item.id] ?? 0;
-                            return _ItemRow(
-                              item: item,
-                              quantity: qty,
-                              onChange: (v) {
-                                setState(() {
-                                  if (v <= 0) {
-                                    _quantities.remove(item.id);
-                                  } else {
-                                    _quantities[item.id] = v;
-                                  }
-                                });
-                              },
-                            );
+                  ? Center(
+                      child: Text(
+                        'Selecciona una bodega origen para ver sus insumos.',
+                        style: TextStyle(color: AppColors.mutedForeground),
+                      ),
+                    )
+                  : ListView.builder(
+                      itemCount: _filteredItems.length,
+                      itemBuilder: (context, index) {
+                        final item = _filteredItems[index];
+                        final qty = _quantities[item.id] ?? 0;
+                        return _ItemRow(
+                          item: item,
+                          quantity: qty,
+                          onChange: (v) {
+                            setState(() {
+                              if (v <= 0) {
+                                _quantities.remove(item.id);
+                              } else {
+                                _quantities[item.id] = v;
+                              }
+                            });
                           },
-                        ),
+                        );
+                      },
+                    ),
             ),
             const SizedBox(height: 10),
             TextField(
@@ -296,6 +465,40 @@ class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
                 isDense: true,
               ),
             ),
+            if (_isCrossBusiness && _targetBusinessId != null) ...[
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.06),
+                  border: Border.all(
+                    color: AppColors.primary.withValues(alpha: 0.25),
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      color: AppColors.primary,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Los insumos que no existan en la sucursal destino se '
+                        'crearán automáticamente al recibirla (match por SKU '
+                        'o nombre).',
+                        style: TextStyle(
+                          color: AppColors.foreground,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             if (_errorMessage != null) ...[
               const SizedBox(height: 10),
               Container(
@@ -342,6 +545,51 @@ class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
               : Text('Enviar ($selectedCount)'),
         ),
       ],
+    );
+  }
+
+  List<InventoryItemSummary> get _filteredItems {
+    final q = _searchController.text.trim().toLowerCase();
+    if (q.isEmpty) return _sourceItems;
+    return _sourceItems
+        .where(
+          (i) =>
+              i.name.toLowerCase().contains(q) ||
+              i.sku.toLowerCase().contains(q),
+        )
+        .toList(growable: false);
+  }
+}
+
+class _TransferTypeSelector extends StatelessWidget {
+  final bool isCrossBusiness;
+  final bool canSelectCross;
+  final ValueChanged<bool> onChanged;
+
+  const _TransferTypeSelector({
+    required this.isCrossBusiness,
+    required this.canSelectCross,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SegmentedButton<bool>(
+      segments: <ButtonSegment<bool>>[
+        const ButtonSegment(
+          value: false,
+          icon: Icon(Icons.warehouse_outlined, size: 18),
+          label: Text('Misma sucursal'),
+        ),
+        ButtonSegment(
+          value: true,
+          enabled: canSelectCross,
+          icon: const Icon(Icons.storefront_outlined, size: 18),
+          label: const Text('Otra sucursal'),
+        ),
+      ],
+      selected: {isCrossBusiness},
+      onSelectionChanged: (s) => onChanged(s.first),
     );
   }
 }
@@ -402,8 +650,8 @@ class _ItemRowState extends State<_ItemRow> {
           color: exceedsStock
               ? Colors.red.shade300
               : selected
-                  ? AppColors.primary.withValues(alpha: 0.4)
-                  : AppColors.border,
+              ? AppColors.primary.withValues(alpha: 0.4)
+              : AppColors.border,
         ),
       ),
       child: Row(

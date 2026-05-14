@@ -151,7 +151,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
       decimalDigits: 2,
     );
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: Colors.white,
       body: _loading && _items.isEmpty
           ? Center(child: CircularProgressIndicator(color: AppColors.primary))
           : _error != null
@@ -601,6 +601,7 @@ class _ItemFormDialogState extends State<_ItemFormDialog> {
   late final TextEditingController _maxStockCtrl;
   late String _costingMethod;
   late bool _isActive;
+  late bool _tracksLots;
   bool _saving = false;
   String? _error;
 
@@ -622,6 +623,7 @@ class _ItemFormDialogState extends State<_ItemFormDialog> {
         text: e?.maxStock != null ? e!.maxStock!.toString() : '');
     _costingMethod = e?.costingMethod == 'fifo' ? 'fifo' : 'average';
     _isActive = e?.isActive ?? true;
+    _tracksLots = e?.tracksLots ?? false;
   }
 
   @override
@@ -671,6 +673,7 @@ class _ItemFormDialogState extends State<_ItemFormDialog> {
           isActive: _isActive,
           costingMethod: _costingMethod,
           barcode: _orNull(_barcodeCtrl.text) ?? '',
+          tracksLots: _tracksLots,
         );
       } else {
         await widget.repo.createItem(
@@ -687,6 +690,7 @@ class _ItemFormDialogState extends State<_ItemFormDialog> {
           isActive: _isActive,
           costingMethod: _costingMethod,
           barcode: _orNull(_barcodeCtrl.text),
+          tracksLots: _tracksLots,
         );
       }
       if (mounted) Navigator.pop(context, true);
@@ -839,6 +843,23 @@ class _ItemFormDialogState extends State<_ItemFormDialog> {
                 value: _isActive,
                 onChanged: (v) => setState(() => _isActive = v ?? true),
                 title: const Text('Insumo activo'),
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+              ),
+              CheckboxListTile(
+                value: _tracksLots,
+                onChanged: (v) => setState(() => _tracksLots = v ?? false),
+                title: const Text('Rastrear lotes y vencimientos'),
+                subtitle: Text(
+                  'Al recibir mercancía se solicitará número de lote y fecha '
+                  'de vencimiento. Útil para perecederos, farmacéuticos y '
+                  'químicos.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: AppColors.mutedForeground,
+                  ),
+                ),
+                isThreeLine: true,
                 contentPadding: EdgeInsets.zero,
                 controlAffinity: ListTileControlAffinity.leading,
               ),

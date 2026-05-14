@@ -51,7 +51,7 @@ class _TransfersViewState extends ConsumerState<TransfersView>
     final cancelled = _filter(state.transfers, StockTransferStatus.cancelled);
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: Colors.white,
       appBar: AppBar(
         title: const Text('Transferencias entre bodegas'),
         bottom: TabBar(
@@ -101,18 +101,42 @@ class _TransfersViewState extends ConsumerState<TransfersView>
                       _TransferList(
                         transfers: pending,
                         emptyText: 'No hay transferencias pendientes',
-                        onTap: (t) => _openReceiveDialog(context, t),
+                        activeBusinessId: state.businessId,
+                        onTapPending: (t) {
+                          // Solo el destinatario abre el receive dialog.
+                          // El emisor solo ve el detalle.
+                          final isSourceOnly =
+                              t.isCrossBusiness &&
+                              t.fromBusinessId == state.businessId &&
+                              t.toBusinessId != state.businessId;
+                          if (isSourceOnly) {
+                            _showDetail(context, t);
+                          } else {
+                            _openReceiveDialog(context, t);
+                          }
+                        },
                         onCancel: (t) => _confirmCancel(context, t),
+                        hasMore: state.hasMore,
+                        loadingMore: state.loadingMore,
+                        onLoadMore: () => vm.loadMore(),
                       ),
                       _TransferList(
                         transfers: received,
                         emptyText: 'Sin transferencias recibidas',
-                        onTap: (t) => _showDetail(context, t),
+                        activeBusinessId: state.businessId,
+                        onTapPending: (t) => _showDetail(context, t),
+                        hasMore: state.hasMore,
+                        loadingMore: state.loadingMore,
+                        onLoadMore: () => vm.loadMore(),
                       ),
                       _TransferList(
                         transfers: cancelled,
                         emptyText: 'Sin transferencias canceladas',
-                        onTap: (t) => _showDetail(context, t),
+                        activeBusinessId: state.businessId,
+                        onTapPending: (t) => _showDetail(context, t),
+                        hasMore: state.hasMore,
+                        loadingMore: state.loadingMore,
+                        onLoadMore: () => vm.loadMore(),
                       ),
                     ],
                   ),
@@ -221,13 +245,21 @@ class _TransfersViewState extends ConsumerState<TransfersView>
 class _TransferList extends StatelessWidget {
   final List<StockTransfer> transfers;
   final String emptyText;
-  final void Function(StockTransfer) onTap;
+  final void Function(StockTransfer) onTapPending;
   final void Function(StockTransfer)? onCancel;
+  final String? activeBusinessId;
+  final bool hasMore;
+  final bool loadingMore;
+  final VoidCallback onLoadMore;
 
   const _TransferList({
     required this.transfers,
     required this.emptyText,
-    required this.onTap,
+    required this.onTapPending,
+    required this.activeBusinessId,
+    required this.hasMore,
+    required this.loadingMore,
+    required this.onLoadMore,
     this.onCancel,
   });
 
@@ -241,18 +273,65 @@ class _TransferList extends StatelessWidget {
         ),
       );
     }
+    final showFooter = hasMore || loadingMore;
     return ListView.separated(
       padding: const EdgeInsets.all(24),
-      itemCount: transfers.length,
+      itemCount: transfers.length + (showFooter ? 1 : 0),
       separatorBuilder: (_, _) => const SizedBox(height: 10),
       itemBuilder: (context, index) {
+        if (index == transfers.length) {
+          return _LoadMoreFooter(
+            loading: loadingMore,
+            onPressed: loadingMore ? null : onLoadMore,
+          );
+        }
         final t = transfers[index];
+        // En tab Pendientes, si la transfer es cross-business y el activo
+        // es el destinatario (no el emisor), no se le permite cancelar.
+        final isIncomingPending =
+            t.isCrossBusiness &&
+            activeBusinessId != null &&
+            t.toBusinessId == activeBusinessId &&
+            t.fromBusinessId != activeBusinessId;
         return _TransferCard(
           transfer: t,
-          onTap: () => onTap(t),
-          onCancel: onCancel == null ? null : () => onCancel!(t),
+          activeBusinessId: activeBusinessId,
+          onTap: () => onTapPending(t),
+          onCancel: (onCancel == null || isIncomingPending)
+              ? null
+              : () => onCancel!(t),
         );
       },
+    );
+  }
+}
+
+class _LoadMoreFooter extends StatelessWidget {
+  final bool loading;
+  final VoidCallback? onPressed;
+
+  const _LoadMoreFooter({required this.loading, required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Center(
+        child: loading
+            ? SizedBox(
+                height: 32,
+                width: 32,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.4,
+                  color: AppColors.primary,
+                ),
+              )
+            : OutlinedButton.icon(
+                onPressed: onPressed,
+                icon: const Icon(Icons.expand_more_rounded, size: 18),
+                label: const Text('Cargar más'),
+              ),
+      ),
     );
   }
 }
@@ -261,12 +340,22 @@ class _TransferCard extends StatelessWidget {
   final StockTransfer transfer;
   final VoidCallback onTap;
   final VoidCallback? onCancel;
+  final String? activeBusinessId;
 
   const _TransferCard({
     required this.transfer,
     required this.onTap,
+    this.activeBusinessId,
     this.onCancel,
   });
+
+  /// El activo es el destinatario de una transferencia cross-business
+  /// recibida desde otra sucursal.
+  bool get _isIncoming =>
+      transfer.isCrossBusiness &&
+      activeBusinessId != null &&
+      transfer.toBusinessId == activeBusinessId &&
+      transfer.fromBusinessId != activeBusinessId;
 
   Color _statusColor() {
     switch (transfer.status) {
@@ -340,6 +429,41 @@ class _TransferCard extends StatelessWidget {
                       ),
                     ),
                   ),
+                  if (transfer.isCrossBusiness) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            _isIncoming
+                                ? Icons.south_east_rounded
+                                : Icons.north_east_rounded,
+                            size: 12,
+                            color: AppColors.primary,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            _isIncoming ? 'ENTRANTE' : 'INTER-SUCURSAL',
+                            style: TextStyle(
+                              color: AppColors.primary,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.6,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                   const SizedBox(width: 8),
                   Text(
                     transfer.transferNumber,
@@ -366,7 +490,9 @@ class _TransferCard extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Desde',
+                          transfer.isCrossBusiness
+                              ? 'Desde · ${transfer.fromBusinessName ?? "Otra sucursal"}'
+                              : 'Desde',
                           style: TextStyle(
                             color: AppColors.mutedForeground,
                             fontSize: 11,
@@ -392,7 +518,9 @@ class _TransferCard extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
                         Text(
-                          'Hacia',
+                          transfer.isCrossBusiness
+                              ? 'Hacia · ${transfer.toBusinessName ?? "Otra sucursal"}'
+                              : 'Hacia',
                           style: TextStyle(
                             color: AppColors.mutedForeground,
                             fontSize: 11,

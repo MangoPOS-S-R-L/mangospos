@@ -55,7 +55,8 @@ class PurchasesRepository {
   Future<List<PurchaseOrderSummary>> getOrders({
     required String businessId,
     String? status,
-    int limit = 80,
+    int limit = 50,
+    int offset = 0,
   }) async {
     final ordersResponse = status != null && status.isNotEmpty
         ? await _client
@@ -66,7 +67,7 @@ class PurchasesRepository {
               .eq('business_id', businessId)
               .eq('status', status)
               .order('created_at', ascending: false)
-              .limit(limit)
+              .range(offset, offset + limit - 1)
         : await _client
               .from(PurchasesQueries.tablePurchaseOrders)
               .select(
@@ -74,7 +75,7 @@ class PurchasesRepository {
               )
               .eq('business_id', businessId)
               .order('created_at', ascending: false)
-              .limit(limit);
+              .range(offset, offset + limit - 1);
 
     final orders = List<Map<String, dynamic>>.from(ordersResponse);
     if (orders.isEmpty) return const [];
@@ -213,6 +214,44 @@ class PurchasesRepository {
         'p_notes': notes,
       }..removeWhere((key, value) => value == null || value == ''),
     );
+  }
+
+  /// Lee las líneas de una OC, incluyendo `quantity_ordered`, `quantity_received`
+  /// y datos del insumo para mostrar en el dialog de recepción parcial.
+  Future<List<PurchaseOrderLine>> getOrderLines(String orderId) async {
+    final response = await _client
+        .from(PurchasesQueries.tablePurchaseOrderItems)
+        .select(
+          'id, inventory_item_id, description, quantity_ordered, quantity_received, '
+          'unit_cost, tax_rate, total, inventory_items(name, unit, sku, tracks_lots)',
+        )
+        .eq('purchase_order_id', orderId)
+        .order('id');
+    return List<Map<String, dynamic>>.from(response)
+        .map(PurchaseOrderLine.fromMap)
+        .toList(growable: false);
+  }
+
+  /// Recepción parcial: el caller envía un array de líneas con cantidad a
+  /// recibir. La RPC valida que la cantidad no exceda lo pendiente, crea
+  /// los movimientos de inventario correspondientes y recalcula el status
+  /// de la OC ('partial' o 'received').
+  Future<Map<String, dynamic>> receivePurchaseOrderPartial({
+    required String orderId,
+    required List<Map<String, dynamic>> lineItems,
+    String? notes,
+  }) async {
+    final response = await _client.rpc(
+      PurchasesQueries.rpcReceivePurchaseOrderPartial,
+      params: {
+        'p_order_id': orderId,
+        'p_line_items': lineItems,
+        'p_notes': notes,
+      }..removeWhere((key, value) => value == null || value == ''),
+    );
+    return response is Map
+        ? Map<String, dynamic>.from(response)
+        : <String, dynamic>{};
   }
 
   Future<String> generateNextOrderNumber(String businessId) async {

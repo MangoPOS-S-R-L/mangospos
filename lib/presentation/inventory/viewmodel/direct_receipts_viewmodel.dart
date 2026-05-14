@@ -1,24 +1,26 @@
+// Sprint 4 Inventario — ViewModel de recepciones directas.
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../data/repositories/inventory_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
-import '../state/transfers_state.dart';
+import '../state/direct_receipts_state.dart';
 import 'inventory_viewmodel.dart';
 
-final transfersViewModelProvider =
-    ChangeNotifierProvider<TransfersViewModel>((ref) {
-      return TransfersViewModel(ref.read(inventoryRepositoryProvider));
+final directReceiptsViewModelProvider =
+    ChangeNotifierProvider<DirectReceiptsViewModel>((ref) {
+      return DirectReceiptsViewModel(ref.read(inventoryRepositoryProvider));
     });
 
-class TransfersViewModel extends ChangeNotifier {
+class DirectReceiptsViewModel extends ChangeNotifier {
   final InventoryRepository _repository;
-  TransfersState _state = const TransfersState();
+  DirectReceiptsState _state = const DirectReceiptsState();
 
-  TransfersViewModel(this._repository);
+  DirectReceiptsViewModel(this._repository);
 
-  TransfersState get state => _state;
+  DirectReceiptsState get state => _state;
 
   Future<void> init({bool force = false}) async {
     if (_state.loading && !force) return;
@@ -37,7 +39,7 @@ class TransfersViewModel extends ChangeNotifier {
     } catch (e) {
       _state = _state.copyWith(
         loading: false,
-        error: 'Error cargando transferencias: $e',
+        error: 'Error cargando recepciones: $e',
       );
       notifyListeners();
     }
@@ -57,33 +59,52 @@ class TransfersViewModel extends ChangeNotifier {
     }
   }
 
+  Future<void> applyStatusFilter(String? status) async {
+    _state = _state.copyWith(
+      statusFilter: status,
+      clearStatusFilter: status == null,
+      loading: true,
+      clearError: true,
+    );
+    notifyListeners();
+    try {
+      await _reload();
+    } catch (e) {
+      _state = _state.copyWith(
+        loading: false,
+        error: 'Error filtrando recepciones: $e',
+      );
+      notifyListeners();
+    }
+  }
+
   Future<void> _reload() async {
     final businessId = _state.businessId;
     if (businessId == null) {
       _state = _state.copyWith(
         loading: false,
-        transfers: const [],
+        receipts: const [],
         hasMore: false,
       );
       notifyListeners();
       return;
     }
-    final page = await _repository.listTransfers(
+    final rows = await _repository.listDirectReceipts(
       businessId: businessId,
-      limit: TransfersState.pageSize,
+      status: _state.statusFilter,
+      limit: DirectReceiptsState.pageSize,
       offset: 0,
     );
+    final receipts = rows.map(DirectReceipt.fromLogMap).toList(growable: false);
     _state = _state.copyWith(
       loading: false,
-      transfers: page,
-      hasMore: page.length == TransfersState.pageSize,
+      receipts: receipts,
+      hasMore: receipts.length == DirectReceiptsState.pageSize,
       clearError: true,
     );
     notifyListeners();
   }
 
-  /// Carga la siguiente página y la concatena a la lista existente.
-  /// No hace nada si ya está cargando, no hay más resultados o no hay negocio.
   Future<void> loadMore() async {
     final businessId = _state.businessId;
     if (businessId == null) return;
@@ -92,39 +113,41 @@ class TransfersViewModel extends ChangeNotifier {
     _state = _state.copyWith(loadingMore: true, clearError: true);
     notifyListeners();
     try {
-      final page = await _repository.listTransfers(
+      final rows = await _repository.listDirectReceipts(
         businessId: businessId,
-        limit: TransfersState.pageSize,
-        offset: _state.transfers.length,
+        status: _state.statusFilter,
+        limit: DirectReceiptsState.pageSize,
+        offset: _state.receipts.length,
       );
+      final more = rows.map(DirectReceipt.fromLogMap).toList(growable: false);
       _state = _state.copyWith(
         loadingMore: false,
-        transfers: [..._state.transfers, ...page],
-        hasMore: page.length == TransfersState.pageSize,
+        receipts: [..._state.receipts, ...more],
+        hasMore: more.length == DirectReceiptsState.pageSize,
       );
       notifyListeners();
     } catch (e) {
       _state = _state.copyWith(
         loadingMore: false,
-        error: 'Error cargando más transferencias: $e',
+        error: 'Error cargando más recepciones: $e',
       );
       notifyListeners();
     }
   }
 
-  Future<List<StockTransferItem>> loadItems(String transferId) {
-    return _repository.getTransferItems(transferId);
+  /// Carga las líneas de una recepción (para el detail dialog).
+  Future<List<DirectReceiptLine>> loadItems(String receiptId) async {
+    final rows = await _repository.getDirectReceiptItems(receiptId);
+    return rows.map(DirectReceiptLine.fromMap).toList(growable: false);
   }
 
-  /// Crea una transferencia. Si [targetBusinessId] se provee y es distinto
-  /// del negocio activo, la transferencia es inter-sucursal: el receiver
-  /// debe ser un usuario con rol owner/admin/manager en el target business.
-  Future<void> createTransfer({
-    required String fromWarehouseId,
-    required String toWarehouseId,
+  /// Crea una recepción directa nueva. [items] formato:
+  /// `[{item_id, quantity, unit_cost?, notes?}]`.
+  Future<void> createReceipt({
+    required String warehouseId,
     required List<Map<String, dynamic>> items,
+    String? supplierId,
     String? notes,
-    String? targetBusinessId,
   }) async {
     final businessId = _state.businessId;
     if (businessId == null) {
@@ -133,60 +156,35 @@ class TransfersViewModel extends ChangeNotifier {
     _state = _state.copyWith(saving: true, clearError: true);
     notifyListeners();
     try {
-      await _repository.sendTransfer(
+      await _repository.createDirectReceipt(
         businessId: businessId,
-        fromWarehouseId: fromWarehouseId,
-        toWarehouseId: toWarehouseId,
+        warehouseId: warehouseId,
         items: items,
+        supplierId: supplierId,
         notes: notes,
-        targetBusinessId: targetBusinessId,
       );
       _state = _state.copyWith(saving: false);
       await _reload();
     } catch (e) {
       _state = _state.copyWith(
         saving: false,
-        error: 'Error enviando transferencia: $e',
+        error: 'Error creando recepción: $e',
       );
       notifyListeners();
       rethrow;
     }
   }
 
-  Future<void> receiveTransfer({
-    required String transferId,
-    required List<Map<String, dynamic>> receivedItems,
-    String? varianceNotes,
-  }) async {
-    _state = _state.copyWith(saving: true, clearError: true);
-    notifyListeners();
-    try {
-      await _repository.receiveTransfer(
-        transferId: transferId,
-        receivedItems: receivedItems,
-        varianceNotes: varianceNotes,
-      );
-      _state = _state.copyWith(saving: false);
-      await _reload();
-    } catch (e) {
-      _state = _state.copyWith(
-        saving: false,
-        error: 'Error recibiendo transferencia: $e',
-      );
-      notifyListeners();
-      rethrow;
-    }
-  }
-
-  Future<void> cancelTransfer({
-    required String transferId,
+  /// Cancela una recepción: revierte el stock y marca el header como cancelled.
+  Future<void> cancelReceipt({
+    required String receiptId,
     String? reason,
   }) async {
     _state = _state.copyWith(saving: true, clearError: true);
     notifyListeners();
     try {
-      await _repository.cancelTransfer(
-        transferId: transferId,
+      await _repository.cancelDirectReceipt(
+        receiptId: receiptId,
         reason: reason,
       );
       _state = _state.copyWith(saving: false);
@@ -194,7 +192,7 @@ class TransfersViewModel extends ChangeNotifier {
     } catch (e) {
       _state = _state.copyWith(
         saving: false,
-        error: 'Error cancelando transferencia: $e',
+        error: 'Error cancelando recepción: $e',
       );
       notifyListeners();
       rethrow;

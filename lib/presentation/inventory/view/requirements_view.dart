@@ -28,7 +28,7 @@ class _RequirementsViewState extends ConsumerState<RequirementsView> {
     final state = ref.watch(inventoryViewModelProvider).state;
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: Colors.white,
       appBar: AppBar(title: const Text('Kardex de inventario')),
       body: state.loading && state.movements.isEmpty
           ? Center(child: CircularProgressIndicator(color: AppColors.primary))

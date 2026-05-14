@@ -86,7 +86,7 @@ class _StockReconciliationViewState
     final state = ref.watch(inventoryViewModelProvider).state;
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: Colors.white,
       appBar: AppBar(title: const Text('Ajustes de inventario')),
       body: state.loading && state.items.isEmpty
           ? Center(child: CircularProgressIndicator(color: AppColors.primary))

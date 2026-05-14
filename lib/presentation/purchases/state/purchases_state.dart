@@ -142,6 +142,80 @@ class PurchaseOrderSummary {
   }
 }
 
+/// Línea de una orden de compra existente: combina cantidades pedidas vs
+/// recibidas con datos descriptivos del insumo (cuando la línea está vinculada).
+/// Sprint 3 — recepción parcial.
+class PurchaseOrderLine {
+  final String id;
+  final String? inventoryItemId;
+  final String description;
+  final String itemName;
+  final String unit;
+  final String sku;
+  final bool tracksLots;
+  final double quantityOrdered;
+  final double quantityReceived;
+  final double unitCost;
+  final double taxRate;
+  final double total;
+
+  const PurchaseOrderLine({
+    required this.id,
+    required this.inventoryItemId,
+    required this.description,
+    required this.itemName,
+    required this.unit,
+    required this.sku,
+    required this.tracksLots,
+    required this.quantityOrdered,
+    required this.quantityReceived,
+    required this.unitCost,
+    required this.taxRate,
+    required this.total,
+  });
+
+  double get pending =>
+      (quantityOrdered - quantityReceived).clamp(0, double.infinity);
+
+  bool get isFulfilled => pending == 0;
+
+  /// Las líneas sin `inventoryItemId` no generan movimientos de stock; se
+  /// reciben "lógicamente" para cerrar la orden pero no impactan inventario.
+  bool get tracksInventory => inventoryItemId != null;
+
+  factory PurchaseOrderLine.fromMap(Map<String, dynamic> map) {
+    double toDouble(dynamic value) {
+      if (value is num) return value.toDouble();
+      return double.tryParse(value?.toString() ?? '') ?? 0;
+    }
+
+    final itemRel = map['inventory_items'];
+    final itemName = itemRel is Map
+        ? (itemRel['name']?.toString() ?? map['description']?.toString() ?? '—')
+        : (map['description']?.toString() ?? '—');
+    final unit = itemRel is Map
+        ? (itemRel['unit']?.toString() ?? 'unidad')
+        : 'unidad';
+    final sku = itemRel is Map ? (itemRel['sku']?.toString() ?? '') : '';
+    final tracksLots = itemRel is Map ? (itemRel['tracks_lots'] == true) : false;
+
+    return PurchaseOrderLine(
+      id: map['id']?.toString() ?? '',
+      inventoryItemId: map['inventory_item_id']?.toString(),
+      description: map['description']?.toString() ?? '',
+      itemName: itemName,
+      unit: unit,
+      sku: sku,
+      tracksLots: tracksLots,
+      quantityOrdered: toDouble(map['quantity_ordered']),
+      quantityReceived: toDouble(map['quantity_received']),
+      unitCost: toDouble(map['unit_cost']),
+      taxRate: toDouble(map['tax_rate']),
+      total: toDouble(map['total']),
+    );
+  }
+}
+
 class PurchaseDraftItem {
   final String? inventoryItemId;
   final String description;
@@ -161,7 +235,11 @@ class PurchaseDraftItem {
 }
 
 class PurchasesState {
+  /// Tamaño de página para la lista de órdenes de compra.
+  static const ordersPageSize = 50;
+
   final bool loading;
+  final bool ordersLoadingMore;
   final bool saving;
   final String? error;
   final String? businessId;
@@ -170,10 +248,12 @@ class PurchasesState {
   final List<PurchaseWarehouse> warehouses;
   final List<PurchaseInventoryItem> inventoryItems;
   final List<PurchaseOrderSummary> orders;
+  final bool ordersHasMore;
   final Map<String, double> totalsByStatus;
 
   const PurchasesState({
     this.loading = false,
+    this.ordersLoadingMore = false,
     this.saving = false,
     this.error,
     this.businessId,
@@ -182,11 +262,13 @@ class PurchasesState {
     this.warehouses = const [],
     this.inventoryItems = const [],
     this.orders = const [],
+    this.ordersHasMore = false,
     this.totalsByStatus = const {},
   });
 
   PurchasesState copyWith({
     bool? loading,
+    bool? ordersLoadingMore,
     bool? saving,
     String? error,
     String? businessId,
@@ -195,11 +277,13 @@ class PurchasesState {
     List<PurchaseWarehouse>? warehouses,
     List<PurchaseInventoryItem>? inventoryItems,
     List<PurchaseOrderSummary>? orders,
+    bool? ordersHasMore,
     Map<String, double>? totalsByStatus,
     bool clearError = false,
   }) {
     return PurchasesState(
       loading: loading ?? this.loading,
+      ordersLoadingMore: ordersLoadingMore ?? this.ordersLoadingMore,
       saving: saving ?? this.saving,
       error: clearError ? null : (error ?? this.error),
       businessId: businessId ?? this.businessId,
@@ -208,6 +292,7 @@ class PurchasesState {
       warehouses: warehouses ?? this.warehouses,
       inventoryItems: inventoryItems ?? this.inventoryItems,
       orders: orders ?? this.orders,
+      ordersHasMore: ordersHasMore ?? this.ordersHasMore,
       totalsByStatus: totalsByStatus ?? this.totalsByStatus,
     );
   }

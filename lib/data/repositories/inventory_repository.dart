@@ -103,10 +103,11 @@ class InventoryRepository {
     required String warehouseId,
     String? query,
   }) async {
-    // PRD 9 Fase 1D: incluir costing_method y barcode (columnas nuevas).
+    // PRD 9 Fase 1D + Sprint 4 lotes: incluir costing_method, barcode y
+    // tracks_lots.
     const columns =
         'id, sku, name, description, unit, cost, min_stock, max_stock, '
-        'is_active, costing_method, barcode';
+        'is_active, costing_method, barcode, tracks_lots';
     final normalized = query?.trim();
     final itemsResponse = normalized != null && normalized.isNotEmpty
         ? await _client
@@ -232,6 +233,371 @@ class InventoryRepository {
         .toList(growable: false);
   }
 
+  /// Sprint 3 — Kardex.
+  ///
+  /// Lee la vista `v_inventory_movements_with_balance` con todos los filtros
+  /// y paginación offset-based. La vista ya calcula `running_balance` por
+  /// (warehouse_id, item_id) mediante window function en SQL.
+  ///
+  /// Notas sobre filtros:
+  ///  - [itemId] limita al kardex de un insumo específico (típico uso).
+  ///  - [warehouseId] limita a una bodega específica.
+  ///  - [movementType] filtra por tipo ('purchase','sale','adjustment',
+  ///    'transfer_in','transfer_out','waste','return').
+  ///  - [createdBy] filtra por usuario que registró el movimiento.
+  ///  - [from]/[to] limitan por rango de fecha de creación.
+  Future<List<Map<String, dynamic>>> getKardexMovements({
+    required String businessId,
+    String? itemId,
+    String? warehouseId,
+    String? movementType,
+    String? createdBy,
+    DateTime? from,
+    DateTime? to,
+    int limit = 100,
+    int offset = 0,
+  }) async {
+    var query = _client
+        .from(InventoryQueries.viewMovementsKardex)
+        .select()
+        .eq('business_id', businessId);
+    if (itemId != null && itemId.isNotEmpty) {
+      query = query.eq('item_id', itemId);
+    }
+    if (warehouseId != null && warehouseId.isNotEmpty) {
+      query = query.eq('warehouse_id', warehouseId);
+    }
+    if (movementType != null && movementType.isNotEmpty) {
+      query = query.eq('movement_type', movementType);
+    }
+    if (createdBy != null && createdBy.isNotEmpty) {
+      query = query.eq('created_by', createdBy);
+    }
+    if (from != null) {
+      query = query.gte('created_at', from.toUtc().toIso8601String());
+    }
+    if (to != null) {
+      query = query.lte('created_at', to.toUtc().toIso8601String());
+    }
+    final response = await query
+        .order('created_at', ascending: false)
+        .order('id', ascending: false)
+        .range(offset, offset + limit - 1);
+    return List<Map<String, dynamic>>.from(response);
+  }
+
+  /// Sprint 4 Inventario — Alertas de stock bajo.
+  ///
+  /// Lee la vista `v_inventory_low_stock`. Cada fila trae el insumo, su
+  /// stock total (excluyendo __IN_TRANSIT__), el nivel de alerta y el
+  /// `shortfall` (cuánto falta para alcanzar el mínimo configurado).
+  ///
+  /// [alertLevel] permite filtrar por 'out_of_stock', 'critical' o 'low'.
+  Future<List<Map<String, dynamic>>> getLowStockAlerts({
+    required String businessId,
+    String? alertLevel,
+    int limit = 200,
+    int offset = 0,
+  }) async {
+    var query = _client
+        .from(InventoryQueries.viewLowStock)
+        .select()
+        .eq('business_id', businessId);
+    if (alertLevel != null && alertLevel.isNotEmpty) {
+      query = query.eq('alert_level', alertLevel);
+    }
+    final response = await query
+        // Orden: agotados primero, después críticos, después bajos.
+        // Dentro del nivel, los de mayor shortfall primero.
+        .order('alert_level', ascending: true)
+        .order('shortfall', ascending: false)
+        .order('name', ascending: true)
+        .range(offset, offset + limit - 1);
+    return List<Map<String, dynamic>>.from(response);
+  }
+
+  /// Devuelve el conteo total de alertas de stock bajo para un business.
+  /// Usado por el badge global del header — query liviana sin traer payloads.
+  Future<int> getLowStockAlertsCount({
+    required String businessId,
+    String? alertLevel,
+  }) async {
+    var query = _client
+        .from(InventoryQueries.viewLowStock)
+        .select('item_id')
+        .eq('business_id', businessId);
+    if (alertLevel != null && alertLevel.isNotEmpty) {
+      query = query.eq('alert_level', alertLevel);
+    }
+    final response = await query.count(CountOption.exact);
+    return response.count;
+  }
+
+  /// Devuelve el desglose de stock por bodega para un insumo. Útil para
+  /// mostrar "en qué bodegas hace falta" cuando el usuario expande una alerta.
+  Future<List<Map<String, dynamic>>> getStockByWarehouseForItem({
+    required String businessId,
+    required String itemId,
+  }) async {
+    final response = await _client
+        .from(InventoryQueries.viewStockByWarehouse)
+        .select()
+        .eq('business_id', businessId)
+        .eq('item_id', itemId)
+        .order('warehouse_is_main', ascending: false)
+        .order('warehouse_name', ascending: true);
+    return List<Map<String, dynamic>>.from(response);
+  }
+
+  // ── Sprint 4 Inventario — Recepción directa (sin OC) ────────────────────
+
+  /// Lista recepciones directas desde `v_direct_receipts_log`. Filtros
+  /// opcionales por status ('received' | 'cancelled') y supplier.
+  Future<List<Map<String, dynamic>>> listDirectReceipts({
+    required String businessId,
+    String? status,
+    String? supplierId,
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    var query = _client
+        .from(InventoryQueries.viewDirectReceiptsLog)
+        .select()
+        .eq('business_id', businessId);
+    if (status != null && status.isNotEmpty) {
+      query = query.eq('status', status);
+    }
+    if (supplierId != null && supplierId.isNotEmpty) {
+      query = query.eq('supplier_id', supplierId);
+    }
+    final response = await query
+        .order('created_at', ascending: false)
+        .range(offset, offset + limit - 1);
+    return List<Map<String, dynamic>>.from(response);
+  }
+
+  /// Carga las líneas de una recepción directa con nombre/unidad del insumo.
+  Future<List<Map<String, dynamic>>> getDirectReceiptItems(
+    String receiptId,
+  ) async {
+    final response = await _client
+        .from(InventoryQueries.tableDirectReceiptItems)
+        .select(
+          'id, item_id, quantity, unit_cost, line_total, notes, '
+          'inventory_items(name, sku, unit)',
+        )
+        .eq('direct_receipt_id', receiptId)
+        .order('id');
+    return List<Map<String, dynamic>>.from(response);
+  }
+
+  /// Crea una recepción directa: header + items + movimientos de inventario
+  /// (atómico). [items] = `[{item_id, quantity, unit_cost?, notes?}]`.
+  Future<Map<String, dynamic>> createDirectReceipt({
+    required String businessId,
+    required String warehouseId,
+    required List<Map<String, dynamic>> items,
+    String? supplierId,
+    String? notes,
+  }) async {
+    final response = await _client.rpc(
+      InventoryQueries.rpcDirectReceipt,
+      params: {
+        'p_business_id': businessId,
+        'p_warehouse_id': warehouseId,
+        'p_items': items,
+        'p_supplier_id': supplierId,
+        'p_notes': notes,
+      },
+    );
+    return response is Map
+        ? Map<String, dynamic>.from(response)
+        : <String, dynamic>{};
+  }
+
+  /// Cancela una recepción directa: registra ajustes negativos por cada
+  /// línea (revirtiendo el stock) y marca el header como `cancelled`.
+  Future<Map<String, dynamic>> cancelDirectReceipt({
+    required String receiptId,
+    String? reason,
+  }) async {
+    final response = await _client.rpc(
+      InventoryQueries.rpcDirectReceiptCancel,
+      params: {
+        'p_receipt_id': receiptId,
+        'p_reason': reason,
+      },
+    );
+    return response is Map
+        ? Map<String, dynamic>.from(response)
+        : <String, dynamic>{};
+  }
+
+  // ── Sprint 5 Inventario — Valoración + ABC ──────────────────────────────
+
+  /// Detalle de valoración por (item × bodega). Filtros opcionales por
+  /// bodega o insumo. Se ordena por value descendente.
+  Future<List<Map<String, dynamic>>> getInventoryValuation({
+    required String businessId,
+    String? warehouseId,
+    String? itemId,
+  }) async {
+    var query = _client
+        .from(InventoryQueries.viewValuation)
+        .select()
+        .eq('business_id', businessId);
+    if (warehouseId != null && warehouseId.isNotEmpty) {
+      query = query.eq('warehouse_id', warehouseId);
+    }
+    if (itemId != null && itemId.isNotEmpty) {
+      query = query.eq('item_id', itemId);
+    }
+    final response = await query
+        .order('value', ascending: false)
+        .order('item_name', ascending: true);
+    return List<Map<String, dynamic>>.from(response);
+  }
+
+  /// Análisis de rotación: outflow, velocidad y clase (star/active/slow/dormant)
+  /// por insumo en una ventana de [daysBack] días (default 30).
+  Future<List<Map<String, dynamic>>> getInventoryRotation({
+    required String businessId,
+    int daysBack = 30,
+  }) async {
+    final response = await _client.rpc(
+      InventoryQueries.rpcRotationAnalysis,
+      params: {
+        'p_business_id': businessId,
+        'p_days_back': daysBack,
+      },
+    );
+    return List<Map<String, dynamic>>.from(response as Iterable);
+  }
+
+  /// Resumen agregado por insumo con clasificación ABC. Filtro opcional
+  /// por `abcClass` ('A' | 'B' | 'C' | 'no_data').
+  Future<List<Map<String, dynamic>>> getInventoryValuationSummary({
+    required String businessId,
+    String? abcClass,
+  }) async {
+    var query = _client
+        .from(InventoryQueries.viewValuationSummary)
+        .select()
+        .eq('business_id', businessId);
+    if (abcClass != null && abcClass.isNotEmpty) {
+      query = query.eq('abc_class', abcClass);
+    }
+    final response = await query
+        .order('total_value', ascending: false)
+        .order('item_name', ascending: true);
+    return List<Map<String, dynamic>>.from(response);
+  }
+
+  // ── Sprint 4 Inventario — Lotes y vencimientos (fase 1) ─────────────────
+
+  /// Lista lotes desde `v_inventory_lots_with_status`. Filtros opcionales:
+  /// - `expiryStatus`: 'fresh' | 'warning' | 'critical' | 'expired' |
+  ///                   'depleted' | 'disposed'.
+  /// - `status`: 'active' | 'depleted' | 'disposed' (status crudo).
+  /// - `itemId` / `warehouseId`: scope a un insumo/bodega.
+  Future<List<Map<String, dynamic>>> listLots({
+    required String businessId,
+    String? expiryStatus,
+    String? status,
+    String? itemId,
+    String? warehouseId,
+    int limit = 100,
+    int offset = 0,
+  }) async {
+    var query = _client
+        .from(InventoryQueries.viewLotsWithStatus)
+        .select()
+        .eq('business_id', businessId);
+    if (expiryStatus != null && expiryStatus.isNotEmpty) {
+      query = query.eq('expiry_status', expiryStatus);
+    }
+    if (status != null && status.isNotEmpty) {
+      query = query.eq('status', status);
+    }
+    if (itemId != null && itemId.isNotEmpty) {
+      query = query.eq('item_id', itemId);
+    }
+    if (warehouseId != null && warehouseId.isNotEmpty) {
+      query = query.eq('warehouse_id', warehouseId);
+    }
+    // Orden: vencidos primero (más urgente), después por fecha de vencimiento
+    // ascendente (los más próximos a vencer al inicio).
+    final response = await query
+        .order('expiry_date', ascending: true, nullsFirst: false)
+        .order('created_at', ascending: false)
+        .range(offset, offset + limit - 1);
+    return List<Map<String, dynamic>>.from(response);
+  }
+
+  /// Cuenta lotes activos en un estado de vencimiento dado (para badge).
+  Future<int> countLotsByExpiryStatus({
+    required String businessId,
+    required String expiryStatus,
+  }) async {
+    final response = await _client
+        .from(InventoryQueries.viewLotsWithStatus)
+        .select('id')
+        .eq('business_id', businessId)
+        .eq('expiry_status', expiryStatus)
+        .count(CountOption.exact);
+    return response.count;
+  }
+
+  /// Marca un lote como dispuesto: revierte el saldo restante (si lo hay)
+  /// como ajuste negativo en la bodega y deja el header con status=disposed.
+  Future<Map<String, dynamic>> disposeLot({
+    required String lotId,
+    String? reason,
+  }) async {
+    final response = await _client.rpc(
+      InventoryQueries.rpcLotDispose,
+      params: {
+        'p_lot_id': lotId,
+        'p_reason': reason,
+      },
+    );
+    return response is Map
+        ? Map<String, dynamic>.from(response)
+        : <String, dynamic>{};
+  }
+
+  /// Registra un lote manualmente (útil para inventario inicial cuando
+  /// no se quiere atar el lote a un direct receipt formal).
+  Future<Map<String, dynamic>> registerLot({
+    required String businessId,
+    required String itemId,
+    required String warehouseId,
+    required double quantity,
+    String? lotNumber,
+    DateTime? expiryDate,
+    double? costPerUnit,
+    String? notes,
+  }) async {
+    final response = await _client.rpc(
+      InventoryQueries.rpcRegisterLot,
+      params: {
+        'p_business_id': businessId,
+        'p_item_id': itemId,
+        'p_warehouse_id': warehouseId,
+        'p_quantity': quantity,
+        'p_lot_number': lotNumber,
+        'p_expiry_date': expiryDate?.toIso8601String().split('T').first,
+        'p_cost_per_unit': costPerUnit,
+        'p_source_type': 'manual',
+        'p_source_id': null,
+        'p_notes': notes,
+      },
+    );
+    return response is Map
+        ? Map<String, dynamic>.from(response)
+        : <String, dynamic>{};
+  }
+
   Future<Map<String, dynamic>> createItem({
     required String businessId,
     required String name,
@@ -244,6 +610,7 @@ class InventoryRepository {
     bool isActive = true,
     String? costingMethod,
     String? barcode,
+    bool tracksLots = false,
   }) async {
     final response = await _client
         .from(InventoryQueries.tableInventoryItems)
@@ -260,6 +627,7 @@ class InventoryRepository {
             'is_active': isActive,
             'costing_method': costingMethod,
             'barcode': barcode,
+            'tracks_lots': tracksLots,
           }..removeWhere((key, value) => value == null),
         )
         .select()
@@ -280,6 +648,7 @@ class InventoryRepository {
     required bool isActive,
     String? costingMethod,
     String? barcode,
+    bool? tracksLots,
   }) async {
     final payload = <String, dynamic>{
       'name': name,
@@ -291,10 +660,11 @@ class InventoryRepository {
       'max_stock': maxStock,
       'is_active': isActive,
     };
-    // costing_method y barcode son extensiones PRD 9 — solo se mandan
-    // si el caller los provee, así no pisamos valores existentes.
+    // Campos opcionales extendidos — solo se mandan si el caller los provee
+    // para no pisar valores existentes.
     if (costingMethod != null) payload['costing_method'] = costingMethod;
     if (barcode != null) payload['barcode'] = barcode;
+    if (tracksLots != null) payload['tracks_lots'] = tracksLots;
     payload.removeWhere((key, value) => value == null);
     await _client
         .from(InventoryQueries.tableInventoryItems)
@@ -443,21 +813,28 @@ class InventoryRepository {
 
   /// Lista transferencias desde `v_inventory_transfers_log`. Si [status]
   /// se provee, filtra por status ('sent','received','cancelled').
+  /// Soporta paginación offset-based para listas grandes.
+  ///
+  /// Devuelve transferencias donde el [businessId] participa como source
+  /// (`from_business_id`) o como target (`to_business_id`). De esta forma
+  /// el negocio activo ve tanto las transferencias que envió como las
+  /// inter-sucursal entrantes que debe recibir.
   Future<List<StockTransfer>> listTransfers({
     required String businessId,
     String? status,
-    int limit = 100,
+    int limit = 50,
+    int offset = 0,
   }) async {
     final query = _client
         .from(InventoryQueries.viewTransfersLog)
         .select()
-        .eq('business_id', businessId);
+        .or('from_business_id.eq.$businessId,to_business_id.eq.$businessId');
     final filtered = status != null && status.isNotEmpty
         ? query.eq('status', status)
         : query;
     final response = await filtered
         .order('sent_at', ascending: false)
-        .limit(limit);
+        .range(offset, offset + limit - 1);
     return List<Map<String, dynamic>>.from(response)
         .map(StockTransfer.fromLogMap)
         .toList(growable: false);
@@ -485,12 +862,18 @@ class InventoryRepository {
   ///
   /// [items] debe ser una lista de mapas con `item_id`, `quantity` y
   /// opcionalmente `cost_per_unit`.
+  ///
+  /// Para una transferencia inter-sucursal (cross-business), pasa
+  /// [targetBusinessId] distinto de [businessId]. En ese caso
+  /// [toWarehouseId] debe pertenecer al target y el usuario debe tener rol
+  /// owner/admin/manager en ambos businesses.
   Future<Map<String, dynamic>> sendTransfer({
     required String businessId,
     required String fromWarehouseId,
     required String toWarehouseId,
     required List<Map<String, dynamic>> items,
     String? notes,
+    String? targetBusinessId,
   }) async {
     final response = await _client.rpc(
       InventoryQueries.rpcTransferSend,
@@ -500,6 +883,8 @@ class InventoryRepository {
         'p_to_warehouse_id': toWarehouseId,
         'p_items': items,
         'p_notes': notes,
+        if (targetBusinessId != null && targetBusinessId != businessId)
+          'p_target_business_id': targetBusinessId,
       },
     );
     return response is Map

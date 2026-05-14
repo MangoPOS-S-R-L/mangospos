@@ -5,4 +5,5 @@ class PurchasesQueries {
   static const tableWarehouses = 'warehouses';
   static const tableInventoryItems = 'inventory_items';
   static const rpcReceivePurchaseOrder = 'fn_receive_purchase_order';
+  static const rpcReceivePurchaseOrderPartial = 'fn_receive_purchase_order_partial';
 }

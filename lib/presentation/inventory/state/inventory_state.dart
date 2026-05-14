@@ -112,6 +112,8 @@ class InventoryItemSummary {
   // PRD 9 Fase 1D — campos extendidos.
   final String costingMethod; // 'average' | 'fifo'
   final String barcode;
+  // Sprint 4 lotes — opt-in para tracking de lote / vencimiento.
+  final bool tracksLots;
 
   const InventoryItemSummary({
     required this.id,
@@ -126,6 +128,7 @@ class InventoryItemSummary {
     required this.stock,
     this.costingMethod = 'average',
     this.barcode = '',
+    this.tracksLots = false,
   });
 
   bool get isLowStock => isActive && stock <= minStock;
@@ -152,6 +155,7 @@ class InventoryItemSummary {
       stock: stock,
       costingMethod: map['costing_method']?.toString() ?? 'average',
       barcode: map['barcode']?.toString() ?? '',
+      tracksLots: map['tracks_lots'] == true,
     );
   }
 }

@@ -44,6 +44,12 @@ import '../../presentation/customers/view/customers_view.dart';
 import '../../presentation/customers/view/customer_detail_view.dart';
 import '../../presentation/inventory/view/inventory_hub_view.dart';
 import '../../presentation/inventory/view/inventory_items_view.dart';
+import '../../presentation/inventory/view/inventory_direct_receipts_view.dart';
+import '../../presentation/inventory/view/inventory_kardex_view.dart';
+import '../../presentation/inventory/view/inventory_lots_view.dart';
+import '../../presentation/inventory/view/inventory_low_stock_view.dart';
+import '../../presentation/inventory/view/inventory_rotation_view.dart';
+import '../../presentation/inventory/view/inventory_valuation_view.dart';
 import '../../presentation/inventory/view/inventory_outflow_view.dart';
 import '../../presentation/inventory/view/suppliers_view.dart';
 import '../../presentation/inventory/view/warehouses_view.dart';
@@ -571,6 +577,30 @@ class AppRouter {
           GoRoute(
             path: AppRoutes.inventoryReconciliation,
             builder: (context, state) => const StockReconciliationView(),
+          ),
+          GoRoute(
+            path: AppRoutes.inventoryKardex,
+            builder: (context, state) => const InventoryKardexView(),
+          ),
+          GoRoute(
+            path: AppRoutes.inventoryLowStock,
+            builder: (context, state) => const InventoryLowStockView(),
+          ),
+          GoRoute(
+            path: AppRoutes.inventoryReceipts,
+            builder: (context, state) => const InventoryDirectReceiptsView(),
+          ),
+          GoRoute(
+            path: AppRoutes.inventoryLots,
+            builder: (context, state) => const InventoryLotsView(),
+          ),
+          GoRoute(
+            path: AppRoutes.inventoryValuation,
+            builder: (context, state) => const InventoryValuationView(),
+          ),
+          GoRoute(
+            path: AppRoutes.inventoryRotation,
+            builder: (context, state) => const InventoryRotationView(),
           ),
           GoRoute(
             path: AppRoutes.inventoryTransfers,

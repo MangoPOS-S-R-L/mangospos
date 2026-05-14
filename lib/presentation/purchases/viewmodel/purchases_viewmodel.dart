@@ -186,6 +186,43 @@ class PurchasesViewModel extends ChangeNotifier {
     }
   }
 
+  /// Sprint 3 — Recepción parcial.
+  /// Devuelve las líneas de la OC para mostrar el dialog (con qty pedida vs
+  /// recibida). No persiste estado: el dialog lo maneja localmente.
+  Future<List<PurchaseOrderLine>> loadOrderLines(String orderId) {
+    return _repository.getOrderLines(orderId);
+  }
+
+  /// Sprint 3 — Recepción parcial.
+  /// [lineItems] es una lista de mapas `[{poi_id, quantity}]`. Tras la
+  /// recepción la OC puede quedar en status 'partial' (si todavía hay líneas
+  /// pendientes) o 'received' (si todas se completaron).
+  Future<Map<String, dynamic>> receiveOrderPartial({
+    required String orderId,
+    required List<Map<String, dynamic>> lineItems,
+    String? notes,
+  }) async {
+    _state = _state.copyWith(saving: true, clearError: true);
+    notifyListeners();
+    try {
+      final result = await _repository.receivePurchaseOrderPartial(
+        orderId: orderId,
+        lineItems: lineItems,
+        notes: notes,
+      );
+      _state = _state.copyWith(saving: false);
+      await refresh();
+      return result;
+    } catch (e) {
+      _state = _state.copyWith(
+        saving: false,
+        error: 'Error en recepción parcial: $e',
+      );
+      notifyListeners();
+      rethrow;
+    }
+  }
+
   Future<void> _reload() async {
     final businessId = _state.businessId;
     if (businessId == null) {
@@ -198,6 +235,8 @@ class PurchasesViewModel extends ChangeNotifier {
     final orders = await _repository.getOrders(
       businessId: businessId,
       status: _state.selectedStatus,
+      limit: PurchasesState.ordersPageSize,
+      offset: 0,
     );
     final totals = await _repository.getOrderTotalsByStatus(businessId);
 
@@ -207,9 +246,41 @@ class PurchasesViewModel extends ChangeNotifier {
       warehouses: warehouses,
       inventoryItems: inventoryItems,
       orders: orders,
+      ordersHasMore: orders.length == PurchasesState.ordersPageSize,
       totalsByStatus: totals,
       clearError: true,
     );
     notifyListeners();
+  }
+
+  /// Carga la siguiente página de órdenes y la concatena a la lista actual.
+  /// No hace nada si ya está cargando, no hay más resultados o no hay negocio.
+  Future<void> loadMoreOrders() async {
+    final businessId = _state.businessId;
+    if (businessId == null) return;
+    if (_state.ordersLoadingMore || _state.loading) return;
+    if (!_state.ordersHasMore) return;
+    _state = _state.copyWith(ordersLoadingMore: true, clearError: true);
+    notifyListeners();
+    try {
+      final page = await _repository.getOrders(
+        businessId: businessId,
+        status: _state.selectedStatus,
+        limit: PurchasesState.ordersPageSize,
+        offset: _state.orders.length,
+      );
+      _state = _state.copyWith(
+        ordersLoadingMore: false,
+        orders: [..._state.orders, ...page],
+        ordersHasMore: page.length == PurchasesState.ordersPageSize,
+      );
+      notifyListeners();
+    } catch (e) {
+      _state = _state.copyWith(
+        ordersLoadingMore: false,
+        error: 'Error cargando más órdenes: $e',
+      );
+      notifyListeners();
+    }
   }
 }

@@ -77,6 +77,11 @@ StockTransferStatus _parseStatus(String? raw) {
 class StockTransfer {
   final String id;
   final String businessId;
+  final String fromBusinessId;
+  final String? fromBusinessName;
+  final String toBusinessId;
+  final String? toBusinessName;
+  final bool isCrossBusiness;
   final String transferNumber;
   final StockTransferStatus status;
   final String fromWarehouseId;
@@ -97,6 +102,9 @@ class StockTransfer {
   const StockTransfer({
     required this.id,
     required this.businessId,
+    required this.fromBusinessId,
+    required this.toBusinessId,
+    required this.isCrossBusiness,
     required this.transferNumber,
     required this.status,
     required this.fromWarehouseId,
@@ -112,16 +120,27 @@ class StockTransfer {
     required this.itemCount,
     required this.totalSent,
     required this.totalReceived,
+    this.fromBusinessName,
+    this.toBusinessName,
     this.items = const [],
   });
 
   bool get isPending => status == StockTransferStatus.sent;
   bool get hasVariance => totalReceived < totalSent && status == StockTransferStatus.received;
 
+  /// Indica si el negocio activo es el destinatario (incoming) o el emisor.
+  bool isIncomingFor(String activeBusinessId) =>
+      isCrossBusiness && toBusinessId == activeBusinessId;
+
   StockTransfer copyWith({List<StockTransferItem>? items}) {
     return StockTransfer(
       id: id,
       businessId: businessId,
+      fromBusinessId: fromBusinessId,
+      fromBusinessName: fromBusinessName,
+      toBusinessId: toBusinessId,
+      toBusinessName: toBusinessName,
+      isCrossBusiness: isCrossBusiness,
       transferNumber: transferNumber,
       status: status,
       fromWarehouseId: fromWarehouseId,
@@ -156,9 +175,23 @@ class StockTransfer {
       return int.tryParse(v.toString()) ?? 0;
     }
 
+    final businessId = map['business_id']?.toString() ?? '';
+    final fromBusinessId = map['from_business_id']?.toString() ?? businessId;
+    final toBusinessId = map['to_business_id']?.toString() ?? businessId;
+    final bool isCross = map['is_cross_business'] is bool
+        ? map['is_cross_business'] as bool
+        : fromBusinessId.isNotEmpty &&
+              toBusinessId.isNotEmpty &&
+              fromBusinessId != toBusinessId;
+
     return StockTransfer(
       id: map['transfer_id']?.toString() ?? '',
-      businessId: map['business_id']?.toString() ?? '',
+      businessId: businessId,
+      fromBusinessId: fromBusinessId,
+      fromBusinessName: map['from_business_name']?.toString(),
+      toBusinessId: toBusinessId,
+      toBusinessName: map['to_business_name']?.toString(),
+      isCrossBusiness: isCross,
       transferNumber: map['transfer_number']?.toString() ?? '',
       status: _parseStatus(map['status']?.toString()),
       fromWarehouseId: map['from_warehouse_id']?.toString() ?? '',
@@ -179,34 +212,45 @@ class StockTransfer {
 }
 
 class TransfersState {
+  /// Tamaño de página para la lista de transferencias.
+  static const pageSize = 50;
+
   final bool loading;
+  final bool loadingMore;
   final bool saving;
   final String? error;
   final String? businessId;
   final List<StockTransfer> transfers;
+  final bool hasMore;
 
   const TransfersState({
     this.loading = false,
+    this.loadingMore = false,
     this.saving = false,
     this.error,
     this.businessId,
     this.transfers = const [],
+    this.hasMore = false,
   });
 
   TransfersState copyWith({
     bool? loading,
+    bool? loadingMore,
     bool? saving,
     String? error,
     String? businessId,
     List<StockTransfer>? transfers,
+    bool? hasMore,
     bool clearError = false,
   }) {
     return TransfersState(
       loading: loading ?? this.loading,
+      loadingMore: loadingMore ?? this.loadingMore,
       saving: saving ?? this.saving,
       error: clearError ? null : (error ?? this.error),
       businessId: businessId ?? this.businessId,
       transfers: transfers ?? this.transfers,
+      hasMore: hasMore ?? this.hasMore,
     );
   }
 }

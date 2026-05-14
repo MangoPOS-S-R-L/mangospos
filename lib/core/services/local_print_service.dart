@@ -66,7 +66,7 @@ class LocalPrintService {
       if (user == null) return null;
       // Get business_id from user's active membership
       final membership = await Supabase.instance.client
-          .from('business_members')
+          .from('user_businesses')
           .select('business_id')
           .eq('user_id', user.id)
           .limit(1)

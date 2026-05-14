@@ -82,6 +82,10 @@ class AppRoutes {
   static const inventoryRequirements = '$settings/inventory-requirements';
   static const inventoryOutflow = '$settings/inventory-outflow';
   static const inventoryReconciliation = '$settings/inventory-reconciliation';
+  static const inventoryLowStock = '$settings/inventory-low-stock';
+  static const inventoryLots = '$settings/inventory-lots';
+  static const inventoryValuation = '$settings/inventory-valuation';
+  static const inventoryRotation = '$settings/inventory-rotation';
 
   // ---- Módulo Inventario (PRD 9) ----
   static const inventoryHome = '/inventory';

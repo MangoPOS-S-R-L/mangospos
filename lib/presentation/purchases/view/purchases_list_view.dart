@@ -4,7 +4,9 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../../app/router/routes.dart';
+import '../state/purchases_state.dart';
 import '../viewmodel/purchases_viewmodel.dart';
+import 'purchase_receive_dialog.dart';
 
 class PurchasesListView extends ConsumerStatefulWidget {
   const PurchasesListView({super.key});
@@ -199,7 +201,7 @@ class _PurchasesListViewState extends ConsumerState<PurchasesListView> {
                               style: TextStyle(color: Color(0xFF64748B)),
                             ),
                           )
-                        else
+                        else ...[
                           ListView.separated(
                             shrinkWrap: true,
                             physics: const NeverScrollableScrollPhysics(),
@@ -242,8 +244,12 @@ class _PurchasesListViewState extends ConsumerState<PurchasesListView> {
                                         OutlinedButton(
                                           onPressed: state.saving
                                               ? null
-                                              : () => _confirmReceiveOrder(order.id),
-                                          child: const Text('Recibir'),
+                                              : () => _openReceiveDialog(order),
+                                          child: Text(
+                                            order.status == 'partial'
+                                                ? 'Recibir resto'
+                                                : 'Recibir',
+                                          ),
                                         ),
                                       ],
                                     ],
@@ -252,6 +258,34 @@ class _PurchasesListViewState extends ConsumerState<PurchasesListView> {
                               );
                             },
                           ),
+                          if (state.ordersHasMore || state.ordersLoadingMore)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 12,
+                                horizontal: 20,
+                              ),
+                              child: Center(
+                                child: state.ordersLoadingMore
+                                    ? const SizedBox(
+                                        height: 28,
+                                        width: 28,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2.4,
+                                        ),
+                                      )
+                                    : OutlinedButton.icon(
+                                        onPressed: () => ref
+                                            .read(purchasesViewModelProvider)
+                                            .loadMoreOrders(),
+                                        icon: const Icon(
+                                          Icons.expand_more_rounded,
+                                          size: 18,
+                                        ),
+                                        label: const Text('Cargar más'),
+                                      ),
+                              ),
+                            ),
+                        ],
                       ],
                     ),
                   ),
@@ -410,42 +444,12 @@ class _PurchasesListViewState extends ConsumerState<PurchasesListView> {
     return status != 'received' && status != 'cancelled';
   }
 
-  Future<void> _confirmReceiveOrder(String orderId) async {
-    final shouldReceive = await showDialog<bool>(
+  Future<void> _openReceiveDialog(PurchaseOrderSummary order) async {
+    await showDialog<void>(
       context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('Recibir orden'),
-          content: const Text(
-            'Esta acción registrará la recepción y subirá stock para las líneas vinculadas a inventario.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Cancelar'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Recibir'),
-            ),
-          ],
-        );
-      },
+      barrierDismissible: false,
+      builder: (_) => PurchaseReceiveDialog(order: order),
     );
-
-    if (shouldReceive != true || !mounted) return;
-
-    try {
-      await ref.read(purchasesViewModelProvider).receiveOrder(orderId);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Orden recibida e inventario actualizado.'),
-        ),
-      );
-    } catch (_) {
-      if (!mounted) return;
-    }
   }
 }
 

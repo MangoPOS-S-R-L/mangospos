@@ -163,7 +163,7 @@ Future<void> _discoverHubsViaMdns() async {
       final user = Supabase.instance.client.auth.currentUser;
       if (user != null) {
         final membership = await Supabase.instance.client
-            .from('business_members')
+            .from('user_businesses')
             .select('business_id')
             .eq('user_id', user.id)
             .limit(1)
@@ -199,7 +199,7 @@ Future<void> _publishAgentUrlToDb() async {
     final user = Supabase.instance.client.auth.currentUser;
     if (user == null) return;
     final membership = await Supabase.instance.client
-        .from('business_members')
+        .from('user_businesses')
         .select('business_id')
         .eq('user_id', user.id)
         .limit(1)

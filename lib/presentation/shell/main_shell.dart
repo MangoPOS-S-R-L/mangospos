@@ -12,6 +12,8 @@ import 'package:mangopos/services/session/session_controller.dart';
 
 import '../../app/theme/mango_colors.dart';
 import '../../app/router/routes.dart';
+import '../inventory/viewmodel/expiring_lots_badge_provider.dart';
+import '../inventory/viewmodel/low_stock_badge_provider.dart';
 
 class MainShell extends ConsumerWidget {
   final Widget child;
@@ -93,7 +95,7 @@ class MainShell extends ConsumerWidget {
                               label: 'Productos',
                               route: AppRoutes.products,
                               asset: 'assets/icons/productos_principal.svg',
-                              permissionCode: 'inventario.acceso',
+                              permissionCode: 'productos.acceso',
                             ),
                             const SizedBox(width: navGap),
                             const _TopNavItem(
@@ -108,6 +110,10 @@ class MainShell extends ConsumerWidget {
                               route: AppRoutes.settings,
                               asset: 'assets/icons/masajustes.svg',
                               permissionCode: 'settings.usuarios.acceso',
+                              inactivePaths: [
+                                AppRoutes.purchasesList,
+                                AppRoutes.inventoryHome,
+                              ],
                             ),
                           ],
                         ),
@@ -122,7 +128,12 @@ class MainShell extends ConsumerWidget {
 
                       const SizedBox(width: 12),
 
-                      // Notificaciones
+                      // Badge de vencimientos
+                      const _ExpiringLotsBadgeButton(),
+
+                      const SizedBox(width: 8),
+
+                      // Badge de alertas de stock bajo
                       const _NotificationButton(),
 
                       const SizedBox(width: 16),
@@ -153,14 +164,21 @@ class MainShell extends ConsumerWidget {
 class _TopNavItem extends ConsumerStatefulWidget {
   final String label;
   final String route;
-  final String asset;
+  final String? asset;
+  final IconData? materialIcon;
   final String? permissionCode;
+  final List<String>? inactivePaths;
   const _TopNavItem({
     required this.label,
     required this.route,
-    required this.asset,
+    this.asset,
+    this.materialIcon,
     this.permissionCode,
-  });
+    this.inactivePaths,
+  }) : assert(
+          asset != null || materialIcon != null,
+          'Debe proporcionarse asset o materialIcon',
+        );
 
   @override
   ConsumerState<_TopNavItem> createState() => _TopNavItemState();
@@ -178,10 +196,13 @@ class _TopNavItemState extends ConsumerState<_TopNavItem> {
             .read(sessionProvider.notifier)
             .hasPermission(widget.permissionCode!);
     final loc = GoRouterState.of(context).uri.toString();
-    final active =
-        loc == widget.route ||
-        (widget.route != '/' && loc.startsWith(widget.route)) ||
-        (widget.route == AppRoutes.settings && loc.startsWith(AppRoutes.menu));
+    final excluded =
+        widget.inactivePaths?.any((p) => loc.startsWith(p)) ?? false;
+    final active = !excluded &&
+        (loc == widget.route ||
+            (widget.route != '/' && loc.startsWith(widget.route)) ||
+            (widget.route == AppRoutes.settings &&
+                loc.startsWith(AppRoutes.menu)));
 
     final showLabel = MediaQuery.of(context).size.width >= 768;
     final iconColor = hasAccess
@@ -215,12 +236,15 @@ class _TopNavItemState extends ConsumerState<_TopNavItem> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              SvgPicture.asset(
-                widget.asset,
-                width: 22,
-                height: 22,
-                colorFilter: ColorFilter.mode(iconColor, BlendMode.srcIn),
-              ),
+              if (widget.asset != null)
+                SvgPicture.asset(
+                  widget.asset!,
+                  width: 22,
+                  height: 22,
+                  colorFilter: ColorFilter.mode(iconColor, BlendMode.srcIn),
+                )
+              else
+                Icon(widget.materialIcon, size: 22, color: iconColor),
               if (showLabel) ...[
                 const SizedBox(width: 8),
                 Text(
@@ -312,27 +336,82 @@ class _FullscreenButtonState extends State<_FullscreenButton> {
   }
 }
 
-// ===== NOTIFICATION BUTTON (New) =====
-class _NotificationButton extends StatelessWidget {
+// ===== NOTIFICATION BUTTON =====
+// Hoy = badge global de alertas de stock bajo. Cuando agreguemos otros tipos
+// de notificación (transferencias entrantes, OC parcial, etc.) podemos
+// agregar fuentes adicionales al provider y mostrar un menú desplegable.
+class _NotificationButton extends ConsumerWidget {
   const _NotificationButton();
 
   @override
-  Widget build(BuildContext context) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: () {
-          // TODO show notifications
-        },
-        child: Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            color: Colors.grey[100],
-            shape: BoxShape.circle,
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(lowStockBadgeCountProvider);
+    final count = async.maybeWhen(data: (v) => v, orElse: () => 0);
+    final hasAlerts = count > 0;
+    final badgeText = count > 99 ? '99+' : '$count';
+
+    return Tooltip(
+      message: hasAlerts
+          ? '$count alerta(s) de stock bajo'
+          : 'Sin alertas activas',
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: () => context.go(AppRoutes.inventoryLowStock),
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: hasAlerts
+                      ? const Color(0xFFFFE9E0)
+                      : Colors.grey[100],
+                  shape: BoxShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: Icon(
+                  hasAlerts
+                      ? Icons.notifications_active_rounded
+                      : Icons.notifications_none,
+                  color: hasAlerts
+                      ? const Color(0xFFDC2626)
+                      : Colors.grey[600],
+                ),
+              ),
+              if (hasAlerts)
+                Positioned(
+                  top: -2,
+                  right: -2,
+                  child: Container(
+                    constraints: const BoxConstraints(
+                      minWidth: 18,
+                      minHeight: 18,
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 5,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFDC2626),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: Colors.white, width: 1.5),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      badgeText,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        height: 1,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
-          alignment: Alignment.center,
-          child: Icon(Icons.notifications_none, color: Colors.grey[600]),
         ),
       ),
     );
@@ -887,6 +966,86 @@ class _UserMenuTile extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ===== BADGE DE VENCIMIENTOS =====
+// Cuenta lotes vencidos + críticos (≤7 días). Tap → vista de Lotes.
+class _ExpiringLotsBadgeButton extends ConsumerWidget {
+  const _ExpiringLotsBadgeButton();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(expiringLotsBadgeCountProvider);
+    final count = async.maybeWhen(data: (v) => v, orElse: () => 0);
+    final hasAlerts = count > 0;
+    final badgeText = count > 99 ? '99+' : '$count';
+
+    return Tooltip(
+      message: hasAlerts
+          ? '$count lote(s) vencido(s) o por vencer'
+          : 'Sin lotes próximos a vencer',
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: () => context.go(AppRoutes.inventoryLots),
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: hasAlerts
+                      ? const Color(0xFFFFE9E0)
+                      : Colors.grey[100],
+                  shape: BoxShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: Icon(
+                  hasAlerts
+                      ? Icons.event_busy_rounded
+                      : Icons.event_note_outlined,
+                  color: hasAlerts
+                      ? const Color(0xFFC2410C)
+                      : Colors.grey[600],
+                ),
+              ),
+              if (hasAlerts)
+                Positioned(
+                  top: -2,
+                  right: -2,
+                  child: Container(
+                    constraints: const BoxConstraints(
+                      minWidth: 18,
+                      minHeight: 18,
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 5,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFC2410C),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: Colors.white, width: 1.5),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      badgeText,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        height: 1,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }

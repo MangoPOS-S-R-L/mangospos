@@ -670,12 +670,15 @@ const Map<String, Map<String, List<String>>> _codeMap = {
     'acceso': ['inventario.acceso'],
     'graba/mod': [
       'inventario.productos.crear_editar',
-      'inventario.ajustes.crear'
+      'inventario.ajustes.crear',
+      'inventario.transferencias.crear',
+      'inventario.transferencias.recibir',
     ],
   },
   'compras': {
-    'acceso': ['compras.proveedores.crear_editar'],
+    'acceso': ['compras.acceso'],
     'graba/mod': [
+      'compras.proveedores.crear_editar',
       'compras.ordenes.crear',
       'compras.ordenes.recibir'
     ],

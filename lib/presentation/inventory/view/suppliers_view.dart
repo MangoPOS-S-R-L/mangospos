@@ -104,7 +104,7 @@ class _SuppliersViewState extends ConsumerState<SuppliersView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: Colors.white,
       body: _loading
           ? Center(child: CircularProgressIndicator(color: AppColors.primary))
           : _error != null

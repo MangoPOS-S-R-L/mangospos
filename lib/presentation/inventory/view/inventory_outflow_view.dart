@@ -44,7 +44,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
     );
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: Colors.white,
       body: state.loading && state.items.isEmpty
           ? Center(child: CircularProgressIndicator(color: AppColors.primary))
           : SingleChildScrollView(

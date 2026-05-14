@@ -398,60 +398,96 @@ class SettingsView extends ConsumerWidget {
             ),
         ],
       ),
-      if (inventoryEnabled)
-        _SettingsSection(
-          title: inventoryMode == InventoryMode.advanced
-              ? 'Almacenes e Inventario (recetas)'
-              : 'Almacenes e Inventario',
-          items: const [
-            _SettingsOption(
-              title: 'Inventario',
-              subtitle: 'Insumos, recetas, almacenes y proveedores',
-              icon: Icons.inventory_2_rounded,
-              color: Color(0xFFFFE6D5),
-              route: AppRoutes.inventoryHome,
-            ),
-            _SettingsOption(
-              title: 'Kardex por Sucursal',
-              subtitle: 'Historial de movimientos por ubicación',
-              icon: Icons.list_rounded,
-              color: Color(0xFFFFE6D5),
-            ),
-            _SettingsOption(
-              title: 'Registro de Salida de Inventario',
-              subtitle: 'Control de salidas de stock',
-              icon: Icons.logout_rounded,
-              color: Color(0xFFFFF0D9),
-              route: AppRoutes.inventoryOutflow,
-            ),
-            _SettingsOption(
-              title: 'Mover Inventario entre Almacenes',
-              subtitle: 'Transferencias entre almacenes',
-              icon: Icons.swap_horiz_rounded,
-              color: Color(0xFFEAF0FF),
-            ),
-            _SettingsOption(
-              title: 'Cuadre de Stock',
-              subtitle: 'Ajustes de inventario',
-              icon: Icons.inventory_rounded,
-              color: Color(0xFFE6F7EE),
-              route: AppRoutes.inventoryReconciliation,
-            ),
-            _SettingsOption(
-              title: 'Mermas o Perecederos',
-              subtitle: 'Registro de pérdidas',
-              icon: Icons.warning_rounded,
-              color: Color(0xFFFFEDED),
-            ),
-            _SettingsOption(
-              title: 'Requerimientos',
-              subtitle: 'Solicitudes de stock',
-              icon: Icons.assignment_rounded,
-              color: Color(0xFFF1F1F1),
-              route: AppRoutes.inventoryRequirements,
-            ),
-          ],
-        ),
+      _SettingsSection(
+        title: inventoryMode == InventoryMode.advanced
+            ? 'Almacenes e Inventario (recetas)'
+            : 'Almacenes e Inventario',
+        items: const [
+          _SettingsOption(
+            title: 'Inventario',
+            subtitle: 'Insumos, recetas, almacenes y proveedores',
+            icon: Icons.inventory_2_rounded,
+            color: Color(0xFFFFE6D5),
+            route: AppRoutes.inventoryHome,
+          ),
+          _SettingsOption(
+            title: 'Kardex por Sucursal',
+            subtitle: 'Historial de movimientos por ubicación',
+            icon: Icons.list_rounded,
+            color: Color(0xFFFFE6D5),
+            route: AppRoutes.inventoryKardex,
+          ),
+          _SettingsOption(
+            title: 'Recepciones',
+            subtitle: 'Ingreso directo de mercancía sin OC',
+            icon: Icons.move_to_inbox_rounded,
+            color: Color(0xFFE6F7EE),
+            route: AppRoutes.inventoryReceipts,
+          ),
+          _SettingsOption(
+            title: 'Registro de Salida de Inventario',
+            subtitle: 'Control de salidas de stock',
+            icon: Icons.logout_rounded,
+            color: Color(0xFFFFF0D9),
+            route: AppRoutes.inventoryOutflow,
+          ),
+          _SettingsOption(
+            title: 'Mover Inventario entre Almacenes',
+            subtitle: 'Transferencias entre almacenes',
+            icon: Icons.swap_horiz_rounded,
+            color: Color(0xFFEAF0FF),
+            route: AppRoutes.inventoryTransfers,
+          ),
+          _SettingsOption(
+            title: 'Cuadre de Stock',
+            subtitle: 'Ajustes de inventario',
+            icon: Icons.inventory_rounded,
+            color: Color(0xFFE6F7EE),
+            route: AppRoutes.inventoryReconciliation,
+          ),
+          _SettingsOption(
+            title: 'Mermas o Perecederos',
+            subtitle: 'Registro de pérdidas',
+            icon: Icons.warning_rounded,
+            color: Color(0xFFFFEDED),
+          ),
+          _SettingsOption(
+            title: 'Lotes y Vencimientos',
+            subtitle: 'Tracking de lote y fecha de vencimiento',
+            icon: Icons.event_note_rounded,
+            color: Color(0xFFFFF0D9),
+            route: AppRoutes.inventoryLots,
+          ),
+          _SettingsOption(
+            title: 'Valoración y ABC',
+            subtitle: 'Valor de existencias y clasificación Pareto',
+            icon: Icons.assessment_rounded,
+            color: Color(0xFFEAF0FF),
+            route: AppRoutes.inventoryValuation,
+          ),
+          _SettingsOption(
+            title: 'Análisis de Rotación',
+            subtitle: 'Velocidad de consumo, estrellas y estancados',
+            icon: Icons.trending_up_rounded,
+            color: Color(0xFFE6F7EE),
+            route: AppRoutes.inventoryRotation,
+          ),
+          _SettingsOption(
+            title: 'Alertas de Stock',
+            subtitle: 'Insumos bajo el mínimo configurado',
+            icon: Icons.notifications_active_rounded,
+            color: Color(0xFFFFEDED),
+            route: AppRoutes.inventoryLowStock,
+          ),
+          _SettingsOption(
+            title: 'Requerimientos',
+            subtitle: 'Solicitudes de stock',
+            icon: Icons.assignment_rounded,
+            color: Color(0xFFF1F1F1),
+            route: AppRoutes.inventoryRequirements,
+          ),
+        ],
+      ),
       _SettingsSection(
         title: 'Compras',
         items: const [

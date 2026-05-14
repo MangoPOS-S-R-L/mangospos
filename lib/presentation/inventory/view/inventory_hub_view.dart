@@ -110,7 +110,7 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: Colors.white,
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
@@ -160,9 +160,9 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
                 _HubCard(
                   icon: Icons.move_to_inbox_outlined,
                   title: 'Recepciones',
-                  subtitle: 'Mercancía entrante (contra OC o directa)',
+                  subtitle: 'Mercancía entrante sin OC formal',
                   route: AppRoutes.inventoryReceipts,
-                  available: false,
+                  available: true,
                 ),
                 _HubCard(
                   icon: Icons.swap_horiz_outlined,
@@ -174,9 +174,58 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
                 _HubCard(
                   icon: Icons.tune_outlined,
                   title: 'Ajustes',
-                  subtitle: 'Conteos físicos, mermas, correcciones',
-                  route: AppRoutes.inventoryAdjustments,
-                  available: false,
+                  subtitle: 'Conteos físicos y correcciones de stock',
+                  route: AppRoutes.inventoryReconciliation,
+                  available: true,
+                ),
+                _HubCard(
+                  icon: Icons.outbox_outlined,
+                  title: 'Salidas / Mermas',
+                  subtitle: 'Registra consumo interno, mermas y donaciones',
+                  route: AppRoutes.inventoryOutflow,
+                  available: true,
+                ),
+                _HubCard(
+                  icon: Icons.fact_check_outlined,
+                  title: 'Requerimientos',
+                  subtitle: 'Sugerencias de reposición según stock mínimo',
+                  route: AppRoutes.inventoryRequirements,
+                  available: true,
+                ),
+                _HubCard(
+                  icon: Icons.receipt_long_outlined,
+                  title: 'Kardex',
+                  subtitle: 'Historial de movimientos con saldo corrido',
+                  route: AppRoutes.inventoryKardex,
+                  available: true,
+                ),
+                _HubCard(
+                  icon: Icons.notifications_active_outlined,
+                  title: 'Alertas de stock',
+                  subtitle: 'Insumos bajo el mínimo configurado',
+                  route: AppRoutes.inventoryLowStock,
+                  available: true,
+                ),
+                _HubCard(
+                  icon: Icons.event_note_outlined,
+                  title: 'Lotes y vencimientos',
+                  subtitle: 'Tracking de lote y fecha de vencimiento',
+                  route: AppRoutes.inventoryLots,
+                  available: true,
+                ),
+                _HubCard(
+                  icon: Icons.assessment_outlined,
+                  title: 'Valoración y ABC',
+                  subtitle: 'Valor de existencias con clasificación Pareto',
+                  route: AppRoutes.inventoryValuation,
+                  available: true,
+                ),
+                _HubCard(
+                  icon: Icons.trending_up_outlined,
+                  title: 'Análisis de Rotación',
+                  subtitle: 'Velocidad de consumo, estrellas y estancados',
+                  route: AppRoutes.inventoryRotation,
+                  available: true,
                 ),
               ],
             ),

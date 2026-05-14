@@ -10,4 +10,21 @@ class InventoryQueries {
   static const rpcTransferCancel = 'fn_inventory_transfer_cancel';
   static const tableStockTransferItems = 'stock_transfer_items';
   static const viewTransfersLog = 'v_inventory_transfers_log';
+  static const viewMovementsKardex = 'v_inventory_movements_with_balance';
+  static const viewLowStock = 'v_inventory_low_stock';
+  static const viewStockByWarehouse = 'v_inventory_stock_by_warehouse';
+  static const tableDirectReceipts = 'direct_receipts';
+  static const tableDirectReceiptItems = 'direct_receipt_items';
+  static const viewDirectReceiptsLog = 'v_direct_receipts_log';
+  static const rpcDirectReceipt = 'fn_inventory_direct_receipt';
+  static const rpcDirectReceiptCancel = 'fn_inventory_direct_receipt_cancel';
+  // Sprint 4 lotes
+  static const tableInventoryLots = 'inventory_lots';
+  static const viewLotsWithStatus = 'v_inventory_lots_with_status';
+  static const rpcRegisterLot = 'fn_inventory_register_lot';
+  static const rpcLotDispose = 'fn_inventory_lot_dispose';
+  // Sprint 5 reportería
+  static const viewValuation = 'v_inventory_valuation';
+  static const viewValuationSummary = 'v_inventory_valuation_summary';
+  static const rpcRotationAnalysis = 'fn_inventory_rotation_analysis';
 }
