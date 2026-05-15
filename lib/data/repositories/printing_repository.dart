@@ -178,7 +178,12 @@ class PrintingRepository {
       if (type != null) updates['type'] = type;
       if (devicePath != null) updates['device_path'] = devicePath;
       if (mac != null) updates['mac'] = mac;
-      if (isActive != null) updates['online'] = isActive;
+      // BUG fix: `is_active` es el flag administrativo (habilitada/
+      // deshabilitada lógicamente). `online` es el heartbeat en tiempo
+      // real — lo sobreescribe el ping cada 30s. Antes este código
+      // actualizaba `online` y el heartbeat borraba el cambio. Ahora
+      // persiste correctamente en `is_active`.
+      if (isActive != null) updates['is_active'] = isActive;
       if (paperWidth != null) updates['paper_width'] = paperWidth;
       if (encoding != null) updates['encoding'] = encoding;
       // Sprint 3 — `clearFallback` distingue "quitar respaldo" (NULL)

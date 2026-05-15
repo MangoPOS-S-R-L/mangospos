@@ -263,6 +263,20 @@ class _BusinessFeaturesViewState extends ConsumerState<BusinessFeaturesView> {
                         _features.copyWith(multimeseroEnabled: v),
                       ),
                     ),
+                    _FlagTile(
+                      icon: Icons.fact_check_outlined,
+                      label: 'Aprobación de transferencias',
+                      subtitle:
+                          'Las transferencias entre bodegas quedan en estado '
+                          '"Por aprobar" al crearse. Un usuario con permiso '
+                          'de aprobar debe revisarlas antes de que el stock '
+                          'se mueva. Separación de funciones — útil cuando '
+                          'el creador y el aprobador son personas distintas.',
+                      value: _features.transfersRequireApproval,
+                      onChanged: (v) => _update(
+                        _features.copyWith(transfersRequireApproval: v),
+                      ),
+                    ),
 
                     const SizedBox(height: 20),
                     _Section(title: 'Inventario'),

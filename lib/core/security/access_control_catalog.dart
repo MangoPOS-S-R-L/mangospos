@@ -451,6 +451,46 @@ const accessPermissions = <AccessPermission>[
     description: 'Permite confirmar la recepción de transferencias en la bodega destino.',
   ),
   AccessPermission(
+    code: 'inventario.transferencias.aprobar',
+    label: 'Aprobar transferencias de stock',
+    categoryId: 'inventory',
+    categoryLabel: 'Inventario y Compras',
+    description: 'Permite aprobar transferencias pendientes cuando el '
+        'negocio tiene el flujo de aprobación activo. Antes de aprobar, el '
+        'stock no se mueve.',
+  ),
+  AccessPermission(
+    code: 'inventario.conteo.acceso',
+    label: 'Acceso a conteo físico',
+    categoryId: 'inventory',
+    categoryLabel: 'Inventario y Compras',
+    description: 'Abre el módulo de conteo físico y ve las sesiones.',
+  ),
+  AccessPermission(
+    code: 'inventario.conteo.crear',
+    label: 'Crear sesiones de conteo físico',
+    categoryId: 'inventory',
+    categoryLabel: 'Inventario y Compras',
+    description: 'Inicia nuevas sesiones de conteo, congela el snapshot y '
+        'registra cantidades contadas.',
+  ),
+  AccessPermission(
+    code: 'inventario.conteo.completar',
+    label: 'Completar conteo físico',
+    categoryId: 'inventory',
+    categoryLabel: 'Inventario y Compras',
+    description: 'Aplica los ajustes resultantes del conteo. Genera '
+        'movimientos en el kardex y modifica el stock — acción sensible.',
+  ),
+  AccessPermission(
+    code: 'inventario.conteo.anular',
+    label: 'Anular conteo físico',
+    categoryId: 'inventory',
+    categoryLabel: 'Inventario y Compras',
+    description: 'Cancela una sesión de conteo en draft o in_progress sin '
+        'aplicar ajustes.',
+  ),
+  AccessPermission(
     code: 'compras.acceso',
     label: 'Acceso a compras',
     categoryId: 'inventory',
@@ -484,6 +524,36 @@ const accessPermissions = <AccessPermission>[
     categoryId: 'inventory',
     categoryLabel: 'Inventario y Compras',
     description: 'Revierte o anula ordenes de compra.',
+  ),
+  AccessPermission(
+    code: 'produccion.acceso',
+    label: 'Acceso a producción',
+    categoryId: 'inventory',
+    categoryLabel: 'Inventario y Compras',
+    description: 'Abre el módulo de producción y ve las órdenes existentes.',
+  ),
+  AccessPermission(
+    code: 'produccion.crear',
+    label: 'Crear órdenes de producción',
+    categoryId: 'inventory',
+    categoryLabel: 'Inventario y Compras',
+    description: 'Crea nuevas órdenes para transformar materias primas en '
+        'productos terminados.',
+  ),
+  AccessPermission(
+    code: 'produccion.completar',
+    label: 'Completar órdenes de producción',
+    categoryId: 'inventory',
+    categoryLabel: 'Inventario y Compras',
+    description: 'Marca una orden como completada. Genera movimientos en el '
+        'kardex y recalcula el costo del producto terminado.',
+  ),
+  AccessPermission(
+    code: 'produccion.anular',
+    label: 'Anular órdenes de producción',
+    categoryId: 'inventory',
+    categoryLabel: 'Inventario y Compras',
+    description: 'Cancela órdenes en draft o in_progress sin afectar stock.',
   ),
   AccessPermission(
     code: 'reportes.ventas',
@@ -707,11 +777,20 @@ final rolePresets = <String, RolePresetDefinition>{
       'inventario.ajustes.crear',
       'inventario.transferencias.crear',
       'inventario.transferencias.recibir',
+      'inventario.transferencias.aprobar',
+      'inventario.conteo.acceso',
+      'inventario.conteo.crear',
+      'inventario.conteo.completar',
+      'inventario.conteo.anular',
       'compras.acceso',
       'compras.proveedores.crear_editar',
       'compras.ordenes.crear',
       'compras.ordenes.recibir',
       'compras.ordenes.anular',
+      'produccion.acceso',
+      'produccion.crear',
+      'produccion.completar',
+      'produccion.anular',
       'reportes.ventas',
       'reportes.productos',
       'reportes.caja',

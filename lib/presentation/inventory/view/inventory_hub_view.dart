@@ -172,9 +172,25 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
                   available: true,
                 ),
                 _HubCard(
+                  icon: Icons.precision_manufacturing_outlined,
+                  title: 'Producción',
+                  subtitle:
+                      'Transforma materias primas en productos terminados',
+                  route: AppRoutes.inventoryProduction,
+                  available: true,
+                ),
+                _HubCard(
+                  icon: Icons.checklist_outlined,
+                  title: 'Conteo físico',
+                  subtitle:
+                      'Congela el stock, registra el conteo real y aplica ajustes',
+                  route: AppRoutes.inventoryPhysicalCount,
+                  available: true,
+                ),
+                _HubCard(
                   icon: Icons.tune_outlined,
                   title: 'Ajustes',
-                  subtitle: 'Conteos físicos y correcciones de stock',
+                  subtitle: 'Correcciones puntuales de stock',
                   route: AppRoutes.inventoryReconciliation,
                   available: true,
                 ),

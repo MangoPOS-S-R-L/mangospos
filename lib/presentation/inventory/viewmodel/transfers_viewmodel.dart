@@ -200,4 +200,24 @@ class TransfersViewModel extends ChangeNotifier {
       rethrow;
     }
   }
+
+  /// Aprueba una transferencia en `pending_approval`. Mueve el stock y
+  /// la deja en `sent`. Requiere permiso `inventario.transferencias.aprobar`
+  /// (validado en backend vía rol).
+  Future<void> approveTransfer({required String transferId}) async {
+    _state = _state.copyWith(saving: true, clearError: true);
+    notifyListeners();
+    try {
+      await _repository.approveTransfer(transferId: transferId);
+      _state = _state.copyWith(saving: false);
+      await _reload();
+    } catch (e) {
+      _state = _state.copyWith(
+        saving: false,
+        error: 'Error aprobando transferencia: $e',
+      );
+      notifyListeners();
+      rethrow;
+    }
+  }
 }

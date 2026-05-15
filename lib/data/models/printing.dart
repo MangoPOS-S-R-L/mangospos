@@ -465,7 +465,11 @@ final class PrinterFieldMapper {
       'ip': ip,
       'mac': _readString(map, const ['mac']),
       'type': printerType.name,
-      'online': _readBool(map, const ['online', 'is_active']) ?? false,
+      // Prefer `is_active` (admin flag, persistente) sobre `online`
+      // (heartbeat en tiempo real). El toggle "Activo" del dialog
+      // actualiza `is_active`; el heartbeat actualiza `online`. Si los
+      // unificamos en una sola propiedad, gana la intención del admin.
+      'online': _readBool(map, const ['is_active', 'online']) ?? false,
       'last_seen': _readDateTime(map, const ['last_seen']),
       'created_at': _readDateTime(map, const ['created_at']) ?? DateTime.now(),
       'port': _readInt(map, const ['port']),

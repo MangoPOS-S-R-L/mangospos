@@ -130,6 +130,14 @@ class _SettingsRolesViewState extends ConsumerState<SettingsRolesView> {
       permissions: [
         _PermissionRow('inventario', 'Inventario'),
         _PermissionRow('compras', 'Compras / ordenes / recepciones'),
+        _PermissionRow(
+          'produccion',
+          'Producción (transformación de materias primas)',
+        ),
+        _PermissionRow(
+          'conteo',
+          'Conteo físico (freeze → contar → ajustar)',
+        ),
       ],
     ),
   ];
@@ -704,6 +712,7 @@ const Map<String, Map<String, List<String>>> _codeMap = {
       'inventario.ajustes.crear',
       'inventario.transferencias.crear',
       'inventario.transferencias.recibir',
+      'inventario.transferencias.aprobar',
     ],
   },
   'compras': {
@@ -714,5 +723,15 @@ const Map<String, Map<String, List<String>>> _codeMap = {
       'compras.ordenes.recibir'
     ],
     'anula': ['compras.ordenes.anular'],
+  },
+  'produccion': {
+    'acceso': ['produccion.acceso'],
+    'graba/mod': ['produccion.crear', 'produccion.completar'],
+    'anula': ['produccion.anular'],
+  },
+  'conteo': {
+    'acceso': ['inventario.conteo.acceso'],
+    'graba/mod': ['inventario.conteo.crear', 'inventario.conteo.completar'],
+    'anula': ['inventario.conteo.anular'],
   },
 };

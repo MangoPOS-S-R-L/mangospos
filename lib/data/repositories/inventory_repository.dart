@@ -934,6 +934,22 @@ class InventoryRepository {
         : <String, dynamic>{};
   }
 
+  /// Aprueba una transferencia en status='pending_approval'. La RPC
+  /// `fn_inventory_transfer_approve` valida rol del caller, ejecuta los
+  /// movimientos de stock (out de origen + in a IN_TRANSIT) y marca la
+  /// orden como 'sent' con `approved_at`/`approved_by` poblados.
+  Future<Map<String, dynamic>> approveTransfer({
+    required String transferId,
+  }) async {
+    final response = await _client.rpc(
+      'fn_inventory_transfer_approve',
+      params: {'p_transfer_id': transferId},
+    );
+    return response is Map
+        ? Map<String, dynamic>.from(response)
+        : <String, dynamic>{};
+  }
+
   /// PRD 9 Fase 1: invoca la RPC `bootstrap_menu_to_inventory_links` que
   /// genera, para el business, los `inventory_items` faltantes a partir
   /// del menú activo y crea las `recipes` + `recipe_ingredients` 1:1

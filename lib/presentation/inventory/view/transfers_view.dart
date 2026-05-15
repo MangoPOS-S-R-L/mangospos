@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../services/session/session_controller.dart';
 import '../state/transfers_state.dart';
 import '../viewmodel/transfers_viewmodel.dart';
 import '../../../core/theme/app_colors.dart';
@@ -23,7 +24,8 @@ class _TransfersViewState extends ConsumerState<TransfersView>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    // 4 tabs: pending_approval, en tránsito (sent), recibidas, canceladas.
+    _tabController = TabController(length: 4, vsync: this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(transfersViewModelProvider).init();
     });
@@ -46,6 +48,8 @@ class _TransfersViewState extends ConsumerState<TransfersView>
   Widget build(BuildContext context) {
     final vm = ref.watch(transfersViewModelProvider);
     final state = vm.state;
+    final pendingApproval =
+        _filter(state.transfers, StockTransferStatus.pendingApproval);
     final pending = _filter(state.transfers, StockTransferStatus.sent);
     final received = _filter(state.transfers, StockTransferStatus.received);
     final cancelled = _filter(state.transfers, StockTransferStatus.cancelled);
@@ -59,8 +63,10 @@ class _TransfersViewState extends ConsumerState<TransfersView>
           labelColor: AppColors.primary,
           unselectedLabelColor: AppColors.mutedForeground,
           indicatorColor: AppColors.primary,
+          isScrollable: true,
           tabs: [
-            Tab(text: 'Pendientes (${pending.length})'),
+            Tab(text: 'Por aprobar (${pendingApproval.length})'),
+            Tab(text: 'En tránsito (${pending.length})'),
             Tab(text: 'Recibidas (${received.length})'),
             Tab(text: 'Canceladas (${cancelled.length})'),
           ],
@@ -99,8 +105,19 @@ class _TransfersViewState extends ConsumerState<TransfersView>
                     controller: _tabController,
                     children: [
                       _TransferList(
+                        transfers: pendingApproval,
+                        emptyText: 'No hay transferencias pendientes de aprobación',
+                        activeBusinessId: state.businessId,
+                        onTapPending: (t) => _showDetail(context, t),
+                        onApprove: (t) => _confirmApprove(context, t),
+                        onCancel: (t) => _confirmCancel(context, t),
+                        hasMore: state.hasMore,
+                        loadingMore: state.loadingMore,
+                        onLoadMore: () => vm.loadMore(),
+                      ),
+                      _TransferList(
                         transfers: pending,
-                        emptyText: 'No hay transferencias pendientes',
+                        emptyText: 'No hay transferencias en tránsito',
                         activeBusinessId: state.businessId,
                         onTapPending: (t) {
                           // Solo el destinatario abre el receive dialog.
@@ -163,6 +180,66 @@ class _TransfersViewState extends ConsumerState<TransfersView>
       barrierDismissible: false,
       builder: (ctx) => TransferReceiveDialog(transfer: transfer),
     );
+  }
+
+  Future<void> _confirmApprove(
+    BuildContext context,
+    StockTransfer transfer,
+  ) async {
+    // Validar permiso antes de mostrar el diálogo. El backend lo va a
+    // re-validar, pero el feedback inmediato es mejor UX.
+    final canApprove = ref
+        .read(sessionProvider.notifier)
+        .hasPermission('inventario.transferencias.aprobar');
+    final messenger = ScaffoldMessenger.of(context);
+    if (!canApprove) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('No tienes permiso para aprobar transferencias.'),
+        ),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Aprobar ${transfer.transferNumber}'),
+        content: Text(
+          'Al aprobarla, el stock se mueve desde ${transfer.fromWarehouseName} '
+          'a IN_TRANSIT y queda lista para recibir en ${transfer.toWarehouseName}.',
+          style: TextStyle(color: AppColors.mutedForeground),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.green.shade700,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Sí, aprobar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await ref.read(transfersViewModelProvider).approveTransfer(
+            transferId: transfer.id,
+          );
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('${transfer.transferNumber} aprobada')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+      );
+    }
   }
 
   Future<void> _confirmCancel(
@@ -247,6 +324,7 @@ class _TransferList extends StatelessWidget {
   final String emptyText;
   final void Function(StockTransfer) onTapPending;
   final void Function(StockTransfer)? onCancel;
+  final void Function(StockTransfer)? onApprove;
   final String? activeBusinessId;
   final bool hasMore;
   final bool loadingMore;
@@ -261,6 +339,7 @@ class _TransferList extends StatelessWidget {
     required this.loadingMore,
     required this.onLoadMore,
     this.onCancel,
+    this.onApprove,
   });
 
   @override
@@ -300,6 +379,10 @@ class _TransferList extends StatelessWidget {
           onCancel: (onCancel == null || isIncomingPending)
               ? null
               : () => onCancel!(t),
+          onApprove: (onApprove == null ||
+                  t.status != StockTransferStatus.pendingApproval)
+              ? null
+              : () => onApprove!(t),
         );
       },
     );
@@ -340,6 +423,7 @@ class _TransferCard extends StatelessWidget {
   final StockTransfer transfer;
   final VoidCallback onTap;
   final VoidCallback? onCancel;
+  final VoidCallback? onApprove;
   final String? activeBusinessId;
 
   const _TransferCard({
@@ -347,6 +431,7 @@ class _TransferCard extends StatelessWidget {
     required this.onTap,
     this.activeBusinessId,
     this.onCancel,
+    this.onApprove,
   });
 
   /// El activo es el destinatario de una transferencia cross-business
@@ -359,6 +444,8 @@ class _TransferCard extends StatelessWidget {
 
   Color _statusColor() {
     switch (transfer.status) {
+      case StockTransferStatus.pendingApproval:
+        return Colors.amber.shade800;
       case StockTransferStatus.sent:
         return Colors.orange.shade700;
       case StockTransferStatus.received:
@@ -372,6 +459,8 @@ class _TransferCard extends StatelessWidget {
 
   String _statusLabel() {
     switch (transfer.status) {
+      case StockTransferStatus.pendingApproval:
+        return 'POR APROBAR';
       case StockTransferStatus.sent:
         return 'EN TRÁNSITO';
       case StockTransferStatus.received:
@@ -572,6 +661,18 @@ class _TransferCard extends StatelessWidget {
                     ),
                   ],
                   const Spacer(),
+                  if (onApprove != null)
+                    FilledButton.icon(
+                      onPressed: onApprove,
+                      icon: const Icon(Icons.check_circle_outline, size: 16),
+                      label: const Text('Aprobar'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Colors.green.shade700,
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                      ),
+                    ),
+                  if (onApprove != null && onCancel != null)
+                    const SizedBox(width: 8),
                   if (onCancel != null)
                     TextButton.icon(
                       onPressed: onCancel,

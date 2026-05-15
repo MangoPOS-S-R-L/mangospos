@@ -58,6 +58,7 @@ class BusinessFeatures {
   final bool barcodeEnabled;
   final InventoryMode inventoryMode;
   final bool multimeseroEnabled;
+  final bool transfersRequireApproval;
 
   const BusinessFeatures({
     this.salesModeTableEnabled = true,
@@ -68,6 +69,7 @@ class BusinessFeatures {
     this.barcodeEnabled = true,
     this.inventoryMode = InventoryMode.none,
     this.multimeseroEnabled = false,
+    this.transfersRequireApproval = false,
   });
 
   /// Defaults aplicados cuando no hay fila en business_settings o
@@ -87,6 +89,7 @@ class BusinessFeatures {
       barcodeEnabled: map['barcode_enabled'] != false,
       inventoryMode: _inventoryModeFromWire(map['inventory_mode']?.toString()),
       multimeseroEnabled: map['multimesero_enabled'] == true,
+      transfersRequireApproval: map['transfers_require_approval'] == true,
     );
   }
 
@@ -99,6 +102,7 @@ class BusinessFeatures {
     bool? barcodeEnabled,
     InventoryMode? inventoryMode,
     bool? multimeseroEnabled,
+    bool? transfersRequireApproval,
   }) {
     return BusinessFeatures(
       salesModeTableEnabled:
@@ -113,6 +117,8 @@ class BusinessFeatures {
       barcodeEnabled: barcodeEnabled ?? this.barcodeEnabled,
       inventoryMode: inventoryMode ?? this.inventoryMode,
       multimeseroEnabled: multimeseroEnabled ?? this.multimeseroEnabled,
+      transfersRequireApproval:
+          transfersRequireApproval ?? this.transfersRequireApproval,
     );
   }
 
@@ -255,7 +261,7 @@ class PosSettingsRepository {
             'sales_mode_table_enabled, sales_mode_manual_enabled, '
             'sales_mode_quick_enabled, sales_mode_delivery_enabled, '
             'kitchen_enabled, barcode_enabled, inventory_mode, '
-            'multimesero_enabled',
+            'multimesero_enabled, transfers_require_approval',
           )
           .eq('business_id', businessId)
           .maybeSingle();
@@ -284,6 +290,7 @@ class PosSettingsRepository {
       'barcode_enabled': features.barcodeEnabled,
       'inventory_mode': features.inventoryMode.wireValue,
       'multimesero_enabled': features.multimeseroEnabled,
+      'transfers_require_approval': features.transfersRequireApproval,
     }, onConflict: 'business_id');
   }
 }

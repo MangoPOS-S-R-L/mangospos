@@ -55,6 +55,8 @@ import '../../presentation/inventory/view/suppliers_view.dart';
 import '../../presentation/inventory/view/warehouses_view.dart';
 import '../../presentation/inventory/view/requirements_view.dart';
 import '../../presentation/inventory/view/stock_reconciliation_view.dart';
+import '../../presentation/inventory/view/production_orders_view.dart';
+import '../../presentation/inventory/view/physical_count_view.dart';
 import '../../presentation/inventory/view/transfers_view.dart';
 import '../../presentation/purchases/view/purchases_list_view.dart';
 import '../../presentation/purchases/view/purchases_register_view.dart';
@@ -652,6 +654,14 @@ class AppRouter {
           GoRoute(
             path: AppRoutes.inventoryTransfers,
             builder: (context, state) => const TransfersView(),
+          ),
+          GoRoute(
+            path: AppRoutes.inventoryProduction,
+            builder: (context, state) => const ProductionOrdersView(),
+          ),
+          GoRoute(
+            path: AppRoutes.inventoryPhysicalCount,
+            builder: (context, state) => const PhysicalCountView(),
           ),
           GoRoute(
             path: AppRoutes.purchasesList,

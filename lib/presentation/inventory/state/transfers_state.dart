@@ -59,10 +59,44 @@ class StockTransferItem {
   }
 }
 
-enum StockTransferStatus { sent, received, cancelled, unknown }
+enum StockTransferStatus { pendingApproval, sent, received, cancelled, unknown }
+
+extension StockTransferStatusX on StockTransferStatus {
+  String get wire {
+    switch (this) {
+      case StockTransferStatus.pendingApproval:
+        return 'pending_approval';
+      case StockTransferStatus.sent:
+        return 'sent';
+      case StockTransferStatus.received:
+        return 'received';
+      case StockTransferStatus.cancelled:
+        return 'cancelled';
+      case StockTransferStatus.unknown:
+        return 'unknown';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case StockTransferStatus.pendingApproval:
+        return 'Pendiente de aprobación';
+      case StockTransferStatus.sent:
+        return 'En tránsito';
+      case StockTransferStatus.received:
+        return 'Recibida';
+      case StockTransferStatus.cancelled:
+        return 'Cancelada';
+      case StockTransferStatus.unknown:
+        return 'Desconocido';
+    }
+  }
+}
 
 StockTransferStatus _parseStatus(String? raw) {
   switch (raw) {
+    case 'pending_approval':
+      return StockTransferStatus.pendingApproval;
     case 'sent':
       return StockTransferStatus.sent;
     case 'received':
@@ -91,6 +125,8 @@ class StockTransfer {
   final DateTime? sentAt;
   final DateTime? receivedAt;
   final DateTime? cancelledAt;
+  final DateTime? approvedAt;
+  final String? approvedByName;
   final String? notes;
   final String? createdByName;
   final String? receivedByName;
@@ -123,8 +159,13 @@ class StockTransfer {
     this.fromBusinessName,
     this.toBusinessName,
     this.items = const [],
+    this.approvedAt,
+    this.approvedByName,
   });
 
+  bool get needsApproval =>
+      status == StockTransferStatus.pendingApproval;
+  bool get isInTransit => status == StockTransferStatus.sent;
   bool get isPending => status == StockTransferStatus.sent;
   bool get hasVariance => totalReceived < totalSent && status == StockTransferStatus.received;
 
@@ -157,6 +198,8 @@ class StockTransfer {
       totalSent: totalSent,
       totalReceived: totalReceived,
       items: items ?? this.items,
+      approvedAt: approvedAt,
+      approvedByName: approvedByName,
     );
   }
 
@@ -201,6 +244,8 @@ class StockTransfer {
       sentAt: DateTime.tryParse(map['sent_at']?.toString() ?? ''),
       receivedAt: DateTime.tryParse(map['received_at']?.toString() ?? ''),
       cancelledAt: DateTime.tryParse(map['cancelled_at']?.toString() ?? ''),
+      approvedAt: DateTime.tryParse(map['approved_at']?.toString() ?? ''),
+      approvedByName: map['approved_by_name']?.toString(),
       notes: map['notes']?.toString(),
       createdByName: map['created_by_name']?.toString(),
       receivedByName: map['received_by_name']?.toString(),
