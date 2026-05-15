@@ -104,10 +104,10 @@ class InventoryRepository {
     String? query,
   }) async {
     // PRD 9 Fase 1D + Sprint 4 lotes: incluir costing_method, barcode y
-    // tracks_lots.
+    // tracks_lots. PRD inventario avanzado: item_classification.
     const columns =
         'id, sku, name, description, unit, cost, min_stock, max_stock, '
-        'is_active, costing_method, barcode, tracks_lots';
+        'is_active, costing_method, barcode, tracks_lots, item_classification';
     final normalized = query?.trim();
     final itemsResponse = normalized != null && normalized.isNotEmpty
         ? await _client
@@ -611,6 +611,7 @@ class InventoryRepository {
     String? costingMethod,
     String? barcode,
     bool tracksLots = false,
+    String? itemClassification,
   }) async {
     final response = await _client
         .from(InventoryQueries.tableInventoryItems)
@@ -628,6 +629,7 @@ class InventoryRepository {
             'costing_method': costingMethod,
             'barcode': barcode,
             'tracks_lots': tracksLots,
+            'item_classification': itemClassification,
           }..removeWhere((key, value) => value == null),
         )
         .select()
@@ -649,6 +651,7 @@ class InventoryRepository {
     String? costingMethod,
     String? barcode,
     bool? tracksLots,
+    String? itemClassification,
   }) async {
     final payload = <String, dynamic>{
       'name': name,
@@ -665,6 +668,9 @@ class InventoryRepository {
     if (costingMethod != null) payload['costing_method'] = costingMethod;
     if (barcode != null) payload['barcode'] = barcode;
     if (tracksLots != null) payload['tracks_lots'] = tracksLots;
+    if (itemClassification != null) {
+      payload['item_classification'] = itemClassification;
+    }
     payload.removeWhere((key, value) => value == null);
     await _client
         .from(InventoryQueries.tableInventoryItems)

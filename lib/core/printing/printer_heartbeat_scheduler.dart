@@ -194,12 +194,23 @@ class PrinterHeartbeatScheduler {
   }) async {
     final type = printer.type.toLowerCase();
     if (type == 'network' && (printer.ipAddress?.isNotEmpty ?? false)) {
-      return _pingTcp(printer.ipAddress!, printer.port ?? 9100);
+      // DESACTIVADO: el TCP probe a port 9100 sobre impresoras de red
+      // disparaba prints de basura en algunas térmicas (interpretan el
+      // socket abierto+cerrado como un job RAW). Reportamos heartbeat
+      // optimista (true) para que la app no las marque offline. Si la
+      // impresora está realmente offline, un trabajo real fallará y el
+      // error se levanta por ahí.
+      //
+      // Históricamente este ping también detectaba impresoras de OTROS
+      // negocios en la misma LAN, generando impresiones cruzadas.
+      // Eliminarlo cierra ese vector también.
+      return true;
     }
     // USB / Bluetooth: dependen del agent local.
     return agentReachable();
   }
 
+  // ignore: unused_element
   Future<bool> _pingTcp(String ip, int port) async {
     try {
       final socket =

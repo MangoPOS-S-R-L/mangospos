@@ -114,6 +114,10 @@ class InventoryItemSummary {
   final String barcode;
   // Sprint 4 lotes — opt-in para tracking de lote / vencimiento.
   final bool tracksLots;
+  // PRD inventario avanzado: clasificación.
+  // Valores válidos: 'simple', 'raw_material', 'finished_product',
+  // 'combo', 'service'. Default 'simple' = comportamiento legacy.
+  final String itemClassification;
 
   const InventoryItemSummary({
     required this.id,
@@ -129,6 +133,7 @@ class InventoryItemSummary {
     this.costingMethod = 'average',
     this.barcode = '',
     this.tracksLots = false,
+    this.itemClassification = 'simple',
   });
 
   bool get isLowStock => isActive && stock <= minStock;
@@ -156,6 +161,8 @@ class InventoryItemSummary {
       costingMethod: map['costing_method']?.toString() ?? 'average',
       barcode: map['barcode']?.toString() ?? '',
       tracksLots: map['tracks_lots'] == true,
+      itemClassification:
+          map['item_classification']?.toString() ?? 'simple',
     );
   }
 }

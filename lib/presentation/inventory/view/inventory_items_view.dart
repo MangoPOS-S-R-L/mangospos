@@ -418,13 +418,24 @@ class _ItemRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  item.name,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.foreground,
-                  ),
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        item.name,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.foreground,
+                        ),
+                      ),
+                    ),
+                    if (item.itemClassification != 'simple') ...[
+                      const SizedBox(width: 8),
+                      _ClassificationChip(value: item.itemClassification),
+                    ],
+                  ],
                 ),
                 if (item.description.isNotEmpty)
                   Text(
@@ -547,6 +558,23 @@ class _CostingBadge extends StatelessWidget {
   }
 }
 
+class _ClassificationChip extends StatelessWidget {
+  final String value;
+  const _ClassificationChip({required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, color) = switch (value) {
+      'raw_material' => ('Materia prima', AppColors.info),
+      'finished_product' => ('Producto terminado', AppColors.success),
+      'combo' => ('Combo', AppColors.primary),
+      'service' => ('Servicio', AppColors.mutedForeground),
+      _ => ('Simple', AppColors.mutedForeground),
+    };
+    return _Pill(text: label, color: color);
+  }
+}
+
 class _Pill extends StatelessWidget {
   final String text;
   final Color color;
@@ -602,6 +630,8 @@ class _ItemFormDialogState extends State<_ItemFormDialog> {
   late String _costingMethod;
   late bool _isActive;
   late bool _tracksLots;
+  // PRD inventario avanzado: clasificación del item.
+  late String _itemClassification;
   bool _saving = false;
   String? _error;
 
@@ -624,6 +654,42 @@ class _ItemFormDialogState extends State<_ItemFormDialog> {
     _costingMethod = e?.costingMethod == 'fifo' ? 'fifo' : 'average';
     _isActive = e?.isActive ?? true;
     _tracksLots = e?.tracksLots ?? false;
+    _itemClassification = _normalizeClassification(e?.itemClassification);
+  }
+
+  static const _classificationOptions = <String, String>{
+    'simple': 'Simple (default)',
+    'raw_material': 'Materia prima',
+    'finished_product': 'Producto terminado',
+    'combo': 'Combo',
+    'service': 'Servicio',
+  };
+
+  static String _normalizeClassification(String? raw) {
+    final v = raw?.trim();
+    if (v == null || v.isEmpty) return 'simple';
+    return _classificationOptions.containsKey(v) ? v : 'simple';
+  }
+
+  static String _classificationHint(String value) {
+    switch (value) {
+      case 'raw_material':
+        return 'Materia prima: entra por compras y sale al producir productos '
+            'terminados o al venderse como insumo.';
+      case 'finished_product':
+        return 'Producto terminado: se genera por órdenes de producción a '
+            'partir de materias primas.';
+      case 'combo':
+        return 'Combo: paquete compuesto por otros items. No requiere '
+            'transformación física.';
+      case 'service':
+        return 'Servicio: no afecta el stock físico (ej. delivery, '
+            'instalación, asesoría).';
+      case 'simple':
+      default:
+        return 'Item genérico — no participa en flujos de producción. '
+            'Comportamiento legacy.';
+    }
   }
 
   @override
@@ -674,6 +740,7 @@ class _ItemFormDialogState extends State<_ItemFormDialog> {
           costingMethod: _costingMethod,
           barcode: _orNull(_barcodeCtrl.text) ?? '',
           tracksLots: _tracksLots,
+          itemClassification: _itemClassification,
         );
       } else {
         await widget.repo.createItem(
@@ -691,6 +758,7 @@ class _ItemFormDialogState extends State<_ItemFormDialog> {
           costingMethod: _costingMethod,
           barcode: _orNull(_barcodeCtrl.text),
           tracksLots: _tracksLots,
+          itemClassification: _itemClassification,
         );
       }
       if (mounted) Navigator.pop(context, true);
@@ -802,6 +870,43 @@ class _ItemFormDialogState extends State<_ItemFormDialog> {
                     ),
                   ),
                 ],
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Clasificación del item',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.mutedForeground,
+                ),
+              ),
+              const SizedBox(height: 6),
+              DropdownButtonFormField<String>(
+                initialValue: _itemClassification,
+                isExpanded: true,
+                items: _classificationOptions.entries
+                    .map(
+                      (entry) => DropdownMenuItem<String>(
+                        value: entry.key,
+                        child: Text(entry.value),
+                      ),
+                    )
+                    .toList(growable: false),
+                onChanged: (v) => setState(
+                  () => _itemClassification = v ?? 'simple',
+                ),
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                _classificationHint(_itemClassification),
+                style: TextStyle(
+                  fontSize: 11,
+                  color: AppColors.mutedForeground,
+                ),
               ),
               const SizedBox(height: 16),
               Text(

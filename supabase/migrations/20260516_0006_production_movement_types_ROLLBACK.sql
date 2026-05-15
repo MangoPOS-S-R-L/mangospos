@@ -1,0 +1,7 @@
+-- Rollback de `20260516_0006_production_movement_types.sql`.
+--
+-- ⚠️ IMPOSIBLE eliminar valores de un ENUM en Postgres sin recrear el tipo
+-- entero (operación destructiva que requiere recrear todas las columnas
+-- que lo usen). Si DEBES rollback, contactanos para hacer la operación
+-- manualmente con downtime planificado. Para el caso normal, los valores
+-- 'production_in' y 'production_out' quedan en el ENUM sin causar daño.
