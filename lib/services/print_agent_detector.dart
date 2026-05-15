@@ -20,7 +20,10 @@ class AgentStatus {
 class PrintAgentDetector {
   static const _cacheKey = 'print_agent_url';
   static const _cacheTtlSeconds = 300;
-  static const _candidatePorts = [4000, 3000, 9100, 9105];
+  // NO INCLUIR PUERTOS RAW DE IMPRESORA AQUI (9100 JetDirect, 9101-9105
+  // auxiliares, 515 LPR). Si lo haces, el scan HTTP GET /status va a
+  // imprimirse como texto plano en el printer que escuche en esos puertos.
+  static const _candidatePorts = [4000, 3000];
 
   Future<String?> _getCached() async {
     final prefs = await SharedPreferences.getInstance();

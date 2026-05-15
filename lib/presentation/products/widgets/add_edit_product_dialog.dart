@@ -37,6 +37,8 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     File? imageFile,
     Uint8List? imageBytes,
     List<String> taxIds,
+    bool isInventoryTracked,
+    double initialStock,
   })
   onAdd;
 
@@ -58,6 +60,8 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     File? imageFile,
     Uint8List? imageBytes,
     List<String> taxIds,
+    bool? isInventoryTracked,
+    double initialStock,
   })
   onUpdate;
 
@@ -94,6 +98,13 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
   /// `null` = el admin no eligió area todavía. Send-to-kitchen bloquea
   /// con error claro si esto se queda asi.
   String? _printAreaCode;
+
+  /// Si true, el producto consume stock al venderse. Al activarlo en un
+  /// producto nuevo o existente sin tracking previo, se pide stock inicial
+  /// que se registra como movimiento `purchase` en la bodega principal.
+  bool _isInventoryTracked = false;
+  bool _wasInventoryTrackedInitially = false;
+  late TextEditingController _initialStockController;
 
   File? _pickedImageFile;
   Uint8List? _pickedImageBytes;
@@ -143,6 +154,9 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     _hasVariants = p?['has_variants'] ?? false;
     _itemType = p?['item_type']?.toString() ?? 'standard';
     _printAreaCode = p?['print_area_code']?.toString();
+    _isInventoryTracked = p?['is_inventory_tracked'] == true;
+    _wasInventoryTrackedInitially = _isInventoryTracked;
+    _initialStockController = TextEditingController(text: '0');
 
     Future.microtask(() async {
       try {
@@ -233,6 +247,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     _costController.dispose();
     _skuController.dispose();
     _barcodeController.dispose();
+    _initialStockController.dispose();
     super.dispose();
   }
 
@@ -591,6 +606,59 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
           value: _isActive,
           onChanged: (v) => setState(() => _isActive = v),
         ),
+        const SizedBox(height: AppSpacing.sm),
+        _switchRow(
+          title: 'Inventariable',
+          value: _isInventoryTracked,
+          onChanged: (v) => setState(() => _isInventoryTracked = v),
+        ),
+        if (_isInventoryTracked && !_wasInventoryTrackedInitially) ...[
+          const SizedBox(height: AppSpacing.xs),
+          Container(
+            padding: const EdgeInsets.all(AppSpacing.sm),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(AppRadius.md),
+              border: Border.all(
+                color: AppColors.primary.withValues(alpha: 0.25),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Stock inicial',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.foreground,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Se registrará como entrada en la bodega principal. '
+                  'Puedes dejarlo en 0 y agregar stock luego desde Inventario.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: AppColors.mutedForeground,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                TextFormField(
+                  controller: _initialStockController,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(
+                    labelText: 'Cantidad',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
         const SizedBox(height: AppSpacing.sm),
         _switchRow(
           title: 'Impuestos',
@@ -1181,6 +1249,19 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         ? null
         : _descController.text.trim();
 
+    // Stock inicial: solo aplica cuando se activa tracking en esta sesión.
+    final initialStock =
+        _isInventoryTracked && !_wasInventoryTrackedInitially
+            ? (double.tryParse(
+                  _initialStockController.text.trim().replaceAll(',', '.'),
+                ) ??
+                0)
+            : 0.0;
+    // Solo enviar el flag en update si cambió respecto al valor original
+    // (para no disparar la RPC innecesariamente en cada save).
+    final inventoryFlagChanged =
+        _isInventoryTracked != _wasInventoryTrackedInitially;
+
     if (widget.product != null) {
       widget.onUpdate(
         id: widget.product!['id'],
@@ -1200,6 +1281,8 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         imageFile: _pickedImageFile,
         imageBytes: _pickedImageBytes,
         taxIds: _selectedTaxIds.toList(),
+        isInventoryTracked: inventoryFlagChanged ? _isInventoryTracked : null,
+        initialStock: initialStock,
       );
     } else {
       widget.onAdd(
@@ -1219,6 +1302,8 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         imageFile: _pickedImageFile,
         imageBytes: _pickedImageBytes,
         taxIds: _selectedTaxIds.toList(),
+        isInventoryTracked: _isInventoryTracked,
+        initialStock: initialStock,
       );
     }
     Navigator.pop(context);

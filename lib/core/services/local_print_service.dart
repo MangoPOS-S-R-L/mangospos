@@ -8,15 +8,16 @@ import '../printing/agent_discovery.dart';
 import 'agent_auth.dart';
 
 class LocalPrintService {
+  // NO INCLUIR PUERTOS RAW DE IMPRESORA AQUI (9100 JetDirect, 9101-9105
+  // auxiliares). Si un printer LAN responde a HTTP GET /status sobre 9100
+  // imprime el header como texto plano en papel térmico. Si el agente LAN
+  // necesita correr en otro puerto, agrégalo explícitamente — pero NUNCA
+  // en puertos de impresora.
   static const List<String> _baseUrls = [
     'http://127.0.0.1:4000',
     'http://localhost:4000',
     'http://127.0.0.1:3000',
     'http://localhost:3000',
-    'http://127.0.0.1:9100',
-    'http://localhost:9100',
-    'http://127.0.0.1:9105',
-    'http://localhost:9105',
   ];
 
   static const Duration _resolvedBaseUrlTtl = Duration(minutes: 10);

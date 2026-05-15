@@ -19,6 +19,7 @@ import 'package:flutter_usb_printer/flutter_usb_printer.dart';
 import 'package:shelf/shelf.dart' as shelf;
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Agent configuration
@@ -248,6 +249,28 @@ class MobilePrintAgent {
     final content = body['content'] as Map<String, dynamic>? ?? {};
     final printerType = printer['type']?.toString() ?? 'network';
 
+    // Aislamiento por negocio: si es una impresora de red, validar que la
+    // IP+puerto correspondan a un printer registrado para algún business
+    // al que el usuario tenga acceso (RLS hace el filtro automáticamente).
+    if (printerType == 'network') {
+      final ip = printer['ip']?.toString() ??
+          printer['ip_address']?.toString() ??
+          '';
+      final port = (printer['port'] as num?)?.toInt() ?? 9100;
+      if (!await _isNetworkPrinterAuthorized(ip, port)) {
+        _addJobHistory(
+          jobId,
+          printerType,
+          'rejected',
+          error: 'Printer $ip:$port no pertenece a tu negocio',
+        );
+        return _jsonError(
+          'Printer no autorizado para tu negocio (IP $ip:$port)',
+          403,
+        );
+      }
+    }
+
     try {
       final Uint8List bytes;
       final contentType = content['type']?.toString() ?? 'raw_base64';
@@ -295,12 +318,60 @@ class MobilePrintAgent {
       return _jsonError('Missing ip or data', 400);
     }
 
+    // Aislamiento por negocio (igual que _handlePrint).
+    if (!await _isNetworkPrinterAuthorized(ip, port)) {
+      return _jsonError(
+        'Printer no autorizado para tu negocio (IP $ip:$port)',
+        403,
+      );
+    }
+
     try {
       final bytes = base64Decode(dataBase64);
       await _printNetwork({'ip': ip, 'port': port}, bytes);
       return _jsonOk({'success': true});
     } catch (e) {
       return _jsonError('Raw print failed: $e', 500);
+    }
+  }
+
+  /// Verifica que la IP exista como printer activo en algún business al
+  /// que el usuario autenticado tenga acceso. Las policies RLS de
+  /// `printers` filtran automáticamente por `current_user_business_ids`,
+  /// así que esta consulta solo devuelve filas de los negocios del user.
+  ///
+  /// Nota sobre el puerto: muchos registros legacy tienen `port=NULL` en
+  /// la DB. Validamos PRIMARIAMENTE por IP — si la IP coincide con un
+  /// printer del negocio del user, autoriza. El puerto es informativo.
+  /// Si DOS businesses tienen la misma IP registrada (caso edge), RLS le
+  /// devuelve al user el suyo y todo bien; si por error el otro también
+  /// fuera visible, igual está autorizado en términos del modelo actual.
+  ///
+  /// Si no hay sesión Supabase activa (agente standalone), permite el
+  /// print — caso edge de agente puro sin acceso a DB.
+  Future<bool> _isNetworkPrinterAuthorized(String ip, int port) async {
+    if (ip.isEmpty) return false;
+    try {
+      final client = Supabase.instance.client;
+      if (client.auth.currentSession == null) {
+        return true;
+      }
+      // Match solo por IP. Port se tolera porque hay registros legacy con
+      // port=NULL. Si en el futuro se fuerza port no-null, agregar un
+      // OR igualdad.
+      final rows = await client
+          .from('printers')
+          .select('id, business_id, port')
+          .eq('ip_address', ip)
+          .eq('is_active', true)
+          .limit(5);
+      return (rows as List).isNotEmpty;
+    } catch (e) {
+      debugPrint(
+        '[MobileAgent] _isNetworkPrinterAuthorized error: $e — '
+        'permitiendo print para no romper en caso de outage temporal de DB',
+      );
+      return true;
     }
   }
 

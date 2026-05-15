@@ -138,9 +138,13 @@ class AgentDiscovery {
 
           if (businessIdFilter != null && businessIdFilter.isNotEmpty) {
             final hubBiz = txtMap['business_id'] ?? '';
-            // Si el hub no anuncia business_id (legacy), igual lo
-            // incluimos — el cajero puede asociarlo manualmente.
-            if (hubBiz.isNotEmpty && hubBiz != businessIdFilter) {
+            // ESTRICTO: si el filtro está activo y el hub no anuncia
+            // business_id, o anuncia uno distinto, se excluye. La versión
+            // anterior incluía hubs "legacy" sin business_id por
+            // compatibilidad, lo que en una LAN compartida (dos negocios
+            // en la misma red) hace que un cliente termine usando el
+            // agente del otro negocio.
+            if (hubBiz.isEmpty || hubBiz != businessIdFilter) {
               continue;
             }
           }

@@ -248,6 +248,8 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
               imageFile,
               imageBytes,
               taxIds = const [],
+              isInventoryTracked = false,
+              initialStock = 0,
             }) {
               viewModel.addProduct(
                 name: name,
@@ -266,6 +268,8 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                 imageFile: imageFile,
                 imageBytes: imageBytes,
                 taxIds: taxIds,
+                isInventoryTracked: isInventoryTracked,
+                initialStock: initialStock,
               );
             },
         onUpdate:
@@ -287,6 +291,8 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
               imageFile,
               imageBytes,
               taxIds = const [],
+              isInventoryTracked,
+              initialStock = 0,
             }) {
               viewModel.updateProduct(
                 id: id,
@@ -306,6 +312,8 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                 imageFile: imageFile,
                 imageBytes: imageBytes,
                 taxIds: taxIds,
+                isInventoryTracked: isInventoryTracked,
+                initialStock: initialStock,
               );
             },
       ),

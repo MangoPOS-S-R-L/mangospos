@@ -52,6 +52,10 @@ class MenuItemRepository {
     List<String>? taxIds, // ids de impuestos a vincular
     double? cost, // (si decides guardar costo)
     String? barcode, // código de barras
+
+    // 👇 Sprint inventario por producto
+    bool isInventoryTracked = false,
+    double initialStock = 0,
   }) async {
     final bid = await BusinessResolver.ensure(businessId);
     final id = const Uuid().v4();
@@ -94,7 +98,43 @@ class MenuItemRepository {
           .insert(taxIds.map((tid) => {'item_id': id, 'tax_id': tid}).toList());
     }
 
+    // Si se pide tracking de inventario, llamar la RPC que crea inventory_item
+    // + receta 1:1 y registra stock inicial en la bodega principal. La RPC
+    // actualiza is_inventory_tracked al final.
+    if (isInventoryTracked) {
+      await setInventoryTracked(
+        menuItemId: id,
+        tracked: true,
+        initialStock: initialStock,
+      );
+    }
+
     return MenuItem.fromMap(row);
+  }
+
+  /// Activa/desactiva el flag de inventario en un producto. Si se activa,
+  /// la RPC se asegura de que exista inventory_item + receta 1:1 y, si
+  /// `initialStock > 0`, registra un movimiento purchase en la bodega
+  /// principal. Si se desactiva, solo baja el flag (no borra movimientos
+  /// para preservar histórico).
+  Future<Map<String, dynamic>> setInventoryTracked({
+    required String menuItemId,
+    required bool tracked,
+    double initialStock = 0,
+    String? warehouseId,
+  }) async {
+    final response = await _sp.rpc(
+      'fn_menu_item_set_inventory_tracked',
+      params: {
+        'p_menu_item_id': menuItemId,
+        'p_tracked': tracked,
+        'p_initial_stock': initialStock,
+        if (warehouseId != null) 'p_warehouse_id': warehouseId,
+      },
+    );
+    return response is Map
+        ? Map<String, dynamic>.from(response)
+        : <String, dynamic>{};
   }
 
   Future<void> update(String id, Map<String, dynamic> patch) async {

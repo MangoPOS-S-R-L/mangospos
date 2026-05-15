@@ -60,6 +60,9 @@ class ProductsRepository {
     String? imagePath,
     String? imageUrl,
     List<String> taxIds = const [],
+    // 👇 inventario por producto
+    bool isInventoryTracked = false,
+    double initialStock = 0,
   }) async {
     final created = await _client
         .from(ProductsQueries.tableMenuItems)
@@ -102,7 +105,41 @@ class ProductsRepository {
       await _client.from(ProductsQueries.tableMenuItemTaxes).insert(taxLinks);
     }
 
+    // Si se pide tracking, llamar la RPC que crea inventory_item + receta
+    // 1:1 + opcionalmente registra stock inicial en la bodega principal.
+    if (isInventoryTracked) {
+      await setInventoryTracked(
+        menuItemId: itemId,
+        tracked: true,
+        initialStock: initialStock,
+      );
+    }
+
     return Map<String, dynamic>.from(created);
+  }
+
+  /// Activa/desactiva el tracking de inventario de un producto. Llama la
+  /// RPC `fn_menu_item_set_inventory_tracked`. Si `tracked=true` e
+  /// `initialStock > 0`, registra un movimiento purchase en la bodega
+  /// principal del business.
+  Future<Map<String, dynamic>> setInventoryTracked({
+    required String menuItemId,
+    required bool tracked,
+    double initialStock = 0,
+    String? warehouseId,
+  }) async {
+    final response = await _client.rpc(
+      'fn_menu_item_set_inventory_tracked',
+      params: {
+        'p_menu_item_id': menuItemId,
+        'p_tracked': tracked,
+        'p_initial_stock': initialStock,
+        if (warehouseId != null) 'p_warehouse_id': warehouseId,
+      },
+    );
+    return response is Map
+        ? Map<String, dynamic>.from(response)
+        : <String, dynamic>{};
   }
 
   Future<void> updateProduct({
@@ -123,6 +160,10 @@ class ProductsRepository {
     String? imagePath,
     String? imageUrl,
     List<String> taxIds = const [],
+    // 👇 inventario por producto. Si difiere del valor actual, después del
+    // update llama la RPC para sincronizar receta/inventory_item/stock.
+    bool? isInventoryTracked,
+    double initialStock = 0,
   }) async {
     final updates = <String, dynamic>{
       'name': name,
@@ -174,6 +215,17 @@ class ProductsRepository {
           .map((taxId) => {'item_id': id, 'tax_id': taxId})
           .toList();
       await _client.from(ProductsQueries.tableMenuItemTaxes).insert(taxLinks);
+    }
+
+    // Sincronizar flag de inventario si el caller lo proveyó. Si se activa,
+    // la RPC crea receta/inventory_item y opcionalmente registra stock
+    // inicial. Si se desactiva, baja el flag preservando histórico.
+    if (isInventoryTracked != null) {
+      await setInventoryTracked(
+        menuItemId: id,
+        tracked: isInventoryTracked,
+        initialStock: isInventoryTracked ? initialStock : 0,
+      );
     }
   }
 

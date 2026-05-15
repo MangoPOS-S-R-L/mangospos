@@ -54,6 +54,11 @@ class MenuItem {
 
   final bool hasPrep;
 
+  /// Si true, este producto consume stock al venderse y el UI muestra
+  /// controles de inventario (stock inicial al activar, etc.). El
+  /// `consume_inventory_from_order` filtra por este flag.
+  final bool isInventoryTracked;
+
   /// Code del area de impresion (FK soft a `print_areas.code`). NULL =
   /// admin no eligio area; send-to-kitchen bloquea con error claro hasta
   /// que se asigne una de las areas configuradas para el negocio.
@@ -84,6 +89,7 @@ class MenuItem {
     this.imagePath,
     this.imageUrl,
     required this.hasPrep,
+    this.isInventoryTracked = false,
     this.printAreaCode,
     this.createdAt,
     this.updatedAt,
@@ -140,6 +146,7 @@ class MenuItem {
       imagePath: m['image_path'] as String?,
       imageUrl: m['image_url'] as String?,
       hasPrep: toBool(m['has_prep']),
+      isInventoryTracked: toBool(m['is_inventory_tracked']),
       printAreaCode: m['print_area_code'] as String?,
       createdAt: toDate(m['created_at']),
       updatedAt: toDate(m['updated_at']),
@@ -166,6 +173,7 @@ class MenuItem {
     String? imagePath,
     String? imageUrl,
     bool? hasPrep,
+    bool? isInventoryTracked,
     String? printAreaCode,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -190,6 +198,7 @@ class MenuItem {
       imagePath: imagePath ?? this.imagePath,
       imageUrl: imageUrl ?? this.imageUrl,
       hasPrep: hasPrep ?? this.hasPrep,
+      isInventoryTracked: isInventoryTracked ?? this.isInventoryTracked,
       printAreaCode: printAreaCode ?? this.printAreaCode,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -215,6 +224,7 @@ class MenuItem {
     'image_path': imagePath,
     'image_url': imageUrl,
     'has_prep': hasPrep,
+    'is_inventory_tracked': isInventoryTracked,
     'print_area_code': printAreaCode,
   }..removeWhere((k, v) => v == null);
 }

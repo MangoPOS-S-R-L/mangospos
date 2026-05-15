@@ -202,6 +202,9 @@ class ProductsViewModel extends ChangeNotifier {
     File? imageFile,
     Uint8List? imageBytes,
     List<String> taxIds = const [],
+    // 👇 inventario por producto
+    bool isInventoryTracked = false,
+    double initialStock = 0,
   }) async {
     if (_businessId == null) return;
 
@@ -251,6 +254,8 @@ class ProductsViewModel extends ChangeNotifier {
         imagePath: imagePath,
         imageUrl: imageUrl,
         taxIds: taxIds,
+        isInventoryTracked: isInventoryTracked,
+        initialStock: initialStock,
       );
 
       await _fetchProducts();
@@ -280,6 +285,10 @@ class ProductsViewModel extends ChangeNotifier {
     File? imageFile,
     Uint8List? imageBytes,
     List<String> taxIds = const [],
+    // 👇 inventario por producto. Si difiere del valor actual del producto,
+    // se llama la RPC para sincronizar.
+    bool? isInventoryTracked,
+    double initialStock = 0,
   }) async {
     try {
       String? imagePath;
@@ -327,6 +336,8 @@ class ProductsViewModel extends ChangeNotifier {
         imagePath: imagePath,
         imageUrl: imageUrl,
         taxIds: taxIds,
+        isInventoryTracked: isInventoryTracked,
+        initialStock: initialStock,
       );
 
       await _fetchProducts();
