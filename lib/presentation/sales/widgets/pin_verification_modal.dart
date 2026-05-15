@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/multimesero/active_waiter_provider.dart';
+import '../../../core/multimesero/multimesero_repository.dart';
 import '../../../services/session/session_controller.dart';
 
 Future<bool> showPinVerificationModal(
@@ -44,6 +46,49 @@ Future<bool> showCurrentUserPinVerificationModal(
   );
 
   return result == true;
+}
+
+/// Modal específico para el modo MULTIMESERO. A diferencia de los otros
+/// modals que devuelven `bool`, este devuelve el `ActiveWaiter` validado
+/// (o `null` si el usuario canceló). Útil para identificar QUIÉN está
+/// operando una mesa, no solo SI puede operarla.
+///
+/// Si el PIN match, además de retornar el waiter, lo setea en
+/// `activeWaiterProvider` para que el resto de la app lo lea sin volver
+/// a pedirlo.
+Future<ActiveWaiter?> showWaiterPinModal(
+  BuildContext context,
+  WidgetRef ref, {
+  required String businessId,
+  String title = 'Identifícate',
+  String subtitle = 'Ingresa tu PIN para abrir/entrar a esta mesa',
+}) async {
+  ActiveWaiter? captured;
+
+  await showDialog<bool>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) => _PinVerificationDialog(
+      title: title,
+      subtitle: subtitle,
+      onVerify: (pin) async {
+        try {
+          final waiter = await ref
+              .read(multimeseroRepositoryProvider)
+              .verifyPin(businessId: businessId, pin: pin);
+          if (waiter == null) return false;
+          captured = waiter;
+          ref.read(activeWaiterProvider.notifier).setActive(waiter);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      invalidMessage: 'PIN inválido o empleado inactivo.',
+    ),
+  );
+
+  return captured;
 }
 
 class _PinVerificationDialog extends StatefulWidget {

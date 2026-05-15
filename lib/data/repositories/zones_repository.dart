@@ -220,6 +220,89 @@ class ZonesRepository {
       }
     }
 
+    // Multimesero: si la sesión tiene `opened_by_employee_id`, sobreescribir
+    // el `waiter_name` con el nombre del empleado (no del auth user del
+    // dispositivo). En modo single-mesero (sin opened_by_employee_id),
+    // mantiene el comportamiento legacy.
+    final openSessionIds = rows
+        .map((row) => row['session_id']?.toString().trim())
+        .whereType<String>()
+        .where((sessionId) => sessionId.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+
+    if (openSessionIds.isNotEmpty) {
+      try {
+        var sessionWaiterQuery = sb
+            .from('table_sessions')
+            .select('id, opened_by_employee_id')
+            .inFilter('id', openSessionIds)
+            .not('opened_by_employee_id', 'is', null);
+
+        if (scopedBusinessId != null && scopedBusinessId.isNotEmpty) {
+          sessionWaiterQuery =
+              sessionWaiterQuery.eq('business_id', scopedBusinessId);
+        }
+
+        final sessionWaiterRows =
+            List<Map<String, dynamic>>.from(await sessionWaiterQuery);
+
+        if (sessionWaiterRows.isNotEmpty) {
+          final employeeIds = sessionWaiterRows
+              .map((s) => s['opened_by_employee_id']?.toString().trim())
+              .whereType<String>()
+              .where((id) => id.isNotEmpty)
+              .toSet()
+              .toList(growable: false);
+
+          final employeeNameById = <String, String>{};
+          if (employeeIds.isNotEmpty) {
+            final employeeRows = List<Map<String, dynamic>>.from(
+              await sb
+                  .from('employees')
+                  .select('id, first_name, last_name')
+                  .inFilter('id', employeeIds),
+            );
+            for (final emp in employeeRows) {
+              final id = emp['id']?.toString().trim();
+              final first = emp['first_name']?.toString().trim();
+              final last = emp['last_name']?.toString().trim() ?? '';
+              if (id == null || id.isEmpty) continue;
+              if (first == null || first.isEmpty) continue;
+              employeeNameById[id] = last.isEmpty
+                  ? first
+                  : preferredDisplayName(firstName: first);
+            }
+          }
+
+          final employeeBySessionId = <String, String>{};
+          for (final s in sessionWaiterRows) {
+            final sessionId = s['id']?.toString();
+            final empId = s['opened_by_employee_id']?.toString();
+            if (sessionId == null || empId == null) continue;
+            final name = employeeNameById[empId];
+            if (name != null && name.isNotEmpty) {
+              employeeBySessionId[sessionId] = name;
+            }
+          }
+
+          if (employeeBySessionId.isNotEmpty) {
+            for (final row in rows) {
+              final sessionId = row['session_id']?.toString();
+              if (sessionId == null) continue;
+              final empName = employeeBySessionId[sessionId];
+              if (empName != null && empName.isNotEmpty) {
+                row['waiter_name'] = empName;
+              }
+            }
+          }
+        }
+      } catch (_) {
+        // Best-effort: si la query falla (columna missing en negocios sin
+        // la migration multimesero, RLS, etc.), no rompemos el flujo.
+      }
+    }
+
     if (sessionIds.isNotEmpty) {
       var orderTotalsQuery = sb
           .from('orders')

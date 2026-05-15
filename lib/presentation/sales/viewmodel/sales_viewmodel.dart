@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:mangopos/core/multimesero/active_waiter_provider.dart';
 import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
@@ -542,6 +543,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       final client = Supabase.instance.client;
       final userId = client.auth.currentUser?.id;
 
+      // Modo multimesero: si hay un activeWaiter validado en este device,
+      // lo pasamos como opened_by_employee_id para trackear quién abre.
+      // Si la mesa ya estaba abierta, el RPC NO sobreescribe el opened_by
+      // original (es inmutable después del primer INSERT).
+      final activeWaiter = ref.read(activeWaiterProvider);
+
       // 1) Abrir mesa en backend
       final result = await ref
           .read(salesRepositoryProvider)
@@ -549,6 +556,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             tableId: tableId,
             userId: userId, // si es null, el RPC tiene fallback
             peopleCount: peopleCount,
+            openedByEmployeeId: activeWaiter?.employeeId,
           );
       final orderId = result['order_id'] as String;
 
@@ -989,6 +997,23 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             isTakeout: takeout,
             notes: notes,
           );
+
+      // Modo multimesero: marcar el item con el empleado activo en el
+      // dispositivo (el que metió PIN al entrar a la mesa). Esto permite
+      // reportes de "qué mesero vendió qué". Si no hay activeWaiter, skip.
+      final activeWaiter = ref.read(activeWaiterProvider);
+      if (activeWaiter != null && itemId.isNotEmpty) {
+        try {
+          await Supabase.instance.client
+              .from('order_items')
+              .update({'created_by_employee_id': activeWaiter.employeeId})
+              .eq('id', itemId);
+        } catch (e) {
+          debugPrint('[multimesero] no se pudo set created_by_employee_id: $e');
+          // No abortamos el flujo — el item igual quedó creado.
+        }
+      }
+
       if (selectedModifiers.isNotEmpty) {
         await ref
             .read(salesRepositoryProvider)

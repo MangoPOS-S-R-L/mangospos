@@ -40,6 +40,7 @@ const Map<String, String> routePermissions = <String, String>{
 
   // --- Reportes (granular por sub-reporte) ---
   '/reports/sales': 'reportes.ventas',
+  '/reports/sales-by-waiter': 'reportes.ventas',
   '/reports/finances': 'reportes.caja',
   '/reports/inventory': 'inventario.acceso',
   '/reports/purchases': 'compras.acceso',

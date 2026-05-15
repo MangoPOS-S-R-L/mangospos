@@ -730,28 +730,51 @@ final rolePresets = <String, RolePresetDefinition>{
   'cashier': RolePresetDefinition(
     key: 'cashier',
     label: 'Cajero',
-    description: 'Cobra, opera caja y registra movimientos. Cierre a ciegas sin ver totales.',
+    description:
+        'Cobra, opera caja, gestiona ventas en mesa y rápidas, registra '
+        'movimientos. Cierre a ciegas sin ver totales.',
     permissionCodes: {
+      // Mesas
       'ventas.mesas.acceso',
       'ventas.mesas.ver_estado',
       'ventas.mesas.abrir',
       'ventas.mesas.mover_unir',
       'ventas.mesas.marcar_pagando',
       'ventas.mesas.liberar',
+      // Orden — en negocios chicos el cajero hace todo el flujo de mesero
       'ventas.orden.ver_total',
+      'ventas.orden.agregar_item',
+      'ventas.orden.editar_item',
+      'ventas.orden.enviar_cocina',
+      'ventas.orden.descuento_aplicar',
+      'ventas.orden.anular',
+      'ventas.orden.reabrir',
+      // Cuenta / split
+      'ventas.cuenta.split_manual',
+      'ventas.cuenta.split_equiv',
+      // Venta rápida
       'ventas_rapida.acceso',
       'ventas_rapida.crear_orden',
+      'ventas_rapida.enviar_cocina',
       'ventas_rapida.cobrar_inmediato',
+      // Pagos
       'pagos.acceso',
       'pagos.cobrar_efectivo',
       'pagos.cobrar_tarjeta',
       'pagos.cobrar_transferencia',
       'pagos.asignar_referencia',
       'pagos.reimprimir_recibo',
+      // Caja
       'caja.apertura',
       'caja.cierre',
       'caja.movimientos_ver',
       'caja.movimientos_crear',
+      // KDS — el cajero suele marcar comandas listas y reimprimir
+      'kds.acceso',
+      'kds.ver_comandas',
+      'kds.cambiar_estado',
+      'kds.reimprimir_comanda',
+      // Clientes
       'clientes.ver',
     },
   ),

@@ -261,6 +261,17 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
         onTap: () => context.go(AppRoutes.reportsSales),
       ),
       _ReportHubCardData(
+        title: 'Ventas por mesero',
+        description:
+            'Atribución de items y totales por empleado. Requiere modo '
+            'multimesero activo.',
+        icon: Icons.group_outlined,
+        color: const Color(0xFF0EA5E9),
+        quickStat: '—',
+        quickStatLabel: 'Trazabilidad por línea',
+        onTap: () => context.go(AppRoutes.reportsSalesByWaiter),
+      ),
+      _ReportHubCardData(
         title: 'Cierres de caja',
         description: 'Cuadre, diferencias y movimientos manuales.',
         icon: Icons.point_of_sale_outlined,

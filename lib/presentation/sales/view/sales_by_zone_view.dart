@@ -4,8 +4,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
+import 'package:mangopos/core/multimesero/active_waiter_provider.dart';
+import 'package:mangopos/core/multimesero/multimesero_repository.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/presentation/cashier/widgets/open_cash_dialog.dart';
 import 'package:mangopos/presentation/sales/state/sales_zoom_provider.dart';
@@ -732,12 +735,89 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
 
     byZone.setOpening(ts.tableId, true);
 
-    // Mesa ocupada por otro mesero:
+    final session = ref.read(sessionProvider);
+    final businessIdForGate = ref.read(byZoneVmProvider).businessId ??
+        session.activeBusinessId;
+
+    // ── Multimesero gate ──────────────────────────────────────────────
+    // Si el negocio tiene multimesero activo, este flujo identifica al
+    // mesero ANTES de navegar a la mesa. Reemplaza al check legacy de
+    // "otro mesero" (que pide PIN del usuario logueado) por uno que
+    // valida CUALQUIER PIN de empleado activo y guarda el "active waiter"
+    // del dispositivo.
+    //   - Mesa nueva → siempre pide PIN para identificar al opener.
+    //   - Mesa existente abierta por el activeWaiter → pasa directo.
+    //   - Mesa existente abierta por otro → pide PIN para identificar al
+    //     que entra (sin cambiar el opened_by original).
+    //
+    // SOLO APLICA AL ROL `mesero`. Owner/admin/manager/cajero operan en
+    // nombre del negocio y no necesitan identificarse vía PIN —
+    // entran a cualquier mesa directo. El cajero también porque suele
+    // hacer cobros en cualquier mesa sin importar qué mesero la abrió.
+    bool multimeseroEnabled = false;
+    final isWaiterRole = session.activeRole == PosRole.mesero;
+    if (isWaiterRole && businessIdForGate != null && businessIdForGate.isNotEmpty) {
+      try {
+        multimeseroEnabled = await ref
+            .read(multimeseroRepositoryProvider)
+            .isEnabled(businessIdForGate);
+      } catch (_) {
+        // Si la lectura falla, asumimos OFF para no romper el flujo
+        // operativo. El admin verá que el toggle no toma efecto y reabre
+        // el setting.
+        multimeseroEnabled = false;
+      }
+    }
+
+    if (multimeseroEnabled && businessIdForGate != null) {
+      String? sessionOpenerEmployeeId;
+      if (ts.sessionId != null && ts.sessionId!.isNotEmpty) {
+        try {
+          final row = await Supabase.instance.client
+              .from('table_sessions')
+              .select('opened_by_employee_id')
+              .eq('id', ts.sessionId!)
+              .maybeSingle();
+          sessionOpenerEmployeeId =
+              row?['opened_by_employee_id']?.toString();
+        } catch (_) {/* lookup best-effort */}
+      }
+
+      final activeWaiter = ref.read(activeWaiterProvider);
+      final isSameWaiterAsOpener = sessionOpenerEmployeeId != null &&
+          activeWaiter != null &&
+          activeWaiter.employeeId == sessionOpenerEmployeeId &&
+          activeWaiter.businessId == businessIdForGate;
+
+      if (!isSameWaiterAsOpener) {
+        if (!context.mounted) {
+          byZone.setOpening(ts.tableId, false);
+          return;
+        }
+        final waiter = await showWaiterPinModal(
+          context,
+          ref,
+          businessId: businessIdForGate,
+          title: ts.sessionId == null
+              ? 'Identifícate'
+              : 'Identifícate para entrar',
+          subtitle: ts.sessionId == null
+              ? 'Ingresa tu PIN para abrir la mesa ${ts.code}'
+              : 'Ingresa tu PIN para registrar tu actividad en la mesa ${ts.code}',
+        );
+        if (waiter == null) {
+          byZone.setOpening(ts.tableId, false);
+          return;
+        }
+      }
+    }
+
+    // Mesa ocupada por otro mesero (LEGACY — solo cuando multimesero está OFF):
     // - el dueño entra sin PIN
     // - admin/supervisor/cajero pueden abrir cualquier mesa sin PIN extra
     // - otro mesero puede entrar, usando SU propio PIN
-    final session = ref.read(sessionProvider);
-    final isOtherWaiterTable = ts.sessionId != null && !ts.isOwn;
+    final isOtherWaiterTable =
+        !multimeseroEnabled && ts.sessionId != null && !ts.isOwn;
     final canBypassPin =
         session.activeRole == PosRole.administrador ||
         session.activeRole == PosRole.supervisor ||

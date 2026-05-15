@@ -57,6 +57,7 @@ class BusinessFeatures {
   final bool kitchenEnabled;
   final bool barcodeEnabled;
   final InventoryMode inventoryMode;
+  final bool multimeseroEnabled;
 
   const BusinessFeatures({
     this.salesModeTableEnabled = true,
@@ -66,12 +67,14 @@ class BusinessFeatures {
     this.kitchenEnabled = true,
     this.barcodeEnabled = true,
     this.inventoryMode = InventoryMode.none,
+    this.multimeseroEnabled = false,
   });
 
   /// Defaults aplicados cuando no hay fila en business_settings o
   /// cuando la query falla. Todo prendido = comportamiento legacy.
   /// Inventario default `none` para no asumir tracking en negocios
   /// que históricamente no lo usaban.
+  /// Multimesero default `false`: feature opt-in.
   static const BusinessFeatures defaults = BusinessFeatures();
 
   factory BusinessFeatures.fromMap(Map<String, dynamic> map) {
@@ -83,6 +86,7 @@ class BusinessFeatures {
       kitchenEnabled: map['kitchen_enabled'] != false,
       barcodeEnabled: map['barcode_enabled'] != false,
       inventoryMode: _inventoryModeFromWire(map['inventory_mode']?.toString()),
+      multimeseroEnabled: map['multimesero_enabled'] == true,
     );
   }
 
@@ -94,6 +98,7 @@ class BusinessFeatures {
     bool? kitchenEnabled,
     bool? barcodeEnabled,
     InventoryMode? inventoryMode,
+    bool? multimeseroEnabled,
   }) {
     return BusinessFeatures(
       salesModeTableEnabled:
@@ -107,6 +112,7 @@ class BusinessFeatures {
       kitchenEnabled: kitchenEnabled ?? this.kitchenEnabled,
       barcodeEnabled: barcodeEnabled ?? this.barcodeEnabled,
       inventoryMode: inventoryMode ?? this.inventoryMode,
+      multimeseroEnabled: multimeseroEnabled ?? this.multimeseroEnabled,
     );
   }
 
@@ -248,7 +254,8 @@ class PosSettingsRepository {
           .select(
             'sales_mode_table_enabled, sales_mode_manual_enabled, '
             'sales_mode_quick_enabled, sales_mode_delivery_enabled, '
-            'kitchen_enabled, barcode_enabled, inventory_mode',
+            'kitchen_enabled, barcode_enabled, inventory_mode, '
+            'multimesero_enabled',
           )
           .eq('business_id', businessId)
           .maybeSingle();
@@ -276,6 +283,7 @@ class PosSettingsRepository {
       'kitchen_enabled': features.kitchenEnabled,
       'barcode_enabled': features.barcodeEnabled,
       'inventory_mode': features.inventoryMode.wireValue,
+      'multimesero_enabled': features.multimeseroEnabled,
     }, onConflict: 'business_id');
   }
 }

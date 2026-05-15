@@ -77,6 +77,7 @@ import '../../presentation/sales/view/delivery_express_view.dart';
 import '../../presentation/sales/view/self_service_view.dart';
 import '../../presentation/sales/view/table_order_screen.dart';
 import '../../presentation/reports/view/reports_view.dart';
+import '../../presentation/reports/view/sales_by_waiter_view.dart';
 import '../../presentation/reports/view/sales_report_view.dart';
 import '../../presentation/reports/view/finance_report_view.dart';
 import '../../presentation/reports/view/inventory_report_view.dart';
@@ -486,6 +487,10 @@ class AppRouter {
           GoRoute(
             path: AppRoutes.reportsSales,
             builder: (context, state) => const SalesReportView(),
+          ),
+          GoRoute(
+            path: AppRoutes.reportsSalesByWaiter,
+            builder: (context, state) => const SalesByWaiterView(),
           ),
           GoRoute(
             path: AppRoutes.reportsFinances,

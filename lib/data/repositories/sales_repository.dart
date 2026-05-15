@@ -280,6 +280,7 @@ class SalesRepository {
     required String tableId,
     String? userId,
     int peopleCount = 1,
+    String? openedByEmployeeId,
   }) async {
     try {
       final response = await _client.rpc(
@@ -288,6 +289,10 @@ class SalesRepository {
           'p_people_count': peopleCount,
           'p_table_id': tableId,
           'p_user_id': userId,
+          // Solo se manda si el modo multimesero está activo y el mesero
+          // metió PIN. El RPC tiene este param con default null para
+          // mantener backwards compat.
+          'p_opened_by_employee_id': openedByEmployeeId,
         },
       );
 

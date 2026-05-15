@@ -249,6 +249,20 @@ class _BusinessFeaturesViewState extends ConsumerState<BusinessFeaturesView> {
                         _features.copyWith(barcodeEnabled: v),
                       ),
                     ),
+                    _FlagTile(
+                      icon: Icons.group_outlined,
+                      label: 'Modo multimesero',
+                      subtitle:
+                          'Cuando un mesero abre o entra a una mesa, el sistema '
+                          'pide su PIN para identificarlo. Cada producto agregado '
+                          'queda registrado a nombre de quién lo agregó. El mesero '
+                          'que abre la mesa queda como "dueño" de la cuenta. '
+                          'Requiere PINs únicos por empleado.',
+                      value: _features.multimeseroEnabled,
+                      onChanged: (v) => _update(
+                        _features.copyWith(multimeseroEnabled: v),
+                      ),
+                    ),
 
                     const SizedBox(height: 20),
                     _Section(title: 'Inventario'),
