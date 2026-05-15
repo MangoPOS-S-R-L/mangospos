@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../data/models/kitchen_models.dart';
 import '../../../data/repositories/kitchen_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
+import '../../../services/session/session_controller.dart';
 import '../state/kds_state.dart';
 
 // Provider
@@ -13,12 +14,13 @@ final kitchenRepositoryProvider = Provider<KitchenRepository>(
 );
 
 final kdsViewModelProvider = StateNotifierProvider<KdsViewModel, KdsState>(
-  (ref) => KdsViewModel(ref.read(kitchenRepositoryProvider)),
+  (ref) => KdsViewModel(ref.read(kitchenRepositoryProvider), ref),
 );
 
 /// 🍳 ViewModel del KDS
 class KdsViewModel extends StateNotifier<KdsState> {
   final KitchenRepository _kitchenRepo;
+  final Ref _ref;
   RealtimeChannel? _rtOrderItems;
   Timer? _reloadDebounce;
   Timer? _refreshTimer;
@@ -26,7 +28,19 @@ class KdsViewModel extends StateNotifier<KdsState> {
   bool _loadingOrders = false;
   bool _loadOrdersQueued = false;
 
-  KdsViewModel(this._kitchenRepo) : super(const KdsState());
+  KdsViewModel(this._kitchenRepo, this._ref) : super(const KdsState());
+
+  /// Verifica si el usuario activo puede cambiar el estado de comandas.
+  /// Setea el error en state y retorna false si no tiene permiso.
+  bool _canChangeStatus() {
+    if (_ref.read(sessionProvider.notifier).hasPermission('kds.cambiar_estado')) {
+      return true;
+    }
+    state = state.copyWith(
+      error: 'No tienes permiso para cambiar el estado de comandas.',
+    );
+    return false;
+  }
 
   // ============================================================
   // 🚀 INICIALIZACIÓN
@@ -153,6 +167,7 @@ class KdsViewModel extends StateNotifier<KdsState> {
 
   /// Iniciar preparación de item
   Future<void> startPreparingItem(String itemId) async {
+    if (!_canChangeStatus()) return;
     _applyLocalItemStatus(itemId, 'preparing');
     try {
       await _kitchenRepo.startPreparingItem(itemId);
@@ -165,6 +180,7 @@ class KdsViewModel extends StateNotifier<KdsState> {
 
   /// Marcar item como listo
   Future<void> markItemReady(String itemId) async {
+    if (!_canChangeStatus()) return;
     _applyLocalItemStatus(itemId, 'ready');
     try {
       await _kitchenRepo.markItemReady(itemId);
@@ -177,6 +193,7 @@ class KdsViewModel extends StateNotifier<KdsState> {
 
   /// Marcar item como servido
   Future<void> markItemServed(String itemId) async {
+    if (!_canChangeStatus()) return;
     _removeItemLocally(itemId);
     try {
       await _kitchenRepo.markItemServed(itemId);
@@ -189,6 +206,7 @@ class KdsViewModel extends StateNotifier<KdsState> {
 
   /// Marcar toda la orden como lista
   Future<void> markOrderReady(String orderId) async {
+    if (!_canChangeStatus()) return;
     _applyLocalOrderStatus(
       orderId,
       from: {'pending', 'preparing'},

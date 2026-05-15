@@ -294,6 +294,15 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   /// transferencia; persistimos el id en `payments.bank_account_id` al
   /// confirmar el pago.
   void setBankAccount(BankAccount? account) {
+    if (!_ref
+        .read(sessionProvider.notifier)
+        .hasPermission('pagos.asignar_referencia')) {
+      state = state.copyWith(
+        validationError:
+            'No tienes permiso para asignar la cuenta bancaria del cobro.',
+      );
+      return;
+    }
     state = state.copyWith(
       selectedBankAccount: account,
       validationError: null,

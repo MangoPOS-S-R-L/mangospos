@@ -642,135 +642,148 @@ class _UserInfo extends ConsumerWidget {
                 break;
             }
           },
-          itemBuilder: (_) => [
-            PopupMenuItem<_UserMenuAction>(
-              enabled: false,
-              padding: EdgeInsets.zero,
-              height: 88,
-              child: Container(
-                padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 42,
-                      height: 42,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFFF0E7),
-                        borderRadius: BorderRadius.circular(12),
+          itemBuilder: (_) {
+            // Gates por rol/permiso para el menú de usuario. La idea es
+            // que un cajero/mesero/cocina NO vea opciones de admin
+            // (Gestionar sucursales, Mejorar plan, Ajustes) — quedan
+            // ocultas, no solo deshabilitadas. La home del rol siempre
+            // está disponible vía la navegación principal del shell.
+            final isAdminLevel =
+                session.activeRole == PosRole.administrador;
+            final canOpenSettings =
+                ctrl.hasPermission('settings.usuarios.acceso');
+            final canSwitchBranch = session.availableBusinesses.length > 1;
+            return [
+              PopupMenuItem<_UserMenuAction>(
+                enabled: false,
+                padding: EdgeInsets.zero,
+                height: 88,
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFF0E7),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(
+                          Icons.storefront_rounded,
+                          color: MangoColors.primaryOrange,
+                        ),
                       ),
-                      child: const Icon(
-                        Icons.storefront_rounded,
-                        color: MangoColors.primaryOrange,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(
-                            businessName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w800,
-                              fontSize: 15,
-                              color: Color(0xFF1F2937),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              businessName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: 15,
+                                color: Color(0xFF1F2937),
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Sesion activa como $roleLabel',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Color(0xFF6B7280),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Sesion activa como $roleLabel',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Color(0xFF6B7280),
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const PopupMenuDivider(height: 1),
-            PopupMenuItem<_UserMenuAction>(
-              value: _UserMenuAction.switchBranch,
-              padding: EdgeInsets.zero,
-              height: 56,
-              enabled: session.availableBusinesses.length > 1,
-              child: _UserMenuTile(
-                icon: Icons.swap_horiz_rounded,
-                label: session.availableBusinesses.length > 1
-                    ? 'Cambiar sucursal'
-                    : 'Solo tienes una sucursal',
-                accent: const Color(0xFFEAFBF3),
-                iconColor: const Color(0xFF059669),
-              ),
-            ),
-            const PopupMenuItem<_UserMenuAction>(
-              value: _UserMenuAction.manageBranches,
-              padding: EdgeInsets.zero,
-              height: 56,
-              child: _UserMenuTile(
-                icon: Icons.apartment_rounded,
-                label: 'Gestionar sucursales',
-                accent: Color(0xFFFFF0D9),
-                iconColor: MangoColors.primaryOrange,
-              ),
-            ),
-            const PopupMenuItem<_UserMenuAction>(
-              value: _UserMenuAction.plan,
-              padding: EdgeInsets.zero,
-              height: 56,
-              child: _UserMenuTile(
-                icon: Icons.rocket_launch_rounded,
-                label: 'Mejorar plan',
-                accent: Color(0xFFFFF0D9),
-                iconColor: MangoColors.primaryOrange,
-              ),
-            ),
-            const PopupMenuItem<_UserMenuAction>(
-              value: _UserMenuAction.settings,
-              padding: EdgeInsets.zero,
-              height: 56,
-              child: _UserMenuTile(
-                icon: Icons.settings_rounded,
-                label: 'Ajustes del sistema',
-                accent: Color(0xFFEAF0FF),
-                iconColor: Color(0xFF2563EB),
-              ),
-            ),
-            const PopupMenuDivider(height: 1),
-            const PopupMenuItem<_UserMenuAction>(
-              value: _UserMenuAction.logout,
-              padding: EdgeInsets.zero,
-              height: 56,
-              child: _UserMenuTile(
-                icon: Icons.logout_rounded,
-                label: 'Cerrar sesion',
-                accent: Color(0xFFFFE7E7),
-                iconColor: Color(0xFFDC2626),
-                textColor: Color(0xFFDC2626),
-              ),
-            ),
-            const PopupMenuDivider(height: 1),
-            const PopupMenuItem<_UserMenuAction>(
-              enabled: false,
-              padding: EdgeInsets.zero,
-              height: 40,
-              child: ColoredBox(
-                color: Color(0xFFF8FAFC),
-                child: Center(
-                  child: Text(
-                    'version ${String.fromEnvironment('APP_VERSION', defaultValue: '1.0.0')}',
-                    style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                    ],
                   ),
                 ),
               ),
-            ),
-          ],
+              const PopupMenuDivider(height: 1),
+              if (canSwitchBranch)
+                PopupMenuItem<_UserMenuAction>(
+                  value: _UserMenuAction.switchBranch,
+                  padding: EdgeInsets.zero,
+                  height: 56,
+                  child: const _UserMenuTile(
+                    icon: Icons.swap_horiz_rounded,
+                    label: 'Cambiar sucursal',
+                    accent: Color(0xFFEAFBF3),
+                    iconColor: Color(0xFF059669),
+                  ),
+                ),
+              if (isAdminLevel)
+                const PopupMenuItem<_UserMenuAction>(
+                  value: _UserMenuAction.manageBranches,
+                  padding: EdgeInsets.zero,
+                  height: 56,
+                  child: _UserMenuTile(
+                    icon: Icons.apartment_rounded,
+                    label: 'Gestionar sucursales',
+                    accent: Color(0xFFFFF0D9),
+                    iconColor: MangoColors.primaryOrange,
+                  ),
+                ),
+              if (isAdminLevel)
+                const PopupMenuItem<_UserMenuAction>(
+                  value: _UserMenuAction.plan,
+                  padding: EdgeInsets.zero,
+                  height: 56,
+                  child: _UserMenuTile(
+                    icon: Icons.rocket_launch_rounded,
+                    label: 'Mejorar plan',
+                    accent: Color(0xFFFFF0D9),
+                    iconColor: MangoColors.primaryOrange,
+                  ),
+                ),
+              if (canOpenSettings)
+                const PopupMenuItem<_UserMenuAction>(
+                  value: _UserMenuAction.settings,
+                  padding: EdgeInsets.zero,
+                  height: 56,
+                  child: _UserMenuTile(
+                    icon: Icons.settings_rounded,
+                    label: 'Ajustes del sistema',
+                    accent: Color(0xFFEAF0FF),
+                    iconColor: Color(0xFF2563EB),
+                  ),
+                ),
+              const PopupMenuDivider(height: 1),
+              const PopupMenuItem<_UserMenuAction>(
+                value: _UserMenuAction.logout,
+                padding: EdgeInsets.zero,
+                height: 56,
+                child: _UserMenuTile(
+                  icon: Icons.logout_rounded,
+                  label: 'Cerrar sesion',
+                  accent: Color(0xFFFFE7E7),
+                  iconColor: Color(0xFFDC2626),
+                  textColor: Color(0xFFDC2626),
+                ),
+              ),
+              const PopupMenuDivider(height: 1),
+              const PopupMenuItem<_UserMenuAction>(
+                enabled: false,
+                padding: EdgeInsets.zero,
+                height: 40,
+                child: ColoredBox(
+                  color: Color(0xFFF8FAFC),
+                  child: Center(
+                    child: Text(
+                      'version ${String.fromEnvironment('APP_VERSION', defaultValue: '1.0.0')}',
+                      style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                    ),
+                  ),
+                ),
+              ),
+            ];
+          },
           child: Container(
             width: 40,
             height: 40,

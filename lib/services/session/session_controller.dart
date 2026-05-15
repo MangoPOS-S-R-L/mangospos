@@ -796,17 +796,19 @@ class SessionController extends Notifier<SessionState> {
             .toSet();
 
         if (granted.isNotEmpty) {
-          // Add wildcard only if the DB-returned permissions confirm
-          // this is truly an admin-level user (has dashboard.acceso
-          // and settings access).  This prevents user_businesses.role
-          // from granting '*' when the effective role is restricted
-          // (e.g. user_businesses says 'owner' but user_roles assigns
-          // them to 'cashier').
-          final looksLikeAdmin = granted.contains('dashboard.acceso') &&
-              granted.contains('settings.usuarios.acceso');
-          if (looksLikeAdmin) {
+          // Si user_businesses.role es owner/admin, SIEMPRE wildcard.
+          // No tiene sentido restringir a un owner vía overrides parciales:
+          // si por error/UI quedan rows incompletas en user_permission_overrides
+          // (ej. alguien tildó solo 3 permisos y guardó, borrando el resto),
+          // el owner perdía acceso a su propio negocio. La regla de negocio
+          // es: si la membresía es owner/admin, manda esa membresía sobre
+          // el detalle del RPC.
+          final normalizedRole = normalizeBusinessRole(roleStr);
+          if (normalizedRole == 'owner' || normalizedRole == 'admin') {
             return {'*', ...granted};
           }
+          // Roles no-admin: usar lo que devuelve el RPC tal cual.
+          // Si el RPC devolvió algo, esos son sus permisos efectivos.
           return granted;
         }
       }

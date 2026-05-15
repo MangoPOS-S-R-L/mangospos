@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -38,24 +40,38 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
   }
 
   Future<void> _loadBusinesses() async {
+    debugPrint('>>> [SelectBusiness] _loadBusinesses start');
     final supabase = Supabase.instance.client;
 
     try {
       final user = supabase.auth.currentUser;
+      debugPrint('>>> [SelectBusiness] currentUser=${user?.id}');
 
       if (user == null) {
+        debugPrint('>>> [SelectBusiness] no user, redirect to /login');
         if (mounted) context.go('/login');
         return;
       }
 
+      debugPrint('>>> [SelectBusiness] querying user_businesses...');
       final res = await supabase
           .from('user_businesses')
           .select(
             'business_id, role, businesses(business_name, branch_name, domain)',
           )
-          .eq('user_id', user.id);
+          .eq('user_id', user.id)
+          .timeout(
+            const Duration(seconds: 10),
+            onTimeout: () {
+              throw TimeoutException(
+                'user_businesses query timed out after 10s',
+              );
+            },
+          );
+      debugPrint('>>> [SelectBusiness] query done, result type=${res.runtimeType}');
 
       final list = res as List<dynamic>;
+      debugPrint('>>> [SelectBusiness] list.length=${list.length}');
       if (list.isEmpty) {
         setState(() {
           _error = 'No tienes negocios asociados todavía.';
@@ -64,20 +80,52 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
         return;
       }
 
-      // Si solo tiene 1 negocio → selección automática interna
-      if (list.length == 1) {
-        final item = list.first as Map<String, dynamic>;
-        final businessId = item['business_id'] as String?;
+      // Solo los OWNERS con múltiples negocios ven el selector. Para todos los
+      // demás casos auto-seleccionamos:
+      //   - 1 solo negocio (cualquier rol) → directo
+      //   - empleado (cashier/waiter/cook/etc.) con múltiples negocios →
+      //     directo al primero. Un empleado no debería tener que "elegir"
+      //     dónde entrar; va a su sucursal asignada.
+      //
+      // Si hay un negocio activo previo en storage, lo preferimos por sobre
+      // "el primero" para que el empleado caiga en la sucursal donde estaba
+      // operando la última vez.
+      final isOwnerOfAny = list.any((row) {
+        final role = (row as Map<String, dynamic>?)?['role']?.toString();
+        return role == 'owner';
+      });
+
+      if (list.length == 1 || !isOwnerOfAny) {
+        Map<String, dynamic>? target;
+
+        // Preferir el negocio activo previo si sigue en la lista del usuario.
+        try {
+          final storage = await StorageService.getInstance();
+          final stored = await storage.read(StorageKeys.activeBusinessId);
+          if (stored != null && stored.isNotEmpty) {
+            for (final row in list) {
+              final map = row as Map<String, dynamic>;
+              if (map['business_id']?.toString() == stored) {
+                target = map;
+                break;
+              }
+            }
+          }
+        } catch (_) {/* storage no crítico */}
+
+        target ??= list.first as Map<String, dynamic>;
+        final businessId = target['business_id'] as String?;
         if (businessId != null) {
           AppLogger.i(
-            '[SelectBusiness] Un solo negocio, seleccionando $businessId',
+            '[SelectBusiness] Auto-seleccionando $businessId '
+            '(isOwnerOfAny=$isOwnerOfAny, total=${list.length})',
           );
-          await _handleSelect(item);
+          await _handleSelect(target);
           return;
         }
       }
 
-      // Múltiples negocios → mostrar el selector
+      // Owner con múltiples negocios → mostrar el selector
       if (mounted) {
         setState(() {
           _businesses = list.cast<Map<String, dynamic>>();
@@ -120,27 +168,70 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
       });
     }
 
-    AppLogger.i('Negocio seleccionado internamente: $businessId');
+    debugPrint('>>> [SelectBusiness] _handleSelect start businessId=$businessId');
 
     try {
+      debugPrint('>>> [SelectBusiness] writing storage');
       final storage = await StorageService.getInstance();
       await storage.write(StorageKeys.activeBusinessId, businessId);
-      BusinessResolver.setActiveBusinessId(businessId);
-      ref.read(sessionProvider.notifier).setActiveBusiness(businessId);
+      debugPrint('>>> [SelectBusiness] storage written');
 
-      await Future.delayed(const Duration(milliseconds: 450));
+      BusinessResolver.setActiveBusinessId(businessId);
+      debugPrint('>>> [SelectBusiness] BusinessResolver set');
+
+      final notifier = ref.read(sessionProvider.notifier);
+      final state = ref.read(sessionProvider);
+      final currentBusinessId = state.activeBusinessId;
+      final hasAvailable = state.availableBusinesses.isNotEmpty;
+      final isDifferentBusiness =
+          currentBusinessId != null && currentBusinessId != businessId;
+
+      // switchBusiness solo cuando realmente estamos CAMBIANDO de negocio
+      // (multi-business owner que toca otra sucursal). Para el primer
+      // login o un re-select del mismo negocio, basta con setActiveBusiness
+      // simple — restoreFromSupabaseSession ya cargó el rol y permisos en
+      // paralelo y switchBusiness duplica queries que pueden colgarse.
+      if (hasAvailable && isDifferentBusiness) {
+        debugPrint('>>> [SelectBusiness] calling switchBusiness (changing biz)');
+        await notifier.switchBusiness(businessId).timeout(
+          const Duration(seconds: 10),
+          onTimeout: () {
+            debugPrint('>>> [SelectBusiness] switchBusiness TIMEOUT');
+            // Fallback: al menos cambiamos el id para no quedar atorados.
+            notifier.setActiveBusiness(businessId);
+          },
+        );
+        debugPrint('>>> [SelectBusiness] switchBusiness done');
+      } else {
+        debugPrint('>>> [SelectBusiness] simple setActiveBusiness');
+        notifier.setActiveBusiness(businessId);
+        // Si la sesión aún no tiene rol cargado, esperamos brevemente a
+        // que restoreFromSupabaseSession termine. Sin esto, homeRoute
+        // devuelve '/dashboard' por null y el route guard puede patear.
+        var waited = 0;
+        while (mounted &&
+            ref.read(sessionProvider).activeRole == null &&
+            waited < 3000) {
+          await Future.delayed(const Duration(milliseconds: 100));
+          waited += 100;
+        }
+        debugPrint('>>> [SelectBusiness] waited ${waited}ms for activeRole');
+      }
+
       if (!mounted) return;
-      final home = ref.read(sessionProvider.notifier).homeRoute;
+      final home = notifier.homeRoute;
+      debugPrint('>>> [SelectBusiness] navigating to $home');
       context.go(home);
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('>>> [SelectBusiness][WARN] error seleccionando: $e\n$st');
       if (mounted) {
         setState(() {
+          _isLoading = false;
           _isSelecting = false;
           _selectingBusinessId = null;
           _error = 'No pudimos entrar a ese negocio. Intenta otra vez.';
         });
       }
-      AppLogger.w('Error seleccionando negocio: $e');
     }
   }
 

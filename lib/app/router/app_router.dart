@@ -67,6 +67,7 @@ import '../../presentation/settings/cash_close_mode/cash_close_mode_view.dart';
 import '../../presentation/settings/currencies/view/currencies_view.dart';
 import '../../presentation/settings/regional/view/regional_view.dart';
 import 'package:mangopos/core/utils/logger.dart';
+import 'route_permissions.dart';
 import 'routes.dart';
 
 // Sales module
@@ -105,6 +106,10 @@ class GoRouterRefreshStream extends ChangeNotifier {
 
   late final StreamSubscription<dynamic> _subscription;
 
+  /// Permite disparar un refresh manual (ej. cuando cambian los permisos
+  /// del usuario activo y el redirect global tiene que reevaluarse).
+  void poke() => notifyListeners();
+
   @override
   void dispose() {
     _subscription.cancel();
@@ -116,6 +121,20 @@ class AppRouter {
   static final GoRouterRefreshStream _authRefresh = GoRouterRefreshStream(
     Supabase.instance.client.auth.onAuthStateChange,
   );
+
+  /// Resolver inyectado desde `MyApp.build` (que tiene `ref`).
+  /// Devuelve `true` si el usuario activo tiene el permiso pedido.
+  /// Si el resolver no está seteado todavía (boot temprano), el router
+  /// asume `true` para no bloquear la pantalla inicial.
+  static bool Function(String permission)? permissionResolver;
+
+  /// Home route por defecto según rol — fallback cuando un usuario
+  /// intenta entrar a una ruta sin permiso. Inyectado desde `MyApp`.
+  static String Function()? homeRouteResolver;
+
+  /// Re-evalúa el redirect global. Lo llama `MyApp` cuando `sessionProvider`
+  /// emite (cambio de rol o permisos refrescados).
+  static void refreshGuards() => _authRefresh.poke();
 
   static String _initialLocation() {
     if (kIsWeb) {
@@ -181,6 +200,29 @@ class AppRouter {
       // - raíz -> selector interno si tiene varios; dashboard si ya quedó negocio activo
       if (isAuthRoute || path == '/') {
         return AppRoutes.selectBusiness;
+      }
+
+      // ── Permission gate ───────────────────────────────────────────
+      // Bloquea rutas que el rol activo no debería visitar directo.
+      // Sin esto, los permisos solo apagaban botones en el UI: un
+      // usuario podía escribir la URL y entrar igual.
+      // Excluimos selectBusiness para no romper el flujo si el resolver
+      // aún no está listo durante el primer build de MyApp.
+      final required = requiredPermissionForPath(path);
+      if (required != null) {
+        final resolver = permissionResolver;
+        // Si el resolver todavía no fue inyectado (boot temprano antes
+        // de que MyApp termine su primer build), no bloqueamos —
+        // refreshListenable disparará otro redirect cuando esté listo.
+        if (resolver != null && !resolver(required)) {
+          final home = homeRouteResolver?.call() ?? AppRoutes.dashboard;
+          AppLogger.d(
+            '[Router] permiso denegado "$required" para "$path" → $home',
+          );
+          // Evita loops si la home también está bloqueada.
+          if (home != path) return home;
+          return AppRoutes.login;
+        }
       }
 
       return null;

@@ -791,6 +791,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     double? productFullTaxRate,
     List<SelectedModifierInput> selectedModifiers = const [],
   }) async {
+    if (!ref
+        .read(sessionProvider.notifier)
+        .hasPermission('ventas.orden.agregar_item')) {
+      state = state.copyWith(
+        error: 'No tienes permiso para agregar productos a la orden.',
+      );
+      return;
+    }
     final orderId = state.order?.id;
     if (orderId == null) {
       state = state.copyWith(error: 'Orden no disponible. Reintenta.');
@@ -1213,6 +1221,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }
 
   Future<void> updateItemQuantity(String itemId, double quantity) async {
+    if (!ref
+        .read(sessionProvider.notifier)
+        .hasPermission('ventas.orden.editar_item')) {
+      state = state.copyWith(
+        error: 'No tienes permiso para editar líneas de orden.',
+      );
+      return;
+    }
     final orderId = state.order?.id;
     if (orderId == null) return;
 
@@ -1346,6 +1362,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }
 
   Future<void> updateItemNotes(String itemId, String notes) async {
+    if (!ref
+        .read(sessionProvider.notifier)
+        .hasPermission('ventas.orden.editar_item')) {
+      state = state.copyWith(
+        error: 'No tienes permiso para editar líneas de orden.',
+      );
+      return;
+    }
     final orderId = state.order?.id;
     if (orderId == null) return;
 
@@ -1489,6 +1513,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }
 
   Future<void> updateItem(String itemId, OrderItem updatedItem) async {
+    if (!ref
+        .read(sessionProvider.notifier)
+        .hasPermission('ventas.orden.editar_item')) {
+      state = state.copyWith(
+        error: 'No tienes permiso para editar líneas de orden.',
+      );
+      return;
+    }
     final orderId = state.order?.id;
     if (orderId == null) return;
 
@@ -1550,6 +1582,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     required List<String> itemIds,
     required double percent,
   }) async {
+    if (!ref
+        .read(sessionProvider.notifier)
+        .hasPermission('ventas.orden.descuento_aplicar')) {
+      state = state.copyWith(
+        error: 'No tienes permiso para aplicar descuentos.',
+      );
+      return;
+    }
     final orderId = state.order?.id;
     if (orderId == null || itemIds.isEmpty) return;
 
@@ -1615,6 +1655,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     required List<String> itemIds,
     required String reason,
   }) async {
+    if (!ref
+        .read(sessionProvider.notifier)
+        .hasPermission('ventas.orden.descuento_aplicar')) {
+      state = state.copyWith(
+        error: 'No tienes permiso para aplicar cortesías.',
+      );
+      return;
+    }
     final orderId = state.order?.id;
     if (orderId == null || itemIds.isEmpty) return;
 
@@ -1783,6 +1831,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }
 
   Future<void> closeOrderPaid() async {
+    if (!ref
+        .read(sessionProvider.notifier)
+        .hasPermission('ventas.mesas.liberar')) {
+      state = state.copyWith(
+        error: 'No tienes permiso para cerrar y liberar la mesa.',
+      );
+      return;
+    }
     final orderId = state.order?.id;
     if (orderId == null) return;
     await ref
@@ -1825,6 +1881,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   /// escala al worker. Retorna `null` si no había orden o si la orden
   /// fue al path local (offline / orden local sin sincronizar).
   Future<KitchenSendResult?> confirmOrder({String? tableName, String? waiterName}) async {
+    if (!ref
+        .read(sessionProvider.notifier)
+        .hasPermission('ventas.orden.enviar_cocina')) {
+      state = state.copyWith(
+        error: 'No tienes permiso para enviar órdenes a cocina.',
+      );
+      return null;
+    }
     final orderId = state.order?.id;
     if (orderId == null) return null;
     // No ponemos loading: true aquí para evitar el parpadeo de la pantalla completa.
@@ -1886,6 +1950,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     required String orderId,
     List<OrderItem>? items,
   }) async {
+    if (!ref
+        .read(sessionProvider.notifier)
+        .hasPermission('kds.reimprimir_comanda')) {
+      state = state.copyWith(
+        error: 'No tienes permiso para reimprimir comandas.',
+      );
+      return;
+    }
     final businessId = _activeBusinessId;
     if (businessId == null) return;
 

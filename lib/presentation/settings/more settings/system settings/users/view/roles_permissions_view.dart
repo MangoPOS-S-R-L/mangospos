@@ -48,6 +48,12 @@ class _SettingsRolesViewState extends ConsumerState<SettingsRolesView> {
 
   final _groups = <_PermissionGroup>[
     _PermissionGroup(
+      title: 'Dashboard',
+      permissions: [
+        _PermissionRow('dashboard', 'Acceso al dashboard'),
+      ],
+    ),
+    _PermissionGroup(
       title: 'Configuracion',
       permissions: [
         _PermissionRow('settings.usuarios', 'Usuarios'),
@@ -84,6 +90,10 @@ class _SettingsRolesViewState extends ConsumerState<SettingsRolesView> {
       permissions: [
         _PermissionRow('pagos', 'Modal de pagos'),
         _PermissionRow('caja', 'Apertura / cierre / arqueo'),
+        _PermissionRow(
+          'caja.movimientos',
+          'Movimientos de caja (ingresos / egresos / gastos)',
+        ),
       ],
     ),
     _PermissionGroup(
@@ -532,6 +542,10 @@ class _PermissionRow {
 // Mapeo de columnas (acceso/ver/graba/anula/reimprime) -> permisos granulares
 // Basado en backend data structure/roles_usuarios_mangopos.txt
 const Map<String, Map<String, List<String>>> _codeMap = {
+  'dashboard': {
+    'acceso': ['dashboard.acceso'],
+    'ver': ['dashboard.acceso'],
+  },
   'settings.usuarios': {
     'acceso': ['settings.usuarios.acceso'],
     'ver': ['settings.usuarios.ver'],
@@ -616,9 +630,23 @@ const Map<String, Map<String, List<String>>> _codeMap = {
     'reimprime': ['pagos.reimprimir_recibo'],
   },
   'caja': {
-    'acceso': ['caja.apertura', 'caja.cierre', 'caja.arqueo_ver'],
-    'ver': ['caja.movimientos_ver', 'caja.arqueo_ver'],
+    'acceso': ['caja.apertura', 'caja.cierre'],
+    'ver': ['caja.arqueo_ver'],
     'graba/mod': ['caja.apertura', 'caja.cierre'],
+  },
+  // Movimientos de caja separados de apertura/cierre — un cajero con
+  // cierre a ciegas (sin caja.arqueo_ver) DEBE poder registrar
+  // ingresos/egresos/gastos. Antes ambos perms vivían en el mismo grupo
+  // y el de "movimientos_crear" no estaba mapeado a ninguna columna,
+  // por lo que era imposible asignárselo desde la UI.
+  //
+  // `graba/mod` incluye `movimientos_ver` además de `movimientos_crear`:
+  // no tiene sentido crear sin poder ver la lista — la card de
+  // "Ingresos y Egresos" en el cashier_view se muestra con `ver`. Si
+  // solo das `crear`, el cajero no encuentra dónde hacerlo.
+  'caja.movimientos': {
+    'ver': ['caja.movimientos_ver'],
+    'graba/mod': ['caja.movimientos_ver', 'caja.movimientos_crear'],
   },
   'kds': {
     'acceso': ['kds.acceso', 'kds.ver_comandas'],
@@ -661,7 +689,10 @@ const Map<String, Map<String, List<String>>> _codeMap = {
     'anula': ['productos.eliminar'],
   },
   'categorias': {
-    'acceso': ['categorias.acceso'],
+    // No existe `categorias.acceso` en el catálogo; usamos `categorias.ver`
+    // como puerta de entrada al módulo (igual que en otros grupos sin
+    // permiso explícito de "acceso").
+    'acceso': ['categorias.ver'],
     'ver': ['categorias.ver'],
     'graba/mod': ['categorias.crear', 'categorias.editar'],
     'anula': ['categorias.eliminar'],

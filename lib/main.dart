@@ -32,6 +32,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'app/router/app_router.dart';
 import 'app/router/routes.dart';
+import 'services/session/session_controller.dart';
 import 'core/cache/cache_manager.dart';
 import 'core/network/supabase_config.dart';
 import 'core/agent/mobile_print_agent.dart';
@@ -892,6 +893,42 @@ class MyApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Inyecta los resolvers que usa el redirect global del router para
+    // bloquear rutas según permisos. Sin esto, las rutas solo estaban
+    // protegidas por la visibilidad del UI (apagar botón) — escribir la
+    // URL directo era suficiente para entrar.
+    AppRouter.permissionResolver = (perm) {
+      final session = ref.read(sessionProvider);
+      // Mientras la sesión está cargando (post-login, switchBusiness,
+      // restoreFromSupabaseSession) los permisos aún no están resueltos.
+      // Permitimos pasar; el ref.listen de abajo dispara refreshGuards
+      // cuando la sesión se estabiliza, y el redirect se re-evalúa con
+      // los permisos correctos. Sin esto, durante el race-window
+      // post-login el guard rechaza /dashboard, redirige al homeRoute
+      // (=/dashboard por rol null), cae a /login, y de ahí vuelve a
+      // /select-business → loop infinito visible como spinner pegado.
+      if (session.status == AuthStatus.loading) return true;
+      return ref.read(sessionProvider.notifier).hasPermission(perm);
+    };
+    AppRouter.homeRouteResolver = () =>
+        ref.read(sessionProvider.notifier).homeRoute;
+
+    // Cuando los permisos/rol cambian (login, switchRole, refresh post-RPC)
+    // re-evaluamos el redirect global. Sin esto, si el usuario está parado
+    // en una ruta permitida y luego pierde el permiso, el router no se
+    // entera hasta el próximo navigate.
+    ref.listen<SessionState>(sessionProvider, (prev, next) {
+      final statusChanged = prev?.status != next.status;
+      final prevPerms = prev?.permissions;
+      final nextPerms = next.permissions;
+      final permsChanged = prevPerms == null ||
+          prevPerms.length != nextPerms.length ||
+          !prevPerms.containsAll(nextPerms);
+      if (statusChanged || permsChanged) {
+        AppRouter.refreshGuards();
+      }
+    });
+
     return MaterialApp.router(
       title: 'MangoPOS',
       debugShowCheckedModeBanner: false,

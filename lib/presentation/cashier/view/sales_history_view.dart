@@ -612,6 +612,16 @@ class _PaymentTableRow extends ConsumerWidget {
     WidgetRef ref,
     Map<String, dynamic> payment,
   ) async {
+    if (!ref
+        .read(sessionProvider.notifier)
+        .hasPermission('pagos.reimprimir_recibo')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No tienes permiso para reimprimir recibos.'),
+        ),
+      );
+      return;
+    }
     final orderId = payment['order_id']?.toString() ?? '';
     if (orderId.isEmpty) return;
 
@@ -941,6 +951,17 @@ class _PaymentTableRow extends ConsumerWidget {
     String? checkId,
   }) async {
     if (paymentId.isEmpty || orderId.isEmpty) return;
+
+    if (!ref
+        .read(sessionProvider.notifier)
+        .hasPermission('pagos.anular_pago')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No tienes permiso para anular pagos.'),
+        ),
+      );
+      return;
+    }
 
     final session = ref.read(sessionProvider);
     final currentRole = session.activeRole;

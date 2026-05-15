@@ -26,12 +26,22 @@ class PermissionsRepository {
     required String employeeId,
     required Set<String> codes,
   }) async {
-    // Nos aseguramos que existan los permisos
+    // Asegurar que existan los códigos en el catálogo. Si la policy de
+    // INSERT no permite (RLS) o el usuario no es admin, el upsert falla
+    // silenciosamente — capturamos la excepción para que NO bloquee el
+    // guardado de overrides (el SELECT de abajo nos dirá qué falta).
     if (codes.isNotEmpty) {
       final toUpsert = codes
           .map((c) => {'code': c, 'name': c, 'module': c.split('.').first})
           .toList();
-      await _client.from('permissions').upsert(toUpsert, onConflict: 'code');
+      try {
+        await _client.from('permissions').upsert(toUpsert, onConflict: 'code');
+      } catch (e) {
+        // Solo log; no abortamos el flujo. Si los códigos ya existían
+        // (caso normal post-backfill), no hace falta el upsert.
+        // ignore: avoid_print
+        print('[permissions] upsert advertencia: $e');
+      }
     }
 
     // Limpiar overrides previos del usuario para este negocio
@@ -48,6 +58,26 @@ class PermissionsRepository {
         .from('permissions')
         .select('id, code')
         .inFilter('code', codes.toList());
+
+    final foundCodes = (perms as List)
+        .map((p) => (p as Map<String, dynamic>)['code']?.toString())
+        .whereType<String>()
+        .toSet();
+
+    // Si algún código del catálogo Dart no existe en la tabla `permissions`
+    // de la DB, antes se descartaba silencioso → el override no se guardaba
+    // y el usuario percibía "los permisos no se guardan". Ahora levantamos
+    // un error claro para que el caller muestre un snackbar útil y nadie
+    // pierda overrides sin saber por qué.
+    final missing = codes.difference(foundCodes);
+    if (missing.isNotEmpty) {
+      throw StateError(
+        'Códigos de permiso no encontrados en el catálogo de la BD: '
+        '${missing.join(", ")}. '
+        'Aplicá la migration 20260515_0002 o agregalos manualmente a la '
+        'tabla `public.permissions`.',
+      );
+    }
 
     final rows = (perms as List)
         .map(

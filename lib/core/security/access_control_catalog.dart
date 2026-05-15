@@ -751,6 +751,7 @@ final rolePresets = <String, RolePresetDefinition>{
       'caja.apertura',
       'caja.cierre',
       'caja.movimientos_ver',
+      'caja.movimientos_crear',
       'clientes.ver',
     },
   ),

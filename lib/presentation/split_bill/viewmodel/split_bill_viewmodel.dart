@@ -392,6 +392,14 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
     required String sourceCheckId,
     required String targetCheckId,
   }) async {
+    if (!_ref
+        .read(sessionProvider.notifier)
+        .hasPermission('ventas.mesas.mover_unir')) {
+      _setErrorWithAutoDismiss(
+        'No tienes permiso para unir o mover sub-cuentas.',
+      );
+      return;
+    }
     if (sourceCheckId == targetCheckId) return;
 
     final sourceCheck = state.checks.firstWhere(
@@ -528,6 +536,14 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
   /// Asignar items seleccionados a un check (LOCAL)
   /// Asignar items seleccionados a un check (LOCAL)
   Future<void> assignSelectedItemsToCheck(String checkId) async {
+    if (!_ref
+        .read(sessionProvider.notifier)
+        .hasPermission('ventas.cuenta.split_manual')) {
+      _setErrorWithAutoDismiss(
+        'No tienes permiso para dividir cuentas manualmente.',
+      );
+      return;
+    }
     if (state.selectedItemIds.isEmpty) return;
 
     // Actualizar items locales
@@ -701,6 +717,14 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
   ///   2. Si total de unidades abiertas < personas, bloquear (no se puede
   ///      repartir 2 productos entre 4 personas sin fraccionar).
   Future<void> applyEqualSplit() async {
+    if (!_ref
+        .read(sessionProvider.notifier)
+        .hasPermission('ventas.cuenta.split_equiv')) {
+      _setErrorWithAutoDismiss(
+        'No tienes permiso para dividir la cuenta en partes iguales.',
+      );
+      return;
+    }
     if (state.order == null) return;
     if (state.equalSplitPeople < 2) return;
 

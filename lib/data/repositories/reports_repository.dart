@@ -459,21 +459,12 @@ class ReportsRepository {
       bucket['quantity'] = _toDouble(bucket['quantity']) + qty;
       bucket['count'] = (bucket['count'] as int) + 1;
 
-      // Attribute the modifier amount to the parent item's category so the
-      // category breakdown reflects what was actually charged on each ticket.
-      final parentProductId = item['product_id']?.toString() ?? '';
-      final parentCategoryName =
-          categoryByProductId[parentProductId] ?? 'Sin categoría';
-      final catBucket = byCategory.putIfAbsent(
-        parentCategoryName,
-        () => {
-          'label': parentCategoryName,
-          'amount': 0.0,
-          'quantity': 0.0,
-          'count': 0,
-        },
-      );
-      catBucket['amount'] = _toDouble(catBucket['amount']) + amount;
+      // NO sumar el modifier al bucket de byCategory: el trigger
+      // fn_compute_item_totals ya incluye `sum(price*qty)` de modifiers en
+      // `oi.subtotal` (ver migration 20260412_0003). El loop principal de
+      // arriba ya acumuló subtotal+tax en catBucket['amount'], así que
+      // volver a sumar `price*qty` aquí duplicaba el valor de modificadores
+      // en la columna "Ventas" del breakdown por categoría.
     }
 
     final byMethod = <String, Map<String, dynamic>>{};
