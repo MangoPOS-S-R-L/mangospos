@@ -33,6 +33,10 @@ class BlindCashCloseDialog extends ConsumerStatefulWidget {
 class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
   bool _processingClose = false;
   bool _processingPrint = false;
+  // Una vez que el DB save tuvo éxito en `_onConfirmCount`, disparamos
+  // un auto-print al entrar al step `result`. Este flag evita reintentos en
+  // cada rebuild — el usuario reimprime con el botón "Reimprimir".
+  bool _autoPrintTried = false;
   double _zoomFactor = 1.0;
   late final FocusNode _dialogFocusNode = FocusNode();
 
@@ -101,11 +105,17 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
         !_processingClose &&
         !_processingPrint;
 
-    // 2026-05-13: removido el auto-print al entrar al step result.
-    // El cierre formal ya imprime una vez al confirmarse (ver
-    // `_closeSession` más abajo), y hay un botón manual "Imprimir"
-    // para reimprimir si el cajero lo necesita. El auto-print extra
-    // generaba un duplicado al cerrar el modal.
+    // Auto-print al entrar al step `result`. El DB save ya ocurrió en
+    // `_onConfirmCount`; aquí imprimimos automáticamente una sola vez y
+    // dejamos el botón "Reimprimir" disponible si el cajero lo necesita.
+    // El botón "Cerrar" del result step solo hace pop del modal — no
+    // imprime ni reescribe en BD.
+    if (state.step == BlindCashCloseStep.result && !_autoPrintTried) {
+      _autoPrintTried = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _printResult(state, silent: true);
+      });
+    }
 
     final mq = MediaQuery.of(context);
     return PopScope(
@@ -559,7 +569,8 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Valida que los montos sean correctos. Una vez confirmado no se vuelve a contar.',
+              'Valida que los montos sean correctos. Una vez confirmado se '
+              'cierra la caja y se imprime el ticket automáticamente.',
             ),
             const SizedBox(height: 12),
             Text('Efectivo contado: ${formatRD(state.totalCounted)}'),
@@ -589,7 +600,27 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
       ),
     );
 
-    if (confirm == true) vm.goToResult();
+    if (confirm != true) return;
+
+    // Cierre formal en BD ANTES de avanzar al result step. Si falla,
+    // mostramos error y nos quedamos en el step de conteo. La impresión
+    // automática se dispara cuando `build()` detecta que entramos a
+    // `result` con `_autoPrintTried == false`.
+    if (widget.onCloseConfirmed == null) {
+      vm.goToResult();
+      return;
+    }
+    setState(() => _processingClose = true);
+    try {
+      await widget.onCloseConfirmed!(state.result);
+      if (!mounted) return;
+      vm.goToResult();
+    } catch (e) {
+      if (!mounted) return;
+      await _showCloseErrorModal(state, e);
+    } finally {
+      if (mounted) setState(() => _processingClose = false);
+    }
   }
 
   Widget _buildResultStep(BuildContext context, BlindCashCloseState state) {
@@ -678,7 +709,7 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
                   onPressed: _processingPrint
                       ? null
                       : () => _printResult(state),
-                  label: const Text('Imprimir Cierre'),
+                  label: const Text('Reimprimir'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: MangoColors.primaryOrange,
                     side: const BorderSide(color: MangoColors.primaryOrange),
@@ -777,56 +808,12 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
     );
   }
 
-  Future<void> _closeSession(BlindCashCloseState state) async {
-    if (widget.onCloseConfirmed == null) {
-      Navigator.of(context).pop();
-      return;
-    }
-    setState(() => _processingClose = true);
-    try {
-      // 1. Guardar en BD primero
-      await widget.onCloseConfirmed!(state.result);
-      if (!mounted) return;
-      ref.read(blindCashCloseProvider(widget.input).notifier).reset();
-      Navigator.of(context).pop();
-
-      // 2. Imprimir después — si falla, la caja ya está cerrada
-      try {
-        final service = CashClosePrintService(Supabase.instance.client);
-        await service.printCloseTicket(
-          input: state.input,
-          result: state.result,
-          denominations: state.denominations,
-          printedAt: DateTime.now(),
-        );
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Caja cerrada e impresa correctamente'),
-              backgroundColor: MangoColors.successGreen,
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
-        }
-      } catch (_) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Caja cerrada. No se pudo imprimir el ticket.'),
-              backgroundColor: Colors.orange,
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      if (!mounted) return;
-      await _showCloseErrorModal(state, e);
-    } finally {
-      if (mounted) {
-        setState(() => _processingClose = false);
-      }
-    }
+  /// "Cerrar" del result step: simplemente descarta el modal. La BD y la
+  /// impresión ya ocurrieron en `_onConfirmCount` + auto-print, así que
+  /// este botón no debe disparar nada más para evitar duplicados.
+  void _closeSession(BlindCashCloseState state) {
+    ref.read(blindCashCloseProvider(widget.input).notifier).reset();
+    Navigator.of(context).pop();
   }
 
   /// Maneja key events del dialog con tres reglas, en orden:
