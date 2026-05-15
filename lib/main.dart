@@ -323,8 +323,22 @@ Future<void> _ensurePrinterAgentStarted() async {
   );
 }
 
-Future<void> _lockLandscapeIfMobile() async {
-  if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+Future<void> _lockOrientationByDevice() async {
+  if (kIsWeb || !(Platform.isAndroid || Platform.isIOS)) return;
+
+  // Determinamos teléfono vs tablet usando el lado más corto en dp.
+  // Teléfono (<600dp) → vertical forzado (UX administrativa).
+  // Tablet (≥600dp) → landscape forzado (UX de caja/POS).
+  final view = PlatformDispatcher.instance.views.first;
+  final shortestSideDp =
+      view.physicalSize.shortestSide / view.devicePixelRatio;
+
+  if (shortestSideDp < 600) {
+    await SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
+  } else {
     await SystemChrome.setPreferredOrientations(const [
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
@@ -535,7 +549,7 @@ Future<void> _bootstrapApp() async {
       }
     }
 
-    await _lockLandscapeIfMobile();
+    await _lockOrientationByDevice();
 
     // ── Montar la UI de inmediato para que la ventana aparezca ──
     _logStep('runApp() - mounting UI...');

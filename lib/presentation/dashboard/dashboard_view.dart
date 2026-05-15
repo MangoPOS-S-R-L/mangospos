@@ -216,16 +216,23 @@ class _WelcomeCard extends StatelessWidget {
         ),
         const SizedBox(height: 8),
 
-        // Welcome & Meta
+        // Welcome & Meta.
+        // En vertical (móvil) el Flex vive dentro de un SingleChildScrollView,
+        // por lo que un hijo flexed con altura no acotada rompe el layout.
+        // Usamos Flexible(loose) en vertical (hijo toma su tamaño intrínseco)
+        // y Expanded en horizontal (hijo ocupa el ancho restante).
         Flex(
           direction: isVertical ? Axis.vertical : Axis.horizontal,
+          mainAxisSize: isVertical ? MainAxisSize.min : MainAxisSize.max,
           crossAxisAlignment: isVertical
               ? CrossAxisAlignment.start
               : CrossAxisAlignment.center,
           children: [
-            Expanded(
+            Flexible(
+              fit: isVertical ? FlexFit.loose : FlexFit.tight,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   RichText(
                     text: TextSpan(
@@ -591,11 +598,14 @@ class _QuickActionsSection extends StatelessWidget {
           },
         ),
         const SizedBox(height: AppSpacing.sectionGap),
-        // Large Buttons Layout - Always 2 columns (matches responsive spec)
+        // Large Buttons Layout - en móvil (<600) stack vertical; en tablet/
+        // desktop dos columnas.
         LayoutBuilder(
           builder: (context, constraints) {
-            final itemWidth =
-                (constraints.maxWidth - AppSpacing.sectionGap) / 2;
+            final stacked = constraints.maxWidth < AppBreakpoints.mobile;
+            final itemWidth = stacked
+                ? constraints.maxWidth
+                : (constraints.maxWidth - AppSpacing.sectionGap) / 2;
             return Wrap(
               spacing: AppSpacing.sectionGap,
               runSpacing: AppSpacing.sectionGap,
@@ -733,6 +743,8 @@ class _QuickActionsSection extends StatelessWidget {
                     // Title - 18px semibold per spec
                     Text(
                       isPrimary ? 'Nueva Venta' : 'Delivery',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontWeight: FontWeight.w600, // semibold
                         fontSize: 18, // text-lg per spec
@@ -744,6 +756,8 @@ class _QuickActionsSection extends StatelessWidget {
                     // Subtitle - 14px per spec
                     Text(
                       subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 14, // text-sm per spec
                         color: subtitleColor,
@@ -1389,34 +1403,48 @@ class _ActiveTableRow extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 6),
-                    Row(
+                    // Wrap permite que personas/hora salten de línea cuando
+                    // el ancho no alcanza (móvil) en vez de overflow.
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        const Icon(
-                          Icons.people_outline,
-                          size: 14,
-                          color: AppColors.mutedForeground,
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.people_outline,
+                              size: 14,
+                              color: AppColors.mutedForeground,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              '$peopleCount personas',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                color: AppColors.mutedForeground,
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 6),
-                        Text(
-                          '$peopleCount personas',
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: AppColors.mutedForeground,
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        const Icon(
-                          Icons.access_time,
-                          size: 14,
-                          color: AppColors.mutedForeground,
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          timeStr,
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: AppColors.mutedForeground,
-                          ),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.access_time,
+                              size: 14,
+                              color: AppColors.mutedForeground,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              timeStr,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                color: AppColors.mutedForeground,
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),

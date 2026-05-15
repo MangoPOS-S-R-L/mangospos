@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/security/access_control_catalog.dart';
+import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/data/repositories/employee_repository.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
 import 'package:mangopos/services/session/session_controller.dart';
@@ -120,12 +121,14 @@ class _SettingsUsersViewState extends ConsumerState<SettingsUsersView> {
       return matchesSearch && matchesStatus && matchesRole;
     }).toList();
 
+    final isCompact = ResponsiveHelper.useCompactShell(context);
     return Scaffold(
       backgroundColor: const Color(0xFFFAF8F6),
       appBar: AppBar(
         backgroundColor: MangoColors.white,
         foregroundColor: MangoColors.darkGray,
         elevation: 0.4,
+        titleSpacing: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => context.go(AppRoutes.settings),
@@ -133,29 +136,52 @@ class _SettingsUsersViewState extends ConsumerState<SettingsUsersView> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Gestión de Usuarios',
-              style: TextStyle(fontWeight: FontWeight.w800),
-            ),
             Text(
-              'Administra los usuarios del sistema y sus permisos',
-              style: TextStyle(color: Colors.grey[600], fontSize: 12),
+              'Gestión de Usuarios',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontWeight: FontWeight.w800,
+                fontSize: isCompact ? 15 : 18,
+              ),
             ),
+            if (!isCompact)
+              Text(
+                'Administra los usuarios del sistema y sus permisos',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: Colors.grey[600], fontSize: 12),
+              ),
           ],
         ),
         actions: [
-          ElevatedButton.icon(
-            onPressed: () => _openUserDialog(context),
-            icon: const Icon(Icons.add),
-            label: const Text('Nuevo Usuario'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFFF7F1F),
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
+          if (isCompact)
+            IconButton(
+              tooltip: 'Nuevo usuario',
+              onPressed: () => _openUserDialog(context),
+              icon: Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFF7F1F),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(Icons.add, color: Colors.white, size: 20),
+              ),
+            )
+          else
+            ElevatedButton.icon(
+              onPressed: () => _openUserDialog(context),
+              icon: const Icon(Icons.add),
+              label: const Text('Nuevo Usuario'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFFF7F1F),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
               ),
             ),
-          ),
           const SizedBox(width: 12),
         ],
       ),
@@ -184,10 +210,15 @@ class _SettingsUsersViewState extends ConsumerState<SettingsUsersView> {
           : RefreshIndicator(
               onRefresh: _load,
               child: ListView(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+                padding: EdgeInsets.fromLTRB(
+                  isCompact ? 12 : 16,
+                  isCompact ? 12 : 16,
+                  isCompact ? 12 : 16,
+                  24,
+                ),
                 children: [
-                  _KpiRow(users: _employees),
-                  const SizedBox(height: 18),
+                  _KpiRow(users: _employees, isCompact: isCompact),
+                  SizedBox(height: isCompact ? 14 : 18),
                   _FiltersBar(
                     searchController: _search,
                     onSearch: () => setState(() {}),
@@ -198,39 +229,65 @@ class _SettingsUsersViewState extends ConsumerState<SettingsUsersView> {
                     onRoleChange: (v) => setState(() => _filterRole = v),
                   ),
                   const SizedBox(height: 14),
-                  Card(
-                    color: Colors.white,
-                    elevation: 0.6,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                      side: BorderSide(color: Colors.grey.shade200),
-                    ),
-                    child: Column(
-                      children: [
-                        _TableHeader(text),
-                        const Divider(height: 1),
-                        if (filtered.isEmpty)
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 24),
-                            child: Text(
-                              'No hay usuarios para los filtros actuales.',
-                              style: text.bodyMedium?.copyWith(
-                                color: Colors.grey[700],
-                              ),
-                            ),
-                          )
-                        else
-                          ...filtered.map(
-                            (u) => _UserRow(
-                              user: u,
-                              onEdit: () => _openUserDialog(context, user: u),
-                              onDelete: () => _deleteUser(u),
-                              repo: _repo,
+                  if (isCompact)
+                    if (filtered.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 24),
+                        child: Center(
+                          child: Text(
+                            'No hay usuarios para los filtros actuales.',
+                            style: text.bodyMedium?.copyWith(
+                              color: Colors.grey[700],
                             ),
                           ),
-                      ],
+                        ),
+                      )
+                    else
+                      ...filtered.map(
+                        (u) => Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: _UserCardMobile(
+                            user: u,
+                            onEdit: () => _openUserDialog(context, user: u),
+                            onDelete: () => _deleteUser(u),
+                          ),
+                        ),
+                      )
+                  else
+                    Card(
+                      color: Colors.white,
+                      elevation: 0.6,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        side: BorderSide(color: Colors.grey.shade200),
+                      ),
+                      child: Column(
+                        children: [
+                          _TableHeader(text),
+                          const Divider(height: 1),
+                          if (filtered.isEmpty)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 24),
+                              child: Text(
+                                'No hay usuarios para los filtros actuales.',
+                                style: text.bodyMedium?.copyWith(
+                                  color: Colors.grey[700],
+                                ),
+                              ),
+                            )
+                          else
+                            ...filtered.map(
+                              (u) => _UserRow(
+                                user: u,
+                                onEdit: () =>
+                                    _openUserDialog(context, user: u),
+                                onDelete: () => _deleteUser(u),
+                                repo: _repo,
+                              ),
+                            ),
+                        ],
+                      ),
                     ),
-                  ),
                 ],
               ),
             ),
@@ -289,8 +346,9 @@ class _SettingsUsersViewState extends ConsumerState<SettingsUsersView> {
 }
 
 class _KpiRow extends StatelessWidget {
-  const _KpiRow({required this.users});
+  const _KpiRow({required this.users, this.isCompact = false});
   final List<Employee> users;
+  final bool isCompact;
 
   @override
   Widget build(BuildContext context) {
@@ -298,40 +356,55 @@ class _KpiRow extends StatelessWidget {
     final active = users.where((u) => u.status == 'active').length;
     final inactive = users.where((u) => u.status == 'inactive').length;
     final reset = users.where((u) => u.status == 'password_reset').length;
+    final cards = [
+      _KpiCard(
+        title: 'Total Usuarios',
+        value: '$total',
+        icon: Icons.groups,
+        compact: isCompact,
+      ),
+      _KpiCard(
+        title: 'Activos',
+        value: '$active',
+        icon: Icons.verified_user,
+        accent: const Color(0xFF22C55E),
+        compact: isCompact,
+      ),
+      _KpiCard(
+        title: 'Inactivos',
+        value: '$inactive',
+        icon: Icons.person_off,
+        compact: isCompact,
+      ),
+      _KpiCard(
+        title: 'Cambio de Clave',
+        value: '$reset',
+        icon: Icons.vpn_key,
+        compact: isCompact,
+      ),
+    ];
+    if (isCompact) {
+      // 2x2 grid en móvil
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          const spacing = 10.0;
+          final cardWidth = (constraints.maxWidth - spacing) / 2;
+          return Wrap(
+            spacing: spacing,
+            runSpacing: spacing,
+            children: [
+              for (final c in cards) SizedBox(width: cardWidth, child: c),
+            ],
+          );
+        },
+      );
+    }
     return Row(
       children: [
-        Expanded(
-          child: _KpiCard(
-            title: 'Total Usuarios',
-            value: '$total',
-            icon: Icons.groups,
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _KpiCard(
-            title: 'Activos',
-            value: '$active',
-            icon: Icons.verified_user,
-            accent: const Color(0xFF22C55E),
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _KpiCard(
-            title: 'Inactivos',
-            value: '$inactive',
-            icon: Icons.person_off,
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _KpiCard(
-            title: 'Cambio de Clave',
-            value: '$reset',
-            icon: Icons.vpn_key,
-          ),
-        ),
+        for (var i = 0; i < cards.length; i++) ...[
+          if (i > 0) const SizedBox(width: 10),
+          Expanded(child: cards[i]),
+        ],
       ],
     );
   }
@@ -343,11 +416,13 @@ class _KpiCard extends StatelessWidget {
     required this.value,
     required this.icon,
     this.accent,
+    this.compact = false,
   });
   final String title;
   final String value;
   final IconData icon;
   final Color? accent;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -360,31 +435,45 @@ class _KpiCard extends StatelessWidget {
         side: BorderSide(color: Colors.grey.shade200),
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? 10 : 16,
+          vertical: compact ? 10 : 12,
+        ),
         child: Row(
           children: [
             CircleAvatar(
+              radius: compact ? 16 : 20,
               backgroundColor: color.withValues(alpha: 0.12),
               foregroundColor: color,
-              child: Icon(icon),
+              child: Icon(icon, size: compact ? 16 : 22),
             ),
-            const SizedBox(width: 12),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(fontSize: 13, color: Colors.grey),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  value,
-                  style: const TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w800,
+            SizedBox(width: compact ? 8 : 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: compact ? 11 : 13,
+                      color: Colors.grey,
+                    ),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 2),
+                  Text(
+                    value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: compact ? 18 : 22,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -866,6 +955,277 @@ class _UserRow extends StatelessWidget {
             child: const Text('Eliminar'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// Vista compacta de usuario para móvil: card apilada en vez de fila tabla.
+// Reutiliza `_Pill`, `_StatusPill` y los dialogs definidos en `_UserRow` no
+// son accesibles desde fuera, así que para móvil solo dejamos editar +
+// eliminar + permisos en el menú (el flujo más común). Resetear contraseña
+// y desactivar quedan accesibles abriendo el usuario y editándolo.
+class _UserCardMobile extends StatelessWidget {
+  const _UserCardMobile({
+    required this.user,
+    required this.onEdit,
+    required this.onDelete,
+  });
+  final Employee user;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  String _formatMoney(double? value) {
+    if (value == null) return 'RD\$0';
+    return 'RD\$${value.toStringAsFixed(0)}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: Colors.white,
+      elevation: 0.4,
+      margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: Colors.grey.shade200),
+      ),
+      child: InkWell(
+        onTap: onEdit,
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 6, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  CircleAvatar(
+                    radius: 20,
+                    backgroundColor: const Color(0xFFFFF2E8),
+                    foregroundColor: const Color(0xFFFF7F1F),
+                    child: Text(user.initials,
+                        style: const TextStyle(fontWeight: FontWeight.w700)),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          user.fullName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14,
+                          ),
+                        ),
+                        Text(
+                          user.email,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  PopupMenuButton<String>(
+                    icon: const Icon(Icons.more_horiz, color: Colors.grey),
+                    onSelected: (value) {
+                      switch (value) {
+                        case 'edit':
+                          onEdit();
+                          break;
+                        case 'view_permissions':
+                          if (user.userId != null) {
+                            context.push(
+                              '${AppRoutes.settingsRoles}/${user.userId}/${user.id}',
+                            );
+                          } else {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Este empleado no tiene un usuario de acceso vinculado.',
+                                ),
+                              ),
+                            );
+                          }
+                          break;
+                        case 'delete':
+                          showDialog<void>(
+                            context: context,
+                            builder: (ctx) => AlertDialog(
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              title: const Text('Eliminar Usuario'),
+                              content: Text(
+                                '¿Estás seguro de eliminar a ${user.fullName}? '
+                                'Esta acción no se puede deshacer.',
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(ctx),
+                                  child: const Text('Cancelar'),
+                                ),
+                                ElevatedButton(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.red[600],
+                                  ),
+                                  onPressed: () {
+                                    Navigator.pop(ctx);
+                                    onDelete();
+                                  },
+                                  child: const Text('Eliminar'),
+                                ),
+                              ],
+                            ),
+                          );
+                          break;
+                      }
+                    },
+                    itemBuilder: (_) => [
+                      PopupMenuItem<String>(
+                        value: 'edit',
+                        child: Row(
+                          children: [
+                            Icon(Icons.edit_outlined,
+                                size: 18, color: Colors.grey[700]),
+                            const SizedBox(width: 10),
+                            const Text('Editar usuario'),
+                          ],
+                        ),
+                      ),
+                      PopupMenuItem<String>(
+                        value: 'view_permissions',
+                        child: Row(
+                          children: [
+                            Icon(Icons.shield_outlined,
+                                size: 18, color: Colors.grey[700]),
+                            const SizedBox(width: 10),
+                            const Text('Editar permisos'),
+                          ],
+                        ),
+                      ),
+                      const PopupMenuDivider(),
+                      PopupMenuItem<String>(
+                        value: 'delete',
+                        child: Row(
+                          children: [
+                            Icon(Icons.delete_outline,
+                                size: 18, color: Colors.red[600]),
+                            const SizedBox(width: 10),
+                            Text(
+                              'Eliminar',
+                              style: TextStyle(color: Colors.red[600]),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  _Pill(
+                    label: user.roles.isNotEmpty
+                        ? user.roles.first
+                        : 'Sin rol',
+                  ),
+                  _StatusPill(status: user.status),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Departamento',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.grey[500],
+                            letterSpacing: 0.4,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          user.department ?? '-',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        if ((user.position ?? '').isNotEmpty)
+                          Text(
+                            user.position!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.grey[600],
+                              fontSize: 11,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Salario',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.grey[500],
+                            letterSpacing: 0.4,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _formatMoney(user.salaryBase),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        if ((user.payFrequency ?? '').isNotEmpty)
+                          Text(
+                            user.payFrequency!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.grey[600],
+                              fontSize: 11,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/breakpoints.dart';
+import 'package:mangopos/core/theme/app_breakpoints.dart' as mango_bp;
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_radius.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
@@ -505,6 +506,17 @@ class _ProductsTable extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Phone (<600dp) usa cards apiladas en vez de tabla horizontal —
+    // las 6 columnas no caben en portrait.
+    final isPhone = mango_bp.ResponsiveHelper.useCompactShell(context);
+    if (isPhone) {
+      return _ProductsCardList(
+        products: products,
+        viewModel: viewModel,
+        onEdit: onEdit,
+        onDelete: onDelete,
+      );
+    }
     return Container(
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
@@ -793,6 +805,349 @@ class _TableHeaderCell extends StatelessWidget {
         color: AppColors.mutedForeground,
       ),
       textAlign: textAlign,
+    );
+  }
+}
+
+// =============================================================================
+// Vista compacta de productos en móvil: cards apiladas en vez de tabla.
+// Reusa los mismos callbacks (onEdit/onDelete) y `viewModel` que la tabla
+// desktop. La acción de toggle disponible usa el mismo método del VM.
+// =============================================================================
+
+class _ProductsCardList extends StatelessWidget {
+  const _ProductsCardList({
+    required this.products,
+    required this.viewModel,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  final List<Map<String, dynamic>> products;
+  final ProductsViewModel viewModel;
+  final ValueChanged<Map<String, dynamic>> onEdit;
+  final ValueChanged<String> onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    if (products.isEmpty) {
+      return Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(AppRadius.lg),
+          border: Border.all(color: AppColors.border),
+        ),
+        padding: const EdgeInsets.all(AppSpacing.xxxl),
+        child: Center(
+          child: Column(
+            children: [
+              Icon(
+                Icons.inventory_2_outlined,
+                size: 48,
+                color: AppColors.mutedForeground.withValues(alpha: 0.5),
+              ),
+              const SizedBox(height: AppSpacing.md),
+              Text(
+                'No hay productos para los filtros actuales',
+                style: TextStyle(
+                  color: AppColors.mutedForeground,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    return ListView.separated(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: products.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 10),
+      itemBuilder: (context, index) {
+        final product = products[index];
+        return _ProductCardMobile(
+          product: product,
+          viewModel: viewModel,
+          onEdit: () => onEdit(product),
+          onDelete: () => onDelete(product['id'].toString()),
+        );
+      },
+    );
+  }
+}
+
+class _ProductCardMobile extends StatelessWidget {
+  const _ProductCardMobile({
+    required this.product,
+    required this.viewModel,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  final Map<String, dynamic> product;
+  final ProductsViewModel viewModel;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  static List<dynamic> _asList(dynamic value) =>
+      value is List ? value : const [];
+  static Map<String, dynamic> _asMap(dynamic value) {
+    if (value is Map<String, dynamic>) return value;
+    if (value is Map) return Map<String, dynamic>.from(value);
+    return const <String, dynamic>{};
+  }
+
+  static double _toDouble(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final categoryName =
+        _asMap(product['categories'])['name']?.toString() ?? '-';
+    final links = _asList(product['menu_item_links']);
+    final menuNames = links
+        .map(_asMap)
+        .map((link) => _asMap(link['menus'])['name']?.toString())
+        .whereType<String>()
+        .where((name) => name.trim().isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    final menuName = menuNames.isEmpty ? '-' : menuNames.join(', ');
+    final isActive = product['is_active'] == true;
+    final inclusive = product['tax_mode']?.toString() == 'inclusive';
+    final taxLabel = inclusive ? 'Imp. Incluido' : 'Imp. Excluido';
+    final taxColor = inclusive ? AppColors.info : AppColors.primary;
+    final imageUrl = product['image_url']?.toString();
+    final productName = product['name']?.toString() ?? 'Sin nombre';
+
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(AppRadius.lg),
+      child: InkWell(
+        onTap: onEdit,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(AppRadius.lg),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 52,
+                    height: 52,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(AppRadius.button),
+                      color: AppColors.muted,
+                      image: imageUrl != null && imageUrl.isNotEmpty
+                          ? DecorationImage(
+                              image: CachedNetworkImageProvider(
+                                imageUrl.replaceAll(
+                                  'sqdwjjewdqzxglvqerqt.supabase.co',
+                                  'supabase.mangopos.do',
+                                ),
+                              ),
+                              fit: BoxFit.cover,
+                              onError: (_, _) {},
+                            )
+                          : null,
+                    ),
+                    child: imageUrl == null || imageUrl.isEmpty
+                        ? Icon(
+                            Icons.image,
+                            size: 22,
+                            color: AppColors.mutedForeground,
+                          )
+                        : null,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          productName,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14,
+                            color: AppColors.foreground,
+                            height: 1.2,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Text(
+                              '\$${_toDouble(product['price']).toStringAsFixed(2)}',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.foreground,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: taxColor.withValues(alpha: 0.10),
+                                borderRadius: BorderRadius.circular(
+                                  AppRadius.badge,
+                                ),
+                              ),
+                              child: Text(
+                                taxLabel,
+                                style: TextStyle(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 0.3,
+                                  color: taxColor,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Toggle disponible + acciones
+                  InkWell(
+                    onTap: () => viewModel.toggleAvailability(
+                      product['id'].toString(),
+                      isActive,
+                    ),
+                    borderRadius: BorderRadius.circular(AppRadius.sm),
+                    child: Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        color: isActive
+                            ? AppColors.success
+                            : AppColors.muted,
+                        borderRadius: BorderRadius.circular(AppRadius.sm),
+                        border: Border.all(
+                          color: isActive
+                              ? AppColors.success
+                              : AppColors.border,
+                        ),
+                      ),
+                      child: Icon(
+                        Icons.check,
+                        size: 16,
+                        color: isActive
+                            ? Colors.white
+                            : AppColors.mutedForeground,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: _MobileMetaCol(
+                      label: 'Categoría',
+                      value: categoryName,
+                    ),
+                  ),
+                  Expanded(
+                    child: _MobileMetaCol(
+                      label: 'Menú',
+                      value: menuName,
+                    ),
+                  ),
+                  PopupMenuButton<String>(
+                    icon: Icon(
+                      Icons.more_horiz,
+                      color: AppColors.mutedForeground,
+                    ),
+                    tooltip: 'Acciones',
+                    onSelected: (v) {
+                      if (v == 'edit') onEdit();
+                      if (v == 'delete') onDelete();
+                    },
+                    itemBuilder: (_) => [
+                      PopupMenuItem<String>(
+                        value: 'edit',
+                        child: Row(
+                          children: [
+                            Icon(Icons.edit, size: 18,
+                                color: AppColors.mutedForeground),
+                            const SizedBox(width: 10),
+                            const Text('Editar producto'),
+                          ],
+                        ),
+                      ),
+                      PopupMenuItem<String>(
+                        value: 'delete',
+                        child: Row(
+                          children: [
+                            Icon(Icons.delete_outline,
+                                size: 18, color: AppColors.destructive),
+                            const SizedBox(width: 10),
+                            Text(
+                              'Eliminar',
+                              style: TextStyle(color: AppColors.destructive),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MobileMetaCol extends StatelessWidget {
+  const _MobileMetaCol({required this.label, required this.value});
+  final String label;
+  final String value;
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label.toUpperCase(),
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.4,
+            color: AppColors.mutedForeground,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: AppColors.foreground,
+          ),
+        ),
+      ],
     );
   }
 }

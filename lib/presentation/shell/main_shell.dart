@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http; // ✅ check internet
 import 'package:google_fonts/google_fonts.dart';
 
 import 'package:mangopos/core/services/fullscreen/fullscreen_service.dart';
+import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/utils/responsive_utils.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 
@@ -14,6 +15,8 @@ import '../../app/theme/mango_colors.dart';
 import '../../app/router/routes.dart';
 import '../inventory/viewmodel/expiring_lots_badge_provider.dart';
 import '../inventory/viewmodel/low_stock_badge_provider.dart';
+import 'mobile_shell.dart';
+import 'shell_destinations.dart';
 
 class MainShell extends ConsumerWidget {
   final Widget child;
@@ -21,6 +24,12 @@ class MainShell extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // En anchos compactos (<600dp) usamos el shell móvil con bottom nav +
+    // drawer. El topbar horizontal solo tiene sentido en tablet/desktop.
+    if (ResponsiveHelper.useCompactShell(context)) {
+      return MobileShell(child: child);
+    }
+
     const topBarHeight = 64.0;
     const horizontalPadding = 16.0;
     const navGap = 16.0;
@@ -62,63 +71,18 @@ class MainShell extends ConsumerWidget {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                            const _TopNavItem(
-                              label: 'Dashboard',
-                              route: AppRoutes.dashboard,
-                              asset: 'assets/icons/dashboard.svg',
-                              permissionCode: 'dashboard.acceso',
-                            ),
-                            const SizedBox(width: navGap),
-                            const _TopNavItem(
-                              label: 'Ventas',
-                              route: AppRoutes.sales,
-                              asset: 'assets/icons/ventas_principal.svg',
-                              permissionCode: 'ventas.mesas.acceso',
-                            ),
-                            const SizedBox(width: navGap),
-                            const _TopNavItem(
-                              label: 'Caja',
-                              route: AppRoutes.cashier,
-                              asset: 'assets/icons/caja_principal.svg',
-                              permissionCode: 'caja.apertura',
-                            ),
-                            const SizedBox(width: navGap),
-                            const _TopNavItem(
-                              label: 'Cocina',
-                              route: AppRoutes.kitchen,
-                              asset: 'assets/icons/cocina_principal.svg',
-                              permissionCode: 'kds.acceso',
-                            ),
-                            const SizedBox(width: navGap),
-
-                            const _TopNavItem(
-                              label: 'Productos',
-                              route: AppRoutes.products,
-                              asset: 'assets/icons/productos_principal.svg',
-                              permissionCode: 'productos.acceso',
-                            ),
-                            const SizedBox(width: navGap),
-                            const _TopNavItem(
-                              label: 'Reportes',
-                              route: AppRoutes.reports,
-                              asset: 'assets/icons/reportes_principal.svg',
-                              permissionCode: 'reportes.ventas',
-                            ),
-                            const SizedBox(width: navGap),
-                            const _TopNavItem(
-                              label: 'Más Opciones',
-                              route: AppRoutes.settings,
-                              asset: 'assets/icons/masajustes.svg',
-                              permissionCode: 'settings.usuarios.acceso',
-                              inactivePaths: [
-                                AppRoutes.purchasesList,
-                                AppRoutes.inventoryHome,
-                              ],
+                          for (var i = 0;
+                              i < kPrimaryDestinations.length;
+                              i++) ...[
+                            if (i > 0) const SizedBox(width: navGap),
+                            _TopNavItem(
+                              destination: kPrimaryDestinations[i],
                             ),
                           ],
-                        ),
+                        ],
                       ),
                     ),
+                  ),
 
                   // Sección derecha (Acciones)
                   Row(
@@ -162,23 +126,8 @@ class MainShell extends ConsumerWidget {
 
 // ===== ITEM DEL MENÚ (PILL SHAPE) =====
 class _TopNavItem extends ConsumerStatefulWidget {
-  final String label;
-  final String route;
-  final String? asset;
-  final IconData? materialIcon;
-  final String? permissionCode;
-  final List<String>? inactivePaths;
-  const _TopNavItem({
-    required this.label,
-    required this.route,
-    this.asset,
-    this.materialIcon,
-    this.permissionCode,
-    this.inactivePaths,
-  }) : assert(
-          asset != null || materialIcon != null,
-          'Debe proporcionarse asset o materialIcon',
-        );
+  final ShellDestination destination;
+  const _TopNavItem({required this.destination});
 
   @override
   ConsumerState<_TopNavItem> createState() => _TopNavItemState();
@@ -190,19 +139,13 @@ class _TopNavItemState extends ConsumerState<_TopNavItem> {
   @override
   Widget build(BuildContext context) {
     ref.watch(sessionProvider);
-    final hasAccess =
-        widget.permissionCode == null ||
+    final d = widget.destination;
+    final hasAccess = d.permissionCode == null ||
         ref
             .read(sessionProvider.notifier)
-            .hasPermission(widget.permissionCode!);
+            .hasPermission(d.permissionCode!);
     final loc = GoRouterState.of(context).uri.toString();
-    final excluded =
-        widget.inactivePaths?.any((p) => loc.startsWith(p)) ?? false;
-    final active = !excluded &&
-        (loc == widget.route ||
-            (widget.route != '/' && loc.startsWith(widget.route)) ||
-            (widget.route == AppRoutes.settings &&
-                loc.startsWith(AppRoutes.menu)));
+    final active = isDestinationActive(d, loc);
 
     final showLabel = MediaQuery.of(context).size.width >= 768;
     final iconColor = hasAccess
@@ -220,7 +163,7 @@ class _TopNavItemState extends ConsumerState<_TopNavItem> {
           : SystemMouseCursors.forbidden,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: hasAccess ? () => context.go(widget.route) : null,
+        onTap: hasAccess ? () => context.go(d.route) : null,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           decoration: BoxDecoration(
@@ -236,19 +179,19 @@ class _TopNavItemState extends ConsumerState<_TopNavItem> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (widget.asset != null)
+              if (d.svgAsset != null)
                 SvgPicture.asset(
-                  widget.asset!,
+                  d.svgAsset!,
                   width: 22,
                   height: 22,
                   colorFilter: ColorFilter.mode(iconColor, BlendMode.srcIn),
                 )
               else
-                Icon(widget.materialIcon, size: 22, color: iconColor),
+                Icon(d.materialIcon, size: 22, color: iconColor),
               if (showLabel) ...[
                 const SizedBox(width: 8),
                 Text(
-                  widget.label,
+                  d.label,
                   style: GoogleFonts.plusJakartaSans(
                     fontSize: 15,
                     fontWeight: active && hasAccess

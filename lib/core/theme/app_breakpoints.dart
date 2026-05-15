@@ -6,8 +6,9 @@ class AppBreakpoints {
   // BREAKPOINT VALUES
   // ============================================================================
 
-  /// Mobile breakpoint - 640dp (sm)
-  static const double mobile = 640;
+  /// Mobile breakpoint - 600dp (Material 3 "compact").
+  /// Por debajo de este ancho activamos el shell móvil (bottom nav + drawer).
+  static const double mobile = 600;
 
   /// Tablet breakpoint - 1024dp (lg - contentWideBreakpoint)
   static const double tablet = 1024;
@@ -72,5 +73,11 @@ class ResponsiveHelper {
   /// Check if should use wide layout (horizontal)
   static bool useWideLayout(BuildContext context) {
     return MediaQuery.of(context).size.width >= AppBreakpoints.tablet;
+  }
+
+  /// Indica si el shell debe usar el layout móvil compacto
+  /// (bottom nav + drawer) en lugar del topbar horizontal.
+  static bool useCompactShell(BuildContext context) {
+    return MediaQuery.of(context).size.width < AppBreakpoints.mobile;
   }
 }

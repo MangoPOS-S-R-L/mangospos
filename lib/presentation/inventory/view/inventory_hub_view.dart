@@ -17,6 +17,7 @@ import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../app/router/routes.dart';
+import '../../../core/theme/app_breakpoints.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_shadows.dart';
@@ -109,10 +110,14 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
 
   @override
   Widget build(BuildContext context) {
+    final isCompact = ResponsiveHelper.useCompactShell(context);
+    final pagePadding = isCompact
+        ? const EdgeInsets.fromLTRB(16, 16, 16, 24)
+        : const EdgeInsets.all(24);
     return Scaffold(
       backgroundColor: Colors.white,
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
+        padding: pagePadding,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -123,9 +128,7 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
             const SizedBox(height: 24),
             const _SectionTitle('Maestros'),
             const SizedBox(height: 12),
-            Wrap(
-              spacing: 16,
-              runSpacing: 16,
+            _HubGrid(
               children: [
                 _HubCard(
                   icon: Icons.inventory_2_outlined,
@@ -153,9 +156,7 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
             const SizedBox(height: 24),
             const _SectionTitle('Operaciones'),
             const SizedBox(height: 12),
-            Wrap(
-              spacing: 16,
-              runSpacing: 16,
+            _HubGrid(
               children: [
                 _HubCard(
                   icon: Icons.move_to_inbox_outlined,
@@ -260,47 +261,58 @@ class _Header extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isCompact = ResponsiveHelper.useCompactShell(context);
+    final titleBlock = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Inventario',
+          style: TextStyle(
+            fontSize: isCompact ? 22 : 28,
+            fontWeight: FontWeight.w800,
+            color: AppColors.foreground,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Maestros, recepciones, transferencias y reportes de stock',
+          style: TextStyle(
+            fontSize: isCompact ? 12 : 14,
+            color: AppColors.mutedForeground,
+          ),
+        ),
+      ],
+    );
+    final button = FilledButton.icon(
+      onPressed: bootstrapping ? null : onBootstrap,
+      icon: bootstrapping
+          ? const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: Colors.white),
+            )
+          : const Icon(Icons.auto_fix_high_outlined),
+      label: Text(bootstrapping
+          ? 'Inicializando...'
+          : 'Inicializar desde menú'),
+    );
+    if (isCompact) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          titleBlock,
+          const SizedBox(height: 12),
+          button,
+        ],
+      );
+    }
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Inventario',
-                style: TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.foreground,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'Maestros, recepciones, transferencias y reportes de stock',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: AppColors.mutedForeground,
-                ),
-              ),
-            ],
-          ),
-        ),
-        FilledButton.icon(
-          onPressed: bootstrapping ? null : onBootstrap,
-          icon: bootstrapping
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: Colors.white),
-                )
-              : const Icon(Icons.auto_fix_high_outlined),
-          label: Text(bootstrapping
-              ? 'Inicializando...'
-              : 'Inicializar desde menú'),
-        ),
+        Expanded(child: titleBlock),
+        button,
       ],
     );
   }
@@ -323,6 +335,40 @@ class _SectionTitle extends StatelessWidget {
   }
 }
 
+class _HubGrid extends StatelessWidget {
+  final List<Widget> children;
+  const _HubGrid({required this.children});
+
+  @override
+  Widget build(BuildContext context) {
+    const spacing = 16.0;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final maxW = constraints.maxWidth;
+        final int cols;
+        if (maxW < 600) {
+          cols = 1;
+        } else if (maxW < 900) {
+          cols = 2;
+        } else if (maxW < 1280) {
+          cols = 3;
+        } else {
+          cols = 4;
+        }
+        final cardWidth = (maxW - (cols - 1) * spacing) / cols;
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          children: [
+            for (final c in children)
+              SizedBox(width: cardWidth, child: c),
+          ],
+        );
+      },
+    );
+  }
+}
+
 class _HubCard extends StatelessWidget {
   final IconData icon;
   final String title;
@@ -340,22 +386,20 @@ class _HubCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 280,
-      child: Material(
-        color: AppColors.card,
+    return Material(
+      color: AppColors.card,
+      borderRadius: BorderRadius.circular(AppRadius.lg),
+      child: InkWell(
         borderRadius: BorderRadius.circular(AppRadius.lg),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(AppRadius.lg),
-          onTap: available
-              ? () => context.go(route)
-              : () => ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Disponible en una próxima fase.'),
-                      duration: Duration(seconds: 2),
-                    ),
+        onTap: available
+            ? () => context.go(route)
+            : () => ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Disponible en una próxima fase.'),
+                    duration: Duration(seconds: 2),
                   ),
-          child: Container(
+                ),
+        child: Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(AppRadius.lg),
@@ -417,7 +461,6 @@ class _HubCard extends StatelessWidget {
             ),
           ),
         ),
-      ),
-    );
+      );
   }
 }

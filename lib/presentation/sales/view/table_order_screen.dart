@@ -807,20 +807,49 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
             );
 
             if (isMobile) {
+              // Layout móvil portrait: catálogo a pantalla completa, ticket
+              // en bottom sheet draggable accesible desde la barra inferior.
+              // El _CartView (que tiene los botones Pagar/Pre-Cuenta/Dividir)
+              // se monta dentro del sheet sin duplicar lógica.
               return Column(
                 children: [
-                  // Mobile: cart primero (40%), luego catálogo (60%)
-                  Expanded(
-                    flex: 4,
-                    child: _CartView(
-                      origin: widget.origin,
-                      tableCode: widget.tableCode ?? 'Venta Local',
-                      isStacked: true,
-                      onAssignClient: () => _handleAssignClient(context),
+                  _MobileSalesHeader(
+                    title: widget.tableCode?.isNotEmpty == true
+                        ? widget.tableCode!
+                        : 'Venta libre',
+                    showTableActions: widget.origin == OrderOrigin.table,
+                    onBack: () => _handleBack(context),
+                    onTransferSession: () => _handleTransferSession(context),
+                    onReleaseTable: () => _handleReleaseTable(context),
+                    onVoidOrder: () => _handleVoidCurrentOrder(
+                      context,
+                      title: 'Anular orden',
+                      content:
+                          'Esta acción anulará la orden actual. Si la mesa no tiene más órdenes activas, también quedará liberada. ¿Deseas continuar?',
+                      confirmLabel: 'Anular',
                     ),
+                    onApplyDiscount: () => _handleApplyDiscount(context),
+                    onApplyCourtesy: () => _handleCourtesyByProduct(context),
                   ),
                   Container(height: 1, color: _salesDivider),
-                  Expanded(flex: 6, child: catalog),
+                  Expanded(
+                    child: Stack(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 72),
+                          child: catalog,
+                        ),
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          child: _MobileCartBar(
+                            onOpenCart: () => _openMobileCartSheet(context),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
               );
             }
@@ -860,6 +889,363 @@ class _VoidOrderDialogResult {
   final String reason;
 
   const _VoidOrderDialogResult({required this.reason});
+}
+
+// =============================================================================
+// Mobile shell: header compacto + bottom bar persistente + sheet del cart.
+// Solo se usa cuando el ancho es <600dp. El layout desktop no se toca.
+// =============================================================================
+
+extension _MobileSalesShell on _OrderScreenState {
+  Future<void> _openMobileCartSheet(BuildContext context) {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.white,
+      barrierColor: Colors.black54,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetCtx) {
+        return FractionallySizedBox(
+          heightFactor: 0.92,
+          child: Column(
+            children: [
+              // Drag handle
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.symmetric(vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE5E7EB),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              Expanded(
+                child: _CartView(
+                  origin: widget.origin,
+                  tableCode: widget.tableCode ?? 'Venta libre',
+                  isStacked: true,
+                  onAssignClient: () => _handleAssignClient(context),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _MobileSalesHeader extends StatelessWidget {
+  final String title;
+  final bool showTableActions;
+  final VoidCallback onBack;
+  final VoidCallback onTransferSession;
+  final VoidCallback onReleaseTable;
+  final VoidCallback onVoidOrder;
+  final VoidCallback onApplyDiscount;
+  final VoidCallback onApplyCourtesy;
+
+  const _MobileSalesHeader({
+    required this.title,
+    required this.showTableActions,
+    required this.onBack,
+    required this.onTransferSession,
+    required this.onReleaseTable,
+    required this.onVoidOrder,
+    required this.onApplyDiscount,
+    required this.onApplyCourtesy,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 56,
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      decoration: const BoxDecoration(color: _salesSurface),
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new_rounded),
+            color: _salesTextPrimary,
+            tooltip: 'Regresar',
+            onPressed: onBack,
+          ),
+          Expanded(
+            child: Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: _salesTextPrimary,
+              ),
+            ),
+          ),
+          if (showTableActions)
+            PopupMenuButton<_MobileSalesAction>(
+              icon: const Icon(Icons.more_vert_rounded,
+                  color: _salesTextPrimary),
+              tooltip: 'Más opciones',
+              onSelected: (action) {
+                switch (action) {
+                  case _MobileSalesAction.transferSession:
+                    onTransferSession();
+                    break;
+                  case _MobileSalesAction.releaseTable:
+                    onReleaseTable();
+                    break;
+                  case _MobileSalesAction.voidOrder:
+                    onVoidOrder();
+                    break;
+                  case _MobileSalesAction.applyDiscount:
+                    onApplyDiscount();
+                    break;
+                  case _MobileSalesAction.applyCourtesy:
+                    onApplyCourtesy();
+                    break;
+                }
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(
+                  value: _MobileSalesAction.transferSession,
+                  child: ListTile(
+                    leading: Icon(Icons.swap_horiz_rounded),
+                    title: Text('Transferir cuenta'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                PopupMenuItem(
+                  value: _MobileSalesAction.releaseTable,
+                  child: ListTile(
+                    leading: Icon(Icons.logout_rounded),
+                    title: Text('Liberar mesa'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                PopupMenuItem(
+                  value: _MobileSalesAction.voidOrder,
+                  child: ListTile(
+                    leading: Icon(Icons.block_rounded),
+                    title: Text('Anular orden'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                PopupMenuDivider(),
+                PopupMenuItem(
+                  value: _MobileSalesAction.applyDiscount,
+                  child: ListTile(
+                    leading: Icon(Icons.percent_rounded),
+                    title: Text('Aplicar descuento'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                PopupMenuItem(
+                  value: _MobileSalesAction.applyCourtesy,
+                  child: ListTile(
+                    leading: Icon(Icons.card_giftcard_rounded),
+                    title: Text('Cortesía producto'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+enum _MobileSalesAction {
+  transferSession,
+  releaseTable,
+  voidOrder,
+  applyDiscount,
+  applyCourtesy,
+}
+
+/// Barra inferior persistente en el layout móvil. Lee `currentOrderProvider`
+/// para mostrar items abiertos + total. Tap abre el bottom sheet con el
+/// `_CartView` completo (Pagar/Pre-Cuenta/Dividir viven adentro).
+class _MobileCartBar extends ConsumerWidget {
+  final VoidCallback onOpenCart;
+  const _MobileCartBar({required this.onOpenCart});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final orderState = ref.watch(currentOrderProvider);
+    final openItems = orderState.items
+        .where((i) => i.status != 'paid' && i.status != 'void')
+        .toList(growable: false);
+    final selectedCheckId = orderState.selectedCheckId;
+    final allChecks = orderState.checks;
+    final displayedItems = selectedCheckId != null
+        ? openItems
+            .where((i) => i.checkId == selectedCheckId)
+            .toList(growable: false)
+        : openItems.where((i) {
+            final checkIsClosed = allChecks.any(
+              (c) => c.id == i.checkId && c.isClosed,
+            );
+            return !checkIsClosed;
+          }).toList(growable: false);
+
+    final itemCount = displayedItems.length;
+    final pricingSummary = summarizeOrderPricing(
+      orderState.order,
+      displayedItems,
+      forcedOrigin: orderState.origin,
+    );
+    final total = pricingSummary.total;
+    final hasItems = itemCount > 0;
+    final currency = NumberFormat('#,##0.00', 'en_US');
+
+    return Material(
+      color: Colors.white,
+      elevation: 8,
+      child: SafeArea(
+        top: false,
+        child: InkWell(
+          onTap: onOpenCart,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            decoration: const BoxDecoration(
+              border: Border(top: BorderSide(color: _salesDivider)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: hasItems
+                        ? _salesPayButton.withValues(alpha: 0.12)
+                        : const Color(0xFFF1F5F9),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  alignment: Alignment.center,
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      Icon(
+                        Icons.receipt_long_rounded,
+                        color: hasItems
+                            ? _salesPayButton
+                            : const Color(0xFF6B7280),
+                        size: 22,
+                      ),
+                      if (hasItems)
+                        Positioned(
+                          top: -6,
+                          right: -8,
+                          child: Container(
+                            constraints: const BoxConstraints(
+                              minWidth: 18,
+                              minHeight: 18,
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 5,
+                              vertical: 1,
+                            ),
+                            decoration: BoxDecoration(
+                              color: _salesPayButton,
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(
+                                color: Colors.white,
+                                width: 1.5,
+                              ),
+                            ),
+                            alignment: Alignment.center,
+                            child: Text(
+                              itemCount > 99 ? '99+' : '$itemCount',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                                height: 1,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        hasItems
+                            ? '$itemCount item${itemCount == 1 ? '' : 's'} en el ticket'
+                            : 'Sin items',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: _salesTextSecondary,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        hasItems
+                            ? 'RD\$ ${currency.format(total)}'
+                            : 'Toca para ver el ticket',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          color: hasItems
+                              ? _salesTextPrimary
+                              : _salesTextSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: hasItems
+                        ? _salesPayButton
+                        : const Color(0xFFF1F5F9),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        hasItems ? 'Ver pedido' : 'Agregar',
+                        style: TextStyle(
+                          color: hasItems
+                              ? Colors.white
+                              : const Color(0xFF475569),
+                          fontWeight: FontWeight.w800,
+                          fontSize: 13,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Icon(
+                        Icons.keyboard_arrow_up_rounded,
+                        size: 18,
+                        color: hasItems
+                            ? Colors.white
+                            : const Color(0xFF475569),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _VoidOrderDialog extends StatefulWidget {

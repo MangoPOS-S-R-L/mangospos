@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
 import '../../../app/router/routes.dart';
+import '../../../core/theme/app_breakpoints.dart';
 import '../../../core/utils/logger.dart';
 import '../../../core/business/business_resolver.dart';
 import '../../../core/network/supabase_config.dart';
@@ -237,32 +238,36 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
 
   @override
   Widget build(BuildContext context) {
+    final isCompact = ResponsiveHelper.useCompactShell(context);
     return Scaffold(
       backgroundColor: const Color(0xFFFAFAFA),
       body: Center(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+          padding: isCompact
+              ? const EdgeInsets.symmetric(horizontal: 16, vertical: 20)
+              : const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Logo Oculto / Branding
+              // Logo / Branding — en móvil mostramos solo este (sin duplicar
+              // dentro del card) y más compacto.
               Center(
                 child: Image.asset(
                   'assets/images/Logo Completo.png',
-                  height: 75,
+                  height: isCompact ? 52 : 75,
                   fit: BoxFit.contain,
                 ),
               ).animate().fadeIn(duration: 400.ms).slideY(begin: 0.2),
 
-              const SizedBox(height: 24),
+              SizedBox(height: isCompact ? 16 : 24),
 
               // Header Animado
               Container(
                     constraints: const BoxConstraints(maxWidth: 520),
                     decoration: BoxDecoration(
                       color: Colors.white,
-                      borderRadius: BorderRadius.circular(24),
+                      borderRadius: BorderRadius.circular(isCompact ? 18 : 24),
                       boxShadow: const [
                         BoxShadow(
                           color: Color(0x0A000000),
@@ -274,7 +279,7 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
                     child: Column(
                       children: [
                         Container(
-                          padding: const EdgeInsets.all(24),
+                          padding: EdgeInsets.all(isCompact ? 16 : 24),
                           decoration: const BoxDecoration(
                             border: Border(
                               bottom: BorderSide(color: Color(0xFFF1F5F9)),
@@ -282,26 +287,28 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
                           ),
                           child: Row(
                             children: [
-                              Image.asset(
-                                'assets/images/Logo Completo.png',
-                                height: 30,
-                                fit: BoxFit.contain,
-                              ),
-                              const SizedBox(width: 12),
-                              const Text(
+                              if (!isCompact) ...[
+                                Image.asset(
+                                  'assets/images/Logo Completo.png',
+                                  height: 30,
+                                  fit: BoxFit.contain,
+                                ),
+                                const SizedBox(width: 12),
+                              ],
+                              Text(
                                 'Selecciona tu negocio',
                                 style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                  color: Color(0xFF0F172A),
+                                  fontSize: isCompact ? 15 : 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: const Color(0xFF0F172A),
                                 ),
                               ),
                             ],
                           ),
                         ),
                         Padding(
-                          padding: const EdgeInsets.all(32),
-                          child: _buildContent(),
+                          padding: EdgeInsets.all(isCompact ? 16 : 32),
+                          child: _buildContent(isCompact),
                         ),
                       ],
                     ),
@@ -316,7 +323,7 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
     );
   }
 
-  Widget _buildContent() {
+  Widget _buildContent(bool isCompact) {
     if (_isLoading) {
       return const _BusinessLoadingState().animate().fadeIn();
     }
@@ -421,6 +428,13 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
         final domain = biz['domain']?.toString() ?? '';
         final role = item['role']?.toString().toUpperCase() ?? 'OWNER';
 
+        final avatarSize = isCompact ? 40.0 : 48.0;
+        final itemPadding = isCompact
+            ? const EdgeInsets.all(14)
+            : const EdgeInsets.all(20);
+        final titleSize = isCompact ? 14.0 : 16.0;
+        final subtitleSize = isCompact ? 11.5 : 13.0;
+        final gapAfterAvatar = isCompact ? 12.0 : 16.0;
         return Padding(
           padding: const EdgeInsets.only(bottom: 12),
           child: Material(
@@ -432,7 +446,7 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 260),
                 curve: Curves.easeOutCubic,
-                padding: const EdgeInsets.all(20),
+                padding: itemPadding,
                 decoration: BoxDecoration(
                   border: Border.all(
                     color: isCurrentSelection
@@ -455,12 +469,13 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
                       : null,
                 ),
                 child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     AnimatedContainer(
                       duration: const Duration(milliseconds: 260),
                       curve: Curves.easeOutCubic,
-                      width: 48,
-                      height: 48,
+                      width: avatarSize,
+                      height: avatarSize,
                       decoration: BoxDecoration(
                         color: isCurrentSelection
                             ? const Color(0xFFF97316)
@@ -473,7 +488,7 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
                               ? businessName.substring(0, 1).toUpperCase()
                               : 'B',
                           style: TextStyle(
-                            fontSize: 18,
+                            fontSize: isCompact ? 16 : 18,
                             fontWeight: FontWeight.bold,
                             color: isCurrentSelection
                                 ? Colors.white
@@ -482,57 +497,105 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
                         ),
                       ),
                     ),
-                    const SizedBox(width: 16),
+                    SizedBox(width: gapAfterAvatar),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(
-                            branchName.isNotEmpty
-                                ? '$businessName - $branchName'
-                                : businessName,
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF0F172A),
-                            ),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  branchName.isNotEmpty
+                                      ? '$businessName - $branchName'
+                                      : businessName,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: titleSize,
+                                    fontWeight: FontWeight.w700,
+                                    height: 1.2,
+                                    color: const Color(0xFF0F172A),
+                                  ),
+                                ),
+                              ),
+                              if (!isCompact) ...[
+                                const SizedBox(width: 8),
+                                AnimatedContainer(
+                                  duration: const Duration(milliseconds: 260),
+                                  curve: Curves.easeOutCubic,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: isCurrentSelection
+                                        ? const Color(0xFFFED7AA)
+                                        : const Color(0xFFF1F5F9),
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: Text(
+                                    role,
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: isCurrentSelection
+                                          ? const Color(0xFF9A3412)
+                                          : const Color(0xFF475569),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
                           ),
                           const SizedBox(height: 4),
-                          Text(
-                            domain,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              color: Color(0xFF64748B),
-                            ),
+                          Row(
+                            children: [
+                              if (isCompact)
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 8),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                      vertical: 2,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: isCurrentSelection
+                                          ? const Color(0xFFFED7AA)
+                                          : const Color(0xFFF1F5F9),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      role,
+                                      style: TextStyle(
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: 0.4,
+                                        color: isCurrentSelection
+                                            ? const Color(0xFF9A3412)
+                                            : const Color(0xFF475569),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              Expanded(
+                                child: Text(
+                                  domain,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: subtitleSize,
+                                    color: const Color(0xFF64748B),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),
                     ),
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 260),
-                      curve: Curves.easeOutCubic,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isCurrentSelection
-                            ? const Color(0xFFFED7AA)
-                            : const Color(0xFFF1F5F9),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        role,
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: isCurrentSelection
-                              ? const Color(0xFF9A3412)
-                              : const Color(0xFF475569),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 8),
                     AnimatedSwitcher(
                       duration: const Duration(milliseconds: 220),
                       child: isCurrentSelection
