@@ -4,6 +4,37 @@ const dgram = require('dgram');
 const { config, logger } = require('../config');
 const { exec } = require('child_process');
 
+// Expande un CIDR IPv4 a las IPs escaneables (excluye network y broadcast
+// para prefijos < /31). Rechaza prefijos < /22 (mas de 1024 hosts) para
+// no saturar sockets ni el OS — los locales POS no necesitan rangos mas
+// grandes; si alguien declara un /16 probablemente es un error.
+const MIN_PREFIX = 22;
+function expandCidr(cidr) {
+    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\/(\d{1,2}))?$/.exec(String(cidr).trim());
+    if (!m) {
+        throw new Error('formato esperado a.b.c.d/prefix');
+    }
+    const octets = [m[1], m[2], m[3], m[4]].map((s) => Number(s));
+    if (octets.some((o) => o < 0 || o > 255)) {
+        throw new Error('octeto fuera de rango 0-255');
+    }
+    const prefix = m[5] !== undefined ? Number(m[5]) : 24;
+    if (prefix < MIN_PREFIX || prefix > 32) {
+        throw new Error(`prefijo /${prefix} fuera de rango [/${MIN_PREFIX}, /32]`);
+    }
+    const baseInt = ((octets[0] << 24) >>> 0) + (octets[1] << 16) + (octets[2] << 8) + octets[3];
+    const mask = prefix === 0 ? 0 : (0xFFFFFFFF << (32 - prefix)) >>> 0;
+    const netInt = (baseInt & mask) >>> 0;
+    const hostCount = 2 ** (32 - prefix);
+    const skipEdges = prefix < 31 ? 1 : 0; // saltar .0 y broadcast en rangos normales
+    const ips = [];
+    for (let i = skipEdges; i < hostCount - skipEdges; i++) {
+        const addr = (netInt + i) >>> 0;
+        ips.push(`${(addr >>> 24) & 0xff}.${(addr >>> 16) & 0xff}.${(addr >>> 8) & 0xff}.${addr & 0xff}`);
+    }
+    return ips;
+}
+
 class DiscoveryService {
     constructor() {
         this.discoveredDevices = [];
@@ -174,45 +205,57 @@ class DiscoveryService {
     }
 
     async scanNetwork() {
-        // Simple ping sweep logic for local subnet on port 9100
-        const interfaces = os.networkInterfaces();
-        const subnets = [];
+        // Recolectamos IPs candidatas desde dos fuentes:
+        //   1) /24 de cada NIC IPv4 no-interna del host (comportamiento legado).
+        //   2) subredes CIDR adicionales declaradas en config.yaml
+        //      (discovery.subnets). Util cuando el agent corre en una PC
+        //      que NO tiene IP en la red de impresoras (VLAN separada).
+        // Se deduplica antes de escanear para evitar trabajo doble.
+        const candidates = new Set();
 
+        const interfaces = os.networkInterfaces();
         Object.keys(interfaces).forEach((ifname) => {
             interfaces[ifname].forEach((iface) => {
                 if ('IPv4' !== iface.family || iface.internal !== false) {
-                    return; // skip over internal (i.e. 127.0.0.1) and non-ipv4
+                    return;
                 }
-                // Calculate subnet range (simplified /24)
                 const parts = iface.address.split('.');
                 parts.pop();
-                subnets.push(parts.join('.'));
+                const base = parts.join('.');
+                for (let i = 1; i < 255; i++) {
+                    candidates.add(`${base}.${i}`);
+                }
             });
         });
 
-        // Scan aggressively (parallel)
-        const scanPromises = [];
-        subnets.forEach(subnet => {
-            for (let i = 1; i < 255; i++) {
-                const ip = `${subnet}.${i}`;
-                scanPromises.push(this.checkPort(ip, 9100));
+        const configuredSubnets = Array.isArray(config.discovery?.subnets)
+            ? config.discovery.subnets
+            : [];
+        for (const cidr of configuredSubnets) {
+            try {
+                const ips = expandCidr(cidr);
+                ips.forEach((ip) => candidates.add(ip));
+                logger.info(`[discovery] Subred configurada ${cidr} -> ${ips.length} IPs.`);
+            } catch (err) {
+                logger.warn(`[discovery] Subred invalida "${cidr}": ${err.message}`);
             }
-        });
+        }
 
+        const scanPromises = Array.from(candidates).map((ip) => this.checkPort(ip, 9100));
         const results = await Promise.allSettled(scanPromises);
-        results.forEach(res => {
+        results.forEach((res) => {
             if (res.status === 'fulfilled' && res.value) {
                 this.discoveredDevices.push({
                     type: 'network',
                     name: `Net Printer (${res.value})`,
                     address: res.value,
-                    port: 9100
+                    port: 9100,
                 });
             }
         });
     }
 
-    checkPort(ip, port, timeout = 200) {
+    checkPort(ip, port, timeout = 2000) {
         return new Promise((resolve, reject) => {
             const socket = new net.Socket();
             socket.setTimeout(timeout);

@@ -1114,25 +1114,116 @@ class PrintingRepository {
 
   /// Enviar datos ESC/POS directos por TCP (solo plataformas nativas).
   ///
-  /// Garantías del flush+close:
-  /// - try/finally cierra el socket aunque `flush` lance, evitando leaks de
-  ///   FD cuando la térmica corta la conexión a media impresión.
-  /// - `await socket.done` espera el handshake de cierre real; sin esto, el
-  ///   `close()` retorna apenas inicia el shutdown y la térmica puede recibir
-  ///   un FIN antes de procesar los últimos bytes (paper jam / corte parcial).
+  /// Hardening contra "se desconectó a mitad de impresión":
+  /// - Retry interno (`attempts`): el primer intento captura blips de
+  ///   red (WiFi, switch flap, NIC powersave wake) sin que el cajero
+  ///   tenga que reintentar a mano.
+  /// - `tcpNoDelay`: pequeñas ráfagas ESC/POS salen sin Nagle. Sin
+  ///   esto la térmica puede recibir el corte (GS V) ~40-200ms tarde
+  ///   y el spool driver del POS asume desconexión.
+  /// - Listener de errores sobre el stream: RST/EPIPE asíncronos
+  ///   (post-flush) llegan al stream, no a `flush()`. Sin este listen
+  ///   los errores se pierden y `close()/done` se cuelga indefinido.
+  /// - Drain delay antes de `close()`: damos tiempo a la impresora a
+  ///   consumir el TX buffer antes del FIN, evitando que trunque el
+  ///   último corte/feed.
+  /// - Timeout en `close()` y `done`: si el peer no responde el FIN
+  ///   (caso común con térmicas chinas) no colgamos la cola del cajero.
   Future<void> printRawDirectTcp({
     required String ip,
     int port = 9100,
     required List<int> data,
-    Duration timeout = const Duration(seconds: 3),
+    Duration timeout = const Duration(seconds: 5),
+    int attempts = 2,
+  }) async {
+    final totalAttempts = attempts < 1 ? 1 : attempts;
+    Object? lastError;
+    StackTrace? lastStack;
+    for (var attempt = 0; attempt < totalAttempts; attempt++) {
+      if (attempt > 0) {
+        await Future.delayed(const Duration(milliseconds: 300));
+      }
+      try {
+        await _sendRawTcpOnce(
+          ip: ip,
+          port: port,
+          data: data,
+          timeout: timeout,
+        );
+        return;
+      } catch (e, st) {
+        lastError = e;
+        lastStack = st;
+        debugPrint(
+          '[TCP] intento ${attempt + 1}/$totalAttempts a $ip:$port falló: $e',
+        );
+      }
+    }
+    Error.throwWithStackTrace(
+      lastError ?? Exception('TCP print failed'),
+      lastStack ?? StackTrace.current,
+    );
+  }
+
+  Future<void> _sendRawTcpOnce({
+    required String ip,
+    required int port,
+    required List<int> data,
+    required Duration timeout,
   }) async {
     final socket = await Socket.connect(ip, port, timeout: timeout);
     try {
+      socket.setOption(SocketOption.tcpNoDelay, true);
+    } catch (_) {}
+
+    Object? asyncError;
+    StreamSubscription<List<int>>? sub;
+    try {
+      // Suscripción para capturar errores asíncronos del socket (RST/
+      // EPIPE que llegan después del flush). Sin esto, esos errores
+      // se pierden silenciosamente y vemos "todo OK" aunque la
+      // impresora cortó la conexión a media impresión. Los bytes de
+      // status que algunas térmicas emiten los descartamos.
+      sub = socket.listen(
+        (_) {},
+        onError: (Object e, StackTrace st) {
+          asyncError ??= e;
+        },
+        cancelOnError: false,
+      );
+
       socket.add(data);
       await socket.flush();
+
+      // Drain: dejamos que la térmica procese los últimos bytes
+      // (incluyendo GS V 'B 0' = corte) antes del FIN. Sin esto
+      // algunas impresoras truncan el corte y el cajero ve "como si
+      // se desconectara" a mitad de ticket.
+      await Future.delayed(const Duration(milliseconds: 80));
+
+      if (asyncError != null) {
+        // RST/EPIPE post-flush — propagar para que el caller (o el
+        // retry de arriba) lo trate como fallo, no como éxito.
+        throw asyncError!;
+      }
     } finally {
-      await socket.close();
-      await socket.done;
+      try {
+        await sub?.cancel();
+      } catch (_) {}
+      try {
+        await socket.close().timeout(const Duration(seconds: 2));
+      } catch (_) {
+        try {
+          socket.destroy();
+        } catch (_) {}
+      }
+      try {
+        await socket.done.timeout(const Duration(seconds: 2));
+      } catch (_) {
+        try {
+          socket.destroy();
+        } catch (_) {}
+      }
     }
   }
 
@@ -1306,6 +1397,10 @@ class PrintingRepository {
               printer: printer,
               data: data,
               timeout: timeout,
+              // El loop de arriba ya hace 3 intentos con backoff —
+              // adentro pasamos 1 para no multiplicar (sería 9 intentos
+              // con winspool, lentísimo).
+              attempts: 1,
             );
             return;
           } catch (e, st) {
@@ -1503,6 +1598,12 @@ class PrintingRepository {
     required PrinterConfig printer,
     required List<int> data,
     Duration timeout = const Duration(seconds: 10),
+    // El receipt path (`_printEscPosLocal`) ya envuelve esta llamada en
+    // un retry de 3 intentos con backoff, así que ahí pasamos
+    // `attempts: 1` para no multiplicar. Otros callers (kitchen, test)
+    // usan el default y obtienen 2 intentos transparentes para cubrir
+    // bumps transitorios de WMI / spooler.
+    int attempts = 2,
   }) async {
     if (Platform.isWindows) {
       await _printRawDirectUsbWindows(
@@ -1511,6 +1612,7 @@ class PrintingRepository {
         portHint: printer.mac,
         data: data,
         timeout: timeout,
+        attempts: attempts,
       );
       return;
     }
@@ -1756,6 +1858,52 @@ if ($items.Count -eq 0) {
   }
 
   Future<void> _printRawDirectUsbWindows({
+    required String printerName,
+    required List<int> data,
+    String? devicePath,
+    String? portHint,
+    Duration timeout = const Duration(seconds: 10),
+    int attempts = 1,
+  }) async {
+    final totalAttempts = attempts < 1 ? 1 : attempts;
+    Object? lastError;
+    StackTrace? lastStack;
+    for (var attempt = 0; attempt < totalAttempts; attempt++) {
+      if (attempt > 0) {
+        // Backoff corto: spooler / WMI suelen recuperarse en ~500ms.
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+      try {
+        await _printRawDirectUsbWindowsOnce(
+          printerName: printerName,
+          data: data,
+          devicePath: devicePath,
+          portHint: portHint,
+          timeout: timeout,
+        );
+        return;
+      } catch (e, st) {
+        // Errores de configuración (printer no encontrado, mala ruta)
+        // no se arreglan reintentando — fail rápido.
+        final msg = e.toString();
+        if (msg.contains('USB_PRINTER_NOT_FOUND') ||
+            msg.contains('no tiene una ruta')) {
+          rethrow;
+        }
+        lastError = e;
+        lastStack = st;
+        debugPrint(
+          '[USB-Win] intento ${attempt + 1}/$totalAttempts a "$printerName" falló: $e',
+        );
+      }
+    }
+    Error.throwWithStackTrace(
+      lastError ?? Exception('USB print failed'),
+      lastStack ?? StackTrace.current,
+    );
+  }
+
+  Future<void> _printRawDirectUsbWindowsOnce({
     required String printerName,
     required List<int> data,
     String? devicePath,

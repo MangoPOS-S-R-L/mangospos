@@ -6,7 +6,7 @@ service:
   name: "MangoPOSPrintAgent"
   display_name: "Mango POS Print Agent"
   description: "Cross-platform LAN printing service for MangoPOS"
-  port: 9100  # API Port (REST + WebSocket)
+  port: 4000  # API Port (REST). Debe coincidir con LOCAL_PORT en src/config.js.
 
 # --- Security ---
 security:
@@ -26,6 +26,15 @@ discovery:
     - network  # Scan LAN via Ping/Port 9100
     - usb      # Scan native USB
     # - bluetooth # Requires OS setup
+  # Subredes adicionales a escanear, en notacion CIDR. Util cuando la PC
+  # del agent NO tiene IP en la red de impresoras (ej. VLAN separada).
+  # Las subredes de los NICs locales SIEMPRE se escanean automaticamente,
+  # no es necesario duplicarlas aqui. Minimo permitido: /22 (1024 hosts).
+  # Ejemplo:
+  # subnets:
+  #   - "192.168.10.0/24"
+  #   - "10.0.5.0/24"
+  subnets: []
 
 # --- Printing ---
 queue:

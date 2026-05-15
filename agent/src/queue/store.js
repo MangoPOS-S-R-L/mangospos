@@ -12,11 +12,22 @@
 // hito Fase 2).
 
 const path = require('path');
+const fs = require('fs');
 const Database = require('better-sqlite3');
 const { randomUUID } = require('crypto');
-const { logger, baseDir } = require('../config');
+const { logger, baseDir, isPkg } = require('../config');
 
 const DB_PATH = path.join(baseDir, 'queue.db');
+
+// Cuando el binario se empaqueta con `pkg`, los modulos nativos (.node)
+// NO pueden cargarse desde el snapshot virtual (C:\snapshot\...). Hay
+// que enviarles un path real en disco. El instalador deja
+// better_sqlite3.node junto al .exe del agente (baseDir).
+const resolveNativeBinding = () => {
+    if (!isPkg) return null;
+    const candidate = path.join(baseDir, 'better_sqlite3.node');
+    return fs.existsSync(candidate) ? candidate : null;
+};
 
 let db = null;
 
@@ -43,7 +54,17 @@ CREATE INDEX IF NOT EXISTS idx_jobs_ticket_id      ON jobs(ticket_id);
 const init = () => {
     if (db) return db;
     logger.info(`[queue] Abriendo cola SQLite en ${DB_PATH}`);
-    db = new Database(DB_PATH);
+    const nativeBinding = resolveNativeBinding();
+    const dbOpts = nativeBinding ? { nativeBinding } : {};
+    if (nativeBinding) {
+        logger.info(`[queue] Usando native binding externa: ${nativeBinding}`);
+    } else if (isPkg) {
+        logger.error(
+            '[queue] No se encontro better_sqlite3.node junto al ejecutable. ' +
+            'El agente NO podra abrir SQLite y crasheara. Reinstalar el agente.',
+        );
+    }
+    db = new Database(DB_PATH, dbOpts);
     db.pragma('journal_mode = WAL');
     db.pragma('synchronous = NORMAL');
     db.exec(SCHEMA);

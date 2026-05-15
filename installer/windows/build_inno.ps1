@@ -226,6 +226,15 @@ if (-not $SkipStage) {
     Copy-Item -Force $envPath $stageAgent
   }
 
+  # better-sqlite3 es un modulo nativo (.node) y no se puede cargar
+  # desde el snapshot virtual de pkg. Lo enviamos al lado del .exe; el
+  # codigo en src/queue/store.js lo busca con resolveNativeBinding().
+  $nativeBinding = Join-Path $root "agent\node_modules\better-sqlite3\build\Release\better_sqlite3.node"
+  if (-not (Test-Path $nativeBinding)) {
+    throw "No se encontro better_sqlite3.node en $nativeBinding. Corre 'npm install' en agent/."
+  }
+  Copy-Item -Force $nativeBinding (Join-Path $stageAgent "better_sqlite3.node")
+
   Copy-Item -Force (Join-Path $root "installer\windows\mangopos-agent-service.xml") $stageAgent
   Copy-Item -Force (Join-Path $root "installer\windows\WinSW.exe") (Join-Path $stageAgent "mangopos-agent-service.exe")
 
