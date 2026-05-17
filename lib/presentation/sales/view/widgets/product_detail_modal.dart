@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:mangopos/core/theme/app_breakpoints.dart';
 import '../../viewmodel/menu_browser_viewmodel.dart';
 import '../../viewmodel/sales_viewmodel.dart';
 import '../../../../data/models/sales_models.dart';
@@ -49,7 +50,6 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
   List<OrderItem> get _scopedItems => widget.groupedItems ?? [widget.item];
   bool get _isGroupedMode => _scopedItems.length > 1;
 
-  late TextEditingController _nameController;
   late TextEditingController _notesController;
   late TextEditingController _courtesyReasonController;
   late TextEditingController _discountController;
@@ -65,7 +65,6 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
   void initState() {
     super.initState();
     final parsedNotes = _splitStoredNotes(widget.item.notes);
-    _nameController = TextEditingController(text: widget.item.productName);
     _notesController = TextEditingController(text: parsedNotes.notes);
     _courtesyReasonController = TextEditingController(
       text: parsedNotes.courtesyReason ?? '',
@@ -87,7 +86,6 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
 
   @override
   void dispose() {
-    _nameController.dispose();
     _notesController.dispose();
     _courtesyReasonController.dispose();
     _discountController.dispose();
@@ -290,10 +288,8 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     }
     final finalNotes = noteParts.join('\n');
 
+    // El nombre del producto no se edita desde aquí — viene fijo del menú.
     final updated = widget.item.copyWith(
-      productName: _nameController.text.trim().isEmpty
-          ? widget.item.productName
-          : _nameController.text.trim(),
       quantity: _quantity,
       isTakeout: _isTakeout,
       discounts: discount,
@@ -430,6 +426,8 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     const kTextPrimary = Color(0xFF2C2C2C);
     const kTextSecondary = Color(0xFF6B7280);
     const kBorder = Color(0xFFE5E7EB);
+    final isCompact = ResponsiveHelper.useCompactShell(context);
+    final mq = MediaQuery.of(context);
     final previewSubtotal = _estimatedSubtotal();
     final previewTax = _estimatedTax();
     final previewDiscount = _effectiveDiscount();
@@ -441,18 +439,20 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
       backgroundColor: Colors.white,
       surfaceTintColor: Colors.white,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      insetPadding: const EdgeInsets.all(16),
+      insetPadding: isCompact
+          ? const EdgeInsets.symmetric(horizontal: 8, vertical: 16)
+          : const EdgeInsets.all(16),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 950),
-        child: FittedBox(
-          fit: BoxFit.scaleDown,
-          alignment: Alignment.center,
-          child: SizedBox(
-            width: 950,
-            child: Container(
-              width: double.maxFinite,
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-              child: Column(
+        constraints: BoxConstraints(
+          maxWidth: 950,
+          maxHeight: mq.size.height * 0.92,
+        ),
+        child: SingleChildScrollView(
+          padding: EdgeInsets.symmetric(
+            horizontal: isCompact ? 14 : 20,
+            vertical: 16,
+          ),
+          child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -495,50 +495,9 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
               ),
               const SizedBox(height: 8),
 
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  // Nombre de reemplazo
-                  Expanded(
-                    flex: 4,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Nombre de reemplazo',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: kTextSecondary,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        TextField(
-                          controller: _nameController,
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                          decoration: InputDecoration(
-                            filled: true,
-                            fillColor: const Color(0xFFF9FAFB),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              borderSide: const BorderSide(color: kBorder),
-                            ),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              borderSide: const BorderSide(color: kBorder),
-                            ),
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 14,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  // Cantidad
-                  Column(
+              Builder(
+                builder: (_) {
+                  final cantidadBlock = Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
@@ -588,24 +547,24 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                           ],
                         ),
                       ),
-                    ],
-                  ),
-                  const SizedBox(width: 24),
-                  if (_isGroupedMode)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 2),
-                      child: Text(
-                        'Cantidad total agrupada',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: kTextSecondary.withValues(alpha: 0.9),
-                          fontWeight: FontWeight.w500,
+                      if (_isGroupedMode)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            'Cantidad total agrupada',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: kTextSecondary.withValues(alpha: 0.9),
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
-                  // Precio und.
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
+                    ],
+                  );
+                  final precioBlock = Column(
+                    crossAxisAlignment: isCompact
+                        ? CrossAxisAlignment.start
+                        : CrossAxisAlignment.end,
                     children: [
                       const Text(
                         'Precio und.',
@@ -617,21 +576,22 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                       ),
                       const SizedBox(height: 4),
                       Row(
+                        mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.baseline,
                         textBaseline: TextBaseline.alphabetic,
                         children: [
                           Text(
                             'RD\$',
                             style: TextStyle(
-                              fontSize: 18,
+                              fontSize: isCompact ? 14 : 18,
                               fontWeight: FontWeight.bold,
                               color: kTextPrimary.withValues(alpha: 0.8),
                             ),
                           ),
                           Text(
                             widget.item.unitPrice.toStringAsFixed(2),
-                            style: const TextStyle(
-                              fontSize: 36,
+                            style: TextStyle(
+                              fontSize: isCompact ? 26 : 36,
                               fontWeight: FontWeight.w900,
                               color: kTextPrimary,
                               letterSpacing: -1,
@@ -639,75 +599,105 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                           ),
                         ],
                       ),
-                      Container(height: 1, width: 140, color: kBorder),
+                      Container(height: 1, width: isCompact ? 100 : 140, color: kBorder),
                     ],
-                  ),
-                ],
+                  );
+                  if (isCompact) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        cantidadBlock,
+                        const SizedBox(height: 12),
+                        precioBlock,
+                      ],
+                    );
+                  }
+                  return Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [cantidadBlock, precioBlock],
+                  );
+                },
               ),
               const SizedBox(height: 12),
 
               // Notas y switch takeout
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: Column(
+              Builder(
+                builder: (_) {
+                  final notasBlock = Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Notas del pedido',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: kTextSecondary,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _notesController,
+                        maxLines: 2,
+                        decoration: InputDecoration(
+                          hintText: 'Por ej: Caliente, con ají, sin sal...',
+                          hintStyle: const TextStyle(
+                            color: Color(0xFF9CA3AF),
+                          ),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: kBorder),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                  final takeoutBlock = Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text(
+                        '¿Tu pedido es para llevar?',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: kTextPrimary,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Switch(
+                        value: _isTakeout,
+                        onChanged: (val) {
+                          setState(() => _isTakeout = val);
+                        },
+                        activeThumbColor: Colors.white,
+                        activeTrackColor: kPrimary,
+                        inactiveTrackColor: const Color(0xFFD1D5DB),
+                        inactiveThumbColor: const Color(0xFF6B7280),
+                      ),
+                    ],
+                  );
+                  if (isCompact) {
+                    return Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
-                          'Notas del pedido',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: kTextSecondary,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        TextField(
-                          controller: _notesController,
-                          maxLines: 2,
-                          decoration: InputDecoration(
-                            hintText: 'Por ejm: Caliente, con ají, sin sal...',
-                            hintStyle: const TextStyle(
-                              color: Color(0xFF9CA3AF),
-                            ),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              borderSide: const BorderSide(color: kBorder),
-                            ),
-                          ),
-                        ),
+                        notasBlock,
+                        const SizedBox(height: 12),
+                        takeoutBlock,
                       ],
-                    ),
-                  ),
-                  const SizedBox(width: 24),
-                  Padding(
-                    padding: const EdgeInsets.only(top: 28),
-                    child: Row(
-                      children: [
-                        const Text(
-                          '¿Tu pedido es para llevar?',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: kTextPrimary,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Switch(
-                          value: _isTakeout,
-                          onChanged: (val) {
-                            setState(() => _isTakeout = val);
-                          },
-                          activeThumbColor: Colors.white,
-                          activeTrackColor: kPrimary,
-                          inactiveTrackColor: const Color(0xFFD1D5DB),
-                          inactiveThumbColor: const Color(0xFF6B7280),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
+                    );
+                  }
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(child: notasBlock),
+                      const SizedBox(width: 24),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 28),
+                        child: takeoutBlock,
+                      ),
+                    ],
+                  );
+                },
               ),
               const SizedBox(height: 12),
 
@@ -918,90 +908,102 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
               const SizedBox(height: 12),
               const Divider(color: kBorder, height: 1),
 
-              // Footer Actions
-              Container(
-                padding: const EdgeInsets.only(top: 0),
-                child: IntrinsicHeight(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Expanded(
-                        child: _ModalButton(
-                          icon: Icons.close,
-                          label: 'Cancelar',
-                          color: kTextPrimary,
-                          onTap: () => Navigator.of(context).pop(),
-                        ),
-                      ),
-                      const VerticalDivider(width: 1, color: kBorder),
-                      Expanded(
-                        child: _ModalButton(
-                          icon: Icons.warning_amber_rounded,
-                          label: 'Agotar producto',
-                          color: widget.item.productId == null
-                              ? kTextSecondary
-                              : kDangerRed,
-                          onTap: widget.item.productId == null
-                              ? null
-                              : _handleMarkSoldOut,
-                        ),
-                      ),
-                      const VerticalDivider(width: 1, color: kBorder),
-                      if (widget.onReprint != null) ...[
+              // Footer Actions — en móvil: CTA Guardar full-width + menú
+              // overflow con secundarias. En desktop: Row con todos los botones.
+              if (isCompact)
+                _MobileFooter(
+                  isSaving: _isSaving,
+                  onSave: _handleSave,
+                  onCancel: () => Navigator.of(context).pop(),
+                  onMarkSoldOut: widget.item.productId == null
+                      ? null
+                      : _handleMarkSoldOut,
+                  onReprint: widget.onReprint,
+                  onDelete: _handleDelete,
+                  primaryColor: kPrimary,
+                )
+              else
+                Container(
+                  padding: const EdgeInsets.only(top: 0),
+                  child: IntrinsicHeight(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
                         Expanded(
                           child: _ModalButton(
-                            icon: Icons.print_outlined,
-                            label: 'Reimprimir comanda',
-                            color: const Color(0xFF2563EB),
-                            onTap: widget.onReprint,
+                            icon: Icons.close,
+                            label: 'Cancelar',
+                            color: kTextPrimary,
+                            onTap: () => Navigator.of(context).pop(),
                           ),
                         ),
                         const VerticalDivider(width: 1, color: kBorder),
-                      ],
-                      Expanded(
-                        child: _ModalButton(
-                          icon: Icons.delete_outline,
-                          label: 'Eliminar pedido',
-                          color: kDangerRed,
-                          onTap: _handleDelete,
+                        Expanded(
+                          child: _ModalButton(
+                            icon: Icons.warning_amber_rounded,
+                            label: 'Agotar producto',
+                            color: widget.item.productId == null
+                                ? kTextSecondary
+                                : kDangerRed,
+                            onTap: widget.item.productId == null
+                                ? null
+                                : _handleMarkSoldOut,
+                          ),
                         ),
-                      ),
-                      const VerticalDivider(width: 1, color: kBorder),
-                      Expanded(
-                        child: Container(
-                          height: double.infinity,
-                          padding: const EdgeInsets.all(8),
-                          child: ElevatedButton.icon(
-                            onPressed: _isSaving ? null : _handleSave,
-                            icon: const Icon(
-                              Icons.check_circle_outline,
-                              size: 24,
+                        const VerticalDivider(width: 1, color: kBorder),
+                        if (widget.onReprint != null) ...[
+                          Expanded(
+                            child: _ModalButton(
+                              icon: Icons.print_outlined,
+                              label: 'Reimprimir comanda',
+                              color: const Color(0xFF2563EB),
+                              onTap: widget.onReprint,
                             ),
-                            label: Text(
-                              _isSaving ? 'Guardando...' : 'Guardar cambios',
-                              style: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
+                          ),
+                          const VerticalDivider(width: 1, color: kBorder),
+                        ],
+                        Expanded(
+                          child: _ModalButton(
+                            icon: Icons.delete_outline,
+                            label: 'Eliminar pedido',
+                            color: kDangerRed,
+                            onTap: _handleDelete,
+                          ),
+                        ),
+                        const VerticalDivider(width: 1, color: kBorder),
+                        Expanded(
+                          child: Container(
+                            height: double.infinity,
+                            padding: const EdgeInsets.all(8),
+                            child: ElevatedButton.icon(
+                              onPressed: _isSaving ? null : _handleSave,
+                              icon: const Icon(
+                                Icons.check_circle_outline,
+                                size: 24,
                               ),
-                            ),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: kPrimary,
-                              elevation: 0,
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
+                              label: Text(
+                                _isSaving ? 'Guardando...' : 'Guardar cambios',
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: kPrimary,
+                                elevation: 0,
+                                foregroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
-              ),
             ],
-          ),
-        ),
           ),
         ),
       ),
@@ -1202,6 +1204,133 @@ class _PreviewRow extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Footer móvil compacto: botón Guardar a ancho completo + menú overflow
+/// con las acciones secundarias (Cancelar / Agotar / Reimprimir / Eliminar).
+class _MobileFooter extends StatelessWidget {
+  const _MobileFooter({
+    required this.isSaving,
+    required this.onSave,
+    required this.onCancel,
+    required this.onMarkSoldOut,
+    required this.onReprint,
+    required this.onDelete,
+    required this.primaryColor,
+  });
+
+  final bool isSaving;
+  final VoidCallback onSave;
+  final VoidCallback onCancel;
+  final VoidCallback? onMarkSoldOut;
+  final VoidCallback? onReprint;
+  final VoidCallback onDelete;
+  final Color primaryColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: SizedBox(
+              height: 48,
+              child: ElevatedButton.icon(
+                onPressed: isSaving ? null : onSave,
+                icon: const Icon(Icons.check_circle_outline, size: 22),
+                label: Text(
+                  isSaving ? 'Guardando...' : 'Guardar cambios',
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: primaryColor,
+                  elevation: 0,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            height: 48,
+            width: 48,
+            decoration: BoxDecoration(
+              color: const Color(0xFFF3F4F6),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: PopupMenuButton<String>(
+              tooltip: 'Más acciones',
+              icon: const Icon(Icons.more_vert, color: Color(0xFF6B7280)),
+              onSelected: (v) {
+                switch (v) {
+                  case 'cancel':
+                    onCancel();
+                    break;
+                  case 'soldout':
+                    onMarkSoldOut?.call();
+                    break;
+                  case 'reprint':
+                    onReprint?.call();
+                    break;
+                  case 'delete':
+                    onDelete();
+                    break;
+                }
+              },
+              itemBuilder: (_) => [
+                const PopupMenuItem(
+                  value: 'cancel',
+                  child: ListTile(
+                    leading: Icon(Icons.close, color: Color(0xFF6B7280)),
+                    title: Text('Cancelar'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                if (onMarkSoldOut != null)
+                  const PopupMenuItem(
+                    value: 'soldout',
+                    child: ListTile(
+                      leading: Icon(Icons.warning_amber_rounded,
+                          color: Color(0xFFEF4444)),
+                      title: Text('Agotar producto'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                if (onReprint != null)
+                  const PopupMenuItem(
+                    value: 'reprint',
+                    child: ListTile(
+                      leading: Icon(Icons.print_outlined,
+                          color: Color(0xFF2563EB)),
+                      title: Text('Reimprimir comanda'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                const PopupMenuDivider(),
+                const PopupMenuItem(
+                  value: 'delete',
+                  child: ListTile(
+                    leading: Icon(Icons.delete_outline,
+                        color: Color(0xFFEF4444)),
+                    title: Text('Eliminar pedido',
+                        style: TextStyle(color: Color(0xFFEF4444))),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

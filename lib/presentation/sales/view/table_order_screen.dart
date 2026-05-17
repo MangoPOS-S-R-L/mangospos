@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/breakpoints.dart';
 import 'package:mangopos/app/theme/sizes.dart';
+import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/business/business_features_provider.dart';
 import 'package:mangopos/core/utils/display_name_utils.dart';
 import 'package:mangopos/data/models/printing.dart';
@@ -454,6 +455,78 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     );
   }
 
+  /// Toggle inteligente: si TODOS los items abiertos ya están como takeout,
+  /// los marca como NO takeout. Si no, marca todos como takeout. Pide
+  /// confirmación porque cambia muchas líneas de un solo paso.
+  Future<void> _handleMarkAllTakeout(BuildContext context) async {
+    final orderState = ref.read(currentOrderProvider);
+    if (orderState.order == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No hay una orden activa.')),
+      );
+      return;
+    }
+    final openItems = orderState.items
+        .where((i) => i.status != 'paid' && i.status != 'void')
+        .toList(growable: false);
+    if (openItems.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('La orden no tiene items para marcar.')),
+      );
+      return;
+    }
+    final allAlready = openItems.every((i) => i.isTakeout);
+    final newValue = !allAlready;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          newValue ? 'Marcar todo para llevar' : 'Quitar "para llevar"',
+        ),
+        content: Text(
+          newValue
+              ? '${openItems.length} item(s) quedarán marcados como "para '
+                  'llevar". Los impuestos pueden cambiar si tu negocio tiene '
+                  'reglas específicas para takeout.'
+              : '${openItems.length} item(s) volverán a "consumo en local".',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(newValue ? 'Marcar todo' : 'Quitar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    try {
+      await ref.read(currentOrderProvider.notifier).toggleTakeout(newValue);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            newValue
+                ? 'Todos los items marcados para llevar.'
+                : 'Todos los items vuelven a consumo en local.',
+          ),
+          backgroundColor: _salesPayButton,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo actualizar: $e')),
+      );
+    }
+  }
+
   Future<void> _handleVoidCurrentOrder(
     BuildContext context, {
     required String title,
@@ -871,6 +944,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                   onApplyDiscount: () => _handleApplyDiscount(context),
                   onApplyCourtesy: () => _handleCourtesyByProduct(context),
                   onTransferSession: () => _handleTransferSession(context),
+                  onMarkAllTakeout: () => _handleMarkAllTakeout(context),
                 ),
                 // Usamos ancho fijo según especificación (400px o 320px)
                 SizedBox(width: cartWidth, child: cart),
@@ -2295,7 +2369,7 @@ class _CartView extends ConsumerWidget {
                               'Subcuenta',
                               style: TextStyle(
                                 fontSize: 10,
-                                color: Colors.blue,
+                                color: Color(0xFFF97316),
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -2867,6 +2941,16 @@ class _CartView extends ConsumerWidget {
                                         waiterName: waiterName,
                                       );
                                   if (!context.mounted) return;
+                                  // Refrescar stock — el trigger auto-86 ya
+                                  // corrió en backend, queremos que el
+                                  // badge del catálogo refleje las nuevas
+                                  // cantidades sin esperar al próximo
+                                  // loadAll.
+                                  unawaited(
+                                    ref
+                                        .read(menuBrowserVmProvider.notifier)
+                                        .refreshStock(),
+                                  );
                                   // Si alguna área tuvo que escalar al
                                   // worker, mostramos snackbar amigable
                                   // amarillo en lugar del verde de éxito.
@@ -2972,7 +3056,7 @@ class _CartView extends ConsumerWidget {
                             onPressed:
                                 !canCharge ||
                                     orderState.order == null ||
-                                    displayTotal <= 0
+                                    displayTotal < 0
                                 ? null
                                 : () => _openPaymentModal(
                                     context,
@@ -2999,7 +3083,7 @@ class _CartView extends ConsumerWidget {
                             onPressed:
                                 !canCharge ||
                                     orderState.order == null ||
-                                    pendingOrderTotal <= 0
+                                    pendingOrderTotal < 0
                                 ? null
                                 : () => _openPaymentModal(
                                     context,
@@ -3022,7 +3106,7 @@ class _CartView extends ConsumerWidget {
                       onPressed:
                           !canCharge ||
                               orderState.order == null ||
-                              displayTotal <= 0
+                              displayTotal < 0
                           ? null
                           : () => _openPaymentModal(
                               context,
@@ -3166,7 +3250,7 @@ class _CartView extends ConsumerWidget {
                             onPressed:
                                 !canCharge ||
                                     orderState.order == null ||
-                                    displayTotal <= 0
+                                    displayTotal < 0
                                 ? null
                                 : () => _openPaymentModal(
                                     context,
@@ -3193,7 +3277,7 @@ class _CartView extends ConsumerWidget {
                             onPressed:
                                 !canCharge ||
                                     orderState.order == null ||
-                                    pendingOrderTotal <= 0
+                                    pendingOrderTotal < 0
                                 ? null
                                 : () => _openPaymentModal(
                                     context,
@@ -3216,7 +3300,7 @@ class _CartView extends ConsumerWidget {
                       onPressed:
                           !canCharge ||
                               orderState.order == null ||
-                              displayTotal <= 0
+                              displayTotal < 0
                           ? null
                           : () => _openPaymentModal(
                               context,
@@ -4006,6 +4090,7 @@ class _SalesToolsRail extends StatelessWidget {
   final VoidCallback onApplyDiscount;
   final VoidCallback onApplyCourtesy;
   final VoidCallback onTransferSession;
+  final VoidCallback onMarkAllTakeout;
 
   const _SalesToolsRail({
     required this.onBack,
@@ -4015,6 +4100,7 @@ class _SalesToolsRail extends StatelessWidget {
     required this.onApplyDiscount,
     required this.onApplyCourtesy,
     required this.onTransferSession,
+    required this.onMarkAllTakeout,
   });
 
   @override
@@ -4075,6 +4161,11 @@ class _SalesToolsRail extends StatelessWidget {
                     icon: Icons.card_giftcard_rounded,
                     label: 'Cortesía\nproducto',
                     onTap: onApplyCourtesy,
+                  ),
+                  _RailButton(
+                    icon: Icons.takeout_dining_rounded,
+                    label: 'Todo\npara llevar',
+                    onTap: onMarkAllTakeout,
                   ),
                 ],
                 const Spacer(),
@@ -4872,10 +4963,12 @@ class _CatalogAreaState extends ConsumerState<_CatalogArea>
 
   @override
   Widget build(BuildContext context) {
+    final isCompact = ResponsiveHelper.isMobile(context);
+    final hPad = isCompact ? 12.0 : 24.0;
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
+          padding: EdgeInsets.fromLTRB(hPad, isCompact ? 12 : 24, hPad, 0),
           child: Row(
             children: [
               Expanded(
@@ -4933,20 +5026,22 @@ class _CatalogAreaState extends ConsumerState<_CatalogArea>
                   },
                 ),
               ),
-              const SizedBox(width: 12),
-              const SalesZoomControl(),
+              if (!isCompact) ...[
+                const SizedBox(width: 12),
+                const SalesZoomControl(),
+              ],
             ],
           ),
         ),
-        const SizedBox(height: 12),
+        SizedBox(height: isCompact ? 8 : 12),
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
+          padding: EdgeInsets.symmetric(horizontal: hPad),
           child: _SegmentedTabs(
             controller: _mainTabController,
             labels: const ['Categorias', 'Menu', 'Favoritos'],
           ),
         ),
-        const SizedBox(height: 16),
+        SizedBox(height: isCompact ? 10 : 16),
         Expanded(
           child: Container(
             color: _salesSurface,
@@ -6335,20 +6430,39 @@ class _CategoriesGrid extends ConsumerWidget {
       builder: (context, constraints) {
         final textScale = MediaQuery.textScalerOf(context).scale(1);
         final zoom = ref.watch(salesZoomProvider);
+        final isCompact = ResponsiveHelper.isMobile(context);
         final categoryCardExtent = (190 + ((textScale - 1) * 24)).clamp(
           190,
           214,
         );
+        // En móvil, forzamos 3 columnas con ancho calculado a partir del
+        // viewport disponible. En desktop conservamos el comportamiento de
+        // maxCrossAxisExtent.
+        final mobileColumns = 3;
+        final mobileSpacing = 8.0;
+        final mobilePadding = 12.0;
+        final mobileCardWidth = (constraints.maxWidth -
+                (mobilePadding * 2) -
+                (mobileSpacing * (mobileColumns - 1))) /
+            mobileColumns;
         return Stack(
           children: [
             GridView.builder(
-              padding: const EdgeInsets.all(16),
-              gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-                maxCrossAxisExtent: 220 * zoom, // cards pequeñas
-                mainAxisExtent: categoryCardExtent.toDouble() * zoom,
-                crossAxisSpacing: 12,
-                mainAxisSpacing: 12,
-              ),
+              padding: EdgeInsets.all(isCompact ? mobilePadding : 16),
+              gridDelegate: isCompact
+                  ? SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: mobileColumns,
+                      mainAxisExtent:
+                          (mobileCardWidth * 0.95).clamp(96, 130),
+                      crossAxisSpacing: mobileSpacing,
+                      mainAxisSpacing: mobileSpacing,
+                    )
+                  : SliverGridDelegateWithMaxCrossAxisExtent(
+                      maxCrossAxisExtent: 220 * zoom,
+                      mainAxisExtent: categoryCardExtent.toDouble() * zoom,
+                      crossAxisSpacing: 12,
+                      mainAxisSpacing: 12,
+                    ),
               itemCount: categories.length,
               itemBuilder: (context, index) {
                 final cat = categories[index];
@@ -6356,10 +6470,14 @@ class _CategoriesGrid extends ConsumerWidget {
                   onTap: () => onCategoryTap(cat.id),
                   borderRadius: BorderRadius.circular(_salesRadiusCard),
                   child: Container(
-                    constraints: const BoxConstraints(
-                      minHeight: 140,
-                      minWidth: 160,
-                    ),
+                    width: isCompact ? double.infinity : null,
+                    height: isCompact ? double.infinity : null,
+                    constraints: isCompact
+                        ? const BoxConstraints()
+                        : const BoxConstraints(
+                            minHeight: 140,
+                            minWidth: 160,
+                          ),
                     decoration: BoxDecoration(
                       color: _salesSurface,
                       borderRadius: BorderRadius.circular(_salesRadiusCard),
@@ -6369,9 +6487,9 @@ class _CategoriesGrid extends ConsumerWidget {
                       ),
                       boxShadow: _salesSoftShadow,
                     ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 14,
+                    padding: EdgeInsets.symmetric(
+                      horizontal: isCompact ? 6 : 16,
+                      vertical: isCompact ? 8 : 14,
                     ),
                     child: Center(
                       child: Column(
@@ -6383,20 +6501,23 @@ class _CategoriesGrid extends ConsumerWidget {
                             textAlign: TextAlign.center,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 16,
-                              color: _salesTextPrimary,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          const Text(
-                            'Ver items',
                             style: TextStyle(
-                              fontSize: 13,
-                              color: _salesTextSecondary,
+                              fontWeight: FontWeight.w600,
+                              fontSize: isCompact ? 12 : 16,
+                              color: _salesTextPrimary,
+                              height: 1.15,
                             ),
                           ),
+                          if (!isCompact) ...[
+                            const SizedBox(height: 6),
+                            const Text(
+                              'Ver items',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: _salesTextSecondary,
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -6432,9 +6553,15 @@ class _SelectedCatalogCategoryHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isCompact = ResponsiveHelper.isMobile(context);
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      padding: EdgeInsets.fromLTRB(
+        isCompact ? 12 : 16,
+        isCompact ? 10 : 14,
+        isCompact ? 12 : 16,
+        isCompact ? 10 : 14,
+      ),
       decoration: BoxDecoration(
         color: _salesSurface,
         border: Border(
@@ -6453,27 +6580,27 @@ class _SelectedCatalogCategoryHeader extends StatelessWidget {
                 onTap: onBack,
                 borderRadius: BorderRadius.circular(999),
                 child: Container(
-                  width: 42,
-                  height: 42,
+                  width: isCompact ? 34 : 42,
+                  height: isCompact ? 34 : 42,
                   decoration: BoxDecoration(
                     color: _salesTotalColor.withValues(alpha: 0.10),
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(
+                  child: Icon(
                     Icons.arrow_back_ios_new_rounded,
                     color: _salesTotalColor,
-                    size: 20,
+                    size: isCompact ? 16 : 20,
                   ),
                 ),
               ),
-              const SizedBox(width: 14),
+              SizedBox(width: isCompact ? 10 : 14),
               Expanded(
                 child: Text(
                   categoryName.toUpperCase(),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 28,
+                  style: TextStyle(
+                    fontSize: isCompact ? 17 : 28,
                     fontWeight: FontWeight.w800,
                     color: _salesTotalColor,
                     letterSpacing: 0.4,
@@ -6482,7 +6609,7 @@ class _SelectedCatalogCategoryHeader extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 10),
+          SizedBox(height: isCompact ? 6 : 10),
           InkWell(
             onTap: onBack,
             borderRadius: BorderRadius.circular(10),
@@ -6539,82 +6666,190 @@ class _ProductsGrid extends ConsumerWidget {
     final textScale = MediaQuery.textScalerOf(context).scale(1);
     final zoom = ref.watch(salesZoomProvider);
     final productCardExtent = (206 + ((textScale - 1) * 32)).clamp(206, 238);
+    final isCompact = ResponsiveHelper.isMobile(context);
 
-    return Stack(
-      children: [
-        GridView.builder(
-          padding: const EdgeInsets.all(16),
-          gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent: 220 * zoom, // mismo ancho que categorías
-            mainAxisExtent: productCardExtent.toDouble() * zoom,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 12,
-          ),
-          itemCount: products.length,
-          itemBuilder: (context, index) {
-            final product = products[index];
-            return GestureDetector(
-              onTap: () => onProductTap(product),
-              child: Container(
-                constraints: BoxConstraints(
-                  minHeight: 140 * zoom,
-                  minWidth: 160 * zoom,
-                  maxWidth: 220 * zoom,
-                ),
-                decoration: BoxDecoration(
-                  color: _salesSurface,
-                  borderRadius: BorderRadius.circular(_salesRadiusCard),
-                  border: Border.all(color: _salesDivider),
-                  boxShadow: _salesSoftShadow,
-                ),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 14,
-                ),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    _ProductAvatar(imageUrl: product.imageUrl, zoom: zoom),
-                    const SizedBox(height: 10),
-                    Text(
-                      product.name,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 14,
-                        color: _salesTextPrimary,
-                      ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // En móvil: 3 columnas, ancho calculado a partir del viewport.
+        const mobileColumns = 3;
+        const mobileSpacing = 8.0;
+        const mobilePadding = 12.0;
+        final mobileCardWidth = (constraints.maxWidth -
+                (mobilePadding * 2) -
+                (mobileSpacing * (mobileColumns - 1))) /
+            mobileColumns;
+        final mobileCardHeight = mobileCardWidth + 50;
+
+        return Stack(
+          children: [
+            GridView.builder(
+              padding: EdgeInsets.all(isCompact ? mobilePadding : 16),
+              gridDelegate: isCompact
+                  ? SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: mobileColumns,
+                      crossAxisSpacing: mobileSpacing,
+                      mainAxisSpacing: mobileSpacing,
+                      mainAxisExtent: mobileCardHeight,
+                    )
+                  : SliverGridDelegateWithMaxCrossAxisExtent(
+                      maxCrossAxisExtent: 220 * zoom,
+                      mainAxisExtent: productCardExtent.toDouble() * zoom,
+                      crossAxisSpacing: 12,
+                      mainAxisSpacing: 12,
                     ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'RD\$ ${product.price.toStringAsFixed(0)}',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: _salesTotalColor,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 14,
-                      ),
+              itemCount: products.length,
+              itemBuilder: (context, index) {
+                final product = products[index];
+                final stockUnits = state.stockByProductId[product.id];
+                return GestureDetector(
+                  onTap: () => onProductTap(product),
+                  child: Container(
+                    width: isCompact ? double.infinity : null,
+                    height: isCompact ? double.infinity : null,
+                    constraints: isCompact
+                        ? const BoxConstraints()
+                        : BoxConstraints(
+                            minHeight: 140 * zoom,
+                            minWidth: 160 * zoom,
+                            maxWidth: 220 * zoom,
+                          ),
+                    decoration: BoxDecoration(
+                      color: _salesSurface,
+                      borderRadius: BorderRadius.circular(_salesRadiusCard),
+                      border: Border.all(color: _salesDivider),
+                      boxShadow: _salesSoftShadow,
                     ),
-                  ],
+                    child: Stack(
+                      children: [
+                        Positioned.fill(
+                          child: Padding(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: isCompact ? 6 : 16,
+                              vertical: isCompact ? 8 : 14,
+                            ),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                _ProductAvatar(
+                                    imageUrl: product.imageUrl,
+                                    zoom: isCompact ? 0.7 : zoom),
+                                SizedBox(height: isCompact ? 6 : 10),
+                                Text(
+                                  product.name,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: isCompact ? 11 : 14,
+                                    color: _salesTextPrimary,
+                                    height: 1.15,
+                                  ),
+                                ),
+                                SizedBox(height: isCompact ? 2 : 6),
+                                Text(
+                                  'RD\$ ${product.price.toStringAsFixed(0)}',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: _salesTotalColor,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: isCompact ? 11 : 14,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        if (stockUnits != null)
+                          Positioned(
+                            top: 6,
+                            right: 6,
+                            child: _StockBadge(units: stockUnits),
+                          ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+            if (state.loading)
+              const Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: LinearProgressIndicator(
+                  minHeight: 2,
+                  color: _salesTotalColor,
                 ),
               ),
-            );
-          },
-        ),
-        if (state.loading)
-          const Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: LinearProgressIndicator(
-              minHeight: 2,
-              color: _salesTotalColor,
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// Pill compacta arriba a la derecha de la card de producto. Muestra "N"
+/// con color según el nivel de stock. Solo aparece cuando el producto es
+/// tracked y tiene receta resoluble (la vista `v_menu_items_stock`
+/// devuelve un valor). Productos auto-86'd no aparecen en el catálogo
+/// porque ya están filtrados por `is_active = true`.
+class _StockBadge extends StatelessWidget {
+  final num units;
+  const _StockBadge({required this.units});
+
+  @override
+  Widget build(BuildContext context) {
+    final n = units.toDouble();
+    // Permitimos ventas con stock <= 0 (deuda de inventario). El badge
+    // rojo "Agotado" señala al cajero que el conteo está en cero o
+    // negativo; la próxima recepción de compra saldará la deuda.
+    final Color bg;
+    final Color fg;
+    if (n <= 0) {
+      bg = const Color(0xFFFEE2E2);
+      fg = const Color(0xFFB91C1C);
+    } else if (n <= 5) {
+      bg = const Color(0xFFFFEDD5);
+      fg = const Color(0xFFC2410C);
+    } else if (n <= 20) {
+      bg = const Color(0xFFFEF3C7);
+      fg = const Color(0xFF92400E);
+    } else {
+      bg = const Color(0xFFDCFCE7);
+      fg = const Color(0xFF15803D);
+    }
+    final String label;
+    if (n <= 0) {
+      label = 'Agotado';
+    } else if (n == n.truncateToDouble()) {
+      label = n.toInt().toString();
+    } else {
+      label = n.toStringAsFixed(1);
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: fg.withValues(alpha: 0.18)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.inventory_2_outlined, size: 12, color: fg),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+              color: fg,
             ),
           ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -6631,23 +6866,47 @@ class _ProductAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final size = 96 * zoom;
-    return Container(
+    final hasUrl = imageUrl != null && imageUrl!.trim().isNotEmpty;
+    final resolvedUrl = hasUrl
+        ? imageUrl!.replaceAll(
+            'sqdwjjewdqzxglvqerqt.supabase.co',
+            'supabase.mangopos.do',
+          )
+        : null;
+
+    // Fallback siempre listo: ícono centrado en círculo gris. Se usa cuando
+    // no hay URL, cuando la imagen está cargando, o cuando falla la carga.
+    final fallback = Container(
       width: size,
       height: size,
-      decoration: BoxDecoration(
+      alignment: Alignment.center,
+      decoration: const BoxDecoration(
         color: _salesTabActiveBg,
         shape: BoxShape.circle,
-        image: imageUrl != null
-            ? DecorationImage(
-                image: CachedNetworkImageProvider(imageUrl!.replaceAll('sqdwjjewdqzxglvqerqt.supabase.co', 'supabase.mangopos.do')),
-                fit: BoxFit.cover,
-                onError: (_, _) {},
-              )
-            : null,
       ),
-      child: imageUrl == null
-          ? Icon(Icons.fastfood, color: _salesTextHint, size: 32 * zoom)
-          : null,
+      child: Icon(
+        Icons.restaurant_rounded,
+        color: _salesTextHint,
+        size: 32 * zoom,
+      ),
+    );
+
+    if (!hasUrl) return fallback;
+
+    // Imagen real recortada en círculo. ClipOval + CachedNetworkImage da
+    // placeholder y errorWidget garantizados — nunca queda círculo vacío.
+    return ClipOval(
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: CachedNetworkImage(
+          imageUrl: resolvedUrl!,
+          fit: BoxFit.cover,
+          alignment: Alignment.center,
+          placeholder: (_, _) => fallback,
+          errorWidget: (_, _, _) => fallback,
+        ),
+      ),
     );
   }
 }

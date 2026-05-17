@@ -39,6 +39,7 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     List<String> taxIds,
     bool isInventoryTracked,
     double initialStock,
+    bool allowNegativeSale,
   })
   onAdd;
 
@@ -62,6 +63,7 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     List<String> taxIds,
     bool? isInventoryTracked,
     double initialStock,
+    bool? allowNegativeSale,
   })
   onUpdate;
 
@@ -105,6 +107,12 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
   bool _isInventoryTracked = false;
   bool _wasInventoryTrackedInitially = false;
   late TextEditingController _initialStockController;
+
+  /// Si true, el producto sigue vendible aunque su stock llegue a 0 o
+  /// negativo. El auto-86 (que normalmente esconde productos agotados)
+  /// NO lo desactiva. El faltante se salda con la próxima compra.
+  bool _allowNegativeSale = false;
+  bool _wasAllowNegativeSaleInitially = false;
 
   File? _pickedImageFile;
   Uint8List? _pickedImageBytes;
@@ -157,6 +165,8 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     _isInventoryTracked = p?['is_inventory_tracked'] == true;
     _wasInventoryTrackedInitially = _isInventoryTracked;
     _initialStockController = TextEditingController(text: '0');
+    _allowNegativeSale = p?['allow_negative_sale'] == true;
+    _wasAllowNegativeSaleInitially = _allowNegativeSale;
 
     Future.microtask(() async {
       try {
@@ -612,6 +622,28 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
           value: _isInventoryTracked,
           onChanged: (v) => setState(() => _isInventoryTracked = v),
         ),
+        if (_isInventoryTracked) ...[
+          const SizedBox(height: AppSpacing.sm),
+          _switchRow(
+            title: 'Vender aunque esté agotado',
+            value: _allowNegativeSale,
+            onChanged: (v) => setState(() => _allowNegativeSale = v),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(top: 4, left: 4, right: 4),
+            child: Text(
+              _allowNegativeSale
+                  ? 'El producto seguirá en el menú aunque su stock llegue a 0 '
+                        '(el conteo puede ir negativo y se ajusta con la próxima compra).'
+                  : 'Al agotarse, el producto se oculta automáticamente del menú '
+                        'hasta que reciba stock.',
+              style: TextStyle(
+                fontSize: 11,
+                color: AppColors.mutedForeground,
+              ),
+            ),
+          ),
+        ],
         if (_isInventoryTracked && !_wasInventoryTrackedInitially) ...[
           const SizedBox(height: AppSpacing.xs),
           Container(
@@ -1261,6 +1293,8 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     // (para no disparar la RPC innecesariamente en cada save).
     final inventoryFlagChanged =
         _isInventoryTracked != _wasInventoryTrackedInitially;
+    final allowNegativeChanged =
+        _allowNegativeSale != _wasAllowNegativeSaleInitially;
 
     if (widget.product != null) {
       widget.onUpdate(
@@ -1283,6 +1317,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         taxIds: _selectedTaxIds.toList(),
         isInventoryTracked: inventoryFlagChanged ? _isInventoryTracked : null,
         initialStock: initialStock,
+        allowNegativeSale: allowNegativeChanged ? _allowNegativeSale : null,
       );
     } else {
       widget.onAdd(
@@ -1304,6 +1339,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         taxIds: _selectedTaxIds.toList(),
         isInventoryTracked: _isInventoryTracked,
         initialStock: initialStock,
+        allowNegativeSale: _allowNegativeSale,
       );
     }
     Navigator.pop(context);

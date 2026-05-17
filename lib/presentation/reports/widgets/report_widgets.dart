@@ -2,6 +2,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_radius.dart';
 import 'package:mangopos/core/theme/app_shadows.dart';
@@ -15,6 +16,14 @@ const EdgeInsets reportSectionPadding = EdgeInsets.fromLTRB(
   AppSpacing.containerPadding,
   AppSpacing.containerPadding,
 );
+
+/// Padding lateral del cuerpo del reporte. En móvil reducimos a 12
+/// para aprovechar el ancho del viewport.
+EdgeInsets reportBodyPadding(BuildContext context) {
+  final mobile = ResponsiveHelper.isMobile(context);
+  final pad = mobile ? 12.0 : AppSpacing.containerPadding;
+  return EdgeInsets.fromLTRB(pad, 0, pad, pad);
+}
 
 ButtonStyle reportOutlineButtonStyle() {
   return OutlinedButton.styleFrom(
@@ -36,17 +45,25 @@ ButtonStyle reportOutlineButtonStyle() {
 Widget buildMetricsWrap(List<SalesMetricCardData> metrics) {
   return LayoutBuilder(
     builder: (context, constraints) {
+      final isMobile = ResponsiveHelper.isMobile(context);
       final availableWidth = constraints.maxWidth;
-      const cardMinWidth = 220.0;
-      final cols = (availableWidth / (cardMinWidth + AppSpacing.itemGap))
-          .floor()
-          .clamp(1, metrics.length);
-      final cardWidth =
-          (availableWidth - (cols - 1) * AppSpacing.itemGap) / cols;
+      // En móvil ponemos 2 columnas de cards más estrechas; en desktop
+      // mantenemos el cálculo por ancho mínimo.
+      final gap = isMobile ? 8.0 : AppSpacing.itemGap;
+      final int cols;
+      if (isMobile) {
+        cols = 2.clamp(1, metrics.length);
+      } else {
+        const cardMinWidth = 220.0;
+        cols = (availableWidth / (cardMinWidth + gap))
+            .floor()
+            .clamp(1, metrics.length);
+      }
+      final cardWidth = (availableWidth - (cols - 1) * gap) / cols;
 
       return Wrap(
-        spacing: AppSpacing.itemGap,
-        runSpacing: AppSpacing.itemGap,
+        spacing: gap,
+        runSpacing: gap,
         children: metrics
             .map(
               (metric) => SizedBox(
@@ -95,13 +112,14 @@ class _ReportMetricCardState extends State<ReportMetricCard> {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = ResponsiveHelper.isMobile(context);
     return MouseRegion(
       onEnter: (_) => setState(() => _isHovered = true),
       onExit: (_) => setState(() => _isHovered = false),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         curve: Curves.easeInOut,
-        padding: const EdgeInsets.all(AppSpacing.cardPadding),
+        padding: EdgeInsets.all(isMobile ? 12 : AppSpacing.cardPadding),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(reportRadius),
@@ -116,27 +134,33 @@ class _ReportMetricCardState extends State<ReportMetricCard> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Container(
-              padding: const EdgeInsets.all(10),
+              padding: EdgeInsets.all(isMobile ? 7 : 10),
               decoration: BoxDecoration(
                 color: widget.color.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(reportRadius),
               ),
-              child: Icon(widget.icon, color: widget.color),
+              child: Icon(
+                widget.icon,
+                color: widget.color,
+                size: isMobile ? 18 : 24,
+              ),
             ),
-            const SizedBox(height: AppSpacing.lg),
+            SizedBox(height: isMobile ? 10 : AppSpacing.lg),
             Text(
               widget.title,
-              style: const TextStyle(
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
                 color: AppColors.mutedForeground,
                 fontWeight: FontWeight.w600,
-                fontSize: 13,
+                fontSize: isMobile ? 11 : 13,
               ),
             ),
             const SizedBox(height: AppSpacing.xs),
             Text(
               widget.value,
-              style: const TextStyle(
-                fontSize: 24,
+              style: TextStyle(
+                fontSize: isMobile ? 17 : 24,
                 fontWeight: FontWeight.w800,
                 color: AppColors.foreground,
               ),
@@ -146,9 +170,12 @@ class _ReportMetricCardState extends State<ReportMetricCard> {
             const SizedBox(height: AppSpacing.xs),
             Text(
               widget.subtitle,
-              style: const TextStyle(
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
                 color: AppColors.mutedForeground,
-                fontSize: 12,
+                fontSize: isMobile ? 10.5 : 12,
+                height: 1.25,
               ),
             ),
           ],
@@ -176,8 +203,9 @@ class CommercialStatTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = ResponsiveHelper.isMobile(context);
     return Container(
-      padding: const EdgeInsets.all(AppSpacing.cardPadding),
+      padding: EdgeInsets.all(isMobile ? 12 : AppSpacing.cardPadding),
       decoration: BoxDecoration(
         color: AppColors.background,
         borderRadius: BorderRadius.circular(reportRadius),
@@ -188,17 +216,21 @@ class CommercialStatTile extends StatelessWidget {
         children: [
           Text(
             label,
-            style: const TextStyle(
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
               color: AppColors.mutedForeground,
-              fontSize: 12,
+              fontSize: isMobile ? 11 : 12,
               fontWeight: FontWeight.w600,
             ),
           ),
           const SizedBox(height: 6),
           Text(
             value,
-            style: const TextStyle(
-              fontSize: 20,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: isMobile ? 17 : 20,
               fontWeight: FontWeight.w800,
               color: AppColors.foreground,
             ),
@@ -206,9 +238,12 @@ class CommercialStatTile extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             hint,
-            style: const TextStyle(
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
               color: AppColors.mutedForeground,
-              fontSize: 12,
+              fontSize: isMobile ? 10.5 : 12,
+              height: 1.25,
             ),
           ),
         ],

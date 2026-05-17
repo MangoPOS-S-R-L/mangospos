@@ -45,8 +45,35 @@ class _SalesReportBody extends StatelessWidget {
     final totalModifiers =
         (summary['modifier_sales_total'] as num?)?.toDouble() ?? 0;
 
+    final isMobile = ResponsiveHelper.isMobile(context);
+    final cardPad = isMobile ? 14.0 : AppSpacing.cardPadding;
+    Widget pdfBtn() => OutlinedButton.icon(
+          style: reportOutlineButtonStyle(),
+          onPressed: () async {
+            await ReportsExportService.exportCurrentReport(
+              category: ReportCategory.sales,
+              state: state,
+              viewModel: viewModel,
+            );
+          },
+          icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
+          label: const Text('PDF'),
+        );
+    Widget csvBtn() => OutlinedButton.icon(
+          style: reportOutlineButtonStyle(),
+          onPressed: () async {
+            await ReportsCsvExportService.exportCurrentReport(
+              category: ReportCategory.sales,
+              state: state,
+              viewModel: viewModel,
+            );
+          },
+          icon: const Icon(Icons.table_view_outlined, size: 18),
+          label: const Text('CSV'),
+        );
+
     return ListView(
-      padding: reportSectionPadding,
+      padding: reportBodyPadding(context),
       children: [
         if (state.error != null) ...[
           const SizedBox(height: AppSpacing.itemGap),
@@ -55,9 +82,9 @@ class _SalesReportBody extends StatelessWidget {
             style: const TextStyle(color: AppColors.destructive),
           ),
         ],
-        const SizedBox(height: AppSpacing.xl),
+        SizedBox(height: isMobile ? AppSpacing.itemGap : AppSpacing.xl),
         Container(
-          padding: const EdgeInsets.all(AppSpacing.cardPadding),
+          padding: EdgeInsets.all(cardPad),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(reportRadius),
@@ -70,25 +97,28 @@ class _SalesReportBody extends StatelessWidget {
               Row(
                 children: [
                   Container(
-                    padding: const EdgeInsets.all(10),
+                    padding: EdgeInsets.all(isMobile ? 8 : 10),
                     decoration: BoxDecoration(
                       color: AppColors.primary.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(reportRadius),
                     ),
-                    child: const Icon(
+                    child: Icon(
                       Icons.insights_outlined,
                       color: AppColors.primary,
+                      size: isMobile ? 18 : 24,
                     ),
                   ),
-                  const SizedBox(width: AppSpacing.itemGap),
+                  SizedBox(width: isMobile ? 10 : AppSpacing.itemGap),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
+                        Text(
                           'Informe de ventas',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            fontSize: 18,
+                            fontSize: isMobile ? 15 : 18,
                             fontWeight: FontWeight.w800,
                             color: AppColors.foreground,
                           ),
@@ -96,43 +126,35 @@ class _SalesReportBody extends StatelessWidget {
                         const SizedBox(height: 4),
                         Text(
                           'Período ${DateFormat('dd MMM yyyy').format(state.salesFrom)} – ${DateFormat('dd MMM yyyy').format(displayTo)}',
-                          style: const TextStyle(
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
                             color: AppColors.mutedForeground,
-                            fontSize: 13,
-                            height: 1.4,
+                            fontSize: isMobile ? 11.5 : 13,
+                            height: 1.3,
                           ),
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(width: AppSpacing.tightGap),
-                  OutlinedButton.icon(
-                    style: reportOutlineButtonStyle(),
-                    onPressed: () async {
-                      await ReportsExportService.exportCurrentReport(
-                        category: ReportCategory.sales,
-                        state: state,
-                        viewModel: viewModel,
-                      );
-                    },
-                    icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
-                    label: const Text('PDF'),
-                  ),
-                  const SizedBox(width: AppSpacing.tightGap),
-                  OutlinedButton.icon(
-                    style: reportOutlineButtonStyle(),
-                    onPressed: () async {
-                      await ReportsCsvExportService.exportCurrentReport(
-                        category: ReportCategory.sales,
-                        state: state,
-                        viewModel: viewModel,
-                      );
-                    },
-                    icon: const Icon(Icons.table_view_outlined, size: 18),
-                    label: const Text('CSV'),
-                  ),
+                  if (!isMobile) ...[
+                    const SizedBox(width: AppSpacing.tightGap),
+                    pdfBtn(),
+                    const SizedBox(width: AppSpacing.tightGap),
+                    csvBtn(),
+                  ],
                 ],
               ),
+              if (isMobile) ...[
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(child: pdfBtn()),
+                    const SizedBox(width: 8),
+                    Expanded(child: csvBtn()),
+                  ],
+                ),
+              ],
               const SizedBox(height: AppSpacing.lg),
               Row(
                 children: [

@@ -36,7 +36,7 @@ class _InventoryReportBody extends StatelessWidget {
     final movementRows = viewModel.getInventoryMovementRows();
 
     return ListView(
-      padding: reportSectionPadding,
+      padding: reportBodyPadding(context),
       children: [
         const Text(
           'Visión general de existencias, alertas y movimientos recientes.',

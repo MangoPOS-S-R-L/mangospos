@@ -98,6 +98,7 @@ class AppRoutes {
   static const inventoryAdjustments = '$inventoryHome/adjustments';
   static const inventoryProduction = '$inventoryHome/production';
   static const inventoryPhysicalCount = '$inventoryHome/physical-count';
+  static const inventoryReorder = '$inventoryHome/reorder';
   static const printingBase = '$settings/printing';
 
   // ---- Gestión de impresión (sin businessId en URL) ----

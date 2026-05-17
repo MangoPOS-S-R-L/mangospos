@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/data/repositories/permissions_repository.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
 import 'package:mangopos/services/session/session_controller.dart';
@@ -145,6 +146,8 @@ class _SettingsRolesViewState extends ConsumerState<SettingsRolesView> {
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
+    final isMobile = ResponsiveHelper.isMobile(context);
+    final hPad = isMobile ? 10.0 : 16.0;
 
     return Scaffold(
       backgroundColor: MangoColors.sidebarBg,
@@ -153,17 +156,27 @@ class _SettingsRolesViewState extends ConsumerState<SettingsRolesView> {
           icon: const Icon(Icons.arrow_back),
           onPressed: () => context.go(AppRoutes.settingsUsers),
         ),
-        title: const Text('Gestionar Roles'),
+        title: Text(
+          'Gestionar Roles',
+          style: TextStyle(fontSize: isMobile ? 16 : 20),
+        ),
         backgroundColor: MangoColors.white,
         foregroundColor: MangoColors.darkGray,
         elevation: .4,
         actions: [
-          TextButton.icon(
-            onPressed: _onSave,
-            icon: const Icon(Icons.save_outlined),
-            label: const Text('Guardar'),
-          ),
-          const SizedBox(width: 8),
+          if (isMobile)
+            IconButton(
+              tooltip: 'Guardar',
+              onPressed: _onSave,
+              icon: const Icon(Icons.save_outlined),
+            )
+          else
+            TextButton.icon(
+              onPressed: _onSave,
+              icon: const Icon(Icons.save_outlined),
+              label: const Text('Guardar'),
+            ),
+          const SizedBox(width: 4),
         ],
       ),
       body: _loading
@@ -182,38 +195,48 @@ class _SettingsRolesViewState extends ConsumerState<SettingsRolesView> {
               : RefreshIndicator(
                   onRefresh: _bootstrap,
                   child: ListView(
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+                    padding: EdgeInsets.fromLTRB(hPad, hPad, hPad, 24),
                     children: [
-                      _HeaderCard(onImportMatrix: _importPreset),
-                      const SizedBox(height: 16),
+                      _HeaderCard(
+                        onImportMatrix: _importPreset,
+                        isMobile: isMobile,
+                      ),
+                      SizedBox(height: isMobile ? 12 : 16),
                       ..._groups.map((group) => _PermissionGroupCard(
                             group: group,
                             actions: actions,
                             grants: _grants,
                             onToggle: _toggle,
+                            isMobile: isMobile,
                           )),
-                      const SizedBox(height: 20),
+                      SizedBox(height: isMobile ? 14 : 20),
                       Card(
                         elevation: .4,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10),
                         ),
                         child: Padding(
-                          padding: const EdgeInsets.all(14),
+                          padding: EdgeInsets.all(isMobile ? 12 : 14),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
                                 'Nota rapida',
                                 style: text.titleMedium?.copyWith(
-                                    fontWeight: FontWeight.w800),
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: isMobile ? 14 : null,
+                                ),
                               ),
-                              const SizedBox(height: 6),
-                              const Text(
+                              SizedBox(height: isMobile ? 4 : 6),
+                              Text(
                                 '- Acceso controla si el modulo/pantalla se muestra.\n'
                                 '- Ver es solo lectura; Graba/Mod permite crear/editar.\n'
                                 '- Anula cubre cancelaciones/reaperturas (motivo requerido).\n'
                                 '- Reimprime aplica a recibos/comandas/fiscales.',
+                                style: TextStyle(
+                                  fontSize: isMobile ? 12 : 14,
+                                  height: 1.4,
+                                ),
                               ),
                             ],
                           ),
@@ -354,31 +377,44 @@ class _PermissionGroupCard extends StatelessWidget {
     required this.actions,
     required this.grants,
     required this.onToggle,
+    this.isMobile = false,
   });
 
   final _PermissionGroup group;
   final List<String> actions;
   final Map<String, Set<String>> grants;
   final void Function(String code, String action, bool value) onToggle;
+  final bool isMobile;
 
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
     return Card(
       elevation: .5,
+      margin: EdgeInsets.only(bottom: isMobile ? 10 : 12),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+        padding: EdgeInsets.fromLTRB(
+          isMobile ? 12 : 14,
+          isMobile ? 10 : 12,
+          isMobile ? 12 : 14,
+          isMobile ? 8 : 10,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
               group.title,
-              style: text.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+              style: text.titleMedium?.copyWith(
+                fontWeight: FontWeight.w800,
+                fontSize: isMobile ? 14 : null,
+              ),
             ),
-            const SizedBox(height: 12),
-            _PermissionTableHeader(actions: actions),
-            const Divider(height: 14),
+            SizedBox(height: isMobile ? 8 : 12),
+            if (!isMobile) ...[
+              _PermissionTableHeader(actions: actions),
+              const Divider(height: 14),
+            ],
             ...group.permissions.map(
               (p) => _PermissionRowWidget(
                 row: p,
@@ -389,6 +425,7 @@ class _PermissionGroupCard extends StatelessWidget {
                 },
                 selected: grants[p.code] ?? const {},
                 onToggle: onToggle,
+                isMobile: isMobile,
               ),
             ),
           ],
@@ -438,6 +475,7 @@ class _PermissionRowWidget extends StatelessWidget {
     required this.availableActions,
     required this.selected,
     required this.onToggle,
+    this.isMobile = false,
   });
 
   final _PermissionRow row;
@@ -445,9 +483,75 @@ class _PermissionRowWidget extends StatelessWidget {
   final Set<String> availableActions;
   final Set<String> selected;
   final void Function(String code, String action, bool value) onToggle;
+  final bool isMobile;
+
+  static const _labels = {
+    'acceso': 'Acceso',
+    'ver': 'Ver',
+    'graba/mod': 'Graba/Mod',
+    'anula': 'Anula',
+    'reimprime': 'Reimprime',
+  };
 
   @override
   Widget build(BuildContext context) {
+    if (isMobile) {
+      // Vista móvil: label arriba, chips toggleables debajo.
+      // Solo mostramos las acciones disponibles para este permiso.
+      final available =
+          actions.where((a) => availableActions.contains(a)).toList();
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFAFAFA),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: const Color(0xFFEEEEEE)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                row.label,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                  height: 1.3,
+                ),
+              ),
+              const SizedBox(height: 8),
+              if (available.isEmpty)
+                const Text(
+                  'Sin acciones configurables',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF9CA3AF),
+                    fontStyle: FontStyle.italic,
+                  ),
+                )
+              else
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: available
+                      .map(
+                        (a) => _ActionChip(
+                          label: _labels[a] ?? a,
+                          selected: selected.contains(a),
+                          onTap: () => onToggle(
+                              row.code, a, !selected.contains(a)),
+                        ),
+                      )
+                      .toList(),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Vista desktop/tablet: tabla con checkboxes en columnas.
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
@@ -481,9 +585,71 @@ class _PermissionRowWidget extends StatelessWidget {
   }
 }
 
+class _ActionChip extends StatelessWidget {
+  const _ActionChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = selected
+        ? MangoColors.primaryOrange.withValues(alpha: 0.14)
+        : Colors.white;
+    final fg = selected
+        ? MangoColors.primaryOrange
+        : const Color(0xFF374151);
+    final border = selected
+        ? MangoColors.primaryOrange
+        : const Color(0xFFD1D5DB);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: border, width: selected ? 1.4 : 1),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              selected
+                  ? Icons.check_circle_rounded
+                  : Icons.radio_button_unchecked_rounded,
+              size: 14,
+              color: fg,
+            ),
+            const SizedBox(width: 5),
+            Text(
+              label,
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 11.5,
+                color: fg,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _HeaderCard extends StatelessWidget {
-  const _HeaderCard({required this.onImportMatrix});
+  const _HeaderCard({
+    required this.onImportMatrix,
+    this.isMobile = false,
+  });
   final VoidCallback onImportMatrix;
+  final bool isMobile;
 
   @override
   Widget build(BuildContext context) {
@@ -492,32 +658,57 @@ class _HeaderCard extends StatelessWidget {
       elevation: .6,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        padding: EdgeInsets.fromLTRB(
+          isMobile ? 12 : 14,
+          isMobile ? 10 : 12,
+          isMobile ? 12 : 14,
+          isMobile ? 10 : 12,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
               'Roles basados en permisos',
-              style: text.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+              style: text.titleMedium?.copyWith(
+                fontWeight: FontWeight.w800,
+                fontSize: isMobile ? 14 : null,
+              ),
             ),
-            const SizedBox(height: 6),
-            const Text(
-              'Activa los permisos por accion segun el documento de roles. '
-              'Acceso muestra la pantalla; los demas toggles habilitan acciones '
-              'como crear/editar, anular/reabrir o reimprimir.',
+            SizedBox(height: isMobile ? 4 : 6),
+            Text(
+              isMobile
+                  ? 'Activa los permisos por acción. Acceso muestra la pantalla; '
+                      'los demás habilitan acciones específicas.'
+                  : 'Activa los permisos por accion segun el documento de roles. '
+                      'Acceso muestra la pantalla; los demas toggles habilitan acciones '
+                      'como crear/editar, anular/reabrir o reimprimir.',
+              style: TextStyle(
+                fontSize: isMobile ? 12 : 14,
+                height: 1.4,
+              ),
             ),
-            const SizedBox(height: 10),
+            SizedBox(height: isMobile ? 8 : 10),
             Wrap(
-              spacing: 8,
+              spacing: isMobile ? 6 : 8,
+              runSpacing: isMobile ? 6 : 8,
               children: [
                 OutlinedButton.icon(
-                  icon: const Icon(Icons.table_rows),
-                  label: const Text('Cargar preset demo'),
+                  icon: Icon(Icons.table_rows, size: isMobile ? 16 : 18),
+                  label: Text(
+                    isMobile ? 'Preset demo' : 'Cargar preset demo',
+                    style: TextStyle(fontSize: isMobile ? 12 : 14),
+                  ),
                   onPressed: onImportMatrix,
                 ),
                 OutlinedButton.icon(
-                  icon: const Icon(Icons.description_outlined),
-                  label: const Text('Ver definiciones'),
+                  icon: Icon(
+                    Icons.description_outlined,
+                    size: isMobile ? 16 : 18,
+                  ),
+                  label: Text(
+                    isMobile ? 'Definiciones' : 'Ver definiciones',
+                    style: TextStyle(fontSize: isMobile ? 12 : 14),
+                  ),
                   onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                       content: Text(

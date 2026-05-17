@@ -229,7 +229,22 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
       }
     }
 
-    return PrintingPageShell(
+    return Scaffold(
+      backgroundColor: const Color(0xFFF3F4F6),
+      appBar: AppBar(
+        backgroundColor: MangoColors.white,
+        foregroundColor: MangoColors.darkGray,
+        elevation: 0.6,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          tooltip: 'Regresar',
+          onPressed: () => Navigator.of(context).canPop()
+              ? Navigator.of(context).pop()
+              : context.go(AppRoutes.printingBase),
+        ),
+        title: const Text('Impresora de comprobantes'),
+      ),
+      body: PrintingPageShell(
       title: 'Asignar impresora por comprobantes',
       icon: Icons.print_outlined,
       listTitle: 'Lista de comprobantes',
@@ -358,6 +373,7 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
                 );
               },
             ),
+      ),
     );
   }
 }

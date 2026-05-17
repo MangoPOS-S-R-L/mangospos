@@ -1521,6 +1521,8 @@ class _UserDialogState extends State<_UserDialog> {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setModalState) {
+            final isMobile = ResponsiveHelper.isMobile(context);
+            final mq = MediaQuery.sizeOf(context);
             final category = accessCategories.firstWhere(
               (item) => item.id == selectedCategoryId,
             );
@@ -1532,259 +1534,442 @@ class _UserDialogState extends State<_UserDialog> {
                 );
             final counts = _categoryCounts(workingCodes);
 
+            // En móvil el modal es fullscreen sin inset; en desktop card 1080×720.
+            final dialogWidth =
+                isMobile ? mq.width : 1080.0.clamp(0.0, mq.width - 48);
+            final dialogHeight =
+                isMobile ? mq.height : 720.0.clamp(0.0, mq.height - 48);
             return Dialog(
               backgroundColor: Colors.white,
-              insetPadding: const EdgeInsets.all(24),
+              insetPadding:
+                  EdgeInsets.all(isMobile ? 0 : 24),
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
+                borderRadius: BorderRadius.circular(isMobile ? 0 : 20),
               ),
               child: SizedBox(
-                width: 1080,
-                height: 720,
-                child: Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Permisos del usuario',
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                                const SizedBox(height: 6),
-                                Text(
-                                  'Cargo: ${businessRoleLabel(selectedRole)}',
-                                  style: TextStyle(
-                                    color: Colors.grey[700],
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          TextButton.icon(
-                            onPressed: () {
-                              setModalState(() {
-                                workingCodes = presetCodesForRole(selectedRole);
-                              });
-                            },
-                            icon: const Icon(Icons.replay_outlined),
-                            label: const Text('Usar permisos predeterminados'),
-                          ),
-                          const SizedBox(width: 8),
-                          IconButton(
-                            onPressed: () => Navigator.of(context).pop(),
-                            icon: const Icon(Icons.close),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Divider(height: 1),
-                    Expanded(
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 320,
-                            padding: const EdgeInsets.all(20),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFF8F7F5),
-                              border: Border(
-                                right: BorderSide(color: Colors.grey.shade200),
-                              ),
-                            ),
-                            child: ListView.separated(
-                              itemCount: accessCategories.length,
-                              separatorBuilder: (_, separatorIndex) =>
-                                  const SizedBox(height: 10),
-                              itemBuilder: (context, index) {
-                                final item = accessCategories[index];
-                                final total = permissionsForCategory(
-                                  item.id,
-                                ).length;
-                                final selected = counts[item.id] ?? 0;
-                                final active = item.id == selectedCategoryId;
-
-                                return InkWell(
-                                  onTap: () {
-                                    setModalState(() {
-                                      selectedCategoryId = item.id;
-                                    });
-                                  },
-                                  borderRadius: BorderRadius.circular(14),
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 16,
-                                      vertical: 14,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: active
-                                          ? const Color(0xFFFFF1E4)
-                                          : Colors.white,
-                                      borderRadius: BorderRadius.circular(14),
-                                      border: Border.all(
-                                        color: active
-                                            ? const Color(0xFFFFB36B)
-                                            : Colors.grey.shade200,
-                                      ),
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            item.label,
-                                            style: TextStyle(
-                                              fontWeight: FontWeight.w700,
-                                              color: active
-                                                  ? const Color(0xFFF97316)
-                                                  : const Color(0xFF2C2C2C),
-                                            ),
-                                          ),
-                                        ),
-                                        Text(
-                                          '$selected/$total',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.w700,
-                                            color: Colors.grey[700],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                          Expanded(
-                            child: Padding(
-                              padding: const EdgeInsets.all(20),
+                width: dialogWidth.toDouble(),
+                height: dialogHeight.toDouble(),
+                child: SafeArea(
+                  child: Column(
+                    children: [
+                      // ── Header ─────────────────────────────────────
+                      Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          isMobile ? 12 : 24,
+                          isMobile ? 10 : 20,
+                          isMobile ? 8 : 24,
+                          isMobile ? 8 : 16,
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: Text(
-                                          category.label,
-                                          style: const TextStyle(
-                                            fontSize: 18,
-                                            fontWeight: FontWeight.w800,
-                                          ),
-                                        ),
-                                      ),
-                                      Checkbox(
-                                        value: allSelected,
-                                        onChanged: (value) {
-                                          setModalState(() {
-                                            for (final permission
-                                                in categoryPermissions) {
-                                              if (value == true) {
-                                                workingCodes.add(
-                                                  permission.code,
-                                                );
-                                              } else {
-                                                workingCodes.remove(
-                                                  permission.code,
-                                                );
-                                              }
-                                            }
-                                          });
-                                        },
-                                      ),
-                                      const Text(
-                                        'Seleccionar todo',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ],
+                                  Text(
+                                    'Permisos del usuario',
+                                    style: TextStyle(
+                                      fontSize: isMobile ? 16 : 20,
+                                      fontWeight: FontWeight.w800,
+                                    ),
                                   ),
-                                  const SizedBox(height: 12),
-                                  Expanded(
-                                    child: ListView.separated(
-                                      itemCount: categoryPermissions.length,
-                                      separatorBuilder: (_, separatorIndex) =>
-                                          Divider(
-                                            height: 1,
-                                            color: Colors.grey.shade200,
-                                          ),
-                                      itemBuilder: (context, index) {
-                                        final permission =
-                                            categoryPermissions[index];
-                                        final selected = workingCodes.contains(
-                                          permission.code,
-                                        );
-                                        return SwitchListTile(
-                                          value: selected,
-                                          onChanged: (value) {
-                                            setModalState(() {
-                                              if (value) {
-                                                workingCodes.add(
-                                                  permission.code,
-                                                );
-                                              } else {
-                                                workingCodes.remove(
-                                                  permission.code,
-                                                );
-                                              }
-                                            });
-                                          },
-                                          title: Text(
-                                            permission.label,
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                          subtitle: Text(
-                                            permission.description,
-                                            style: TextStyle(
-                                              color: Colors.grey[600],
-                                            ),
-                                          ),
-                                          activeThumbColor: const Color(
-                                            0xFF3B82F6,
-                                          ),
-                                        );
-                                      },
+                                  SizedBox(height: isMobile ? 2 : 6),
+                                  Text(
+                                    'Cargo: ${businessRoleLabel(selectedRole)}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: Colors.grey[700],
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: isMobile ? 12 : 14,
                                     ),
                                   ),
                                 ],
                               ),
                             ),
-                          ),
-                        ],
+                            if (isMobile)
+                              IconButton(
+                                tooltip: 'Permisos predeterminados',
+                                onPressed: () {
+                                  setModalState(() {
+                                    workingCodes =
+                                        presetCodesForRole(selectedRole);
+                                  });
+                                },
+                                icon: const Icon(Icons.replay_outlined),
+                              )
+                            else
+                              TextButton.icon(
+                                onPressed: () {
+                                  setModalState(() {
+                                    workingCodes =
+                                        presetCodesForRole(selectedRole);
+                                  });
+                                },
+                                icon: const Icon(Icons.replay_outlined),
+                                label: const Text(
+                                  'Usar permisos predeterminados',
+                                ),
+                              ),
+                            if (!isMobile) const SizedBox(width: 8),
+                            IconButton(
+                              onPressed: () => Navigator.of(context).pop(),
+                              icon: const Icon(Icons.close),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                    const Divider(height: 1),
-                    Padding(
-                      padding: const EdgeInsets.all(20),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          TextButton(
-                            onPressed: () => Navigator.of(context).pop(),
-                            child: const Text('Cancelar'),
-                          ),
-                          ElevatedButton.icon(
-                            onPressed: () =>
-                                Navigator.of(context).pop({...workingCodes}),
-                            icon: const Icon(Icons.add_task_outlined),
-                            label: const Text('Aplicar permisos'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF3B82F6),
-                              foregroundColor: Colors.white,
+                      const Divider(height: 1),
+                      // ── Cuerpo ────────────────────────────────────
+                      // Móvil: chip-row horizontal de categorías + lista de
+                      // permisos. Desktop: side panel de categorías + lista.
+                      if (isMobile)
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                          color: const Color(0xFFFAFAFA),
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: Row(
+                              children: [
+                                for (final item in accessCategories) ...[
+                                  Builder(builder: (_) {
+                                    final total = permissionsForCategory(
+                                      item.id,
+                                    ).length;
+                                    final sel = counts[item.id] ?? 0;
+                                    final active = item.id == selectedCategoryId;
+                                    return InkWell(
+                                      onTap: () {
+                                        setModalState(() {
+                                          selectedCategoryId = item.id;
+                                        });
+                                      },
+                                      borderRadius: BorderRadius.circular(10),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                          vertical: 8,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: active
+                                              ? const Color(0xFFFFF1E4)
+                                              : Colors.white,
+                                          borderRadius:
+                                              BorderRadius.circular(10),
+                                          border: Border.all(
+                                            color: active
+                                                ? const Color(0xFFFFB36B)
+                                                : Colors.grey.shade300,
+                                            width: active ? 1.4 : 1,
+                                          ),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Text(
+                                              item.label,
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.w700,
+                                                fontSize: 12,
+                                                color: active
+                                                    ? const Color(0xFFF97316)
+                                                    : const Color(0xFF374151),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 6),
+                                            Container(
+                                              padding: const EdgeInsets
+                                                  .symmetric(
+                                                horizontal: 6,
+                                                vertical: 2,
+                                              ),
+                                              decoration: BoxDecoration(
+                                                color: active
+                                                    ? const Color(0xFFF97316)
+                                                    : Colors.grey.shade200,
+                                                borderRadius:
+                                                    BorderRadius.circular(8),
+                                              ),
+                                              child: Text(
+                                                '$sel/$total',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.w700,
+                                                  fontSize: 10,
+                                                  color: active
+                                                      ? Colors.white
+                                                      : Colors.grey[700],
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    );
+                                  }),
+                                  const SizedBox(width: 6),
+                                ],
+                              ],
                             ),
                           ),
-                        ],
+                        ),
+                      Expanded(
+                        child: isMobile
+                            ? _MobilePermissionsList(
+                                category: category,
+                                permissions: categoryPermissions,
+                                workingCodes: workingCodes,
+                                allSelected: allSelected,
+                                onToggleAll: (value) {
+                                  setModalState(() {
+                                    for (final p in categoryPermissions) {
+                                      if (value == true) {
+                                        workingCodes.add(p.code);
+                                      } else {
+                                        workingCodes.remove(p.code);
+                                      }
+                                    }
+                                  });
+                                },
+                                onTogglePermission: (code, value) {
+                                  setModalState(() {
+                                    if (value) {
+                                      workingCodes.add(code);
+                                    } else {
+                                      workingCodes.remove(code);
+                                    }
+                                  });
+                                },
+                              )
+                            : Row(
+                                children: [
+                                  Container(
+                                    width: 320,
+                                    padding: const EdgeInsets.all(20),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFF8F7F5),
+                                      border: Border(
+                                        right: BorderSide(
+                                            color: Colors.grey.shade200),
+                                      ),
+                                    ),
+                                    child: ListView.separated(
+                                      itemCount: accessCategories.length,
+                                      separatorBuilder:
+                                          (_, separatorIndex) =>
+                                              const SizedBox(height: 10),
+                                      itemBuilder: (context, index) {
+                                        final item = accessCategories[index];
+                                        final total = permissionsForCategory(
+                                          item.id,
+                                        ).length;
+                                        final selected = counts[item.id] ?? 0;
+                                        final active =
+                                            item.id == selectedCategoryId;
+
+                                        return InkWell(
+                                          onTap: () {
+                                            setModalState(() {
+                                              selectedCategoryId = item.id;
+                                            });
+                                          },
+                                          borderRadius:
+                                              BorderRadius.circular(14),
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 16,
+                                              vertical: 14,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: active
+                                                  ? const Color(0xFFFFF1E4)
+                                                  : Colors.white,
+                                              borderRadius:
+                                                  BorderRadius.circular(14),
+                                              border: Border.all(
+                                                color: active
+                                                    ? const Color(0xFFFFB36B)
+                                                    : Colors.grey.shade200,
+                                              ),
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                Expanded(
+                                                  child: Text(
+                                                    item.label,
+                                                    style: TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.w700,
+                                                      color: active
+                                                          ? const Color(
+                                                              0xFFF97316)
+                                                          : const Color(
+                                                              0xFF2C2C2C),
+                                                    ),
+                                                  ),
+                                                ),
+                                                Text(
+                                                  '$selected/$total',
+                                                  style: TextStyle(
+                                                    fontWeight:
+                                                        FontWeight.w700,
+                                                    color: Colors.grey[700],
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(20),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Expanded(
+                                                child: Text(
+                                                  category.label,
+                                                  style: const TextStyle(
+                                                    fontSize: 18,
+                                                    fontWeight: FontWeight.w800,
+                                                  ),
+                                                ),
+                                              ),
+                                              Checkbox(
+                                                value: allSelected,
+                                                onChanged: (value) {
+                                                  setModalState(() {
+                                                    for (final permission
+                                                        in categoryPermissions) {
+                                                      if (value == true) {
+                                                        workingCodes.add(
+                                                          permission.code,
+                                                        );
+                                                      } else {
+                                                        workingCodes.remove(
+                                                          permission.code,
+                                                        );
+                                                      }
+                                                    }
+                                                  });
+                                                },
+                                              ),
+                                              const Text(
+                                                'Seleccionar todo',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 12),
+                                          Expanded(
+                                            child: ListView.separated(
+                                              itemCount:
+                                                  categoryPermissions.length,
+                                              separatorBuilder:
+                                                  (_, separatorIndex) =>
+                                                      Divider(
+                                                        height: 1,
+                                                        color: Colors
+                                                            .grey.shade200,
+                                                      ),
+                                              itemBuilder: (context, index) {
+                                                final permission =
+                                                    categoryPermissions[index];
+                                                final selected = workingCodes
+                                                    .contains(permission.code);
+                                                return SwitchListTile(
+                                                  value: selected,
+                                                  onChanged: (value) {
+                                                    setModalState(() {
+                                                      if (value) {
+                                                        workingCodes.add(
+                                                          permission.code,
+                                                        );
+                                                      } else {
+                                                        workingCodes.remove(
+                                                          permission.code,
+                                                        );
+                                                      }
+                                                    });
+                                                  },
+                                                  title: Text(
+                                                    permission.label,
+                                                    style: const TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                    ),
+                                                  ),
+                                                  subtitle: Text(
+                                                    permission.description,
+                                                    style: TextStyle(
+                                                      color: Colors.grey[600],
+                                                    ),
+                                                  ),
+                                                  activeThumbColor:
+                                                      Colors.white,
+                                                  activeTrackColor: MangoColors
+                                                      .primaryOrange,
+                                                  inactiveThumbColor:
+                                                      Colors.white,
+                                                  inactiveTrackColor:
+                                                      const Color(0xFFD1D5DB),
+                                                  trackOutlineColor:
+                                                      WidgetStateProperty
+                                                          .resolveWith(
+                                                    (states) => states.contains(
+                                                            WidgetState
+                                                                .selected)
+                                                        ? MangoColors
+                                                            .primaryOrange
+                                                        : const Color(
+                                                            0xFFD1D5DB),
+                                                  ),
+                                                );
+                                              },
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                       ),
-                    ),
-                  ],
+                      const Divider(height: 1),
+                      Padding(
+                        padding: EdgeInsets.all(isMobile ? 12 : 20),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            TextButton(
+                              onPressed: () => Navigator.of(context).pop(),
+                              child: const Text('Cancelar'),
+                            ),
+                            ElevatedButton.icon(
+                              onPressed: () => Navigator.of(context)
+                                  .pop({...workingCodes}),
+                              icon: const Icon(Icons.add_task_outlined),
+                              label: Text(isMobile
+                                  ? 'Aplicar'
+                                  : 'Aplicar permisos'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: MangoColors.successGreen,
+                                foregroundColor: Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             );
@@ -2053,32 +2238,47 @@ class _UserDialogState extends State<_UserDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = ResponsiveHelper.isMobile(context);
+    final mq = MediaQuery.sizeOf(context);
     return Dialog(
       backgroundColor: Colors.white,
-      insetPadding: const EdgeInsets.all(16),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      insetPadding: EdgeInsets.all(isMobile ? 0 : 16),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(isMobile ? 0 : 16),
+      ),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeInOut,
-        width: 720,
-        constraints: const BoxConstraints(maxHeight: 680),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+        width: isMobile ? mq.width : 720,
+        constraints: BoxConstraints(
+          maxHeight: isMobile ? mq.height : 680,
+        ),
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
             // Header
             Padding(
-              padding: const EdgeInsets.fromLTRB(24, 20, 20, 16),
+              padding: EdgeInsets.fromLTRB(
+                isMobile ? 14 : 24,
+                isMobile ? 10 : 20,
+                isMobile ? 10 : 20,
+                isMobile ? 10 : 16,
+              ),
               child: Row(
                 children: [
-                  Text(
-                    widget.user == null ? 'Nuevo Usuario' : 'Editar Usuario',
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF1A1A1A),
+                  Expanded(
+                    child: Text(
+                      widget.user == null ? 'Nuevo Usuario' : 'Editar Usuario',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: isMobile ? 16 : 20,
+                        fontWeight: FontWeight.w700,
+                        color: const Color(0xFF1A1A1A),
+                      ),
                     ),
                   ),
-                  const Spacer(),
                   IconButton(
                     icon: const Icon(Icons.close, size: 20),
                     onPressed: () => Navigator.pop(context),
@@ -2092,7 +2292,7 @@ class _UserDialogState extends State<_UserDialog> {
             // Tabs
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 24),
+              padding: EdgeInsets.symmetric(horizontal: isMobile ? 12 : 24),
               child: Row(
                 children: List.generate(_tabs.length, (i) {
                   final selected = _tab == i;
@@ -2158,12 +2358,12 @@ class _UserDialogState extends State<_UserDialog> {
               ),
             ),
 
-            const SizedBox(height: 20),
+            SizedBox(height: isMobile ? 12 : 20),
 
             // Content
             Expanded(
               child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
+                padding: EdgeInsets.symmetric(horizontal: isMobile ? 14 : 24),
                 child: AnimatedSwitcher(
                   duration: const Duration(milliseconds: 250),
                   switchInCurve: Curves.easeInOut,
@@ -2188,7 +2388,7 @@ class _UserDialogState extends State<_UserDialog> {
             // Footer
             const Divider(height: 1),
             Padding(
-              padding: const EdgeInsets.all(20),
+              padding: EdgeInsets.all(isMobile ? 12 : 20),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
@@ -2196,9 +2396,9 @@ class _UserDialogState extends State<_UserDialog> {
                     onPressed: () => Navigator.pop(context),
                     style: TextButton.styleFrom(
                       foregroundColor: const Color(0xFF666666),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 20,
-                        vertical: 12,
+                      padding: EdgeInsets.symmetric(
+                        horizontal: isMobile ? 14 : 20,
+                        vertical: isMobile ? 10 : 12,
                       ),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),
@@ -2212,7 +2412,7 @@ class _UserDialogState extends State<_UserDialog> {
                       ),
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  SizedBox(width: isMobile ? 8 : 12),
                   ElevatedButton(
                     onPressed: _saving
                         ? null
@@ -2227,11 +2427,11 @@ class _UserDialogState extends State<_UserDialog> {
                             }
                           },
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFFF7F1F),
+                      backgroundColor: MangoColors.primaryOrange,
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 12,
+                      padding: EdgeInsets.symmetric(
+                        horizontal: isMobile ? 16 : 24,
+                        vertical: isMobile ? 10 : 12,
                       ),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),
@@ -2241,8 +2441,8 @@ class _UserDialogState extends State<_UserDialog> {
                     child: Text(
                       _tab == _tabs.length - 1
                           ? (widget.user == null
-                                ? 'Crear Usuario'
-                                : 'Guardar cambios')
+                                ? (isMobile ? 'Crear' : 'Crear Usuario')
+                                : (isMobile ? 'Guardar' : 'Guardar cambios'))
                           : 'Siguiente',
                       style: const TextStyle(
                         fontSize: 14,
@@ -2255,7 +2455,31 @@ class _UserDialogState extends State<_UserDialog> {
             ),
           ],
         ),
+        ),
       ),
+    );
+  }
+
+  /// Apila dos widgets en columna (móvil) o los pone lado a lado con
+  /// Expanded (desktop/tablet). Se usa para los pares de campos del
+  /// formulario de usuario que no caben juntos en ~380 px.
+  Widget _pair(BuildContext context, Widget left, Widget right) {
+    if (ResponsiveHelper.isMobile(context)) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          left,
+          const SizedBox(height: 16),
+          right,
+        ],
+      );
+    }
+    return Row(
+      children: [
+        Expanded(child: left),
+        const SizedBox(width: 16),
+        Expanded(child: right),
+      ],
     );
   }
 
@@ -2266,22 +2490,10 @@ class _UserDialogState extends State<_UserDialog> {
           key: const ValueKey(0),
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: _LabeledField(
-                    label: 'Nombre *',
-                    controller: _firstName,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _LabeledField(
-                    label: 'Apellido *',
-                    controller: _lastName,
-                  ),
-                ),
-              ],
+            _pair(
+              context,
+              _LabeledField(label: 'Nombre *', controller: _firstName),
+              _LabeledField(label: 'Apellido *', controller: _lastName),
             ),
             const SizedBox(height: 16),
             _LabeledField(label: 'Email *', controller: _email),
@@ -2293,63 +2505,51 @@ class _UserDialogState extends State<_UserDialog> {
               keyboardType: TextInputType.number,
             ),
             const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: _LabeledField(
-                    label: 'Teléfono *',
-                    controller: _phone,
-                    keyboardType: TextInputType.phone,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _DropdownField(
-                    label: 'Género',
-                    items: const [
-                      'Seleccionar',
-                      'Masculino',
-                      'Femenino',
-                      'Otro',
-                    ],
-                    value: _gender,
-                    onChanged: (v) => setState(() => _gender = v),
-                  ),
-                ),
-              ],
+            _pair(
+              context,
+              _LabeledField(
+                label: 'Teléfono *',
+                controller: _phone,
+                keyboardType: TextInputType.phone,
+              ),
+              _DropdownField(
+                label: 'Género',
+                items: const [
+                  'Seleccionar',
+                  'Masculino',
+                  'Femenino',
+                  'Otro',
+                ],
+                value: _gender,
+                onChanged: (v) => setState(() => _gender = v),
+              ),
             ),
             const SizedBox(height: 16),
             _LabeledField(label: 'Dirección', controller: _address),
             const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: _LabeledField(
-                    label: widget.user == null
-                        ? 'Contraseña *'
-                        : 'Nueva Contraseña',
-                    controller: _password,
-                    hint: widget.user == null
-                        ? 'Mínimo 6 caracteres'
-                        : 'Dejar vacío para no cambiar',
-                    obscureText: true,
-                    showVisibilityToggle: true,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _LabeledField(
-                    label: 'PIN (4 dígitos)',
-                    controller: _pin,
-                    hint: 'Ej: 1234',
-                    keyboardType: TextInputType.number,
-                    maxLength: 4,
-                    digitsOnly: true,
-                    obscureText: true,
-                    showVisibilityToggle: true,
-                  ),
-                ),
-              ],
+            _pair(
+              context,
+              _LabeledField(
+                label: widget.user == null
+                    ? 'Contraseña *'
+                    : 'Nueva Contraseña',
+                controller: _password,
+                hint: widget.user == null
+                    ? 'Mínimo 6 caracteres'
+                    : 'Dejar vacío para no cambiar',
+                obscureText: true,
+                showVisibilityToggle: true,
+              ),
+              _LabeledField(
+                label: 'PIN (4 dígitos)',
+                controller: _pin,
+                hint: 'Ej: 1234',
+                keyboardType: TextInputType.number,
+                maxLength: 4,
+                digitsOnly: true,
+                obscureText: true,
+                showVisibilityToggle: true,
+              ),
             ),
             const SizedBox(height: 24),
           ],
@@ -2359,77 +2559,65 @@ class _UserDialogState extends State<_UserDialog> {
           key: const ValueKey(1),
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: _DropdownField(
-                    label: 'Departamento *',
-                    items: const [
-                      'Seleccionar',
-                      'Gerencia',
-                      'Administración',
-                      'Cocina',
-                      'Servicio/Salón',
-                      'Barra',
-                      'Caja',
-                      'Delivery',
-                      'Limpieza',
-                      'Seguridad',
-                      'Recursos Humanos',
-                      'Marketing',
-                    ],
-                    value: _department,
-                    onChanged: (v) => setState(() => _department = v),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _DropdownField(
-                    label: 'Posición *',
-                    items: const [
-                      'Seleccionar',
-                      'Gerente General',
-                      'Gerente de Turno',
-                      'Supervisor',
-                      'Chef Ejecutivo',
-                      'Sous Chef',
-                      'Cocinero',
-                      'Ayudante de Cocina',
-                      'Bartender',
-                      'Mesero',
-                      'Host/Hostess',
-                      'Cajero',
-                    ],
-                    value: _position,
-                    onChanged: (v) => setState(() => _position = v),
-                  ),
-                ),
-              ],
+            _pair(
+              context,
+              _DropdownField(
+                label: 'Departamento *',
+                items: const [
+                  'Seleccionar',
+                  'Gerencia',
+                  'Administración',
+                  'Cocina',
+                  'Servicio/Salón',
+                  'Barra',
+                  'Caja',
+                  'Delivery',
+                  'Limpieza',
+                  'Seguridad',
+                  'Recursos Humanos',
+                  'Marketing',
+                ],
+                value: _department,
+                onChanged: (v) => setState(() => _department = v),
+              ),
+              _DropdownField(
+                label: 'Posición *',
+                items: const [
+                  'Seleccionar',
+                  'Gerente General',
+                  'Gerente de Turno',
+                  'Supervisor',
+                  'Chef Ejecutivo',
+                  'Sous Chef',
+                  'Cocinero',
+                  'Ayudante de Cocina',
+                  'Bartender',
+                  'Mesero',
+                  'Host/Hostess',
+                  'Cajero',
+                ],
+                value: _position,
+                onChanged: (v) => setState(() => _position = v),
+              ),
             ),
             const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: _DropdownField(
-                    label: 'Tipo de Contrato',
-                    items: const [
-                      'Tiempo Completo',
-                      'Medio Tiempo',
-                      'Temporal',
-                    ],
-                    value: _contractType,
-                    onChanged: (v) => setState(() => _contractType = v),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _DateField(
-                    label: 'Fecha de Ingreso',
-                    selectedDate: _hireDate,
-                    onDateSelected: (date) => setState(() => _hireDate = date),
-                  ),
-                ),
-              ],
+            _pair(
+              context,
+              _DropdownField(
+                label: 'Tipo de Contrato',
+                items: const [
+                  'Tiempo Completo',
+                  'Medio Tiempo',
+                  'Temporal',
+                ],
+                value: _contractType,
+                onChanged: (v) => setState(() => _contractType = v),
+              ),
+              _DateField(
+                label: 'Fecha de Ingreso',
+                selectedDate: _hireDate,
+                onDateSelected: (date) => setState(() => _hireDate = date),
+              ),
             ),
             const SizedBox(height: 16),
             _LabeledField(
@@ -2445,47 +2633,35 @@ class _UserDialogState extends State<_UserDialog> {
           key: const ValueKey(2),
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: _LabeledField(
-                    label: 'Salario Base (DOP) *',
-                    controller: _salary,
-                    keyboardType: TextInputType.number,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _DropdownField(
-                    label: 'Frecuencia de Pago',
-                    items: const ['Semanal', 'Quincenal', 'Mensual'],
-                    value: _payFrequency,
-                    onChanged: (v) => setState(() => _payFrequency = v),
-                  ),
-                ),
-              ],
+            _pair(
+              context,
+              _LabeledField(
+                label: 'Salario Base (DOP) *',
+                controller: _salary,
+                keyboardType: TextInputType.number,
+              ),
+              _DropdownField(
+                label: 'Frecuencia de Pago',
+                items: const ['Semanal', 'Quincenal', 'Mensual'],
+                value: _payFrequency,
+                onChanged: (v) => setState(() => _payFrequency = v),
+              ),
             ),
             const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: _DropdownField(
-                    label: 'AFP (2.87%)',
-                    items: const ['AFP Popular', 'AFP Crecer', 'AFP Siembra'],
-                    value: _afp,
-                    onChanged: (v) => setState(() => _afp = v),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _DropdownField(
-                    label: 'ARS (3.04%)',
-                    items: const ['ARS Humano', 'ARS Universal', 'ARS Mapfre'],
-                    value: _ars,
-                    onChanged: (v) => setState(() => _ars = v),
-                  ),
-                ),
-              ],
+            _pair(
+              context,
+              _DropdownField(
+                label: 'AFP (2.87%)',
+                items: const ['AFP Popular', 'AFP Crecer', 'AFP Siembra'],
+                value: _afp,
+                onChanged: (v) => setState(() => _afp = v),
+              ),
+              _DropdownField(
+                label: 'ARS (3.04%)',
+                items: const ['ARS Humano', 'ARS Universal', 'ARS Mapfre'],
+                value: _ars,
+                onChanged: (v) => setState(() => _ars = v),
+              ),
             ),
             const SizedBox(height: 16),
             const _LabeledField(
@@ -2493,24 +2669,18 @@ class _UserDialogState extends State<_UserDialog> {
               hint: 'Transporte, Alimentación...',
             ),
             const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: _DropdownField(
-                    label: 'Banco',
-                    items: const ['Popular', 'BHD', 'Reservas'],
-                    value: _bank,
-                    onChanged: (v) => setState(() => _bank = v),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _LabeledField(
-                    label: 'Número de Cuenta',
-                    controller: _accountNumber,
-                  ),
-                ),
-              ],
+            _pair(
+              context,
+              _DropdownField(
+                label: 'Banco',
+                items: const ['Popular', 'BHD', 'Reservas'],
+                value: _bank,
+                onChanged: (v) => setState(() => _bank = v),
+              ),
+              _LabeledField(
+                label: 'Número de Cuenta',
+                controller: _accountNumber,
+              ),
             ),
             const SizedBox(height: 24),
           ],
@@ -3140,6 +3310,115 @@ class _RoleCheckbox extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Lista vertical de permisos para móvil. Reemplaza el side-panel + lista
+/// de la vista desktop para que entre cómodamente en ~380 px de ancho.
+class _MobilePermissionsList extends StatelessWidget {
+  const _MobilePermissionsList({
+    required this.category,
+    required this.permissions,
+    required this.workingCodes,
+    required this.allSelected,
+    required this.onToggleAll,
+    required this.onTogglePermission,
+  });
+
+  final AccessCategory category;
+  final List<AccessPermission> permissions;
+  final Set<String> workingCodes;
+  final bool allSelected;
+  final ValueChanged<bool?> onToggleAll;
+  final void Function(String code, bool value) onTogglePermission;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  category.label,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              Transform.scale(
+                scale: 0.9,
+                child: Checkbox(
+                  value: allSelected,
+                  onChanged: onToggleAll,
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+              const Text(
+                'Todo',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Expanded(
+            child: ListView.separated(
+              padding: EdgeInsets.zero,
+              itemCount: permissions.length,
+              separatorBuilder: (_, _) => Divider(
+                height: 1,
+                color: Colors.grey.shade200,
+              ),
+              itemBuilder: (context, index) {
+                final permission = permissions[index];
+                final selected = workingCodes.contains(permission.code);
+                return SwitchListTile(
+                  value: selected,
+                  onChanged: (value) =>
+                      onTogglePermission(permission.code, value),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  visualDensity: VisualDensity.compact,
+                  title: Text(
+                    permission.label,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                  ),
+                  subtitle: Text(
+                    permission.description,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.grey[600],
+                      fontSize: 11,
+                      height: 1.3,
+                    ),
+                  ),
+                  activeThumbColor: Colors.white,
+                  activeTrackColor: MangoColors.primaryOrange,
+                  inactiveThumbColor: Colors.white,
+                  inactiveTrackColor: const Color(0xFFD1D5DB),
+                  trackOutlineColor: WidgetStateProperty.resolveWith(
+                    (states) => states.contains(WidgetState.selected)
+                        ? MangoColors.primaryOrange
+                        : const Color(0xFFD1D5DB),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }

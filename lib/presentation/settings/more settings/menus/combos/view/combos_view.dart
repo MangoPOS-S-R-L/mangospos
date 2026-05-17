@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../../../../../app/router/routes.dart';
+import '../../../../../../../app/theme/mango_colors.dart';
 import '../../../../../../../data/repositories/combos_repository.dart';
 
 final combosRepositoryProvider = Provider<CombosRepository>((ref) {
@@ -225,6 +228,19 @@ class _CombosViewState extends ConsumerState<CombosView> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
+      appBar: AppBar(
+        backgroundColor: MangoColors.white,
+        foregroundColor: MangoColors.darkGray,
+        elevation: 0.4,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          tooltip: 'Regresar',
+          onPressed: () => Navigator.of(context).canPop()
+              ? Navigator.of(context).pop()
+              : context.go(AppRoutes.menu),
+        ),
+        title: const Text('Combos'),
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : Padding(

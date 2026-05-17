@@ -17,11 +17,12 @@ import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../app/router/routes.dart';
+import '../../../core/business/business_features_provider.dart';
 import '../../../core/theme/app_breakpoints.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
-import '../../../core/theme/app_shadows.dart';
 import '../../../data/repositories/inventory_repository.dart';
+import '../../../data/repositories/pos_settings_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 
 class InventoryHubView extends ConsumerStatefulWidget {
@@ -114,6 +115,11 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
     final pagePadding = isCompact
         ? const EdgeInsets.fromLTRB(16, 16, 16, 24)
         : const EdgeInsets.all(24);
+    final featuresAsync = ref.watch(businessFeaturesProvider);
+    final inventoryMode = featuresAsync.maybeWhen(
+      data: (f) => f.inventoryMode,
+      orElse: () => InventoryMode.none,
+    );
     return Scaffold(
       backgroundColor: Colors.white,
       body: SingleChildScrollView(
@@ -124,7 +130,15 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
             _Header(
               bootstrapping: _bootstrapping,
               onBootstrap: _runBootstrap,
+              inventoryMode: inventoryMode,
             ),
+            if (inventoryMode == InventoryMode.none) ...[
+              const SizedBox(height: 16),
+              _InventoryDisabledBanner(
+                onActivate: () =>
+                    context.go(AppRoutes.settingsBusinessFeatures),
+              ),
+            ],
             const SizedBox(height: 24),
             const _SectionTitle('Maestros'),
             const SizedBox(height: 12),
@@ -203,10 +217,11 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
                   available: true,
                 ),
                 _HubCard(
-                  icon: Icons.fact_check_outlined,
-                  title: 'Requerimientos',
-                  subtitle: 'Sugerencias de reposición según stock mínimo',
-                  route: AppRoutes.inventoryRequirements,
+                  icon: Icons.shopping_cart_outlined,
+                  title: 'Sugerencias de reorden',
+                  subtitle:
+                      'Productos bajo mínimo + crear OC directo al proveedor',
+                  route: AppRoutes.inventoryReorder,
                   available: true,
                 ),
                 _HubCard(
@@ -256,8 +271,13 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
 class _Header extends StatelessWidget {
   final bool bootstrapping;
   final VoidCallback onBootstrap;
+  final InventoryMode inventoryMode;
 
-  const _Header({required this.bootstrapping, required this.onBootstrap});
+  const _Header({
+    required this.bootstrapping,
+    required this.onBootstrap,
+    required this.inventoryMode,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -265,13 +285,21 @@ class _Header extends StatelessWidget {
     final titleBlock = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Inventario',
-          style: TextStyle(
-            fontSize: isCompact ? 22 : 28,
-            fontWeight: FontWeight.w800,
-            color: AppColors.foreground,
-          ),
+        Row(
+          children: [
+            Flexible(
+              child: Text(
+                'Inventario',
+                style: TextStyle(
+                  fontSize: isCompact ? 22 : 28,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.foreground,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            _InventoryModeChip(mode: inventoryMode),
+          ],
         ),
         const SizedBox(height: 6),
         Text(
@@ -404,7 +432,6 @@ class _HubCard extends StatelessWidget {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(AppRadius.lg),
               border: Border.all(color: AppColors.border),
-              boxShadow: AppShadows.soft,
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -462,5 +489,132 @@ class _HubCard extends StatelessWidget {
           ),
         ),
       );
+  }
+}
+
+/// Chip visible al lado del título "Inventario" que indica el modo actual.
+/// Naranja para basic, morado para advanced, gris para none.
+class _InventoryModeChip extends StatelessWidget {
+  final InventoryMode mode;
+  const _InventoryModeChip({required this.mode});
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, bg, fg, icon) = switch (mode) {
+      InventoryMode.none => (
+          'Apagado',
+          const Color(0xFFF1F5F9),
+          const Color(0xFF64748B),
+          Icons.block,
+        ),
+      InventoryMode.basic => (
+          'Básico',
+          const Color(0xFFFFEDD5),
+          const Color(0xFFC2410C),
+          Icons.inventory_2_outlined,
+        ),
+      InventoryMode.advanced => (
+          'Avanzado',
+          const Color(0xFFEDE9FE),
+          const Color(0xFF6D28D9),
+          Icons.menu_book_outlined,
+        ),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: fg),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.3,
+              color: fg,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Banner que aparece SOLO cuando `inventory_mode = 'none'`. Avisa que el
+/// módulo está apagado y ofrece un atajo directo a Settings → Modos de
+/// negocio para activarlo. Resuelve el caso "está en none y no me daba
+/// cuenta" que reportó el usuario.
+class _InventoryDisabledBanner extends StatelessWidget {
+  final VoidCallback onActivate;
+  const _InventoryDisabledBanner({required this.onActivate});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFBEB),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFFDE68A)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.warning_amber_rounded,
+            color: Color(0xFFB45309),
+            size: 28,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Inventario está apagado',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF92400E),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'En este modo el sistema no descuenta stock al vender, '
+                  'no muestra alertas de bajo nivel ni habilita auto-86. '
+                  'Actívalo en Modos de negocio para empezar a controlar '
+                  'tu inventario.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF92400E),
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                FilledButton.icon(
+                  onPressed: onActivate,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFFB45309),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                  ),
+                  icon: const Icon(Icons.settings, size: 16),
+                  label: const Text('Configurar modo de inventario'),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

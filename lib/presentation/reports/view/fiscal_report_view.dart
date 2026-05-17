@@ -65,7 +65,7 @@ class _FiscalReportBody extends StatelessWidget {
     final selectedType = state.fiscalTypeFilter;
 
     return ListView(
-      padding: reportSectionPadding,
+      padding: reportBodyPadding(context),
       children: [
         ReportHeroCard(
           title: 'Ventas por recibo / comprobante',

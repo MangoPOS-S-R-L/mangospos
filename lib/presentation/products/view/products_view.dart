@@ -251,6 +251,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
               taxIds = const [],
               isInventoryTracked = false,
               initialStock = 0,
+              allowNegativeSale = false,
             }) {
               viewModel.addProduct(
                 name: name,
@@ -271,6 +272,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                 taxIds: taxIds,
                 isInventoryTracked: isInventoryTracked,
                 initialStock: initialStock,
+                allowNegativeSale: allowNegativeSale,
               );
             },
         onUpdate:
@@ -294,6 +296,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
               taxIds = const [],
               isInventoryTracked,
               initialStock = 0,
+              allowNegativeSale,
             }) {
               viewModel.updateProduct(
                 id: id,
@@ -315,6 +318,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                 taxIds: taxIds,
                 isInventoryTracked: isInventoryTracked,
                 initialStock: initialStock,
+                allowNegativeSale: allowNegativeSale,
               );
             },
       ),
@@ -641,13 +645,33 @@ class _ProductsTable extends StatelessWidget {
                             ),
                             const SizedBox(width: AppSpacing.md),
                             Expanded(
-                              child: Text(
-                                product['name']?.toString() ?? 'Sin nombre',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w500,
-                                  color: AppColors.foreground,
-                                ),
-                                overflow: TextOverflow.ellipsis,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text(
+                                    product['name']?.toString() ?? 'Sin nombre',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w500,
+                                      color: AppColors.foreground,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  if (_extractStock(product) != null) ...[
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      'Stock: ${_extractStock(product)!.label}',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                        color: _extractStock(product)!
+                                            .isLow
+                                            ? const Color(0xFFC2410C)
+                                            : AppColors.mutedForeground,
+                                      ),
+                                    ),
+                                  ],
+                                ],
                               ),
                             ),
                           ],
@@ -707,28 +731,11 @@ class _ProductsTable extends StatelessWidget {
                       Expanded(
                         flex: 1,
                         child: Center(
-                          child: InkWell(
+                          child: _AvailabilityIndicator(
+                            state: _extractAvailability(product),
                             onTap: () => viewModel.toggleAvailability(
                               product['id'].toString(),
                               isActive,
-                            ),
-                            borderRadius: BorderRadius.circular(AppRadius.sm),
-                            child: Container(
-                              width: 20,
-                              height: 20,
-                              decoration: BoxDecoration(
-                                color: isActive
-                                    ? AppColors.success
-                                    : AppColors.mutedForeground,
-                                borderRadius: BorderRadius.circular(
-                                  AppRadius.sm,
-                                ),
-                              ),
-                              child: const Icon(
-                                Icons.check,
-                                size: 14,
-                                color: Colors.white,
-                              ),
                             ),
                           ),
                         ),
@@ -787,6 +794,128 @@ class _ProductsTable extends StatelessWidget {
     if (value is num) return value.toDouble();
     return double.tryParse(value?.toString() ?? '') ?? 0;
   }
+}
+
+/// Resumen de stock disponible para mostrar en la lista de productos.
+/// Devuelve null si el producto no es inventariable o no tiene receta 1:1
+/// (esos no se muestran).
+class _StockSummary {
+  final String label;
+  final bool isLow;
+  const _StockSummary({required this.label, required this.isLow});
+}
+
+/// Estado de disponibilidad de un producto en el catálogo. Hay 3 casos:
+///   - Activo: is_active = true. Verde, clickable para apagar manualmente.
+///   - Auto-agotado: is_active = false AND auto_disabled = true. Naranja.
+///     El sistema lo apagó porque stock = 0; se reactivará automáticamente
+///     al recibir stock. Tap = forzar reactivación manual (clearing flag).
+///   - Inactivo manual: is_active = false AND auto_disabled = false. Gris.
+///     El admin lo apagó. No se reactiva solo. Tap = reactivar manualmente.
+enum _Availability { active, autoSoldOut, inactive }
+
+_Availability _extractAvailability(Map<String, dynamic> product) {
+  final isActive = product['is_active'] == true;
+  if (isActive) return _Availability.active;
+  final autoDisabled = product['auto_disabled'] == true;
+  return autoDisabled ? _Availability.autoSoldOut : _Availability.inactive;
+}
+
+class _AvailabilityIndicator extends StatelessWidget {
+  final _Availability state;
+  final VoidCallback onTap;
+  final bool compact;
+
+  const _AvailabilityIndicator({
+    required this.state,
+    required this.onTap,
+    this.compact = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, bg, fg, icon, tooltip) = switch (state) {
+      _Availability.active => (
+          'Disponible',
+          AppColors.success.withValues(alpha: 0.12),
+          AppColors.success,
+          Icons.check_circle,
+          'Producto activo. Tócalo para deshabilitarlo manualmente.',
+        ),
+      _Availability.autoSoldOut => (
+          'Auto-agotado',
+          const Color(0xFFFFEDD5),
+          const Color(0xFFC2410C),
+          Icons.inventory_2_outlined,
+          'Apagado automáticamente porque el stock llegó a 0. '
+              'Se reactivará solo cuando regrese stock. '
+              'Tócalo para reactivarlo manualmente ahora.',
+        ),
+      _Availability.inactive => (
+          'Inactivo',
+          const Color(0xFFE5E7EB),
+          const Color(0xFF6B7280),
+          Icons.do_not_disturb_on_outlined,
+          'Apagado manualmente. No se reactiva por sí solo. '
+              'Tócalo para reactivarlo.',
+        ),
+    };
+    final pill = Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 8 : 10,
+        vertical: compact ? 3 : 4,
+      ),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: compact ? 12 : 14, color: fg),
+          SizedBox(width: compact ? 4 : 5),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: compact ? 10 : 11,
+              fontWeight: FontWeight.w800,
+              color: fg,
+            ),
+          ),
+        ],
+      ),
+    );
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: pill,
+      ),
+    );
+  }
+}
+
+_StockSummary? _extractStock(Map<String, dynamic> product) {
+  final tracked = product['is_inventory_tracked'] == true;
+  if (!tracked) return null;
+  final stockRaw = product['stock'];
+  if (stockRaw == null) return null;
+  final stock = stockRaw is Map<String, dynamic>
+      ? stockRaw
+      : Map<String, dynamic>.from(stockRaw as Map);
+  final units = stock['available_units'];
+  if (units == null) return null;
+  final num n = units is num ? units : (num.tryParse(units.toString()) ?? 0);
+  final unit = stock['unit']?.toString() ?? '';
+  final unitSuffix = unit.isEmpty ? '' : ' $unit';
+  final value = n.toDouble();
+  final isInt = value == value.truncate();
+  final formatted = isInt ? value.toInt().toString() : value.toStringAsFixed(2);
+  return _StockSummary(
+    label: '$formatted$unitSuffix',
+    isLow: value <= 0,
+  );
 }
 
 class _TableHeaderCell extends StatelessWidget {
@@ -1022,38 +1151,61 @@ class _ProductCardMobile extends StatelessWidget {
                       ],
                     ),
                   ),
-                  // Toggle disponible + acciones
-                  InkWell(
+                  // Estado de disponibilidad: activo / auto-agotado / inactivo
+                  _AvailabilityIndicator(
+                    state: _extractAvailability(product),
+                    compact: true,
                     onTap: () => viewModel.toggleAvailability(
                       product['id'].toString(),
                       isActive,
                     ),
-                    borderRadius: BorderRadius.circular(AppRadius.sm),
-                    child: Container(
-                      width: 28,
-                      height: 28,
-                      decoration: BoxDecoration(
-                        color: isActive
-                            ? AppColors.success
-                            : AppColors.muted,
-                        borderRadius: BorderRadius.circular(AppRadius.sm),
-                        border: Border.all(
-                          color: isActive
-                              ? AppColors.success
-                              : AppColors.border,
-                        ),
-                      ),
-                      child: Icon(
-                        Icons.check,
-                        size: 16,
-                        color: isActive
-                            ? Colors.white
-                            : AppColors.mutedForeground,
-                      ),
-                    ),
                   ),
                 ],
               ),
+              if (_extractStock(product) != null) ...[
+                const SizedBox(height: 8),
+                Builder(
+                  builder: (_) {
+                    final s = _extractStock(product)!;
+                    return Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: (s.isLow
+                                ? const Color(0xFFC2410C)
+                                : AppColors.success)
+                            .withValues(alpha: 0.10),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.inventory_2_outlined,
+                            size: 14,
+                            color: s.isLow
+                                ? const Color(0xFFC2410C)
+                                : AppColors.success,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Stock: ${s.label}',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: s.isLow
+                                  ? const Color(0xFFC2410C)
+                                  : AppColors.success,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ],
               const SizedBox(height: 10),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,

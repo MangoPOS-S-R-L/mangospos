@@ -5,6 +5,7 @@ import 'package:mangopos/data/models/kitchen_models.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/app/theme/mango_tokens.dart';
+import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_radius.dart';
 import 'package:mangopos/core/theme/app_shadows.dart';
@@ -26,7 +27,9 @@ class KitchenView extends ConsumerStatefulWidget {
   ConsumerState<KitchenView> createState() => _KitchenViewState();
 }
 
-class _KitchenViewState extends ConsumerState<KitchenView> {
+class _KitchenViewState extends ConsumerState<KitchenView>
+    with TickerProviderStateMixin {
+  TabController? _mobileTabController;
   bool autoUpdate = true;
   String? _lastBusinessId;
   String updateInterval = '10 Segundo';
@@ -68,53 +71,108 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
       return d.year == now.year && d.month == now.month && d.day == now.day;
     }).length;
 
+    final isMobile = ResponsiveHelper.isMobile(context);
+    // En móvil instanciamos un TabController para alternar entre las 2
+    // columnas (En Espera / En Preparación) — no caben lado a lado.
+    if (isMobile) {
+      _mobileTabController ??= TabController(length: 2, vsync: this);
+    }
+    final padding = isMobile ? 12.0 : 24.0;
+
     return Scaffold(
       backgroundColor: AppColors.background,
       body: Padding(
-        padding: const EdgeInsets.all(24.0),
+        padding: EdgeInsets.all(padding),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _buildHeader(context),
-            const SizedBox(height: 20),
+            SizedBox(height: isMobile ? 12 : 20),
             _buildStatsRow(
               pendingCount: pending.length,
               preparingCount: preparing.length,
               completedToday: completedToday,
               readyItems: ready,
             ),
-            const SizedBox(height: 18),
+            SizedBox(height: isMobile ? 12 : 18),
+            if (isMobile) ...[
+              TabBar(
+                controller: _mobileTabController,
+                labelColor: AppColors.foreground,
+                unselectedLabelColor: AppColors.mutedForeground,
+                indicatorColor: AppColors.primary,
+                labelStyle: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+                tabs: [
+                  Tab(text: 'En Espera (${pendingOrders.length})'),
+                  Tab(text: 'Preparación (${preparingOrders.length})'),
+                ],
+              ),
+              const SizedBox(height: 8),
+            ],
             Expanded(
               child: vm.isLoading
-                  ? Center(child: CircularProgressIndicator(color: AppColors.primary))
-                  : Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: _buildOrderColumn(
-                            title: 'En Espera',
-                            color: AppColors.warning,
-                            orders: pendingOrders,
-                            actionLabel: 'Preparar',
-                            onAction: (orderId) => ref
-                                .read(kitchenViewModelProvider)
-                                .startPreparingOrder(orderId),
-                          ),
+                  ? Center(
+                      child: CircularProgressIndicator(
+                        color: AppColors.primary,
+                      ),
+                    )
+                  : isMobile
+                      ? TabBarView(
+                          controller: _mobileTabController,
+                          children: [
+                            _buildOrderColumn(
+                              title: 'En Espera',
+                              color: AppColors.warning,
+                              orders: pendingOrders,
+                              actionLabel: 'Preparar',
+                              hideHeader: true,
+                              onAction: (orderId) => ref
+                                  .read(kitchenViewModelProvider)
+                                  .startPreparingOrder(orderId),
+                            ),
+                            _buildOrderColumn(
+                              title: 'En Preparacion',
+                              color: AppColors.info,
+                              orders: preparingOrders,
+                              actionLabel: 'Listo',
+                              hideHeader: true,
+                              onAction: (orderId) => ref
+                                  .read(kitchenViewModelProvider)
+                                  .markOrderReady(orderId),
+                            ),
+                          ],
+                        )
+                      : Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: _buildOrderColumn(
+                                title: 'En Espera',
+                                color: AppColors.warning,
+                                orders: pendingOrders,
+                                actionLabel: 'Preparar',
+                                onAction: (orderId) => ref
+                                    .read(kitchenViewModelProvider)
+                                    .startPreparingOrder(orderId),
+                              ),
+                            ),
+                            const SizedBox(width: 20),
+                            Expanded(
+                              child: _buildOrderColumn(
+                                title: 'En Preparacion',
+                                color: AppColors.info,
+                                orders: preparingOrders,
+                                actionLabel: 'Listo',
+                                onAction: (orderId) => ref
+                                    .read(kitchenViewModelProvider)
+                                    .markOrderReady(orderId),
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 20),
-                        Expanded(
-                          child: _buildOrderColumn(
-                            title: 'En Preparacion',
-                            color: AppColors.info,
-                            orders: preparingOrders,
-                            actionLabel: 'Listo',
-                            onAction: (orderId) => ref
-                                .read(kitchenViewModelProvider)
-                                .markOrderReady(orderId),
-                          ),
-                        ),
-                      ],
-                    ),
             ),
           ],
         ),
@@ -122,65 +180,103 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
     );
   }
 
+  @override
+  void dispose() {
+    _mobileTabController?.dispose();
+    super.dispose();
+  }
+
   Widget _buildHeader(BuildContext context) {
+    final isMobile = ResponsiveHelper.isMobile(context);
     return Row(
       children: [
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Cocina (KDS)',
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-                color: AppColors.foreground,
-              ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              'Sistema de visualizacion de comandas',
-              style: TextStyle(color: AppColors.mutedForeground, fontSize: 13),
-            ),
-          ],
-        ),
-        const Spacer(),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: AppColors.card,
-            borderRadius: BorderRadius.circular(AppRadius.card),
-            border: Border.all(color: AppColors.border),
-          ),
-          child: Row(
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
-                'Auto-refresh',
-                style: TextStyle(fontWeight: FontWeight.w600),
+              Text(
+                'Cocina (KDS)',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: isMobile ? 17 : 22,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.foreground,
+                ),
               ),
-              const SizedBox(width: 10),
-              Switch(
-                value: autoUpdate,
-                onChanged: (val) => setState(() => autoUpdate = val),
-                activeThumbColor: AppColors.primary,
-              ),
+              if (!isMobile) ...[
+                const SizedBox(height: 2),
+                Text(
+                  'Sistema de visualizacion de comandas',
+                  style: TextStyle(
+                    color: AppColors.mutedForeground,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
             ],
           ),
         ),
-        const SizedBox(width: 12),
-        OutlinedButton.icon(
-          onPressed: () => ref.read(kitchenViewModelProvider).refresh(),
-          icon: const Icon(Icons.refresh, size: 18),
-          label: const Text('Actualizar'),
-          style: OutlinedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            foregroundColor: AppColors.foreground,
-            side: BorderSide(color: AppColors.border),
+        // En móvil sólo dejamos el switch (compacto) + botón refresh icon.
+        if (isMobile) ...[
+          Switch(
+            value: autoUpdate,
+            onChanged: (val) => setState(() => autoUpdate = val),
+            activeThumbColor: Colors.white,
+            activeTrackColor: AppColors.primary,
+            inactiveThumbColor: Colors.white,
+            inactiveTrackColor: const Color(0xFFD1D5DB),
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),
-        ),
-        const SizedBox(width: 8),
-        _iconButton(Icons.keyboard_arrow_up),
-        const SizedBox(width: 6),
-        _iconButton(Icons.keyboard_arrow_down),
+          const SizedBox(width: 4),
+          IconButton(
+            onPressed: () => ref.read(kitchenViewModelProvider).refresh(),
+            icon: const Icon(Icons.refresh, size: 22),
+            color: AppColors.foreground,
+            tooltip: 'Actualizar',
+            visualDensity: VisualDensity.compact,
+          ),
+        ] else ...[
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: AppColors.card,
+              borderRadius: BorderRadius.circular(AppRadius.card),
+              border: Border.all(color: AppColors.border),
+            ),
+            child: Row(
+              children: [
+                const Text(
+                  'Auto-refresh',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(width: 10),
+                Switch(
+                  value: autoUpdate,
+                  onChanged: (val) => setState(() => autoUpdate = val),
+                  activeThumbColor: AppColors.primary,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          OutlinedButton.icon(
+            onPressed: () => ref.read(kitchenViewModelProvider).refresh(),
+            icon: const Icon(Icons.refresh, size: 18),
+            label: const Text('Actualizar'),
+            style: OutlinedButton.styleFrom(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              foregroundColor: AppColors.foreground,
+              side: BorderSide(color: AppColors.border),
+            ),
+          ),
+          const SizedBox(width: 8),
+          _iconButton(Icons.keyboard_arrow_up),
+          const SizedBox(width: 6),
+          _iconButton(Icons.keyboard_arrow_down),
+        ],
       ],
     );
   }
@@ -204,6 +300,8 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
     required int completedToday,
     required List<KitchenItem> readyItems,
   }) {
+    final isMobile = ResponsiveHelper.isMobile(context);
+    final gap = isMobile ? 8.0 : 16.0;
     return Row(
       children: [
         Expanded(
@@ -214,22 +312,22 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
             subtitle: 'En Espera',
           ),
         ),
-        const SizedBox(width: 16),
+        SizedBox(width: gap),
         Expanded(
           child: _buildStatCard(
             color: AppColors.info,
             icon: Icons.schedule,
             title: preparingCount.toString(),
-            subtitle: 'En Preparacion',
+            subtitle: isMobile ? 'Preparando' : 'En Preparacion',
           ),
         ),
-        const SizedBox(width: 16),
+        SizedBox(width: gap),
         Expanded(
           child: _buildStatCard(
             color: AppColors.success,
             icon: Icons.check_circle_outline,
             title: completedToday.toString(),
-            subtitle: 'Completados Hoy',
+            subtitle: isMobile ? 'Hoy' : 'Completados Hoy',
             onTap: () => _showCompletedTodayDialog(context, readyItems),
           ),
         ),
@@ -244,49 +342,64 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
     required String subtitle,
     VoidCallback? onTap,
   }) {
+    final isMobile = ResponsiveHelper.isMobile(context);
+    final iconBox = isMobile ? 32.0 : 42.0;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(AppRadius.card),
       child: Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.card,
-        borderRadius: BorderRadius.circular(AppRadius.card),
-        border: Border.all(color: AppColors.border),
-        boxShadow: AppShadows.cardElevated,
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(AppRadius.card),
+        padding: EdgeInsets.all(isMobile ? 10 : 16),
+        decoration: BoxDecoration(
+          color: AppColors.card,
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          border: Border.all(color: AppColors.border),
+          boxShadow: AppShadows.cardElevated,
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: iconBox,
+              height: iconBox,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(AppRadius.card),
+              ),
+              child: Icon(
+                icon,
+                color: color,
+                size: isMobile ? 18 : 24,
+              ),
             ),
-            child: Icon(icon, color: color),
-          ),
-          const SizedBox(width: 12),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
+            SizedBox(width: isMobile ? 8 : 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: isMobile ? 16 : 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: AppColors.mutedForeground,
+                      fontSize: isMobile ? 10.5 : 12,
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 2),
-              Text(
-                subtitle,
-                style: TextStyle(color: AppColors.mutedForeground, fontSize: 12),
-              ),
-            ],
-          ),
-        ],
+            ),
+          ],
+        ),
       ),
-    ));
+    );
   }
 
   void _showCompletedTodayDialog(BuildContext context, List<KitchenItem> ready) {
@@ -581,38 +694,43 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
     required List<KitchenOrder> orders,
     required String actionLabel,
     required void Function(String orderId) onAction,
+    bool hideHeader = false,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Container(
-              width: 10,
-              height: 10,
-              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-            ),
-            const SizedBox(width: 8),
-            Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(AppRadius.full),
+        if (!hideHeader) ...[
+          Row(
+            children: [
+              Container(
+                width: 10,
+                height: 10,
+                decoration:
+                    BoxDecoration(color: color, shape: BoxShape.circle),
               ),
-              child: Text(
-                orders.length.toString(),
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: color,
-                  fontSize: 12,
+              const SizedBox(width: 8),
+              Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(width: 8),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(AppRadius.full),
+                ),
+                child: Text(
+                  orders.length.toString(),
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: color,
+                    fontSize: 12,
+                  ),
                 ),
               ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
+            ],
+          ),
+          const SizedBox(height: 12),
+        ],
         Expanded(
           child: orders.isEmpty
               ? Center(

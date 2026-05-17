@@ -35,7 +35,7 @@ class _PurchasesReportBody extends StatelessWidget {
     final supplierRows = viewModel.getPurchaseSupplierRows();
 
     return ListView(
-      padding: reportSectionPadding,
+      padding: reportBodyPadding(context),
       children: [
         const Text(
           'Resumen de órdenes, recepción y proveedores del período.',

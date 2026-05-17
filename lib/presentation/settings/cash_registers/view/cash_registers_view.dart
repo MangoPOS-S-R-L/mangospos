@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
 import 'package:mangopos/data/models/printing.dart' show PrinterConfig;
@@ -97,6 +99,13 @@ class _CashRegistersViewState extends ConsumerState<CashRegistersView> {
         backgroundColor: MangoColors.white,
         foregroundColor: MangoColors.darkGray,
         elevation: 0.6,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          tooltip: 'Regresar',
+          onPressed: () => Navigator.of(context).canPop()
+              ? Navigator.of(context).pop()
+              : context.go(AppRoutes.settings),
+        ),
         title: const Text('Cajas Registradoras'),
         actions: [
           IconButton(

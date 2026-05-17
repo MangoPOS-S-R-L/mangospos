@@ -59,6 +59,11 @@ class MenuItem {
   /// `consume_inventory_from_order` filtra por este flag.
   final bool isInventoryTracked;
 
+  /// Si true, el auto-86 NO desactiva el producto al agotarse. Sigue
+  /// vendible aunque el stock llegue a 0 o negativo; el faltante se
+  /// salda con la próxima compra. Solo aplica cuando isInventoryTracked.
+  final bool allowNegativeSale;
+
   /// Code del area de impresion (FK soft a `print_areas.code`). NULL =
   /// admin no eligio area; send-to-kitchen bloquea con error claro hasta
   /// que se asigne una de las areas configuradas para el negocio.
@@ -90,6 +95,7 @@ class MenuItem {
     this.imageUrl,
     required this.hasPrep,
     this.isInventoryTracked = false,
+    this.allowNegativeSale = false,
     this.printAreaCode,
     this.createdAt,
     this.updatedAt,
@@ -147,6 +153,7 @@ class MenuItem {
       imageUrl: m['image_url'] as String?,
       hasPrep: toBool(m['has_prep']),
       isInventoryTracked: toBool(m['is_inventory_tracked']),
+      allowNegativeSale: toBool(m['allow_negative_sale']),
       printAreaCode: m['print_area_code'] as String?,
       createdAt: toDate(m['created_at']),
       updatedAt: toDate(m['updated_at']),
@@ -174,6 +181,7 @@ class MenuItem {
     String? imageUrl,
     bool? hasPrep,
     bool? isInventoryTracked,
+    bool? allowNegativeSale,
     String? printAreaCode,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -199,6 +207,7 @@ class MenuItem {
       imageUrl: imageUrl ?? this.imageUrl,
       hasPrep: hasPrep ?? this.hasPrep,
       isInventoryTracked: isInventoryTracked ?? this.isInventoryTracked,
+      allowNegativeSale: allowNegativeSale ?? this.allowNegativeSale,
       printAreaCode: printAreaCode ?? this.printAreaCode,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -225,6 +234,7 @@ class MenuItem {
     'image_url': imageUrl,
     'has_prep': hasPrep,
     'is_inventory_tracked': isInventoryTracked,
+    'allow_negative_sale': allowNegativeSale,
     'print_area_code': printAreaCode,
   }..removeWhere((k, v) => v == null);
 }

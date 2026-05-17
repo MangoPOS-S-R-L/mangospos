@@ -168,6 +168,24 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
        _ref = ref,
        super(PaymentSplitState(totalAmount: total)) {
     _loadOrderForReceipt();
+    // Cortesía 100%: cuando total == 0 no hay nada que cobrar, pero el
+    // flujo de cierre necesita pasar por processPayment para generar
+    // fiscal_document y cerrar orden/check. Pre-seedeamos una transacción
+    // efectivo $0 para que canConfirm habilite directo y el cajero solo
+    // confirme. Ver removeTransaction (no permite borrar la última en
+    // este caso) y bug-fix histórico del botón "Pagar RD$ 0.00" bloqueado.
+    if (total <= 0.01) {
+      state = state.copyWith(
+        transactions: [
+          PaymentTransaction(
+            id: DateTime.now().millisecondsSinceEpoch.toString(),
+            method: PaymentMethodType.cash,
+            amount: 0,
+            timestamp: DateTime.now(),
+          ),
+        ],
+      );
+    }
   }
 
   String _friendlyPaymentError(Object error) {
@@ -396,6 +414,10 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   }
 
   void removeTransaction(String id) {
+    // Cortesía 100%: la transacción seed $0 (ver constructor) es la única
+    // forma de cerrar la orden. No permitir borrarla; el cajero puede
+    // cancelar el modal si no quiere cobrar.
+    if (state.totalAmount <= 0.01 && state.transactions.length <= 1) return;
     final updated = state.transactions.where((t) => t.id != id).toList();
     final newRemaining =
         (state.totalAmount -

@@ -19,7 +19,33 @@ class ProductsRepository {
         .eq('business_id', businessId)
         .order('created_at', ascending: false);
 
-    return List<Map<String, dynamic>>.from(response);
+    final products = List<Map<String, dynamic>>.from(response);
+
+    // Merge stock disponible por producto. Si la vista no existe (migración
+    // no aplicada), ignoramos silenciosamente — el resto del query no debe
+    // romperse por una migración faltante.
+    try {
+      final stockRows = await _client
+          .from(ProductsQueries.viewMenuItemsStock)
+          .select(ProductsQueries.selectMenuItemsStock);
+      final stockByItem = <String, Map<String, dynamic>>{};
+      for (final row in (stockRows as List)) {
+        final map = Map<String, dynamic>.from(row as Map);
+        final id = map['menu_item_id']?.toString();
+        if (id != null) stockByItem[id] = map;
+      }
+      for (final p in products) {
+        final id = p['id']?.toString();
+        if (id != null && stockByItem.containsKey(id)) {
+          p['stock'] = stockByItem[id];
+        }
+      }
+    } catch (_) {
+      // Vista no aplicada o sin permisos. No es crítico — productos
+      // siguen apareciendo, solo sin la columna de stock.
+    }
+
+    return products;
   }
 
   Future<List<Map<String, dynamic>>> getCategories(String businessId) async {
@@ -63,6 +89,7 @@ class ProductsRepository {
     // 👇 inventario por producto
     bool isInventoryTracked = false,
     double initialStock = 0,
+    bool allowNegativeSale = false,
   }) async {
     final created = await _client
         .from(ProductsQueries.tableMenuItems)
@@ -83,6 +110,7 @@ class ProductsRepository {
             'print_area_code': printAreaCode,
             'image_path': imagePath,
             'image_url': imageUrl,
+            'allow_negative_sale': allowNegativeSale,
           }..removeWhere((key, value) => value == null),
         )
         .select()
@@ -164,6 +192,7 @@ class ProductsRepository {
     // update llama la RPC para sincronizar receta/inventory_item/stock.
     bool? isInventoryTracked,
     double initialStock = 0,
+    bool? allowNegativeSale,
   }) async {
     final updates = <String, dynamic>{
       'name': name,
@@ -178,6 +207,7 @@ class ProductsRepository {
       'has_variants': hasVariants,
       'item_type': itemType,
       'print_area_code': printAreaCode,
+      if (allowNegativeSale != null) 'allow_negative_sale': allowNegativeSale,
     };
 
     if (imagePath != null) {

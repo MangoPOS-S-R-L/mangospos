@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/app/widgets/date_range_modal.dart';
+import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
@@ -196,8 +197,10 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
       decimalDigits: 2,
     );
 
+    final isMobile = ResponsiveHelper.isMobile(context);
+    final outerPad = isMobile ? 12.0 : 24.0;
     return Padding(
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.all(outerPad),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -206,98 +209,189 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
               padding: EdgeInsets.only(bottom: 8),
               child: LinearProgressIndicator(minHeight: 2),
             ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _searchController,
-                  onChanged: (val) {
-                    _debounce?.cancel();
-                    _debounce = Timer(const Duration(milliseconds: 400), () {
-                      setState(() {
-                        _searchQuery = val.trim().isEmpty ? null : val.trim();
-                        _currentPage = 1;
+          SizedBox(height: isMobile ? 4 : 8),
+          // Mobile: search arriba, filtro de fecha abajo. Desktop: lado a lado.
+          if (isMobile) ...[
+            TextField(
+              controller: _searchController,
+              onChanged: (val) {
+                _debounce?.cancel();
+                _debounce = Timer(const Duration(milliseconds: 400), () {
+                  setState(() {
+                    _searchQuery = val.trim().isEmpty ? null : val.trim();
+                    _currentPage = 1;
+                  });
+                  _load();
+                });
+              },
+              decoration: InputDecoration(
+                hintText: 'Buscar comprobante o cliente',
+                hintStyle: const TextStyle(fontSize: 13),
+                prefixIcon: const Icon(Icons.search, size: 20),
+                suffixIcon: _searchController.text.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear, size: 18),
+                        onPressed: () {
+                          _searchController.clear();
+                          _debounce?.cancel();
+                          setState(() {
+                            _searchQuery = null;
+                            _currentPage = 1;
+                          });
+                          _load();
+                        },
+                      )
+                    : null,
+                isDense: true,
+                filled: true,
+                fillColor: MangoColors.white,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide:
+                      const BorderSide(color: MangoColors.cardBorder),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            InkWell(
+              onTap: _selectDateRange,
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: MangoColors.white,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: MangoColors.cardBorder),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.calendar_today_outlined, size: 16),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        _fromDate == null || _toDate == null
+                            ? 'Filtrar por fecha'
+                            : '${DateFormat('dd MMM.').format(_fromDate!)} → ${DateFormat('dd MMM.').format(_toDate!)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    if (_fromDate != null)
+                      InkWell(
+                        onTap: () {
+                          setState(() {
+                            _fromDate = null;
+                            _toDate = null;
+                            _currentPage = 1;
+                          });
+                          _load();
+                        },
+                        child: const Icon(Icons.close, size: 16),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ] else
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    onChanged: (val) {
+                      _debounce?.cancel();
+                      _debounce = Timer(const Duration(milliseconds: 400), () {
+                        setState(() {
+                          _searchQuery = val.trim().isEmpty ? null : val.trim();
+                          _currentPage = 1;
+                        });
+                        _load();
                       });
-                      _load();
-                    });
-                  },
-                  decoration: InputDecoration(
-                    hintText: 'Buscar por comprobante o cliente',
-                    prefixIcon: const Icon(Icons.search),
-                    suffixIcon: _searchController.text.isNotEmpty
-                        ? IconButton(
-                            icon: const Icon(Icons.clear, size: 18),
-                            onPressed: () {
-                              _searchController.clear();
-                              _debounce?.cancel();
-                              setState(() {
-                                _searchQuery = null;
-                                _currentPage = 1;
-                              });
-                              _load();
-                            },
-                          )
-                        : null,
-                    filled: true,
-                    fillColor: MangoColors.white,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(
-                        color: MangoColors.cardBorder,
+                    },
+                    decoration: InputDecoration(
+                      hintText: 'Buscar por comprobante o cliente',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: _searchController.text.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear, size: 18),
+                              onPressed: () {
+                                _searchController.clear();
+                                _debounce?.cancel();
+                                setState(() {
+                                  _searchQuery = null;
+                                  _currentPage = 1;
+                                });
+                                _load();
+                              },
+                            )
+                          : null,
+                      filled: true,
+                      fillColor: MangoColors.white,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(
+                          color: MangoColors.cardBorder,
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 16),
-              InkWell(
-                onTap: _selectDateRange,
-                borderRadius: BorderRadius.circular(12),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
-                  decoration: BoxDecoration(
-                    color: MangoColors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: MangoColors.cardBorder),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.calendar_today_outlined, size: 18),
-                      const SizedBox(width: 12),
-                      Text(
-                        _fromDate == null || _toDate == null
-                            ? 'Filtrar por fecha'
-                            : '${DateFormat('dd MMM.').format(_fromDate!)} → ${DateFormat('dd MMM.').format(_toDate!)}',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      if (_fromDate != null)
-                        Padding(
-                          padding: const EdgeInsets.only(left: 8),
-                          child: InkWell(
-                            onTap: () {
-                              setState(() {
-                                _fromDate = null;
-                                _toDate = null;
-                                _currentPage = 1;
-                              });
-                              _load();
-                            },
-                            child: const Icon(Icons.close, size: 16),
+                const SizedBox(width: 16),
+                InkWell(
+                  onTap: _selectDateRange,
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                    decoration: BoxDecoration(
+                      color: MangoColors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: MangoColors.cardBorder),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.calendar_today_outlined, size: 18),
+                        const SizedBox(width: 12),
+                        Text(
+                          _fromDate == null || _toDate == null
+                              ? 'Filtrar por fecha'
+                              : '${DateFormat('dd MMM.').format(_fromDate!)} → ${DateFormat('dd MMM.').format(_toDate!)}',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
-                    ],
+                        if (_fromDate != null)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 8),
+                            child: InkWell(
+                              onTap: () {
+                                setState(() {
+                                  _fromDate = null;
+                                  _toDate = null;
+                                  _currentPage = 1;
+                                });
+                                _load();
+                              },
+                              child: const Icon(Icons.close, size: 16),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 24),
+              ],
+            ),
+          SizedBox(height: isMobile ? 12 : 24),
           Expanded(
             child: Container(
               decoration: BoxDecoration(
@@ -307,8 +401,12 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
               ),
               child: Column(
                 children: [
-                  _buildTableHeader(),
-                  const Divider(height: 1),
+                  // Header de tabla solo en desktop — en móvil cada
+                  // venta se renderiza como card.
+                  if (!isMobile) ...[
+                    _buildTableHeader(),
+                    const Divider(height: 1),
+                  ],
                   Expanded(
                     child: data.payments.isEmpty
                         ? Center(
@@ -316,16 +414,34 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
                               _searchQuery != null || _fromDate != null
                                   ? 'No se encontraron resultados para los filtros aplicados.'
                                   : 'No hay ventas registradas.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: isMobile ? 13 : 14,
+                              ),
                             ),
                           )
                         : ListView.separated(
-                            itemCount: data.payments.length,
-                            separatorBuilder: (_, _) => const Divider(height: 1),
-                            itemBuilder: (context, index) => _PaymentTableRow(
-                              payment: data.payments[index],
-                              currency: currency,
-                              onRefresh: _reload,
+                            padding: EdgeInsets.symmetric(
+                              vertical: isMobile ? 6 : 0,
                             ),
+                            itemCount: data.payments.length,
+                            separatorBuilder: (_, _) => Divider(
+                              height: isMobile ? 6 : 1,
+                              color: isMobile
+                                  ? Colors.transparent
+                                  : MangoColors.cardBorder,
+                            ),
+                            itemBuilder: (context, index) => isMobile
+                                ? _PaymentMobileCard(
+                                    payment: data.payments[index],
+                                    currency: currency,
+                                    onRefresh: _reload,
+                                  )
+                                : _PaymentTableRow(
+                                    payment: data.payments[index],
+                                    currency: currency,
+                                    onRefresh: _reload,
+                                  ),
                           ),
                   ),
                   _buildTableFooter(data.totalCount),
@@ -367,47 +483,76 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
     final end = (_currentPage * _pageSize) > totalCount
         ? totalCount
         : (_currentPage * _pageSize);
+    final isMobile = ResponsiveHelper.isMobile(context);
 
     return Padding(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.all(isMobile ? 8 : 16),
       child: Row(
         children: [
-          Text(
-            'Mostrando $start - $end de $totalCount ventas',
-            style: const TextStyle(color: MangoColors.muted, fontSize: 13),
+          Expanded(
+            child: Text(
+              isMobile
+                  ? '$start-$end de $totalCount'
+                  : 'Mostrando $start - $end de $totalCount ventas',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: MangoColors.muted,
+                fontSize: isMobile ? 11 : 13,
+              ),
+            ),
           ),
-          const Spacer(),
           IconButton(
             icon: const Icon(Icons.first_page),
             onPressed: _currentPage > 1 ? () => _changePage(1) : null,
+            visualDensity:
+                isMobile ? VisualDensity.compact : VisualDensity.standard,
+            iconSize: isMobile ? 18 : 24,
           ),
           IconButton(
             icon: const Icon(Icons.chevron_left),
-            onPressed: _currentPage > 1 ? () => _changePage(_currentPage - 1) : null,
+            onPressed: _currentPage > 1
+                ? () => _changePage(_currentPage - 1)
+                : null,
+            visualDensity:
+                isMobile ? VisualDensity.compact : VisualDensity.standard,
+            iconSize: isMobile ? 18 : 24,
           ),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            padding: EdgeInsets.symmetric(
+              horizontal: isMobile ? 8 : 12,
+              vertical: isMobile ? 4 : 6,
+            ),
             decoration: BoxDecoration(
               color: MangoColors.primaryOrange,
               borderRadius: BorderRadius.circular(4),
             ),
             child: Text(
               '$_currentPage',
-              style: const TextStyle(
+              style: TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.bold,
+                fontSize: isMobile ? 12 : 14,
               ),
             ),
           ),
           IconButton(
             icon: const Icon(Icons.chevron_right),
-            onPressed:
-                _currentPage < totalPages ? () => _changePage(_currentPage + 1) : null,
+            onPressed: _currentPage < totalPages
+                ? () => _changePage(_currentPage + 1)
+                : null,
+            visualDensity:
+                isMobile ? VisualDensity.compact : VisualDensity.standard,
+            iconSize: isMobile ? 18 : 24,
           ),
           IconButton(
             icon: const Icon(Icons.last_page),
-            onPressed:
-                _currentPage < totalPages ? () => _changePage(totalPages) : null,
+            onPressed: _currentPage < totalPages
+                ? () => _changePage(totalPages)
+                : null,
+            visualDensity:
+                isMobile ? VisualDensity.compact : VisualDensity.standard,
+            iconSize: isMobile ? 18 : 24,
           ),
         ],
       ),
@@ -434,7 +579,7 @@ class _HeaderText extends StatelessWidget {
   }
 }
 
-class _PaymentTableRow extends ConsumerWidget {
+class _PaymentTableRow extends ConsumerWidget with _PaymentActionsMixin {
   final Map<String, dynamic> payment;
   final NumberFormat currency;
   final VoidCallback onRefresh;
@@ -606,6 +751,12 @@ class _PaymentTableRow extends ConsumerWidget {
       ),
     );
   }
+}
+
+mixin _PaymentActionsMixin {
+  Map<String, dynamic> get payment;
+  VoidCallback get onRefresh;
+  NumberFormat get currency;
 
   void _reprintInvoice(
     BuildContext context,
@@ -1497,7 +1648,16 @@ class _PaymentTableRow extends ConsumerWidget {
                               SizedBox(
                                 width: 90,
                                 child: Text(
-                                  currency.format(item.total),
+                                  // Cortesías históricas pueden tener
+                                  // discount > subtotal+tax (bug previo
+                                  // de doble-cuenta de ITBIS en
+                                  // _courtesyLineAmount). Capamos a 0
+                                  // para no mostrar "-RD$767" en
+                                  // facturas donde el cliente no pagó
+                                  // nada por la línea.
+                                  currency.format(
+                                    item.total < 0 ? 0 : item.total,
+                                  ),
                                   textAlign: TextAlign.right,
                                   style: const TextStyle(
                                     fontSize: 13,
@@ -1603,6 +1763,199 @@ class _PaymentTableRow extends ConsumerWidget {
   }
 
   String? get _waiterNameFromPayment => payment['waiter_name']?.toString();
+}
+
+class _PaymentMobileCard extends ConsumerWidget with _PaymentActionsMixin {
+  @override
+  final Map<String, dynamic> payment;
+  final NumberFormat currency;
+  @override
+  final VoidCallback onRefresh;
+
+  const _PaymentMobileCard({
+    required this.payment,
+    required this.currency,
+    required this.onRefresh,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final amount =
+        (payment['net_amount'] as num?)?.toDouble() ??
+        ((payment['amount'] as num?)?.toDouble() ?? 0);
+    final createdAt = AppTime.tryParseServerToAst(payment['created_at']);
+    final dateStr = createdAt == null
+        ? '-'
+        : DateFormat('dd/MM/yyyy').format(createdAt);
+    final timeStr = createdAt == null
+        ? '-'
+        : DateFormat('hh:mm a').format(createdAt);
+
+    final customerName =
+        payment['customer_name']?.toString() ?? 'Público General';
+    final ncf = payment['ncf_number']?.toString() ?? 'Ticket';
+    final ncfType = payment['ncf_type_name']?.toString() ?? 'Boleta';
+    final waiterName = payment['waiter_name']?.toString() ?? 'Servicio';
+    final paymentId = payment['id']?.toString() ?? '';
+    final orderId = payment['order_id']?.toString() ?? '';
+    final checkId = payment['check_id']?.toString();
+    final isVoided =
+        payment['status'] == 'void' || payment['status'] == 'cancelled';
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      decoration: BoxDecoration(
+        color: isVoided ? Colors.red.withValues(alpha: 0.05) : MangoColors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isVoided ? Colors.red.withValues(alpha: 0.3) : MangoColors.cardBorder,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        ncfType,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                          color: isVoided ? Colors.red : null,
+                          decoration: isVoided ? TextDecoration.lineThrough : null,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        ncf,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: MangoColors.muted,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      currency.format(amount),
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 16,
+                        color: isVoided ? Colors.red : MangoColors.darkGray,
+                        decoration: isVoided ? TextDecoration.lineThrough : null,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '$dateStr $timeStr',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: MangoColors.muted,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Divider(height: 1),
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _InfoRow(icon: Icons.person_outline, text: customerName, isVoided: isVoided),
+                      const SizedBox(height: 4),
+                      _InfoRow(icon: Icons.support_agent_outlined, text: waiterName, isVoided: isVoided),
+                    ],
+                  ),
+                ),
+                Row(
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.visibility_outlined, size: 20),
+                      onPressed: () => _showDetailDialog(context, ref, payment),
+                      color: MangoColors.muted,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    if (!isVoided) ...[
+                      IconButton(
+                        icon: const Icon(Icons.print_outlined, size: 20),
+                        onPressed: () => _reprintInvoice(context, ref, payment),
+                        color: Colors.blue,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.cancel_outlined, size: 20),
+                        onPressed: () => _voidSale(context, ref, paymentId, orderId, checkId: checkId),
+                        color: Colors.redAccent,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ] else
+                      const Padding(
+                        padding: EdgeInsets.only(left: 8),
+                        child: Text(
+                          'ANULADA',
+                          style: TextStyle(
+                            color: Colors.red,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _InfoRow extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  final bool isVoided;
+
+  const _InfoRow({required this.icon, required this.text, this.isVoided = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 14, color: MangoColors.muted),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12,
+              color: MangoColors.darkGray,
+              decoration: isVoided ? TextDecoration.lineThrough : null,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 class _SalesHistoryData {

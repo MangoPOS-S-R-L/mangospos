@@ -23,6 +23,7 @@ import 'package:mangopos/domain/models/ventas_table.dart' as ventas;
 import 'package:mangopos/presentation/sales/view/theme/sales_theme.dart';
 import 'package:mangopos/presentation/sales/widgets/table_card.dart';
 import 'package:mangopos/app/widgets/skeleton_loading.dart';
+import 'package:mangopos/core/theme/app_breakpoints.dart';
 
 /// Una mesa con sesion abierta pero sin orders ni items abiertos esta
 /// "ocupada fantasma" — el cajero la abrio, no agrego productos y se
@@ -202,155 +203,187 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
       );
     }
 
-    return Scaffold(
-      backgroundColor: SalesTheme.background,
-      appBar: hasZones && _tabController != null
-          ? AppBar(
-              backgroundColor: SalesTheme.background,
-              elevation: 0,
-              automaticallyImplyLeading: false,
-              toolbarHeight: 56,
-              titleSpacing: 0,
-              title: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 12,
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    // TABS LIST - Container con fondo secondary
-                    Container(
-                      padding: const EdgeInsets.all(4), // p-1
-                      decoration: BoxDecoration(
-                        color: SalesTheme.secondary, // bg-secondary
-                        borderRadius: BorderRadius.circular(12), // rounded-xl
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: zones.asMap().entries.map((entry) {
-                          final index = entry.key;
-                          final zone = entry.value;
-                          final isActive = _tabController?.index == index;
+    final isCompact = ResponsiveHelper.isMobile(context);
 
-                          return MouseRegion(
-                            cursor: SystemMouseCursors.click,
-                            child: GestureDetector(
-                              onTap: () => _tabController?.animateTo(index),
-                              child: AnimatedContainer(
-                                duration: const Duration(milliseconds: 150),
-                                curve: Curves.easeInOut,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 16, // px-4
-                                  vertical: 8, // py-2
-                                ),
-                                decoration: BoxDecoration(
-                                  color: isActive
-                                      ? SalesTheme
-                                            .cardBackground // bg-card (blanco)
-                                      : Colors.transparent,
-                                  borderRadius: BorderRadius.circular(
-                                    8,
-                                  ), // rounded-lg
-                                  boxShadow: isActive
-                                      ? [
-                                          BoxShadow(
-                                            color: Colors.black.withValues(
-                                              alpha: 0.05,
-                                            ),
-                                            blurRadius: 2,
-                                            offset: const Offset(0, 1),
-                                          ),
-                                        ]
-                                      : null,
-                                ),
-                                child: Text(
-                                  zone.name,
-                                  style: TextStyle(
-                                    fontSize: 14, // text-sm
-                                    fontWeight: FontWeight.w500, // Medium
-                                    color: isActive
-                                        ? SalesTheme
-                                              .foreground // Negro cálido
-                                        : SalesTheme
-                                              .mutedForeground, // Gris medio
-                                    letterSpacing: -0.2,
-                                  ),
-                                ),
-                              ),
+    Widget buildZoneTabs() {
+      return Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: SalesTheme.secondary,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: zones.asMap().entries.map((entry) {
+            final index = entry.key;
+            final zone = entry.value;
+            final isActive = _tabController?.index == index;
+            return MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: GestureDetector(
+                onTap: () => _tabController?.animateTo(index),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  curve: Curves.easeInOut,
+                  padding: EdgeInsets.symmetric(
+                    horizontal: isCompact ? 12 : 16,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: isActive
+                        ? SalesTheme.cardBackground
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(8),
+                    boxShadow: isActive
+                        ? [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.05),
+                              blurRadius: 2,
+                              offset: const Offset(0, 1),
                             ),
-                          );
-                        }).toList(),
-                      ),
+                          ]
+                        : null,
+                  ),
+                  child: Text(
+                    zone.name,
+                    style: TextStyle(
+                      fontSize: isCompact ? 13 : 14,
+                      fontWeight: FontWeight.w500,
+                      color: isActive
+                          ? SalesTheme.foreground
+                          : SalesTheme.mutedForeground,
+                      letterSpacing: -0.2,
                     ),
-
-                    // INDICADORES DE ESTADO a la derecha
-                    Row(
-                      children: [
-                        if (!isCashOpen) ...[
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.red.withValues(alpha: 0.08),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                color: Colors.red.withValues(alpha: 0.22),
-                              ),
-                            ),
-                            child: const Text(
-                              'Caja cerrada',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                                color: Colors.red,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                        ],
-                        // Indicador DISPONIBLES (verde)
-                        _buildStatusIndicator(
-                          count: availableCount,
-                          label: 'disponible',
-                          color: SalesTheme.success,
-                        ),
-                        const SizedBox(width: 16), // gap-4
-                        // Indicador OCUPADAS (naranja)
-                        _buildStatusIndicator(
-                          count: occupiedCount,
-                          label: 'ocupada',
-                          color: SalesTheme.warning,
-                        ),
-                        const SizedBox(width: 16),
-                        // Control de zoom de grids (persistente vía
-                        // shared_preferences).
-                        const SalesZoomControl(),
-                        const SizedBox(width: 12),
-                        // Botón refresh
-                        IconButton(
-                          onPressed: _loadData,
-                          icon: const Icon(
-                            Icons.refresh_rounded,
-                            size: 20,
-                            color: SalesTheme.mutedForeground,
-                          ),
-                          tooltip: 'Actualizar',
-                          padding: const EdgeInsets.all(8),
-                          constraints: const BoxConstraints(
-                            minWidth: 36,
-                            minHeight: 36,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
+                  ),
                 ),
               ),
-            )
-          : null,
+            );
+          }).toList(),
+        ),
+      );
+    }
+
+    Widget buildIndicators() {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (!isCashOpen) ...[
+            Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 10,
+                vertical: 6,
+              ),
+              decoration: BoxDecoration(
+                color: Colors.red.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: Colors.red.withValues(alpha: 0.22),
+                ),
+              ),
+              child: Text(
+                isCompact ? 'Cerrada' : 'Caja cerrada',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.red,
+                ),
+              ),
+            ),
+            SizedBox(width: isCompact ? 8 : 12),
+          ],
+          _buildStatusIndicator(
+            count: availableCount,
+            label: isCompact ? '' : 'disponible',
+            color: SalesTheme.success,
+          ),
+          SizedBox(width: isCompact ? 8 : 16),
+          _buildStatusIndicator(
+            count: occupiedCount,
+            label: isCompact ? '' : 'ocupada',
+            color: SalesTheme.warning,
+          ),
+          if (!isCompact) ...[
+            const SizedBox(width: 16),
+            const SalesZoomControl(),
+            const SizedBox(width: 12),
+          ] else
+            const SizedBox(width: 8),
+          IconButton(
+            onPressed: _loadData,
+            icon: const Icon(
+              Icons.refresh_rounded,
+              size: 20,
+              color: SalesTheme.mutedForeground,
+            ),
+            tooltip: 'Actualizar',
+            padding: const EdgeInsets.all(8),
+            constraints: const BoxConstraints(
+              minWidth: 36,
+              minHeight: 36,
+            ),
+          ),
+        ],
+      );
+    }
+
+    PreferredSizeWidget? appBarWidget;
+    if (hasZones && _tabController != null) {
+      if (isCompact) {
+        appBarWidget = PreferredSize(
+          preferredSize: const Size.fromHeight(104),
+          child: AppBar(
+            backgroundColor: SalesTheme.background,
+            elevation: 0,
+            automaticallyImplyLeading: false,
+            toolbarHeight: 104,
+            titleSpacing: 0,
+            title: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: buildZoneTabs(),
+                  ),
+                  const SizedBox(height: 8),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: buildIndicators(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      } else {
+        appBarWidget = AppBar(
+          backgroundColor: SalesTheme.background,
+          elevation: 0,
+          automaticallyImplyLeading: false,
+          toolbarHeight: 56,
+          titleSpacing: 0,
+          title: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 24,
+              vertical: 12,
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                buildZoneTabs(),
+                buildIndicators(),
+              ],
+            ),
+          ),
+        );
+      }
+    }
+
+    return Scaffold(
+      backgroundColor: SalesTheme.background,
+      appBar: appBarWidget,
       body: RefreshIndicator(
         color: SalesTheme.primary,
         onRefresh: () async {
@@ -430,7 +463,9 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
         const SizedBox(width: 6), // gap-2
         // Texto del indicador
         Text(
-          '$count $label${count != 1 ? 's' : ''}',
+          label.isEmpty
+              ? '$count'
+              : '$count $label${count != 1 ? 's' : ''}',
           style: const TextStyle(
             fontSize: 14, // text-sm
             fontWeight: FontWeight.w400, // Regular
@@ -583,25 +618,29 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
         Expanded(
           child: LayoutBuilder(
             builder: (context, constraints) {
+              final isCompact = ResponsiveHelper.isMobile(context);
               // Zoom factor: lee `salesZoomProvider`. Aplica el multiplicador
               // sobre el ancho base 220 para que el cajero pueda ajustar la
               // densidad del grid (mas columnas con zoom out, menos con
               // zoom in). Persistente via shared_preferences.
               final zoom = ref.watch(salesZoomProvider);
-              // Calcular número óptimo de columnas
-              // Usando 220px como referencia para favorecer más columnas (cards más estrechas)
-              final availableWidth =
-                  constraints.maxWidth - 48; // Quitando padding (24px × 2)
+              // En móvil forzamos 2 columnas con padding reducido.
+              final padding = isCompact
+                  ? const EdgeInsets.fromLTRB(12, 12, 12, 12)
+                  : const EdgeInsets.all(24);
+              final horizontalPad = isCompact ? 24.0 : 48.0;
+              final availableWidth = constraints.maxWidth - horizontalPad;
 
-              int columns =
-                  ((availableWidth + SalesTheme.gridGap) /
-                          ((220.0 * zoom) +
-                              SalesTheme.gridGap)) // 220px * zoom
-                      .floor()
-                      .clamp(
-                        1,
-                        10,
-                      ); // Máximo 10 columnas para aprovechar pantallas anchas
+              int columns;
+              if (isCompact) {
+                columns = 2;
+              } else {
+                columns =
+                    ((availableWidth + SalesTheme.gridGap) /
+                            ((220.0 * zoom) + SalesTheme.gridGap))
+                        .floor()
+                        .clamp(1, 10);
+              }
 
               // Calcular el ancho REAL de cada card
               final totalGaps = (columns - 1) * SalesTheme.gridGap;
@@ -611,7 +650,7 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
               final aspectRatio = cardWidth / SalesTheme.tableCardHeight;
 
               return GridView.builder(
-                padding: const EdgeInsets.all(24),
+                padding: padding,
                 gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: columns,
                   childAspectRatio: aspectRatio, // Dinámico

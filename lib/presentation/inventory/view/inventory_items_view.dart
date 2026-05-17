@@ -16,9 +16,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../core/theme/app_breakpoints.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
-import '../../../core/theme/app_shadows.dart';
 import '../../../data/repositories/inventory_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 import '../state/inventory_state.dart';
@@ -177,7 +177,9 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
                   ),
                 )
               : SingleChildScrollView(
-                  padding: const EdgeInsets.all(24),
+                  padding: ResponsiveHelper.useCompactShell(context)
+                      ? const EdgeInsets.fromLTRB(14, 16, 14, 24)
+                      : const EdgeInsets.all(24),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -225,77 +227,90 @@ class _Header extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isCompact = ResponsiveHelper.useCompactShell(context);
+    final titleBlock = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Insumos',
+          style: TextStyle(
+            fontSize: isCompact ? 22 : 28,
+            fontWeight: FontWeight.w800,
+            color: AppColors.foreground,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Items inventariables, costo y método de costeo',
+          style: TextStyle(
+            fontSize: isCompact ? 12 : 14,
+            color: AppColors.mutedForeground,
+          ),
+        ),
+      ],
+    );
+
+    final createButton = FilledButton.icon(
+      onPressed: onCreate,
+      icon: const Icon(Icons.add),
+      label: Text(isCompact ? 'Nuevo' : 'Nuevo insumo'),
+    );
+
+    final warehouseDropdown = DropdownButtonFormField<String>(
+      initialValue: selectedId,
+      decoration: const InputDecoration(
+        labelText: 'Bodega para mostrar stock',
+        isDense: true,
+      ),
+      isExpanded: true,
+      items: [
+        for (final w in warehouses)
+          DropdownMenuItem(
+            value: w.id,
+            child: Text(w.isMain ? '${w.name}  •  principal' : w.name),
+          ),
+      ],
+      onChanged: onSelect,
+    );
+
+    final searchField = TextField(
+      decoration: const InputDecoration(
+        prefixIcon: Icon(Icons.search),
+        hintText: 'Buscar por nombre, SKU o descripción',
+        isDense: true,
+      ),
+      onChanged: onSearch,
+    );
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Insumos',
-                    style: TextStyle(
-                      fontSize: 28,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.foreground,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Items inventariables, costo y método de costeo',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: AppColors.mutedForeground,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            FilledButton.icon(
-              onPressed: onCreate,
-              icon: const Icon(Icons.add),
-              label: const Text('Nuevo insumo'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        Row(
-          children: [
-            SizedBox(
-              width: 240,
-              child: DropdownButtonFormField<String>(
-                initialValue: selectedId,
-                decoration: const InputDecoration(
-                  labelText: 'Bodega para mostrar stock',
-                  isDense: true,
-                ),
-                items: [
-                  for (final w in warehouses)
-                    DropdownMenuItem(
-                      value: w.id,
-                      child: Text(w.isMain ? '${w.name}  •  principal' : w.name),
-                    ),
-                ],
-                onChanged: onSelect,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: TextField(
-                decoration: const InputDecoration(
-                  prefixIcon: Icon(Icons.search),
-                  hintText: 'Buscar por nombre, SKU o descripción',
-                  isDense: true,
-                ),
-                onChanged: onSearch,
-              ),
-            ),
-          ],
-        ),
+        if (isCompact) ...[
+          titleBlock,
+          const SizedBox(height: 12),
+          SizedBox(width: double.infinity, child: createButton),
+          const SizedBox(height: 16),
+          warehouseDropdown,
+          const SizedBox(height: 10),
+          searchField,
+        ] else ...[
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: titleBlock),
+              createButton,
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              SizedBox(width: 240, child: warehouseDropdown),
+              const SizedBox(width: 12),
+              Expanded(child: searchField),
+            ],
+          ),
+        ],
       ],
     );
   }
@@ -340,12 +355,31 @@ class _ItemsTable extends StatelessWidget {
         ),
       );
     }
+    final isCompact = ResponsiveHelper.useCompactShell(context);
+
+    // En móvil renderizamos cada insumo como una card apilada — la tabla
+    // horizontal con 6+ columnas no cabe en portrait.
+    if (isCompact) {
+      return Column(
+        children: [
+          for (final i in items)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _InventoryItemCardMobile(
+                item: i,
+                currency: currency,
+                onEdit: onEdit,
+              ),
+            ),
+        ],
+      );
+    }
+
     return Container(
       decoration: BoxDecoration(
         color: AppColors.card,
         borderRadius: BorderRadius.circular(AppRadius.lg),
         border: Border.all(color: AppColors.border),
-        boxShadow: AppShadows.soft,
       ),
       child: Column(
         children: [
@@ -516,6 +550,217 @@ class _ItemRow extends StatelessWidget {
   }
 }
 
+/// Versión móvil del insumo: card vertical compacta. Reusa los helpers
+/// `_ClassificationChip`, `_CostingBadge`, `_Pill` para mantener
+/// consistencia visual con el desktop.
+class _InventoryItemCardMobile extends StatelessWidget {
+  final InventoryItemSummary item;
+  final NumberFormat currency;
+  final void Function(InventoryItemSummary) onEdit;
+
+  const _InventoryItemCardMobile({
+    required this.item,
+    required this.currency,
+    required this.onEdit,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final fmt = NumberFormat.decimalPattern('es_DO');
+    final low = item.isLowStock;
+    return Material(
+      color: AppColors.card,
+      borderRadius: BorderRadius.circular(AppRadius.lg),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        onTap: () => onEdit(item),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(AppRadius.lg),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Línea 1: nombre + editar
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          item.name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.foreground,
+                            height: 1.2,
+                          ),
+                        ),
+                        if (item.description.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 1),
+                            child: Text(
+                              item.description,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: AppColors.mutedForeground,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.edit_outlined, size: 18),
+                    onPressed: () => onEdit(item),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(
+                      minWidth: 28,
+                      minHeight: 28,
+                    ),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              // Línea 2: chips status (deben caber en una sola línea normalmente)
+              Wrap(
+                spacing: 4,
+                runSpacing: 4,
+                children: [
+                  if (item.itemClassification != 'simple')
+                    _ClassificationChip(value: item.itemClassification),
+                  _CostingBadge(method: item.costingMethod),
+                  if (item.isActive)
+                    _Pill(text: 'Activo', color: AppColors.success)
+                  else
+                    _Pill(
+                      text: 'Inactivo',
+                      color: AppColors.mutedForeground,
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              // Línea 3: Costo + Stock lado a lado
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: _MobileMeta(
+                      label: 'COSTO',
+                      value: currency.format(item.cost),
+                      sublabel: '/ ${item.unit}',
+                    ),
+                  ),
+                  Expanded(
+                    child: _MobileMeta(
+                      label: 'STOCK',
+                      value: fmt.format(item.stock),
+                      valueColor: low ? AppColors.warning : null,
+                      sublabel: 'mín ${fmt.format(item.minStock)} ${item.unit}',
+                    ),
+                  ),
+                ],
+              ),
+              // Línea 4: SKU/Barcode (si existen) — bloque ultra-compacto
+              if (item.sku.isNotEmpty || item.barcode.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.qr_code_2_rounded,
+                      size: 12,
+                      color: AppColors.mutedForeground,
+                    ),
+                    const SizedBox(width: 4),
+                    Flexible(
+                      child: Text(
+                        [
+                          if (item.sku.isNotEmpty) item.sku,
+                          if (item.barcode.isNotEmpty) item.barcode,
+                        ].join(' · '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: AppColors.mutedForeground,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MobileMeta extends StatelessWidget {
+  final String label;
+  final String value;
+  final String? sublabel;
+  final Color? valueColor;
+
+  const _MobileMeta({
+    required this.label,
+    required this.value,
+    this.sublabel,
+    this.valueColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.4,
+            color: AppColors.mutedForeground,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+            color: valueColor ?? AppColors.foreground,
+          ),
+        ),
+        if (sublabel != null)
+          Text(
+            sublabel!,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 11,
+              color: AppColors.mutedForeground,
+            ),
+          ),
+      ],
+    );
+  }
+}
+
 class _StockCell extends StatelessWidget {
   final InventoryItemSummary item;
   const _StockCell({required this.item});
@@ -582,21 +827,22 @@ class _Pill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(AppRadius.sm),
-        ),
-        child: Text(
-          text,
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-            color: color,
-          ),
+    // Sin Align externo: el chip toma su ancho intrínseco. Eso permite
+    // usarlo dentro de Wrap/Row sin que cada chip se expanda al ancho
+    // completo del contenedor padre (bug que estaba apilándolos en
+    // líneas separadas en la card móvil).
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          color: color,
         ),
       ),
     );

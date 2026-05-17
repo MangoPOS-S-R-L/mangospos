@@ -138,6 +138,11 @@ class MenuBrowserState {
   final String? loadedMenuId;
   final String search;
   final MenuProduct? selectedProduct;
+  // Stock disponible por menu_item_id. Si el producto es tracked y tiene
+  // receta 1:1 (o multi-ingrediente reducible a unidades), aquí está la
+  // cantidad disponible. Si el producto no es tracked, no aparece en el
+  // mapa — la UI no muestra badge.
+  final Map<String, num> stockByProductId;
 
   const MenuBrowserState({
     this.loading = false,
@@ -152,6 +157,7 @@ class MenuBrowserState {
     this.loadedMenuId,
     this.search = '',
     this.selectedProduct,
+    this.stockByProductId = const {},
   });
 
   MenuBrowserState copyWith({
@@ -169,6 +175,7 @@ class MenuBrowserState {
     bool clearLoadedMenuId = false,
     String? search,
     MenuProduct? selectedProduct,
+    Map<String, num>? stockByProductId,
   }) {
     return MenuBrowserState(
       loading: loading ?? this.loading,
@@ -187,6 +194,7 @@ class MenuBrowserState {
           : (loadedMenuId ?? this.loadedMenuId),
       search: search ?? this.search,
       selectedProduct: selectedProduct ?? this.selectedProduct,
+      stockByProductId: stockByProductId ?? this.stockByProductId,
     );
   }
 }
@@ -211,6 +219,47 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
 
   /// Whether a background sync is already running (prevents duplicate syncs).
   bool _backgroundSyncRunning = false;
+
+  /// Realtime: escucha cambios en inventory_stock para refrescar los badges
+  /// de stock sin que el cajero tenga que recargar el menú. Crítico cuando
+  /// dos tablets venden el mismo producto en paralelo.
+  RealtimeChannel? _stockChannel;
+  Timer? _stockRefreshDebounce;
+  static const _stockRefreshDelay = Duration(milliseconds: 500);
+
+  @override
+  void dispose() {
+    _stockChannel?.unsubscribe();
+    _stockChannel = null;
+    _stockRefreshDebounce?.cancel();
+    _stockRefreshDebounce = null;
+    super.dispose();
+  }
+
+  /// Suscribe (o re-suscribe) el canal de stock realtime. Se llama después
+  /// de cargar el catálogo. Idempotente: no abre canales duplicados.
+  void _subscribeStockRealtime() {
+    if (_stockChannel != null) return;
+    _stockChannel = _client
+        .channel('rt:inventory_stock')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'inventory_stock',
+          callback: (_) => _scheduleStockRefresh(),
+        )
+        .subscribe();
+  }
+
+  /// Debounce: si llegan muchos eventos seguidos (ej. una orden con 10
+  /// items dispara 10 movements + recálculos), agrupamos en un solo
+  /// refresh ~500ms después del último cambio.
+  void _scheduleStockRefresh() {
+    _stockRefreshDebounce?.cancel();
+    _stockRefreshDebounce = Timer(_stockRefreshDelay, () {
+      _loadStockMap();
+    });
+  }
 
   static const _menuItemsSelect =
       'id,name,price,image_url,category_id,is_active,position,tax_mode,item_type,menu_item_taxes(tax_id,taxes(name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery))';
@@ -610,11 +659,52 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
           preselectMenuId: preselectMenuId,
         );
       }
+      // Stock disponible por producto. Lo cargamos después del catálogo
+      // (no bloqueante: si la vista no existe o falla, ignoramos).
+      unawaited(_loadStockMap());
+      // Suscribir a cambios de stock en tiempo real para que los badges
+      // se actualicen cuando otra tablet venda/reciba inventario.
+      _subscribeStockRealtime();
     } catch (e) {
       state = state.copyWith(
         loading: false,
         error: 'No se pudieron cargar categorias: $e',
       );
+    }
+  }
+
+  /// Hook público para refrescar el stock map. Lo llamamos desde el flujo
+  /// de "Enviar a cocina" para que el badge se actualice en el acto en vez
+  /// de esperar al próximo `loadAll()`.
+  Future<void> refreshStock() => _loadStockMap();
+
+  /// Lee `v_menu_items_stock` y mergea las cantidades disponibles en el
+  /// estado. La vista solo retorna productos `is_inventory_tracked = true`
+  /// con recetas 1:1; los productos no tracked NO aparecen en el mapa y
+  /// no muestran badge en la UI.
+  Future<void> _loadStockMap() async {
+    try {
+      final rows = await _client
+          .from('v_menu_items_stock')
+          .select('menu_item_id, available_units');
+      final map = <String, num>{};
+      for (final row in (rows as List)) {
+        final m = Map<String, dynamic>.from(row as Map);
+        final id = m['menu_item_id']?.toString();
+        final units = m['available_units'];
+        if (id != null && units != null) {
+          if (units is num) {
+            map[id] = units;
+          } else {
+            final parsed = num.tryParse(units.toString());
+            if (parsed != null) map[id] = parsed;
+          }
+        }
+      }
+      state = state.copyWith(stockByProductId: map);
+    } catch (_) {
+      // Vista no aplicada o sin permisos: ignoramos silenciosamente.
+      // El catálogo sigue funcionando sin badge.
     }
   }
 

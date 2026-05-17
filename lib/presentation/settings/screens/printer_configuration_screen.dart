@@ -6,7 +6,9 @@ import 'package:flutter/material.dart';
 // flutter_blue_plus_windows: wrapper cross-platform para soportar Windows.
 import 'package:flutter_blue_plus_windows/flutter_blue_plus_windows.dart' as fbp;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../app/router/routes.dart';
 import '../../../data/repositories/printing_repository.dart';
 import '../../../data/models/printing_models.dart';
 import '../../../services/printing/esc_pos_generator.dart' show EscPosGenerator;
@@ -49,6 +51,13 @@ class _PrinterConfigurationScreenState
         title: const Text('Configuración de Impresión'),
         backgroundColor: const Color(0xFFF97316),
         foregroundColor: Colors.white,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          tooltip: 'Regresar',
+          onPressed: () => Navigator.of(context).canPop()
+              ? Navigator.of(context).pop()
+              : context.go(AppRoutes.settings),
+        ),
         bottom: TabBar(
           controller: _tabController,
           indicatorColor: Colors.white,

@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/data/models/payment_models.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
@@ -269,31 +270,68 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
                 .where((tx) => tx.type == 'expense')
                 .fold<double>(0, (sum, tx) => sum + tx.amount);
 
+            final isMobile = ResponsiveHelper.isMobile(context);
+            final pad = isMobile ? 12.0 : 24.0;
             return ListView(
-              padding: const EdgeInsets.all(24),
+              padding: EdgeInsets.all(pad),
               children: [
-                Wrap(
-                  spacing: 16,
-                  runSpacing: 16,
-                  children: [
-                    _MetricCard(
-                      title: 'Depósitos',
-                      value: deposits,
-                      color: Colors.blue,
-                    ),
-                    _MetricCard(
-                      title: 'Retiros',
-                      value: withdrawals,
-                      color: const Color(0xFFF97316),
-                    ),
-                    _MetricCard(
-                      title: 'Gastos',
-                      value: expenses,
-                      color: Colors.red,
-                    ),
-                  ],
+                LayoutBuilder(
+                  builder: (context, c) {
+                    // En móvil: 3 cards en una fila con Expanded; en
+                    // tablet/desktop: Wrap con ancho fijo 240.
+                    if (isMobile) {
+                      return Row(
+                        children: [
+                          Expanded(
+                            child: _MetricCard(
+                              title: 'Depósitos',
+                              value: deposits,
+                              color: MangoColors.successGreen,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: _MetricCard(
+                              title: 'Retiros',
+                              value: withdrawals,
+                              color: MangoColors.primaryOrange,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: _MetricCard(
+                              title: 'Gastos',
+                              value: expenses,
+                              color: Colors.red,
+                            ),
+                          ),
+                        ],
+                      );
+                    }
+                    return Wrap(
+                      spacing: 16,
+                      runSpacing: 16,
+                      children: [
+                        _MetricCard(
+                          title: 'Depósitos',
+                          value: deposits,
+                          color: MangoColors.successGreen,
+                        ),
+                        _MetricCard(
+                          title: 'Retiros',
+                          value: withdrawals,
+                          color: MangoColors.primaryOrange,
+                        ),
+                        _MetricCard(
+                          title: 'Gastos',
+                          value: expenses,
+                          color: Colors.red,
+                        ),
+                      ],
+                    );
+                  },
                 ),
-                const SizedBox(height: 24),
+                SizedBox(height: isMobile ? 14 : 24),
                 LayoutBuilder(
                   builder: (context, constraints) {
                     final isWide = constraints.maxWidth > 980;
@@ -310,7 +348,7 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
                     return Column(
                       children: [
                         _buildForm(data),
-                        const SizedBox(height: 24),
+                        SizedBox(height: isMobile ? 14 : 24),
                         _buildList(data),
                       ],
                     );
@@ -525,8 +563,9 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
       );
     }
 
+    final isMobile = ResponsiveHelper.isMobile(context);
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: EdgeInsets.all(isMobile ? 14 : 20),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
@@ -536,40 +575,45 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
         children: [
           Text(
             'Registrar movimiento',
-            style: Theme.of(
-              context,
-            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  fontSize: isMobile ? 16 : null,
+                ),
           ),
-          const SizedBox(height: 6),
+          SizedBox(height: isMobile ? 4 : 6),
           Text(
             'Sesión ${data.session.id.substring(0, 8).toUpperCase()} abierta el ${DateFormat('dd/MM/yyyy HH:mm').format(AppTime.astFromInstant(data.session.openedAt))}',
-            style: TextStyle(color: Colors.grey[600]),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: Colors.grey[600],
+              fontSize: isMobile ? 11 : 13,
+            ),
           ),
-          const SizedBox(height: 20),
+          SizedBox(height: isMobile ? 14 : 20),
           SegmentedButton<String>(
-            segments: const [
+            // En móvil ocultamos los íconos para que entren las 3 segments.
+            segments: [
               ButtonSegment(
                 value: 'deposit',
-                label: Text('Ingreso'),
-                icon: Icon(Icons.south_west),
+                label: const Text('Ingreso'),
+                icon: isMobile ? null : const Icon(Icons.south_west),
               ),
               ButtonSegment(
                 value: 'withdrawal',
-                label: Text('Retiro'),
-                icon: Icon(Icons.north_east),
+                label: const Text('Retiro'),
+                icon: isMobile ? null : const Icon(Icons.north_east),
               ),
               ButtonSegment(
                 value: 'expense',
-                label: Text('Gasto'),
-                icon: Icon(Icons.money_off),
+                label: const Text('Gasto'),
+                icon: isMobile ? null : const Icon(Icons.money_off),
               ),
             ],
             selected: {_selectedType},
             onSelectionChanged: (selection) {
               setState(() {
                 _selectedType = selection.first;
-                // Reset razón al cambiar de tipo — algunas razones solo
-                // aplican a un tipo específico.
                 _selectedReasonCode = null;
               });
             },
@@ -631,8 +675,9 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
   }
 
   Widget _buildList(_ManualCashData data) {
+    final isMobile = ResponsiveHelper.isMobile(context);
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: EdgeInsets.all(isMobile ? 14 : 20),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
@@ -641,12 +686,15 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Movimientos manuales de la sesión',
-            style: Theme.of(
-              context,
-            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+            isMobile
+                ? 'Movimientos de la sesión'
+                : 'Movimientos manuales de la sesión',
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  fontSize: isMobile ? 15 : null,
+                ),
           ),
-          const SizedBox(height: 16),
+          SizedBox(height: isMobile ? 12 : 16),
           if (data.transactions.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 40),
@@ -666,11 +714,11 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
   Color _colorForType(String type) {
     switch (type) {
       case 'deposit':
-        return Colors.blue;
+        return MangoColors.successGreen;
       case 'withdrawal':
-        return const Color(0xFFF97316);
+        return MangoColors.primaryOrange;
       case 'expense':
-        return Colors.red;
+        return const Color(0xFFDC2626);
       default:
         return MangoColors.primaryOrange;
     }
@@ -743,12 +791,13 @@ class _MetricCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = ResponsiveHelper.isMobile(context);
     return Container(
-      width: 240,
-      padding: const EdgeInsets.all(20),
+      width: isMobile ? null : 240,
+      padding: EdgeInsets.all(isMobile ? 10 : 20),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: color.withValues(alpha: 0.1)),
         boxShadow: [
           BoxShadow(
@@ -760,34 +809,45 @@ class _MetricCard extends StatelessWidget {
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            padding: const EdgeInsets.all(8),
+            padding: EdgeInsets.symmetric(
+              horizontal: isMobile ? 6 : 8,
+              vertical: isMobile ? 4 : 8,
+            ),
             decoration: BoxDecoration(
               color: color.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Text(
               title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 color: color,
-                fontSize: 12,
+                fontSize: isMobile ? 10 : 12,
                 fontWeight: FontWeight.w700,
                 letterSpacing: 0.5,
               ),
             ),
           ),
-          const SizedBox(height: 16),
-          Text(
-            NumberFormat.currency(
-              symbol: 'RD\$ ',
-              decimalDigits: 2,
-            ).format(value),
-            style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w900,
-              color: MangoColors.darkGray,
-              letterSpacing: -0.5,
+          SizedBox(height: isMobile ? 8 : 16),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              NumberFormat.currency(
+                symbol: 'RD\$ ',
+                decimalDigits: isMobile ? 0 : 2,
+              ).format(value),
+              maxLines: 1,
+              style: TextStyle(
+                fontSize: isMobile ? 15 : 22,
+                fontWeight: FontWeight.w900,
+                color: MangoColors.darkGray,
+                letterSpacing: -0.5,
+              ),
             ),
           ),
         ],
@@ -811,17 +871,24 @@ class _ManualMovementTile extends StatelessWidget {
       _ => Colors.grey,
     };
 
+    final isMobile = ResponsiveHelper.isMobile(context);
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
+      margin: EdgeInsets.only(bottom: isMobile ? 8 : 12),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.03),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: color.withValues(alpha: 0.1)),
       ),
       child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        contentPadding: EdgeInsets.symmetric(
+          horizontal: isMobile ? 10 : 16,
+          vertical: isMobile ? 0 : 4,
+        ),
+        dense: isMobile,
+        visualDensity:
+            isMobile ? VisualDensity.compact : VisualDensity.standard,
         leading: Container(
-          padding: const EdgeInsets.all(10),
+          padding: EdgeInsets.all(isMobile ? 7 : 10),
           decoration: BoxDecoration(
             color: color.withValues(alpha: 0.1),
             shape: BoxShape.circle,
@@ -834,25 +901,33 @@ class _ManualMovementTile extends StatelessWidget {
               _ => Icons.receipt_long,
             },
             color: color,
-            size: 20,
+            size: isMobile ? 16 : 20,
           ),
         ),
         title: Text(
           transaction.description ?? 'Movimiento',
-          style: const TextStyle(
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
             fontWeight: FontWeight.w700,
             color: MangoColors.darkGray,
+            fontSize: isMobile ? 13 : 14,
           ),
         ),
         subtitle: Text(
           '${DateFormat('dd MMM hh:mm a').format(AppTime.astFromInstant(transaction.createdAt))} · ${_typeLabel(transaction.type)}',
-          style: const TextStyle(fontSize: 12, color: MangoColors.muted),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: isMobile ? 10.5 : 12,
+            color: MangoColors.muted,
+          ),
         ),
         trailing: Text(
-          '${isDeposit ? '+' : '-'}RD\$ ${transaction.amount.toStringAsFixed(2)}',
+          '${isDeposit ? '+' : '-'}RD\$ ${transaction.amount.toStringAsFixed(isMobile ? 0 : 2)}',
           style: TextStyle(
             fontWeight: FontWeight.w900,
-            fontSize: 16,
+            fontSize: isMobile ? 13 : 16,
             color: color,
           ),
         ),

@@ -42,7 +42,7 @@ class _FinanceReportBody extends StatelessWidget {
         closures.where((row) => row['status']?.toString() == 'closed').length;
 
     return ListView(
-      padding: reportSectionPadding,
+      padding: reportBodyPadding(context),
       children: [
         ReportHeroCard(
           title: 'Cierres de caja',

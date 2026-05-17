@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/app/widgets/date_range_modal.dart';
+import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
 import 'package:mangopos/presentation/reports/services/reports_csv_export_service.dart';
@@ -63,6 +64,8 @@ class _ReportScaffoldState extends ConsumerState<ReportScaffold> {
       });
     }
 
+    final isMobile = ResponsiveHelper.isMobile(context);
+    final containerPad = isMobile ? 12.0 : AppSpacing.containerPadding;
     return Scaffold(
       backgroundColor: AppColors.background,
       body: SafeArea(
@@ -70,14 +73,16 @@ class _ReportScaffoldState extends ConsumerState<ReportScaffold> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Padding(
-              padding: const EdgeInsets.all(AppSpacing.containerPadding),
+              padding: EdgeInsets.all(containerPad),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
                     children: [
                       Padding(
-                        padding: const EdgeInsets.only(right: AppSpacing.lg),
+                        padding: EdgeInsets.only(
+                          right: isMobile ? AppSpacing.sm : AppSpacing.lg,
+                        ),
                         child: IconButton(
                           icon: const Icon(
                             Icons.arrow_back,
@@ -95,8 +100,8 @@ class _ReportScaffoldState extends ConsumerState<ReportScaffold> {
                       Expanded(
                         child: Text(
                           widget.title,
-                          style: const TextStyle(
-                            fontSize: 28,
+                          style: TextStyle(
+                            fontSize: isMobile ? 18 : 28,
                             fontWeight: FontWeight.bold,
                             color: AppColors.foreground,
                           ),
@@ -104,10 +109,6 @@ class _ReportScaffoldState extends ConsumerState<ReportScaffold> {
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                      // Solo mostramos el indicador del header en la
-                      // primera carga (cuando no hay data aún). Refreshes
-                      // posteriores corren en background sin mostrar nada
-                      // — la data se actualiza in-place cuando termina.
                       if (state.loading && state.salesSummary == null)
                         Padding(
                           padding: const EdgeInsets.only(right: AppSpacing.sm),
@@ -127,7 +128,7 @@ class _ReportScaffoldState extends ConsumerState<ReportScaffold> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: AppSpacing.itemGap),
+                  SizedBox(height: isMobile ? 10 : AppSpacing.itemGap),
                   _ReportToolbar(
                     state: state,
                     viewModel: viewModel,

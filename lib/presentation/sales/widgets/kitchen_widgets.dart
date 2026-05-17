@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
+import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -87,6 +90,13 @@ class _SendToKitchenButtonState extends ConsumerState<_SendToKitchenButton> {
 
       // Send order to kitchen (via provider)
       await orderNotifier.confirmOrder();
+
+      // Refrescar stock — el trigger auto-86 ya corrió en backend, queremos
+      // que el badge del catálogo refleje las nuevas cantidades sin esperar
+      // al próximo loadAll.
+      unawaited(
+        ref.read(menuBrowserVmProvider.notifier).refreshStock(),
+      );
 
       setState(() => _state = KitchenButtonState.success);
 

@@ -2507,18 +2507,41 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }
 
   double _courtesyLineAmount(OrderItem item) {
-    // Costo de modifiers por UNA unidad del item. Multiplicamos por qty
-    // despues para alinearnos con la formula de fn_compute_item_totals
-    // (migration 20260509_0004).
+    // El descuento de cortesía representa "lo que el cliente NO paga" y
+    // jamás debe exceder el gross efectivo de la línea. Si excede, el
+    // trigger backend grabará item.total = subtotal + tax - discount
+    // negativo, y la factura mostrará -RD$X en vez de RD$0.
+    //
+    // Fuente de verdad del gross:
+    //   inclusive → item.subtotal + item.tax  (subtotal está NETO,
+    //               extraído por el trigger; sumarlos da el gross
+    //               que el cliente ve en el menú).
+    //   exclusive → item.subtotal + item.tax  (subtotal es base sin
+    //               tax; sumarle tax da el gross final).
+    // En ambos casos: subtotal + tax == gross real. Usamos esto cuando
+    // los valores estén persistidos (item ya pasó por fn_compute_item_totals).
+    if (item.subtotal > 0 || item.tax > 0) {
+      final base = item.subtotal + item.tax;
+      return double.parse(base.toStringAsFixed(2));
+    }
+
+    // Fallback para items en draft sin totals persistidos. Estimamos
+    // según el modo de impuestos.
     final modifiersPerUnit = item.modifiers.fold<double>(
       0,
       (sum, modifier) => sum + (modifier.price * modifier.qty),
     );
-    final estimatedSubtotal = item.quantity * (item.unitPrice + modifiersPerUnit);
 
-    final taxRate = item.subtotal > 0
-        ? (item.tax / item.subtotal)
-        : (item.tax > 0 ? 0.18 : 0.0);
+    if (item.taxMode == 'inclusive') {
+      // unitPrice ya incluye tax baked; el gross es directamente
+      // qty * (unitPrice + modifiers).
+      final gross = item.quantity * (item.unitPrice + modifiersPerUnit);
+      return double.parse(gross.toStringAsFixed(2));
+    }
+
+    // Exclusive draft: estimamos tax sobre la base.
+    final estimatedSubtotal = item.quantity * (item.unitPrice + modifiersPerUnit);
+    final taxRate = item.tax > 0 ? 0.18 : 0.0;
     final estimatedTax = estimatedSubtotal * taxRate;
 
     final total = (estimatedSubtotal + estimatedTax)

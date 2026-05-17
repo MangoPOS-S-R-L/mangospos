@@ -74,7 +74,7 @@ class _TaxReportBody extends StatelessWidget {
         : '';
 
     return ListView(
-      padding: reportSectionPadding,
+      padding: reportBodyPadding(context),
       children: [
         // Hero card
         ReportHeroCard(

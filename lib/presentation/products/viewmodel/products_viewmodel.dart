@@ -205,6 +205,7 @@ class ProductsViewModel extends ChangeNotifier {
     // 👇 inventario por producto
     bool isInventoryTracked = false,
     double initialStock = 0,
+    bool allowNegativeSale = false,
   }) async {
     if (_businessId == null) return;
 
@@ -256,6 +257,7 @@ class ProductsViewModel extends ChangeNotifier {
         taxIds: taxIds,
         isInventoryTracked: isInventoryTracked,
         initialStock: initialStock,
+        allowNegativeSale: allowNegativeSale,
       );
 
       await _fetchProducts();
@@ -289,6 +291,7 @@ class ProductsViewModel extends ChangeNotifier {
     // se llama la RPC para sincronizar.
     bool? isInventoryTracked,
     double initialStock = 0,
+    bool? allowNegativeSale,
   }) async {
     try {
       String? imagePath;
@@ -338,6 +341,7 @@ class ProductsViewModel extends ChangeNotifier {
         taxIds: taxIds,
         isInventoryTracked: isInventoryTracked,
         initialStock: initialStock,
+        allowNegativeSale: allowNegativeSale,
       );
 
       await _fetchProducts();

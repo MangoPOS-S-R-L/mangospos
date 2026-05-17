@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme/breakpoints.dart';
+import '../../../core/theme/app_breakpoints.dart';
 import '../../../data/models/kitchen_models.dart';
 import '../viewmodel/kds_viewmodel.dart';
 import '../widgets/order_card.dart';
@@ -56,26 +57,33 @@ class _KitchenDisplayScreenState extends ConsumerState<KitchenDisplayScreen>
   Widget build(BuildContext context) {
     final state = ref.watch(kdsViewModelProvider);
     final viewModel = ref.read(kdsViewModelProvider.notifier);
+    final isMobile = ResponsiveHelper.isMobile(context);
 
     return Scaffold(
       backgroundColor: Colors.grey[900],
       appBar: AppBar(
         backgroundColor: Colors.black,
+        titleSpacing: isMobile ? 0 : null,
         title: Row(
           children: [
             const Icon(Icons.restaurant_menu, color: Color(0xFFF97316)),
-            const SizedBox(width: 12),
-            const Text(
-              'Kitchen Display System',
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
+            SizedBox(width: isMobile ? 8 : 12),
+            Expanded(
+              child: Text(
+                isMobile ? 'KDS' : 'Kitchen Display System',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: isMobile ? 16 : 24,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
               ),
             ),
-            const Spacer(),
-            // Stats
-            if (state.stats.isNotEmpty) ...[
+            // En desktop mostramos los stat chips en el header. En móvil
+            // viven en la TabBar (los conteos ya están al lado del label),
+            // así que omitimos para no chocar con los IconButtons.
+            if (!isMobile && state.stats.isNotEmpty) ...[
               _StatChip(
                 label: 'Pendientes',
                 value: state.stats['pending'] ?? 0,
@@ -98,47 +106,80 @@ class _KitchenDisplayScreenState extends ConsumerState<KitchenDisplayScreen>
         ),
         bottom: TabBar(
           controller: _tabController,
+          isScrollable: isMobile,
+          tabAlignment: isMobile ? TabAlignment.start : null,
           indicatorColor: const Color(0xFFF97316),
           labelColor: const Color(0xFFF97316),
           unselectedLabelColor: Colors.grey[400],
+          labelStyle: TextStyle(
+            fontSize: isMobile ? 12 : 14,
+            fontWeight: FontWeight.w600,
+          ),
+          unselectedLabelStyle: TextStyle(
+            fontSize: isMobile ? 12 : 14,
+          ),
           tabs: [
             Tab(
-              icon: const Icon(Icons.pending_actions),
-              text: 'Pendientes (${state.pendingOrders.length})',
+              icon: Icon(
+                Icons.pending_actions,
+                size: isMobile ? 18 : 24,
+              ),
+              text: isMobile
+                  ? 'Pend. (${state.pendingOrders.length})'
+                  : 'Pendientes (${state.pendingOrders.length})',
             ),
             Tab(
-              icon: const Icon(Icons.restaurant),
-              text: 'Preparando (${state.preparingOrders.length})',
+              icon: Icon(
+                Icons.restaurant,
+                size: isMobile ? 18 : 24,
+              ),
+              text: isMobile
+                  ? 'Prep. (${state.preparingOrders.length})'
+                  : 'Preparando (${state.preparingOrders.length})',
             ),
             Tab(
-              icon: const Icon(Icons.check_circle),
+              icon: Icon(
+                Icons.check_circle,
+                size: isMobile ? 18 : 24,
+              ),
               text: 'Listos (${state.readyOrders.length})',
             ),
           ],
         ),
         actions: [
-          // Sound toggle
           IconButton(
             icon: Icon(
               state.soundEnabled ? Icons.volume_up : Icons.volume_off,
               color: Colors.white,
+              size: isMobile ? 20 : 24,
             ),
             onPressed: () => viewModel.toggleSound(),
+            visualDensity:
+                isMobile ? VisualDensity.compact : VisualDensity.standard,
           ),
-          // Auto-refresh toggle
           IconButton(
             icon: Icon(
               state.autoRefresh ? Icons.sync : Icons.sync_disabled,
-              color: state.autoRefresh ? const Color(0xFF22C55E) : Colors.grey,
+              color: state.autoRefresh
+                  ? const Color(0xFF22C55E)
+                  : Colors.grey,
+              size: isMobile ? 20 : 24,
             ),
             onPressed: () => viewModel.toggleAutoRefresh(),
+            visualDensity:
+                isMobile ? VisualDensity.compact : VisualDensity.standard,
           ),
-          // Refresh button
           IconButton(
-            icon: const Icon(Icons.refresh, color: Colors.white),
+            icon: Icon(
+              Icons.refresh,
+              color: Colors.white,
+              size: isMobile ? 20 : 24,
+            ),
             onPressed: () => viewModel.loadOrders(),
+            visualDensity:
+                isMobile ? VisualDensity.compact : VisualDensity.standard,
           ),
-          const SizedBox(width: 16),
+          SizedBox(width: isMobile ? 4 : 16),
         ],
       ),
       body: state.loading
@@ -258,17 +299,25 @@ class _KitchenDisplayScreenState extends ConsumerState<KitchenDisplayScreen>
     // PRD 6 § 4.3 — en compact (<1366) las cards se hacen más estrechas
     // (340 max) para caber 3 columnas cómodas en 1280-1366 px sin
     // comprimir contenido. En regular/wide mantenemos 400 (4 cols+).
-    final maxCardWidth = Breakpoints.isCompact(context) ? 340.0 : 400.0;
+    // En móvil (<600) usamos el ancho completo del viewport con
+    // aspect ratio más alto (más vertical) — una card por fila.
+    final isMobile = ResponsiveHelper.isMobile(context);
+    final maxCardWidth = isMobile
+        ? double.infinity
+        : (Breakpoints.isCompact(context) ? 340.0 : 400.0);
+    final aspectRatio = isMobile ? 1.0 : 0.8;
+    final gridPadding = isMobile ? 10.0 : 16.0;
+    final spacing = isMobile ? 10.0 : 16.0;
     final buckets = _splitOrdersByTakeout(
       orders is List<KitchenOrder> ? orders : List<KitchenOrder>.from(orders),
     );
     return GridView.builder(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.all(gridPadding),
       gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
         maxCrossAxisExtent: maxCardWidth,
-        childAspectRatio: 0.8,
-        crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
+        childAspectRatio: aspectRatio,
+        crossAxisSpacing: spacing,
+        mainAxisSpacing: spacing,
       ),
       itemCount: buckets.length,
       itemBuilder: (context, index) {

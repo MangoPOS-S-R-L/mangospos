@@ -278,25 +278,26 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
       child: MangoModal.wrap(
         context: context,
         type: MangoModalType.form,
-        child: Center(
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: isMobile ? double.infinity : 880,
-              maxHeight: isMobile ? double.infinity : 680,
-            ),
-            child: Container(
-              decoration: BoxDecoration(
-                color: _kSurface,
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x22000000),
-                    blurRadius: 20,
-                    offset: Offset(0, 12),
-                  ),
-                ],
+        child: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: isMobile ? double.infinity : 880,
+                maxHeight: isMobile ? double.infinity : 680,
               ),
-          child: Column(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: _kSurface,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x22000000),
+                      blurRadius: 20,
+                      offset: Offset(0, 12),
+                    ),
+                  ],
+                ),
+                child: Column(
             children: [
               _buildHeader(context, isPrinting: state.isPrinting),
               const Divider(height: 1, color: _kBorder),
@@ -304,7 +305,9 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
                 child: isMobile
                     ? SingleChildScrollView(
                         child: Padding(
-                          padding: const EdgeInsets.all(16),
+                          padding: EdgeInsets.all(
+                            MediaQuery.sizeOf(context).width < 600 ? 12 : 16,
+                          ),
                           child: _MobileLayout(
                             state: state,
                             vm: vm,
@@ -346,13 +349,14 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
                         ),
                       ),
               ),
-              if (state.validationError != null || state.error != null)
-                _ErrorBar(
-                  message: state.validationError ?? state.error!,
-                  isDanger: state.error != null,
-                ),
-            ],
-          ),
+                  if (state.validationError != null || state.error != null)
+                    _ErrorBar(
+                      message: state.validationError ?? state.error!,
+                      isDanger: state.error != null,
+                    ),
+                ],
+              ),
+            ),
             ),
           ),
         ),
@@ -361,49 +365,62 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
   }
 
   Widget _buildHeader(BuildContext context, {required bool isPrinting}) {
+    final isPhone = MediaQuery.sizeOf(context).width < 600;
+    final title = widget.customerName?.trim().isNotEmpty == true
+        ? (isPhone
+            ? widget.customerName!
+            : 'Pago - ${widget.customerName}')
+        : 'Pago - Mesa ${widget.tableName}';
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      padding: EdgeInsets.symmetric(
+        horizontal: isPhone ? 12 : 16,
+        vertical: isPhone ? 8 : 10,
+      ),
       child: Row(
         children: [
           Container(
-            padding: const EdgeInsets.all(10),
+            padding: EdgeInsets.all(isPhone ? 8 : 10),
             decoration: BoxDecoration(
               color: const Color.fromRGBO(247, 148, 26, 0.12),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: const Icon(Icons.credit_card, color: _kPrimary, size: 22),
+            child: Icon(
+              Icons.credit_card,
+              color: _kPrimary,
+              size: isPhone ? 18 : 22,
+            ),
           ),
-          const SizedBox(width: 12),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                widget.customerName?.trim().isNotEmpty == true
-                    ? 'Pago - ${widget.customerName}'
-                    : 'Pago - Mesa ${widget.tableName}',
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
+          SizedBox(width: isPhone ? 8 : 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: isPhone ? 15 : 18,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
-              ),
-              Text(
-                'Total: RD\$ ${widget.totalAmount.toStringAsFixed(2)}',
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey,
-                  fontWeight: FontWeight.w600,
+                Text(
+                  'Total: RD\$ ${widget.totalAmount.toStringAsFixed(2)}',
+                  style: TextStyle(
+                    fontSize: isPhone ? 11 : 12,
+                    color: Colors.grey,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-          const Spacer(),
           IconButton(
             icon: Icon(
               Icons.close,
               color: isPrinting ? Colors.black26 : Colors.black54,
             ),
-            // Bloqueado durante impresion: el pago ya esta grabado y
-            // si se cierra aqui se libera la mesa sin ticket.
             onPressed: isPrinting ? null : () => Navigator.of(context).pop(),
           ),
         ],
@@ -429,32 +446,99 @@ class _LeftPanel extends ConsumerWidget {
     this.compact = false,
   });
 
-  /// Altura del keypad en modo compact (mobile). Antes era hardcoded a 250.
-  /// Ahora escala con la altura disponible: ~36 % de la pantalla con bounds
-  /// para que no se aplaste en celulares chicos ni quede gigante en tablets.
-  ///
-  /// Bounds:
-  ///   - Min 240 px → 4 filas × 60 px (touch target mínimo cómodo).
-  ///   - Max 340 px → en tablets grandes evita que un solo botón ocupe
-  ///     toda la pantalla y desbalancee el layout vertical.
+  /// Altura del keypad en modo compact (mobile/tablet portrait). Escala con
+  /// la altura disponible. En celular real (<600 px ancho) bajamos los
+  /// bounds para que no domine la pantalla.
   double _resolveCompactKeypadHeight(BuildContext context) {
-    final screenH = MediaQuery.sizeOf(context).height;
-    return (screenH * 0.36).clamp(240.0, 340.0);
+    final size = MediaQuery.sizeOf(context);
+    final isPhone = size.width < 600;
+    final pct = isPhone ? 0.28 : 0.36;
+    final min = isPhone ? 180.0 : 240.0;
+    final max = isPhone ? 230.0 : 340.0;
+    return (size.height * pct).clamp(min, max);
   }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final canAdd = state.inputAmount > 0 && !state.isProcessing;
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    // True mobile (celular). En mobile partimos los chips en 2 filas y
+    // achicamos labels de los métodos para que entren en ~380 px.
+    final isPhone = screenWidth < 600;
+
+    Widget quickAmountChips() {
+      final amounts = const [100, 200, 500, 1000, 2000];
+      if (isPhone) {
+        // Mobile: fila 1 = "Exacto" full width; fila 2 = 5 chips iguales.
+        return Column(
+          children: [
+            if (state.remaining > 0) ...[
+              SizedBox(
+                width: double.infinity,
+                child: _QuickAmountChip(
+                  label: 'Monto Exacto',
+                  primary: true,
+                  onTap: () => vm.setExactAmount(),
+                ),
+              ),
+              const SizedBox(height: 6),
+            ],
+            Row(
+              children: [
+                for (var i = 0; i < amounts.length; i++) ...[
+                  Expanded(
+                    child: _QuickAmountChip(
+                      label: amounts[i].toString(),
+                      onTap: () =>
+                          vm.setQuickAmount(amounts[i].toDouble()),
+                    ),
+                  ),
+                  if (i != amounts.length - 1) const SizedBox(width: 4),
+                ],
+              ],
+            ),
+          ],
+        );
+      }
+      return Row(
+        children: [
+          if (state.remaining > 0) ...[
+            Expanded(
+              flex: 3,
+              child: _QuickAmountChip(
+                label: 'Monto Exacto',
+                primary: true,
+                onTap: () => vm.setExactAmount(),
+              ),
+            ),
+            const SizedBox(width: 6),
+          ],
+          for (final amount in amounts) ...[
+            Expanded(
+              child: _QuickAmountChip(
+                label: amount.toString(),
+                onTap: () => vm.setQuickAmount(amount.toDouble()),
+              ),
+            ),
+            if (amount != amounts.last) const SizedBox(width: 6),
+          ],
+        ],
+      );
+    }
 
     final content = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Text(
+        Text(
           'Método de pago',
-          style: TextStyle(fontWeight: FontWeight.w700, color: Colors.black87),
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            color: Colors.black87,
+            fontSize: isPhone ? 12 : 14,
+          ),
         ),
-        const SizedBox(height: 6),
+        SizedBox(height: isPhone ? 4 : 6),
         Row(
           children: [
             _MethodCard(
@@ -462,71 +546,41 @@ class _LeftPanel extends ConsumerWidget {
               icon: Icons.payments_outlined,
               isSelected: state.activeMethod == PaymentMethodType.cash,
               onTap: () => vm.setMethod(PaymentMethodType.cash),
+              compact: isPhone,
             ),
-            const SizedBox(width: 8),
+            SizedBox(width: isPhone ? 6 : 8),
             _MethodCard(
               label: 'Tarjeta',
               icon: Icons.credit_card,
               isSelected: state.activeMethod == PaymentMethodType.card,
               onTap: () => vm.setMethod(PaymentMethodType.card),
+              compact: isPhone,
             ),
-            const SizedBox(width: 8),
+            SizedBox(width: isPhone ? 6 : 8),
             _MethodCard(
-              label: 'Transferencia',
+              label: isPhone ? 'Transfer.' : 'Transferencia',
               icon: Icons.qr_code_2,
               isSelected: state.activeMethod == PaymentMethodType.transfer,
               onTap: () async {
                 vm.setMethod(PaymentMethodType.transfer);
-                // Tras seleccionar transferencia, abrimos el dialog para
-                // que el cajero elija a cuál cuenta del negocio llegó.
-                // El cajero puede cancelar y reabrirlo después con el
-                // chip de "Cambiar cuenta" que aparece más abajo.
                 await _openBankAccountPicker(context, ref);
               },
+              compact: isPhone,
             ),
           ],
         ),
-        // Chip / banner de cuenta bancaria seleccionada (solo cuando
-        // método activo = transferencia). Sin selección: invita a elegir.
         if (state.activeMethod == PaymentMethodType.transfer) ...[
-          const SizedBox(height: 8),
+          SizedBox(height: isPhone ? 6 : 8),
           _SelectedBankBanner(
             account: state.selectedBankAccount,
             onChange: () => _openBankAccountPicker(context, ref),
           ),
         ],
-        const SizedBox(height: 10),
-        // PRD 6 § 4.7 — atajos de denominación ARRIBA del input.
-        // Una fila de 5 chips (Exacto + 4 billetes) que se distribuyen
-        // proporcionalmente al ancho disponible. Exacto recibe flex 2 para
-        // destacarse (es la acción más usada en cobros que cuadran).
-        Row(
-          children: [
-            if (state.remaining > 0) ...[
-              Expanded(
-                flex: 3,
-                child: _QuickAmountChip(
-                  label: 'Monto Exacto',
-                  primary: true,
-                  onTap: () => vm.setExactAmount(),
-                ),
-              ),
-              const SizedBox(width: 6),
-            ],
-            for (final amount in const [100, 200, 500, 1000, 2000]) ...[
-              Expanded(
-                child: _QuickAmountChip(
-                  label: amount.toString(),
-                  onTap: () => vm.setQuickAmount(amount.toDouble()),
-                ),
-              ),
-              if (amount != 2000) const SizedBox(width: 6),
-            ],
-          ],
-        ),
-        const SizedBox(height: 8),
+        SizedBox(height: isPhone ? 8 : 10),
+        quickAmountChips(),
+        SizedBox(height: isPhone ? 6 : 8),
         _InputDisplay(state: state),
-        const SizedBox(height: 8),
+        SizedBox(height: isPhone ? 6 : 8),
         if (compact)
           SizedBox(
             height: _resolveCompactKeypadHeight(context),
@@ -536,7 +590,7 @@ class _LeftPanel extends ConsumerWidget {
           Expanded(
             child: _NumericKeypad(vm: vm, pressedKey: pressedKey),
           ),
-        const SizedBox(height: 20),
+        SizedBox(height: isPhone ? 10 : 20),
         SizedBox(
           width: double.infinity,
           height: compact ? 52 : 48,
@@ -1144,23 +1198,29 @@ class _MobileLayout extends StatelessWidget {
         !state.isPrinting;
     final isBusy = state.isProcessing || state.isPrinting;
     final busyLabel = state.isPrinting ? 'Imprimiendo...' : 'Procesando...';
+    final isPhone = MediaQuery.sizeOf(context).width < 600;
+    final gap = isPhone ? 10.0 : 16.0;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _TotalsCard(state: state, compact: true),
-        const SizedBox(height: 16),
+        SizedBox(height: gap),
         _LeftPanel(state: state, vm: vm, pressedKey: pressedKey, compact: true),
-        const SizedBox(height: 16),
-        _PaymentList(
-          transactions: state.transactions,
-          onDelete: vm.removeTransaction,
-          allowScrolling: false,
-        ),
-        const SizedBox(height: 16),
+        // Lista de pagos: solo mostramos si hay transacciones — en
+        // celular el "Aún no has agregado pagos" ocupa espacio inútil.
+        if (state.transactions.isNotEmpty) ...[
+          SizedBox(height: gap),
+          _PaymentList(
+            transactions: state.transactions,
+            onDelete: vm.removeTransaction,
+            allowScrolling: false,
+          ),
+        ],
+        SizedBox(height: gap),
         SizedBox(
           width: double.infinity,
-          height: 54,
+          height: isPhone ? 48 : 54,
           child: ElevatedButton.icon(
             onPressed: canConfirm
                 ? () async {
@@ -1220,13 +1280,11 @@ class _MobileLayout extends StatelessWidget {
             ],
           ),
         ],
-        const SizedBox(height: 10),
+        SizedBox(height: isPhone ? 8 : 10),
         SizedBox(
           width: double.infinity,
-          height: 48,
+          height: isPhone ? 42 : 48,
           child: OutlinedButton(
-            // Mientras imprime, bloqueamos el cierre — el pago ya esta
-            // grabado y la mesa se libera al cerrar el modal.
             onPressed: isBusy ? null : () => Navigator.pop(context),
             style: OutlinedButton.styleFrom(
               side: const BorderSide(color: _kBorder),
@@ -1236,25 +1294,6 @@ class _MobileLayout extends StatelessWidget {
             ),
             child: const Text(
               'Cancelar',
-              style: TextStyle(fontWeight: FontWeight.w700),
-            ),
-          ),
-        ),
-        const SizedBox(height: 10),
-        SizedBox(
-          width: double.infinity,
-          height: 46,
-          child: TextButton.icon(
-            onPressed: () => Navigator.pop(context, false),
-            style: TextButton.styleFrom(
-              foregroundColor: Colors.black87,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-            icon: const Icon(Icons.arrow_back_ios_new, size: 18),
-            label: const Text(
-              'Volver a la mesa',
               style: TextStyle(fontWeight: FontWeight.w700),
             ),
           ),
@@ -1278,6 +1317,7 @@ class _InputDisplay extends StatelessWidget {
     final entered = state.inputAmount;
     final showChange = entered > state.remaining && state.remaining > 0;
     final preview = entered - state.remaining;
+    final isPhone = MediaQuery.sizeOf(context).width < 600;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1287,14 +1327,17 @@ class _InputDisplay extends StatelessWidget {
           style: TextStyle(
             color: Colors.grey[600],
             fontWeight: FontWeight.w700,
-            fontSize: 10,
+            fontSize: isPhone ? 9 : 10,
             letterSpacing: 1.2,
           ),
         ),
-        const SizedBox(height: 6),
+        SizedBox(height: isPhone ? 4 : 6),
         Container(
           width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          padding: EdgeInsets.symmetric(
+            horizontal: isPhone ? 12 : 14,
+            vertical: isPhone ? 8 : 12,
+          ),
           decoration: BoxDecoration(
             color: const Color(0xFFF6F7F9),
             borderRadius: BorderRadius.circular(10),
@@ -1315,16 +1358,16 @@ class _InputDisplay extends StatelessWidget {
                         letterSpacing: -0.5,
                       ),
                       children: [
-                        const TextSpan(
+                        TextSpan(
                           text: 'RD\$ ',
                           style: TextStyle(
-                            fontSize: 15,
+                            fontSize: isPhone ? 13 : 15,
                             color: Colors.grey,
                           ),
                         ),
                         TextSpan(
                           text: input,
-                          style: const TextStyle(fontSize: 25),
+                          style: TextStyle(fontSize: isPhone ? 20 : 25),
                         ),
                       ],
                     ),
@@ -1579,12 +1622,14 @@ class _MethodCard extends StatelessWidget {
   final IconData icon;
   final bool isSelected;
   final VoidCallback onTap;
+  final bool compact;
 
   const _MethodCard({
     required this.label,
     required this.icon,
     required this.isSelected,
     required this.onTap,
+    this.compact = false,
   });
 
   @override
@@ -1597,7 +1642,7 @@ class _MethodCard extends StatelessWidget {
         onTap: onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
-          height: 64,
+          height: compact ? 56 : 64,
           decoration: BoxDecoration(
             color: bgColor,
             borderRadius: BorderRadius.circular(10),
@@ -1609,14 +1654,16 @@ class _MethodCard extends StatelessWidget {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, color: fgColor, size: 20),
-              const SizedBox(height: 4),
+              Icon(icon, color: fgColor, size: compact ? 18 : 20),
+              SizedBox(height: compact ? 2 : 4),
               Text(
                 label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: isSelected ? _kPrimary : Colors.black87,
                   fontWeight: FontWeight.w700,
-                  fontSize: 11,
+                  fontSize: compact ? 10 : 11,
                 ),
               ),
             ],
@@ -1714,10 +1761,14 @@ class _TotalsCard extends StatelessWidget {
         ? 0.0
         : (state.totalPaid / state.totalAmount).clamp(0.0, 1.0);
     final isComplete = remaining <= 0;
+    final isPhone = MediaQuery.sizeOf(context).width < 600;
+    // En celular bajamos paddings y fuentes para que la card no domine la
+    // pantalla. En desktop/tablet conservamos el look original.
+    final pad = isPhone ? 10.0 : (compact ? 14.0 : 18.0);
 
     return Container(
       width: double.infinity,
-      padding: EdgeInsets.all(compact ? 14 : 18),
+      padding: EdgeInsets.all(pad),
       decoration: BoxDecoration(
         color: const Color(0xFFF8F8F8),
         borderRadius: BorderRadius.circular(14),
@@ -1729,42 +1780,43 @@ class _TotalsCard extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text(
+              Text(
                 'Total a pagar',
                 style: TextStyle(
                   fontWeight: FontWeight.w600,
                   color: Colors.black87,
+                  fontSize: isPhone ? 13 : 14,
                 ),
               ),
               Text(
                 'RD\$ ${state.totalAmount.toStringAsFixed(2)}',
                 style: TextStyle(
                   fontWeight: FontWeight.w800,
-                  fontSize: compact ? 18 : 20,
+                  fontSize: isPhone ? 16 : (compact ? 18 : 20),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 10),
+          SizedBox(height: isPhone ? 6 : 10),
           ClipRRect(
             borderRadius: BorderRadius.circular(99),
             child: LinearProgressIndicator(
               value: progress,
-              minHeight: 6,
+              minHeight: isPhone ? 4 : 6,
               backgroundColor: _kBorder,
               valueColor: AlwaysStoppedAnimation<Color>(_kPositive),
             ),
           ),
-          const SizedBox(height: 10),
+          SizedBox(height: isPhone ? 6 : 10),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
                 'Pagado RD\$ ${state.totalPaid.toStringAsFixed(2)}',
-                style: const TextStyle(
+                style: TextStyle(
                   color: _kPositive,
                   fontWeight: FontWeight.w700,
-                  fontSize: 12,
+                  fontSize: isPhone ? 11 : 12,
                 ),
               ),
               Text(
@@ -1776,7 +1828,7 @@ class _TotalsCard extends StatelessWidget {
                       ? Colors.redAccent
                       : Colors.grey[700],
                   fontWeight: FontWeight.w700,
-                  fontSize: 12,
+                  fontSize: isPhone ? 11 : 12,
                 ),
               ),
             ],

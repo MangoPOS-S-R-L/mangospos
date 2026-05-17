@@ -12,6 +12,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:go_router/go_router.dart';
+
+import '../../../app/router/routes.dart';
 import '../../../app/theme/mango_colors.dart';
 import '../../../core/business/business_resolver.dart';
 import '../../../data/models/business_profile.dart';
@@ -300,6 +303,13 @@ class _BusinessProfileScreenState extends ConsumerState<BusinessProfileScreen> {
         backgroundColor: MangoColors.white,
         foregroundColor: MangoColors.darkGray,
         elevation: .4,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          tooltip: 'Regresar',
+          onPressed: () => Navigator.of(context).canPop()
+              ? Navigator.of(context).pop()
+              : context.go(AppRoutes.settings),
+        ),
       ),
       body: _loading
           ? const Center(

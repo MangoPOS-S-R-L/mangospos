@@ -684,8 +684,9 @@ class _HeaderSection extends StatelessWidget {
       }
     }
 
+    final isMobile = context.isMobile;
     return Container(
-      padding: EdgeInsets.all(context.wp(2.5)),
+      padding: EdgeInsets.all(isMobile ? 12 : context.wp(2.5)),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
@@ -700,118 +701,152 @@ class _HeaderSection extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Row(
-            children: [
-              IconButton(
-                onPressed: () {
-                  if (context.canPop()) {
-                    context.pop();
-                  } else {
-                    context.go(AppRoutes.dashboard);
-                  }
-                },
-                tooltip: 'Volver',
-                icon: const Icon(Icons.arrow_back),
-                style: IconButton.styleFrom(
-                  backgroundColor: const Color(0xFFF5F5F5),
-                  foregroundColor: MangoColors.darkGray,
+          Expanded(
+            child: Row(
+              children: [
+                IconButton(
+                  onPressed: () {
+                    if (context.canPop()) {
+                      context.pop();
+                    } else {
+                      context.go(AppRoutes.dashboard);
+                    }
+                  },
+                  tooltip: 'Volver',
+                  icon: const Icon(Icons.arrow_back),
+                  style: IconButton.styleFrom(
+                    backgroundColor: const Color(0xFFF5F5F5),
+                    foregroundColor: MangoColors.darkGray,
+                    minimumSize: Size(
+                      isMobile ? 36 : 40,
+                      isMobile ? 36 : 40,
+                    ),
+                  ),
                 ),
-              ),
-              SizedBox(width: context.wp(1.2)),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+                SizedBox(width: isMobile ? 8 : context.wp(1.2)),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Container(
-                        width: context.iconSizeOf(10),
-                        height: context.iconSizeOf(10),
-                        decoration: BoxDecoration(
-                          color: isOpen
-                              ? MangoColors.successGreen
-                              : Colors.grey[400],
-                          shape: BoxShape.circle,
-                          boxShadow: isOpen
-                              ? [
-                                  BoxShadow(
-                                    color: MangoColors.successGreen.withValues(
-                                      alpha: 0.3,
-                                    ),
-                                    blurRadius: 8,
-                                    spreadRadius: 2,
-                                  ),
-                                ]
-                              : null,
+                      Row(
+                        children: [
+                          Container(
+                            width: isMobile ? 8 : context.iconSizeOf(10),
+                            height: isMobile ? 8 : context.iconSizeOf(10),
+                            decoration: BoxDecoration(
+                              color: isOpen
+                                  ? MangoColors.successGreen
+                                  : Colors.grey[400],
+                              shape: BoxShape.circle,
+                              boxShadow: isOpen
+                                  ? [
+                                      BoxShadow(
+                                        color: MangoColors.successGreen
+                                            .withValues(alpha: 0.3),
+                                        blurRadius: 8,
+                                        spreadRadius: 2,
+                                      ),
+                                    ]
+                                  : null,
+                            ),
+                          ),
+                          SizedBox(width: isMobile ? 6 : context.wp(1.2)),
+                          Flexible(
+                            child: Text(
+                              isOpen ? 'Caja Abierta' : 'Caja Cerrada',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: isOpen
+                                    ? MangoColors.successGreen
+                                    : Colors.grey[600],
+                                fontSize: isMobile ? 11 : context.sp(13),
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.3,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      SizedBox(height: isMobile ? 4 : context.hp(0.8)),
+                      Text(
+                        registerName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: isMobile ? 17 : context.sp(28),
+                          fontWeight: FontWeight.w800,
+                          color: MangoColors.darkGray,
+                          letterSpacing: -0.5,
                         ),
                       ),
-                      SizedBox(width: context.wp(1.2)),
+                      SizedBox(height: isMobile ? 2 : context.hp(0.4)),
                       Text(
-                        isOpen ? 'Caja Abierta' : 'Caja Cerrada',
+                        'Último cierre: $lastClosedText',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          color: isOpen
-                              ? MangoColors.successGreen
-                              : Colors.grey[600],
-                          fontSize: context.sp(13),
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 0.3,
+                          fontSize: isMobile ? 10.5 : context.sp(12),
+                          color: Colors.grey[600],
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                     ],
                   ),
-                  SizedBox(height: context.hp(0.8)),
-                  Text(
-                    registerName,
-                    style: TextStyle(
-                      fontSize: context.sp(28),
-                      fontWeight: FontWeight.w800,
-                      color: MangoColors.darkGray,
-                      letterSpacing: -0.5,
-                    ),
-                  ),
-                  SizedBox(height: context.hp(0.4)),
-                  Text(
-                    'Último cierre: $lastClosedText',
-                    style: TextStyle(
-                      fontSize: context.sp(12),
-                      color: Colors.grey[600],
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-          ElevatedButton.icon(
-            onPressed: () {
-              context.go('/sales/by-zone');
-            },
-            icon: Icon(
-              Icons.table_restaurant_rounded,
-              color: Colors.white,
-              size: context.iconSizeOf(20),
+                ),
+              ],
             ),
-            label: Text(
-              'Ir a Mesas',
-              style: TextStyle(
+          ),
+          if (isMobile)
+            IconButton(
+              onPressed: () {
+                context.go('/sales/by-zone');
+              },
+              tooltip: 'Ir a Mesas',
+              icon: const Icon(
+                Icons.table_restaurant_rounded,
                 color: Colors.white,
-                fontSize: context.sp(14),
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.3,
+              ),
+              style: IconButton.styleFrom(
+                backgroundColor: MangoColors.primaryOrange,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+            )
+          else
+            ElevatedButton.icon(
+              onPressed: () {
+                context.go('/sales/by-zone');
+              },
+              icon: Icon(
+                Icons.table_restaurant_rounded,
+                color: Colors.white,
+                size: context.iconSizeOf(20),
+              ),
+              label: Text(
+                'Ir a Mesas',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: context.sp(14),
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.3,
+                ),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: MangoColors.primaryOrange,
+                elevation: 0,
+                padding: EdgeInsets.symmetric(
+                  horizontal: context.wp(2.5),
+                  vertical: context.hp(1.8),
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                shadowColor: MangoColors.primaryOrange.withValues(alpha: 0.3),
               ),
             ),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: MangoColors.primaryOrange,
-              elevation: 0,
-              padding: EdgeInsets.symmetric(
-                horizontal: context.wp(2.5),
-                vertical: context.hp(1.8),
-              ),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              shadowColor: MangoColors.primaryOrange.withValues(alpha: 0.3),
-            ),
-          ),
         ],
       ),
     );
@@ -872,7 +907,7 @@ class _StatsCardsSection extends StatelessWidget {
                   title: 'Transacciones',
                   value: '$transactions',
                   icon: Icons.receipt_long_rounded,
-                  color: Colors.blue[600]!,
+                  color: MangoColors.primaryOrange,
                 ),
               ),
             ],
@@ -946,11 +981,12 @@ class _StatCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = context.isMobile;
     return Container(
-      padding: EdgeInsets.all(context.wp(2.2)),
+      padding: EdgeInsets.all(isMobile ? 10 : context.wp(2.2)),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: color.withValues(alpha: 0.1), width: 1.5),
         boxShadow: [
           BoxShadow(
@@ -966,19 +1002,25 @@ class _StatCard extends StatelessWidget {
           Row(
             children: [
               Container(
-                padding: EdgeInsets.all(context.wp(0.8)),
+                padding: EdgeInsets.all(isMobile ? 6 : context.wp(0.8)),
                 decoration: BoxDecoration(
                   color: color.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: Icon(icon, color: color, size: context.iconSizeOf(20)),
+                child: Icon(
+                  icon,
+                  color: color,
+                  size: isMobile ? 16 : context.iconSizeOf(20),
+                ),
               ),
-              SizedBox(width: context.wp(1.2)),
+              SizedBox(width: isMobile ? 6 : context.wp(1.2)),
               Expanded(
                 child: Text(
                   title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: context.sp(12),
+                    fontSize: isMobile ? 10.5 : context.sp(12),
                     color: Colors.grey[600],
                     fontWeight: FontWeight.w600,
                   ),
@@ -986,14 +1028,19 @@ class _StatCard extends StatelessWidget {
               ),
             ],
           ),
-          SizedBox(height: context.hp(1.2)),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: context.sp(20),
-              fontWeight: FontWeight.w800,
-              color: color,
-              letterSpacing: -0.3,
+          SizedBox(height: isMobile ? 6 : context.hp(1.2)),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
+              maxLines: 1,
+              style: TextStyle(
+                fontSize: isMobile ? 15 : context.sp(20),
+                fontWeight: FontWeight.w800,
+                color: color,
+                letterSpacing: -0.3,
+              ),
             ),
           ),
         ],
@@ -1179,11 +1226,12 @@ class _ActionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = context.isMobile;
     return Container(
-      padding: EdgeInsets.all(context.wp(2.2)),
+      padding: EdgeInsets.all(isMobile ? 12 : context.wp(2.2)),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(
           color: enabled
               ? iconColor.withValues(alpha: 0.15)
@@ -1203,26 +1251,28 @@ class _ActionCard extends StatelessWidget {
           Row(
             children: [
               Container(
-                padding: EdgeInsets.all(context.wp(1.8)),
+                padding: EdgeInsets.all(isMobile ? 8 : context.wp(1.8)),
                 decoration: BoxDecoration(
                   color: enabled ? iconBgColor : Colors.grey[100],
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(12),
                 ),
                 child: Icon(
                   icon,
                   color: enabled ? iconColor : Colors.grey[400],
-                  size: context.iconSizeOf(32),
+                  size: isMobile ? 22 : context.iconSizeOf(32),
                 ),
               ),
-              SizedBox(width: context.wp(2)),
+              SizedBox(width: isMobile ? 10 : context.wp(2)),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: context.sp(15),
+                        fontSize: isMobile ? 13 : context.sp(15),
                         fontWeight: FontWeight.w700,
                         color: enabled
                             ? MangoColors.darkGray
@@ -1230,13 +1280,16 @@ class _ActionCard extends StatelessWidget {
                         letterSpacing: -0.2,
                       ),
                     ),
-                    SizedBox(height: context.hp(0.4)),
+                    SizedBox(height: isMobile ? 2 : context.hp(0.4)),
                     Text(
                       subtitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: context.sp(11),
+                        fontSize: isMobile ? 10.5 : context.sp(11),
                         color: Colors.grey[600],
                         fontWeight: FontWeight.w500,
+                        height: 1.3,
                       ),
                     ),
                   ],
@@ -1244,7 +1297,7 @@ class _ActionCard extends StatelessWidget {
               ),
             ],
           ),
-          SizedBox(height: context.hp(1.5)),
+          SizedBox(height: isMobile ? 10 : context.hp(1.5)),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
@@ -1255,7 +1308,9 @@ class _ActionCard extends StatelessWidget {
                 disabledBackgroundColor: Colors.grey[300],
                 disabledForegroundColor: Colors.grey[500],
                 elevation: 0,
-                padding: EdgeInsets.symmetric(vertical: context.hp(1.4)),
+                padding: EdgeInsets.symmetric(
+                  vertical: isMobile ? 10 : context.hp(1.4),
+                ),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(10),
                 ),
@@ -1263,7 +1318,7 @@ class _ActionCard extends StatelessWidget {
               child: Text(
                 buttonText,
                 style: TextStyle(
-                  fontSize: context.sp(13),
+                  fontSize: isMobile ? 12 : context.sp(13),
                   fontWeight: FontWeight.w700,
                   letterSpacing: 0.3,
                 ),
@@ -1380,9 +1435,10 @@ class _RecentMovementsSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final movements = viewModel.recentMovements;
+    final isMobile = context.isMobile;
 
     return Container(
-      padding: EdgeInsets.all(context.wp(2.5)),
+      padding: EdgeInsets.all(isMobile ? 12 : context.wp(2.5)),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
@@ -1400,28 +1456,33 @@ class _RecentMovementsSection extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                'Movimientos Recientes',
-                style: TextStyle(
-                  fontSize: context.sp(18),
-                  fontWeight: FontWeight.w800,
-                  color: MangoColors.darkGray,
-                  letterSpacing: -0.3,
+              Expanded(
+                child: Text(
+                  isMobile ? 'Movimientos' : 'Movimientos Recientes',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: isMobile ? 14 : context.sp(18),
+                    fontWeight: FontWeight.w800,
+                    color: MangoColors.darkGray,
+                    letterSpacing: -0.3,
+                  ),
                 ),
               ),
-              Row(
-                children: [
-                  _FilterChip(
-                    label: 'Ingreso',
-                    color: MangoColors.successGreen,
-                  ),
-                  SizedBox(width: context.wp(1)),
-                  _FilterChip(label: 'Egreso', color: Colors.red[600]!),
-                ],
-              ),
+              if (!isMobile)
+                Row(
+                  children: [
+                    _FilterChip(
+                      label: 'Ingreso',
+                      color: MangoColors.successGreen,
+                    ),
+                    SizedBox(width: context.wp(1)),
+                    _FilterChip(label: 'Egreso', color: Colors.red[600]!),
+                  ],
+                ),
             ],
           ),
-          SizedBox(height: context.hp(2)),
+          SizedBox(height: isMobile ? 12 : context.hp(2)),
 
           if (movements.isEmpty)
             Center(
@@ -1480,7 +1541,7 @@ class _FilterChip extends StatelessWidget {
       ),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(10),
         border: Border.all(color: color.withValues(alpha: 0.3), width: 1.5),
       ),
       child: Row(

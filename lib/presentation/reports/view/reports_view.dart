@@ -83,6 +83,8 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
       });
     }
 
+    final isMobile = ResponsiveHelper.isMobile(context);
+    final containerPad = isMobile ? 12.0 : AppSpacing.containerPadding;
     return Scaffold(
       backgroundColor: AppColors.background,
       body: SafeArea(
@@ -90,14 +92,16 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Padding(
-              padding: const EdgeInsets.all(AppSpacing.containerPadding),
+              padding: EdgeInsets.all(containerPad),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
                     children: [
                       Padding(
-                        padding: const EdgeInsets.only(right: AppSpacing.lg),
+                        padding: EdgeInsets.only(
+                          right: isMobile ? AppSpacing.sm : AppSpacing.lg,
+                        ),
                         child: IconButton(
                           icon: const Icon(
                             Icons.arrow_back,
@@ -112,11 +116,13 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
                           },
                         ),
                       ),
-                      const Expanded(
+                      Expanded(
                         child: Text(
                           'Informes',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            fontSize: 28,
+                            fontSize: isMobile ? 20 : 28,
                             fontWeight: FontWeight.bold,
                             color: AppColors.foreground,
                           ),
@@ -143,11 +149,11 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: AppSpacing.sm),
-                  const Text(
+                  SizedBox(height: AppSpacing.sm),
+                  Text(
                     'Mira y analiza todos los números que genera tu negocio',
                     style: TextStyle(
-                      fontSize: 16,
+                      fontSize: isMobile ? 13 : 16,
                       color: AppColors.mutedForeground,
                     ),
                   ),
@@ -321,19 +327,27 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
+        final isMobile = ResponsiveHelper.isMobile(context);
         final crossAxisCount = constraints.maxWidth >= AppBreakpoints.desktop
             ? 3
             : constraints.maxWidth >= AppBreakpoints.tablet
                 ? 2
                 : 1;
+        // En móvil la card 1-col luce muy estirada con aspect 2.8 — la
+        // bajamos a 2.0 para que el contenido se vea balanceado.
+        final aspect = crossAxisCount == 1
+            ? (isMobile ? 2.0 : 2.8)
+            : 1.8;
 
         return GridView.builder(
-          padding: const EdgeInsets.all(AppSpacing.containerPadding),
+          padding: EdgeInsets.all(
+            isMobile ? 12 : AppSpacing.containerPadding,
+          ),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: crossAxisCount,
-            mainAxisSpacing: AppSpacing.itemGap,
-            crossAxisSpacing: AppSpacing.itemGap,
-            childAspectRatio: crossAxisCount == 1 ? 2.8 : 1.8,
+            mainAxisSpacing: isMobile ? 10 : AppSpacing.itemGap,
+            crossAxisSpacing: isMobile ? 10 : AppSpacing.itemGap,
+            childAspectRatio: aspect,
           ),
           itemCount: cards.length,
           itemBuilder: (context, index) {
@@ -395,6 +409,8 @@ class _ReportHubCardState extends State<_ReportHubCard> {
     final d = widget.data;
     final isDisabled = d.disabled;
     final effectiveColor = isDisabled ? AppColors.mutedForeground : d.color;
+    final isMobile = ResponsiveHelper.isMobile(context);
+    final cardPad = isMobile ? 14.0 : AppSpacing.cardPadding;
 
     return MouseRegion(
       onEnter: (_) {
@@ -409,7 +425,7 @@ class _ReportHubCardState extends State<_ReportHubCard> {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
           curve: Curves.easeInOut,
-          padding: const EdgeInsets.all(AppSpacing.cardPadding),
+          padding: EdgeInsets.all(cardPad),
           decoration: BoxDecoration(
             color: isDisabled
                 ? AppColors.secondary
@@ -430,16 +446,22 @@ class _ReportHubCardState extends State<_ReportHubCard> {
                 children: [
                   AnimatedContainer(
                     duration: const Duration(milliseconds: 200),
-                    padding: const EdgeInsets.all(12),
+                    padding: EdgeInsets.all(isMobile ? 9 : 12),
                     decoration: BoxDecoration(
                       color: _isHovered
                           ? effectiveColor.withValues(alpha: 0.15)
                           : effectiveColor.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(_reportRadius),
                     ),
-                    child: Icon(d.icon, color: effectiveColor, size: 28),
+                    child: Icon(
+                      d.icon,
+                      color: effectiveColor,
+                      size: isMobile ? 22 : 28,
+                    ),
                   ),
-                  const SizedBox(width: AppSpacing.itemGap),
+                  SizedBox(
+                    width: isMobile ? 10 : AppSpacing.itemGap,
+                  ),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -449,8 +471,10 @@ class _ReportHubCardState extends State<_ReportHubCard> {
                             Expanded(
                               child: Text(
                                 d.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  fontSize: 18,
+                                  fontSize: isMobile ? 15 : 18,
                                   fontWeight: FontWeight.w800,
                                   color: isDisabled
                                       ? AppColors.mutedForeground
@@ -486,10 +510,10 @@ class _ReportHubCardState extends State<_ReportHubCard> {
                         const SizedBox(height: 4),
                         Text(
                           d.description,
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: AppColors.mutedForeground,
-                            fontSize: 13,
-                            height: 1.35,
+                            fontSize: isMobile ? 11.5 : 13,
+                            height: 1.3,
                           ),
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
@@ -503,14 +527,16 @@ class _ReportHubCardState extends State<_ReportHubCard> {
                       color: _isHovered
                           ? d.color
                           : AppColors.mutedForeground,
-                      size: 28,
+                      size: isMobile ? 22 : 28,
                     ),
                 ],
               ),
               const Spacer(),
               Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 14, vertical: 10),
+                padding: EdgeInsets.symmetric(
+                  horizontal: isMobile ? 10 : 14,
+                  vertical: isMobile ? 8 : 10,
+                ),
                 decoration: BoxDecoration(
                   color: effectiveColor.withValues(alpha: 0.06),
                   borderRadius: BorderRadius.circular(_reportRadius),
@@ -520,21 +546,25 @@ class _ReportHubCardState extends State<_ReportHubCard> {
                 ),
                 child: Row(
                   children: [
-                    Text(
-                      d.quickStat,
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800,
-                        color: effectiveColor,
+                    Flexible(
+                      child: Text(
+                        d.quickStat,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: isMobile ? 15 : 20,
+                          fontWeight: FontWeight.w800,
+                          color: effectiveColor,
+                        ),
                       ),
                     ),
-                    const SizedBox(width: AppSpacing.tightGap),
+                    SizedBox(width: AppSpacing.tightGap),
                     Expanded(
                       child: Text(
                         d.quickStatLabel,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: AppColors.mutedForeground,
-                          fontSize: 12,
+                          fontSize: isMobile ? 11 : 12,
                           fontWeight: FontWeight.w600,
                         ),
                         textAlign: TextAlign.end,

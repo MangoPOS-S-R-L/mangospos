@@ -32,6 +32,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'app/router/app_router.dart';
 import 'app/router/routes.dart';
+import 'app/theme/mango_theme.dart';
 import 'services/session/session_controller.dart';
 import 'core/cache/cache_manager.dart';
 import 'core/network/supabase_config.dart';
@@ -947,7 +948,7 @@ class MyApp extends ConsumerWidget {
       title: 'MangoPOS',
       debugShowCheckedModeBanner: false,
       routerConfig: AppRouter.router,
-      theme: ThemeData(primaryColor: const Color(0xFFF97316)),
+      theme: buildMangoTheme(),
     );
   }
 }
