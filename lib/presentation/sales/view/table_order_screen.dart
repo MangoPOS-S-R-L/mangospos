@@ -6701,8 +6701,30 @@ class _ProductsGrid extends ConsumerWidget {
               itemBuilder: (context, index) {
                 final product = products[index];
                 final stockUnits = state.stockByProductId[product.id];
+                // Bloqueo cliente: si el producto tracked está agotado y
+                // NO permite venta en negativo, mostramos snackbar y no
+                // dejamos agregar. Es la capa de seguridad cuando el
+                // catálogo no se ha refrescado vía realtime.
+                final blockedByStock = product.isInventoryTracked &&
+                    !product.allowNegativeSale &&
+                    stockUnits != null &&
+                    stockUnits <= 0;
                 return GestureDetector(
-                  onTap: () => onProductTap(product),
+                  onTap: blockedByStock
+                      ? () {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                '${product.name} está agotado. '
+                                'Recibe stock o activa "Vender aunque '
+                                'esté agotado" en el producto.',
+                              ),
+                              backgroundColor: const Color(0xFFB91C1C),
+                              duration: const Duration(seconds: 3),
+                            ),
+                          );
+                        }
+                      : () => onProductTap(product),
                   child: Container(
                     width: isCompact ? double.infinity : null,
                     height: isCompact ? double.infinity : null,

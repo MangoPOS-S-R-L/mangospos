@@ -48,6 +48,15 @@ class MenuProduct {
   final String? menuId;
   final String itemType;
 
+  /// Si true, este producto descuenta inventario al venderse. Para
+  /// productos sin tracking (false), el grid permite agregar siempre.
+  final bool isInventoryTracked;
+
+  /// Si true, el cajero puede agregar el producto al pedido aunque
+  /// stock <= 0 (la deuda se salda con la próxima compra). Si false,
+  /// el grid bloquea el tap cuando v_menu_items_stock indica agotado.
+  final bool allowNegativeSale;
+
   final List<Map<String, dynamic>> associatedTaxes;
 
   const MenuProduct({
@@ -60,6 +69,8 @@ class MenuProduct {
     this.imageUrl,
     this.menuId,
     this.itemType = 'standard',
+    this.isInventoryTracked = false,
+    this.allowNegativeSale = false,
     this.associatedTaxes = const [],
   });
 
@@ -84,6 +95,12 @@ class MenuProduct {
       resolvedRate += tax.rate;
     }
 
+    bool toBool(dynamic v) {
+      if (v is bool) return v;
+      final s = v?.toString().toLowerCase();
+      return s == 'true' || s == 't' || s == '1';
+    }
+
     return MenuProduct(
       id: m['id'] as String,
       name: (m['name'] ?? '') as String,
@@ -96,6 +113,8 @@ class MenuProduct {
       imageUrl: m['image_url'] as String?,
       menuId: m['menu_id'] as String?,
       itemType: m['item_type']?.toString() ?? 'standard',
+      isInventoryTracked: toBool(m['is_inventory_tracked']),
+      allowNegativeSale: toBool(m['allow_negative_sale']),
       associatedTaxes: taxList,
     );
   }
@@ -220,11 +239,13 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
   /// Whether a background sync is already running (prevents duplicate syncs).
   bool _backgroundSyncRunning = false;
 
-  /// Realtime: escucha cambios en inventory_stock para refrescar los badges
-  /// de stock sin que el cajero tenga que recargar el menú. Crítico cuando
-  /// dos tablets venden el mismo producto en paralelo.
+  /// Realtime: escucha cambios en inventory_stock y menu_items para que
+  /// el cajero vea badges y disponibilidad actualizados sin recargar.
+  /// Crítico cuando dos tablets venden en paralelo, o cuando auto-86
+  /// desactiva un producto que se agotó.
   RealtimeChannel? _stockChannel;
   Timer? _stockRefreshDebounce;
+  Timer? _catalogRefreshDebounce;
   static const _stockRefreshDelay = Duration(milliseconds: 500);
 
   @override
@@ -233,20 +254,38 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
     _stockChannel = null;
     _stockRefreshDebounce?.cancel();
     _stockRefreshDebounce = null;
+    _catalogRefreshDebounce?.cancel();
+    _catalogRefreshDebounce = null;
     super.dispose();
   }
 
-  /// Suscribe (o re-suscribe) el canal de stock realtime. Se llama después
-  /// de cargar el catálogo. Idempotente: no abre canales duplicados.
+  /// Suscribe (o re-suscribe) el canal realtime. Idempotente.
+  /// - inventory_stock: cualquier cambio → refrescar mapa de stock (badges).
+  /// - menu_items UPDATE de is_active: auto-86 activó/desactivó un producto
+  ///   → recargar catálogo para que aparezca/desaparezca del grid.
   void _subscribeStockRealtime() {
     if (_stockChannel != null) return;
     _stockChannel = _client
-        .channel('rt:inventory_stock')
+        .channel('rt:inventory_realtime')
         .onPostgresChanges(
           event: PostgresChangeEvent.all,
           schema: 'public',
           table: 'inventory_stock',
           callback: (_) => _scheduleStockRefresh(),
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'menu_items',
+          callback: (payload) {
+            // Solo recargar catálogo cuando is_active cambió (auto-86).
+            // Cambios cosméticos (precio, nombre) los maneja otro flujo.
+            final oldActive = payload.oldRecord['is_active'];
+            final newActive = payload.newRecord['is_active'];
+            if (oldActive != newActive) {
+              _scheduleCatalogRefresh();
+            }
+          },
         )
         .subscribe();
   }
@@ -261,10 +300,24 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
     });
   }
 
+  /// Recarga el catálogo completo (productos visibles + stock map) cuando
+  /// auto-86 activa/desactiva un producto. Cancela el stock debounce
+  /// porque loadAll ya invoca _loadStockMap al final.
+  void _scheduleCatalogRefresh() {
+    _stockRefreshDebounce?.cancel();
+    _catalogRefreshDebounce?.cancel();
+    _catalogRefreshDebounce = Timer(_stockRefreshDelay, () {
+      unawaited(loadAll(
+        preselectCategoryId: state.selectedCategoryId,
+        preselectMenuId: state.selectedMenuId,
+      ));
+    });
+  }
+
   static const _menuItemsSelect =
-      'id,name,price,image_url,category_id,is_active,position,tax_mode,item_type,menu_item_taxes(tax_id,taxes(name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery))';
+      'id,name,price,image_url,category_id,is_active,position,tax_mode,item_type,is_inventory_tracked,allow_negative_sale,menu_item_taxes(tax_id,taxes(name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery))';
   static const _menuListSelect =
-      'id,name,price,image_url,category_id,menu_id,is_active,position,tax_mode,item_type,effective_tax_rate,menu_item_taxes(tax_id,taxes(name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery))';
+      'id,name,price,image_url,category_id,menu_id,is_active,position,tax_mode,item_type,is_inventory_tracked,allow_negative_sale,effective_tax_rate,menu_item_taxes(tax_id,taxes(name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery))';
 
   Future<String> _resolveBusinessId() async {
     final sessionBusinessId = ref.read(sessionProvider).activeBusinessId;
