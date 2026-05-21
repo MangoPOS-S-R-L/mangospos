@@ -31,8 +31,12 @@ import 'package:mangopos/presentation/customers/viewmodel/customers_viewmodel.da
 import 'package:mangopos/services/dgii_lookup_service.dart';
 
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
+import 'package:mangopos/services/printing/print_destination.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
 import 'package:mangopos/services/printing/qr_esc_pos_builder.dart';
+import 'package:mangopos/presentation/sales/widgets/precheck/pre_check_dialog.dart';
+import 'package:mangopos/presentation/sales/widgets/precheck/print_destination_picker.dart';
+import 'package:mangopos/core/printing/device_identity.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
@@ -3178,19 +3182,12 @@ class _CartView extends ConsumerWidget {
                                         };
 
                                         try {
-                                          await _handlePrintFlow(
+                                          await _runPrecheckWithDestinationPicker(
                                             context,
                                             ref,
-                                            'precheck',
-                                            preCheckData,
+                                            preCheckData: preCheckData,
                                             orderObj: orderState.order!,
                                             orderItems: displayedItems,
-                                            tableName:
-                                                preCheckData['tableName']
-                                                    as String?,
-                                            waiterName:
-                                                preCheckData['waiterName']
-                                                    as String?,
                                           );
                                         } catch (e) {
                                           if (context.mounted) {
@@ -3322,6 +3319,99 @@ class _CartView extends ConsumerWidget {
     );
   }
 
+  /// Pre-Cuenta v2: si hay >1 destino configurado, muestra el selector
+  /// (bottom sheet) y rutea según la elección. Memoriza la última opción
+  /// por device. Si hay 1 o 0 destinos, cae al flujo legacy [_handlePrintFlow]
+  /// (auto-resolución de impresora).
+  Future<void> _runPrecheckWithDestinationPicker(
+    BuildContext context,
+    WidgetRef ref, {
+    required Map<String, dynamic> preCheckData,
+    required Order orderObj,
+    required List<OrderItem> orderItems,
+  }) async {
+    final session = ref.read(sessionProvider);
+    final businessId = session.activeBusinessId;
+    if (businessId == null || businessId.isEmpty) {
+      throw Exception('Negocio no resuelto.');
+    }
+
+    final tableName = preCheckData['tableName'] as String?;
+    final waiterName = preCheckData['waiterName'] as String?;
+
+    // 1. Resolver destinos disponibles. Failure aquí cae al legacy.
+    List<PrintDestination> destinations = const [];
+    try {
+      final resolver = ref.read(printDestinationResolverProvider);
+      destinations = await resolver.resolveForPrecheck(
+        businessId: businessId,
+      );
+    } catch (_) {
+      // Si el resolver explota (RLS, red, etc.), seguimos con el flujo legacy.
+    }
+
+    // Solo mostrar selector si hay >1 destino impresora (screen-only siempre
+    // se agrega). Contamos impresoras únicas.
+    final printerDestinations = destinations
+        .where((d) => d.kind == PrintDestinationKind.printer)
+        .toList(growable: false);
+
+    PrintDestination? chosen;
+    if (printerDestinations.length > 1) {
+      final deviceId = await DeviceIdentity.getOrCreateId(businessId);
+      final lastUsedKey = await PrechecPrinterPreference.read(deviceId);
+
+      if (!context.mounted) return;
+      chosen = await showPrintDestinationPicker(
+        context,
+        destinations: destinations,
+        recentlyUsedKey: lastUsedKey,
+      );
+      if (chosen == null) return; // usuario canceló
+
+      // Persistir elección (fire-and-forget, no bloquea).
+      unawaited(PrechecPrinterPreference.save(deviceId, chosen.persistKey));
+    } else if (printerDestinations.length == 1) {
+      // Una sola impresora → comportamiento actual (sin picker), usa esa.
+      chosen = printerDestinations.first;
+    }
+
+    // 2. Procesar la elección.
+    if (chosen != null && chosen.kind == PrintDestinationKind.screenOnly) {
+      // Solo pantalla: mostrar el dialog en vez de imprimir.
+      final mode = await ref
+          .read(posSettingsRepositoryProvider)
+          .getReceiptItemDisplayMode(businessId);
+      if (!context.mounted) return;
+      // ignore: use_build_context_synchronously
+      unawaited(showDialog<void>(
+        context: context,
+        builder: (dialogCtx) => PreCheckDialog(
+          data: preCheckData,
+          receiptItemDisplayMode: mode,
+          onCancel: () => Navigator.of(dialogCtx).pop(),
+          onPrint: () => Navigator.of(dialogCtx).pop(),
+        ),
+      ));
+      return;
+    }
+
+    // 3. Imprimir con la impresora forzada (o auto-resolución si chosen==null,
+    //    caso "0 destinos resueltos" — _handlePrintFlow lanzará error claro).
+    if (!context.mounted) return;
+    await _handlePrintFlow(
+      context,
+      ref,
+      'precheck',
+      preCheckData,
+      orderObj: orderObj,
+      orderItems: orderItems,
+      tableName: tableName,
+      waiterName: waiterName,
+      forcedPrinter: chosen?.printer,
+    );
+  }
+
   Future<void> _handlePrintFlow(
     BuildContext context,
     WidgetRef ref,
@@ -3333,6 +3423,7 @@ class _CartView extends ConsumerWidget {
     String? tableName,
     String? waiterName,
     bool showSnackBar = true,
+    PrinterConfig? forcedPrinter,
   }) async {
     try {
       final printRepo = ref.read(printingPrintersRepositoryProvider);
@@ -3342,29 +3433,35 @@ class _CartView extends ConsumerWidget {
         throw Exception('Negocio no resuelto.');
       }
 
-      // 1. Try register-specific printer first (each cash register can have its own)
-      PrinterConfig? assignedPrinter;
-      final registerId = ref.read(cashierViewModelProvider).currentRegisterId;
-      if (registerId != null) {
-        try {
-          final regPrinterId = await ref
-              .read(cashierRepositoryProvider)
-              .getRegisterPrinterId(registerId);
-          if (regPrinterId != null) {
-            assignedPrinter = await printRepo.getPrinter(regPrinterId);
-          }
-        } catch (_) {}
-      }
+      // Si el usuario ya eligió impresora en el selector v2 (Printing v2),
+      // usar esa y saltar la auto-resolución legacy.
+      PrinterConfig? assignedPrinter = forcedPrinter;
 
-      // 2. Fallback to global area-based printer
-      assignedPrinter ??= await printRepo.getAssignedPrinterForType(
-        businessId: businessId,
-        preferredAreaCodes: type == 'invoice'
-            ? const ['fiscal', 'cashier']
-            : const ['cashier', 'fiscal'],
-        printsPrebills: type == 'precheck',
-        printsReceipts: type == 'invoice',
-      );
+      if (assignedPrinter == null) {
+        // 1. Try register-specific printer first (each cash register can have its own)
+        final registerId =
+            ref.read(cashierViewModelProvider).currentRegisterId;
+        if (registerId != null) {
+          try {
+            final regPrinterId = await ref
+                .read(cashierRepositoryProvider)
+                .getRegisterPrinterId(registerId);
+            if (regPrinterId != null) {
+              assignedPrinter = await printRepo.getPrinter(regPrinterId);
+            }
+          } catch (_) {}
+        }
+
+        // 2. Fallback to global area-based printer
+        assignedPrinter ??= await printRepo.getAssignedPrinterForType(
+          businessId: businessId,
+          preferredAreaCodes: type == 'invoice'
+              ? const ['fiscal', 'cashier']
+              : const ['cashier', 'fiscal'],
+          printsPrebills: type == 'precheck',
+          printsReceipts: type == 'invoice',
+        );
+      }
 
       final receiptItemDisplayModeFuture = ref
           .read(posSettingsRepositoryProvider)
