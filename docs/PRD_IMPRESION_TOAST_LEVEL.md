@@ -156,16 +156,15 @@ create table public.device_printer_bindings (
   primary key (device_id, printer_id)
 );
 
--- 6) Health de agente local
-create table public.device_agents_health (
-  device_id text primary key,
-  business_id uuid references public.businesses(id) on delete cascade,
-  last_heartbeat timestamptz default now(),
-  agent_version text,
-  os text,
-  available_transports text[],
-  metadata jsonb default '{}'::jsonb
-);
+-- 6) Health de agente local — la tabla `device_agents` ya existe desde
+--    PRD 5 F2.5 (mayo 2026). Solo se le agregan columnas de metadata
+--    para soportar dashboards de salud y debugging remoto.
+alter table public.device_agents
+  add column if not exists agent_version text,
+  add column if not exists os text,
+  add column if not exists hostname text,
+  add column if not exists available_transports text[] not null default '{}',
+  add column if not exists metadata jsonb not null default '{}'::jsonb;
 
 -- 7) Health de cada impresora
 create table public.printer_health (
@@ -270,7 +269,7 @@ class CupsTransport extends PrinterTransport { ... }
 - [ ] Pantalla "Descubrir impresoras" que muestra las detectadas y permite agregarlas.
 - [ ] Vinculación device ↔ impresora BT/USB (UI de pareo).
 - [ ] Cola local SQLite en el agent para resiliencia offline.
-- [ ] Heartbeat cada 30s a `device_agents_health`.
+- [ ] Heartbeat cada 30s vía `fn_device_agent_heartbeat` (actualiza `device_agents` con metadata v2).
 - [ ] Tests de integración con impresoras mock.
 
 **Deliverable:** Una impresora BT o USB se descubre, se vincula a un device, y se imprime en ella desde cualquier app del business.

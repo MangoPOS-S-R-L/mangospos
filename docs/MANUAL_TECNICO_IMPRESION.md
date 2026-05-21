@@ -41,7 +41,7 @@
 │ Supabase                                                     │
 │  • print_jobs (queue)                                        │
 │  • printers, prep_stations, prep_station_printers           │
-│  • device_printer_bindings, device_agents_health            │
+│  • device_printer_bindings, device_agents (extendida)       │
 │  • printer_health                                            │
 │  • RPC: fn_enqueue_print_job, fn_retry_failed_jobs          │
 └───────────────────────────┬──────────────────────────────────┘
@@ -134,19 +134,27 @@ N:M productos ↔ estaciones.
 | `is_local_owner` | boolean | el device "es dueño" de la impresora física |
 | `paired_at` | timestamptz | |
 
-#### `device_agents_health`
+#### `device_agents` (extendida)
 
-Heartbeat de cada agent. Refresca cada 30s.
+Heartbeat de cada agent. Refresca cada 30s. La tabla ya existía desde
+PRD 5 F2.5 (migración `20260501_0002_prd5_f25_printer_sharing.sql`);
+Printing v2 solo le agrega columnas de metadata
+(`20260521_0005_device_agents_extend.sql`).
 
 | Columna | Tipo | Notas |
 |---|---|---|
-| `device_id` | text PK | |
+| `id` | uuid PK | device_id estable del device (de [device_identity.dart](../lib/core/printing/device_identity.dart)) |
 | `business_id` | uuid FK | |
-| `last_heartbeat` | timestamptz | |
-| `agent_version` | text | |
-| `os` | text | |
-| `available_transports` | text[] | `{lan,usb,bluetooth}` |
-| `metadata` | jsonb | |
+| `device_name` | text | nombre manual del admin |
+| `agent_url` | text | URL local del proxy HTTP del agent (legacy F2.5) |
+| `platform` | text | legacy F2.5 |
+| `online` | boolean | true cuando hay heartbeat reciente |
+| `last_heartbeat_at` | timestamptz | actualizado por `fn_device_agent_heartbeat` |
+| `agent_version` | text | **v2** — versión del binario del agent |
+| `os` | text | **v2** — Darwin/Linux/Windows/Android/iOS |
+| `hostname` | text | **v2** — hostname legible para dashboards |
+| `available_transports` | text[] | **v2** — `{lan,usb,bluetooth}` |
+| `metadata` | jsonb | **v2** — info libre debugging |
 
 #### `printer_health`
 
@@ -862,7 +870,7 @@ alter table public.prep_stations enable row level security;
 alter table public.prep_station_printers enable row level security;
 alter table public.device_printer_bindings enable row level security;
 alter table public.printer_health enable row level security;
-alter table public.device_agents_health enable row level security;
+-- device_agents ya tiene RLS desde PRD 5 F2.5
 
 -- Política básica: solo miembros del business
 create policy "prep_stations_select" on public.prep_stations
