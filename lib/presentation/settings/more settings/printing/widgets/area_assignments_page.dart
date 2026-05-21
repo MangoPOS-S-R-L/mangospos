@@ -121,38 +121,28 @@ class _PrintingAreaAssignmentsPageState
   }
 
   Future<void> _showRenameAreaDialog(PrintArea area) async {
-    final ctrl = TextEditingController(text: area.name);
-    final areasCtrl = ref.read(printingAreasViewModelProvider.notifier);
     final updated = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Renombrar área'),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          decoration: const InputDecoration(labelText: 'Nombre del área'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              final ok = await areasCtrl.updateArea(
-                areaId: area.id,
-                name: ctrl.text,
-              );
-              if (dialogContext.mounted) {
-                Navigator.of(dialogContext).pop(ok);
-              }
-            },
-            child: const Text('Guardar'),
-          ),
-        ],
+      builder: (dialogContext) => _EditAreaDialog(
+        area: area,
+        onSave: ({
+          required String name,
+          required String? color,
+          required int displayOrder,
+          required bool clearColor,
+        }) async {
+          final areasCtrl =
+              ref.read(printingAreasViewModelProvider.notifier);
+          return areasCtrl.updateArea(
+            areaId: area.id,
+            name: name,
+            color: color,
+            displayOrder: displayOrder,
+            clearColor: clearColor,
+          );
+        },
       ),
     );
-    ctrl.dispose();
     if (updated == true) {
       await _bootstrap();
     }
@@ -758,6 +748,200 @@ class _PrinterPickerDialog extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Dialog de edición de área (Printing v2 — Slice 4.A).
+///
+/// Permite editar: nombre, color (paleta de chips predefinidos) y orden
+/// de visualización. Retorna `true` si guardó OK.
+class _EditAreaDialog extends StatefulWidget {
+  const _EditAreaDialog({
+    required this.area,
+    required this.onSave,
+  });
+
+  final PrintArea area;
+
+  /// Callback de guardado. Retorna `true` si el save tuvo éxito.
+  final Future<bool> Function({
+    required String name,
+    required String? color,
+    required int displayOrder,
+    required bool clearColor,
+  }) onSave;
+
+  @override
+  State<_EditAreaDialog> createState() => _EditAreaDialogState();
+}
+
+class _EditAreaDialogState extends State<_EditAreaDialog> {
+  /// Paleta de colores predefinidos. NULL = "sin color" (UI default).
+  static const _palette = <(String, String?)>[
+    ('Sin color', null),
+    ('Rojo', '#EF4444'),
+    ('Naranja', '#F97316'),
+    ('Amarillo', '#EAB308'),
+    ('Verde', '#10B981'),
+    ('Azul', '#3B82F6'),
+    ('Púrpura', '#8B5CF6'),
+    ('Rosa', '#EC4899'),
+    ('Gris', '#6B7280'),
+  ];
+
+  late final TextEditingController _nameCtrl;
+  late final TextEditingController _orderCtrl;
+  late String? _selectedColor;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameCtrl = TextEditingController(text: widget.area.name);
+    _orderCtrl =
+        TextEditingController(text: widget.area.displayOrder.toString());
+    _selectedColor = widget.area.color;
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _orderCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final name = _nameCtrl.text.trim();
+    if (name.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('El nombre del área es obligatorio.')),
+      );
+      return;
+    }
+
+    final orderText = _orderCtrl.text.trim();
+    final order = orderText.isEmpty ? 0 : int.tryParse(orderText);
+    if (order == null || order < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('El orden debe ser un número positivo (0 o mayor).'),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _busy = true);
+    final ok = await widget.onSave(
+      name: name,
+      color: _selectedColor,
+      displayOrder: order,
+      clearColor: _selectedColor == null && widget.area.color != null,
+    );
+    if (!mounted) return;
+    setState(() => _busy = false);
+    Navigator.of(context).pop(ok);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Editar área'),
+      content: SizedBox(
+        width: 380,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _nameCtrl,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Nombre del área',
+                hintText: 'Ej: Cocina Caliente, Bar, Postres',
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _orderCtrl,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Orden',
+                hintText: '0 = primera',
+                helperText: 'Define el orden de aparición en listas.',
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Color',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _palette.map((entry) {
+                final (label, hex) = entry;
+                final isSelected = _selectedColor == hex;
+                final colorValue = hex == null
+                    ? const Color(0xFFE5E7EB)
+                    : Color(int.parse('FF${hex.substring(1)}', radix: 16));
+                return GestureDetector(
+                  onTap: _busy
+                      ? null
+                      : () => setState(() => _selectedColor = hex),
+                  child: Tooltip(
+                    message: label,
+                    child: Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: colorValue,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: isSelected
+                              ? const Color(0xFF111827)
+                              : const Color(0xFFD1D5DB),
+                          width: isSelected ? 3 : 1,
+                        ),
+                      ),
+                      child: hex == null
+                          ? const Icon(
+                              Icons.block,
+                              size: 16,
+                              color: Color(0xFF6B7280),
+                            )
+                          : (isSelected
+                              ? const Icon(
+                                  Icons.check,
+                                  size: 18,
+                                  color: Colors.white,
+                                )
+                              : null),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.of(context).pop(false),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: _busy ? null : _save,
+          child: const Text('Guardar'),
+        ),
+      ],
     );
   }
 }

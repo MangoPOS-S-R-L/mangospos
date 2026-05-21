@@ -2224,16 +2224,29 @@ finally {
   }
 
   /// PRD 5 F4.1: actualizar nombre y/o código de un área existente.
+  ///
+  /// Printing v2 (Slice 4.A): agrega soporte para `color` (hex #RRGGBB) y
+  /// `displayOrder` (int) introducidos en migración 20260521_0002.
+  /// Pasar [clearColor]=true setea color a NULL (volver al default UI).
   Future<PrintArea> updateArea({
     required String areaId,
     String? name,
     String? code,
     bool? isActive,
+    String? color,
+    int? displayOrder,
+    bool clearColor = false,
   }) async {
     final patch = <String, dynamic>{};
     if (name != null) patch['name'] = name.trim();
     if (code != null) patch['code'] = code.trim().toLowerCase();
     if (isActive != null) patch['is_active'] = isActive;
+    if (clearColor) {
+      patch['color'] = null;
+    } else if (color != null) {
+      patch['color'] = color.trim();
+    }
+    if (displayOrder != null) patch['display_order'] = displayOrder;
 
     if (patch.isEmpty) {
       throw Exception('No hay cambios para guardar.');

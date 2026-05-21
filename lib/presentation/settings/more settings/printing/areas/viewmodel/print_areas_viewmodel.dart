@@ -113,6 +113,9 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
     String? name,
     String? code,
     bool? isActive,
+    String? color,
+    int? displayOrder,
+    bool clearColor = false,
   }) async {
     final trimmedName = name?.trim();
     if (trimmedName != null && trimmedName.isEmpty) {
@@ -121,6 +124,25 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
       );
       return false;
     }
+
+    // Validar formato hex del color si se provee (debe match #RRGGBB).
+    if (color != null && color.trim().isNotEmpty) {
+      final hex = color.trim();
+      if (!RegExp(r'^#[0-9A-Fa-f]{6}$').hasMatch(hex)) {
+        state = state.copyWith(
+          errorMessage: 'Color inválido. Formato esperado: #RRGGBB.',
+        );
+        return false;
+      }
+    }
+
+    if (displayOrder != null && displayOrder < 0) {
+      state = state.copyWith(
+        errorMessage: 'El orden debe ser un número positivo.',
+      );
+      return false;
+    }
+
     try {
       state = state.copyWith(isLoading: true, errorMessage: null);
       final b = await _ensureBusiness();
@@ -138,6 +160,9 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
         name: trimmedName,
         code: finalCode,
         isActive: isActive,
+        color: color?.trim().isEmpty == true ? null : color?.trim(),
+        displayOrder: displayOrder,
+        clearColor: clearColor,
       );
       await load(businessId: b, force: true);
       return true;
