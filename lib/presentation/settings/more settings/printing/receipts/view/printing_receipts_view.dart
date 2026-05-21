@@ -32,6 +32,9 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
   List<String> _receiptPrinterIds = const [];
   List<String> _closurePrinterIds = const [];
   String _receiptItemDisplayMode = PosSettingsRepository.receiptItemsGrouped;
+  // Slice B: multi-copia automática (sin picker) por tipo de comprobante.
+  bool _precheckMultiCopy = false;
+  bool _receiptMultiCopy = false;
   bool _busy = false;
 
   @override
@@ -59,6 +62,10 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
     final receiptItemDisplayMode = businessId.isEmpty
         ? PosSettingsRepository.receiptItemsGrouped
         : await settingsRepo.getReceiptItemDisplayMode(businessId);
+    // Slice B: leer flags multi-copia.
+    final multiCopy = businessId.isEmpty
+        ? (precheck: false, receipt: false)
+        : await settingsRepo.getPrintMultiCopyModes(businessId);
     if (!mounted) return;
     setState(() {
       _cashierArea = bootstrap.cashierArea;
@@ -68,7 +75,47 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
       _receiptPrinterIds = bootstrap.receiptPrinterIds;
       _closurePrinterIds = bootstrap.closurePrinterIds;
       _receiptItemDisplayMode = receiptItemDisplayMode;
+      _precheckMultiCopy = multiCopy.precheck;
+      _receiptMultiCopy = multiCopy.receipt;
     });
+  }
+
+  /// Slice B: toggle del flag multi-copia para precheck o receipt.
+  Future<void> _toggleMultiCopy(String kind, bool enabled) async {
+    final businessId = _resolvedBusinessId;
+    if (businessId.isEmpty) return;
+    setState(() {
+      _busy = true;
+      if (kind == 'precheck') _precheckMultiCopy = enabled;
+      if (kind == 'receipt') _receiptMultiCopy = enabled;
+    });
+    try {
+      await ref.read(posSettingsRepositoryProvider).setPrintMultiCopy(
+            businessId: businessId,
+            kind: kind,
+            enabled: enabled,
+          );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(enabled
+              ? 'Multi-copia activada para ${kind == 'precheck' ? 'pre-cuentas' : 'recibos'}.'
+              : 'Multi-copia desactivada.'),
+        ),
+      );
+    } catch (e) {
+      // Revertir en caso de error.
+      if (!mounted) return;
+      setState(() {
+        if (kind == 'precheck') _precheckMultiCopy = !enabled;
+        if (kind == 'receipt') _receiptMultiCopy = !enabled;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo guardar el cambio: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _saveAssignment({
@@ -300,6 +347,9 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
                         trailingLabel: 'Area fiscal',
                         assigned: receiptPrinters,
                         busy: _busy,
+                        multiCopy: _receiptMultiCopy,
+                        onMultiCopyChanged: (v) =>
+                            _toggleMultiCopy('receipt', v),
                         onAdd: () => _addPrinter(
                           area: _fiscalArea!,
                           dialogTitle:
@@ -324,6 +374,9 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
                         trailingLabel: 'Area caja',
                         assigned: prebillPrinters,
                         busy: _busy,
+                        multiCopy: _precheckMultiCopy,
+                        onMultiCopyChanged: (v) =>
+                            _toggleMultiCopy('precheck', v),
                         onAdd: () => _addPrinter(
                           area: _cashierArea!,
                           dialogTitle: 'Selecciona impresora para prefactura',
@@ -452,6 +505,8 @@ class _DocumentAssignmentCard extends StatelessWidget {
     required this.onAdd,
     required this.onDelete,
     required this.onConfigure,
+    this.multiCopy,
+    this.onMultiCopyChanged,
   });
 
   final String title;
@@ -461,6 +516,10 @@ class _DocumentAssignmentCard extends StatelessWidget {
   final VoidCallback onAdd;
   final ValueChanged<PrinterDevice> onDelete;
   final ValueChanged<PrinterDevice> onConfigure;
+  /// Slice B: si NO es null, muestra un switch para activar/desactivar
+  /// modo "multi-copia" (imprime en TODAS las asignadas, sin picker).
+  final bool? multiCopy;
+  final ValueChanged<bool>? onMultiCopyChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -527,6 +586,60 @@ class _DocumentAssignmentCard extends StatelessWidget {
                 label: const Text('Agregar otra impresora'),
               ),
             ),
+            // Slice B: switch de multi-copia. Solo visible cuando hay >1
+            // impresora asignada (con 1 sola no tiene sentido el modo).
+            if (multiCopy != null &&
+                onMultiCopyChanged != null &&
+                assigned.length > 1) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF9FAFB),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFE5E7EB)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.copy_all_outlined,
+                      size: 18,
+                      color: MangoColors.darkGray,
+                    ),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Imprimir en todas (multi-copia)',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                              color: MangoColors.darkGray,
+                            ),
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            'Sin picker: el ticket sale en cada impresora '
+                            'asignada al mismo tiempo.',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: MangoColors.muted,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Switch(
+                      value: multiCopy!,
+                      onChanged: busy ? null : onMultiCopyChanged,
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ],
         ],
       ),

@@ -3332,6 +3332,75 @@ class _CartView extends ConsumerWidget {
     );
   }
 
+  /// Printing v2 — Slice B: imprime la pre-cuenta en TODAS las impresoras
+  /// precheck-capable del business simultáneamente. Las llamadas se
+  /// disparan en paralelo (Future.wait) para no acumular latencia. Si
+  /// alguna falla, las demás siguen — un error individual no aborta el lote.
+  Future<void> _printPrecheckOnAll(
+    BuildContext context,
+    WidgetRef ref, {
+    required Map<String, dynamic> preCheckData,
+    required Order orderObj,
+    required List<OrderItem> orderItems,
+    String? tableName,
+    String? waiterName,
+    required List<PrintDestination> destinations,
+  }) async {
+    final printerDestinations = destinations
+        .where((d) =>
+            d.kind == PrintDestinationKind.printer && d.printer != null)
+        .toList(growable: false);
+    if (printerDestinations.isEmpty) return;
+
+    // Mostrar feedback inmediato al usuario.
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 2),
+          content: Text(
+            'Imprimiendo en ${printerDestinations.length} impresoras...',
+          ),
+        ),
+      );
+    }
+
+    final futures = printerDestinations.map((d) async {
+      try {
+        await _handlePrintFlow(
+          context,
+          ref,
+          'precheck',
+          preCheckData,
+          orderObj: orderObj,
+          orderItems: orderItems,
+          tableName: tableName,
+          waiterName: waiterName,
+          showSnackBar: false,
+          forcedPrinter: d.printer,
+        );
+        return null;
+      } catch (e) {
+        return '${d.displayName}: $e';
+      }
+    });
+
+    final errors = (await Future.wait(futures))
+        .whereType<String>()
+        .toList(growable: false);
+
+    if (context.mounted && errors.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: const Color(0xFFEF4444),
+          duration: const Duration(seconds: 4),
+          content: Text(
+            'Algunas copias fallaron:\n${errors.join('\n')}',
+          ),
+        ),
+      );
+    }
+  }
+
   /// Pre-Cuenta v2: si hay >1 destino configurado, decide entre:
   ///   - Imprimir directo en la impresora "fijada" para este device
   ///     (saltando el picker — UX rápida para alto volumen).
@@ -3376,6 +3445,29 @@ class _CartView extends ConsumerWidget {
 
     PrintDestination? chosen;
     if (printerDestinations.length > 1) {
+      // ── Slice B: si el business activó multi-copia, fan-out a TODAS
+      //    paralelo (sin picker, sin fijada).
+      try {
+        final modes = await ref
+            .read(posSettingsRepositoryProvider)
+            .getPrintMultiCopyModes(businessId);
+        if (modes.precheck && !forcePicker) {
+          await _printPrecheckOnAll(
+            context,
+            ref,
+            preCheckData: preCheckData,
+            orderObj: orderObj,
+            orderItems: orderItems,
+            tableName: tableName,
+            waiterName: waiterName,
+            destinations: printerDestinations,
+          );
+          return;
+        }
+      } catch (_) {
+        // Si el setting no se puede leer, seguimos con el flujo normal.
+      }
+
       final deviceId = await DeviceIdentity.getOrCreateId(businessId);
       final pinnedKey = await PrechecPrinterPreference.read(deviceId);
 
@@ -3451,24 +3543,23 @@ class _CartView extends ConsumerWidget {
     );
   }
 
-  /// Printing v2 (Slice 3): resuelve la impresora para el recibo final
-  /// cuando la caja no tiene una `cash_register.receipt_printer_id`
+  /// Printing v2 (Slice 3 + B): resuelve la impresora para el recibo
+  /// final cuando la caja no tiene una `cash_register.receipt_printer_id`
   /// asignada (el paso 1 del fallback no resolvió).
   ///
   /// Lógica:
   ///   - 0 destinos receipt-capable: retorna null → cae al fallback legacy
   ///     (area-based) que ya estaba antes.
   ///   - 1 destino: lo usa directo, sin picker.
-  ///   - 2+ destinos:
-  ///     - Si hay impresora "fijada" para receipts en este device y todavía
-  ///       existe entre los destinos → la usa.
+  ///   - 2+ destinos + business.print_receipt_multi_copy=true (Slice B):
+  ///     - Asigna `extraReceiptPrintersToFanOut` con las demás impresoras
+  ///       para que `_handlePrintFlow` haga fan-out paralelo, y retorna
+  ///       la primera como "principal" del flujo legacy.
+  ///   - 2+ destinos sin multi-copia:
+  ///     - Si hay impresora "fijada" para receipts en este device → usa.
   ///     - Sino → muestra picker rápido. Al elegir, queda fijada.
-  ///
-  /// El gesto de "cambiar la fijada" no existe a este nivel — el admin
-  /// puede ir a Ajustes → Impresión → Asignar por comprobantes (Slice 1.5)
-  /// para reconfigurar, o a Ajustes → Cajas para setear
-  /// cash_register.receipt_printer_id (tiene precedencia sobre el pin).
-  Future<PrinterConfig?> _resolveReceiptDestination(
+  Future<({PrinterConfig? primary, List<PrinterConfig> extras})>
+      _resolveReceiptDestination(
     BuildContext context,
     WidgetRef ref, {
     required String businessId,
@@ -3479,21 +3570,44 @@ class _CartView extends ConsumerWidget {
       destinations = await resolver.resolveForReceipt(businessId: businessId);
     } catch (_) {
       // Resolver falló (RLS, red); que el fallback legacy se encargue.
-      return null;
+      return (primary: null, extras: const <PrinterConfig>[]);
     }
 
     final printerDestinations = destinations
-        .where((d) => d.kind == PrintDestinationKind.printer)
+        .where((d) =>
+            d.kind == PrintDestinationKind.printer && d.printer != null)
         .toList(growable: false);
 
     if (printerDestinations.isEmpty) {
-      return null;
+      return (primary: null, extras: const <PrinterConfig>[]);
     }
     if (printerDestinations.length == 1) {
-      return printerDestinations.first.printer;
+      return (
+        primary: printerDestinations.first.printer,
+        extras: const <PrinterConfig>[],
+      );
     }
 
-    // >1 destinos receipt-capable: usar fijada o pedir al cajero.
+    // Slice B: si el business activó multi-copia para recibo, fan-out
+    // paralelo a TODAS las impresoras receipt-capable.
+    try {
+      final modes = await ref
+          .read(posSettingsRepositoryProvider)
+          .getPrintMultiCopyModes(businessId);
+      if (modes.receipt) {
+        return (
+          primary: printerDestinations.first.printer,
+          extras: printerDestinations
+              .skip(1)
+              .map((d) => d.printer!)
+              .toList(growable: false),
+        );
+      }
+    } catch (_) {
+      // Si falla, seguir con el flujo normal (picker o fijada).
+    }
+
+    // >1 destinos receipt-capable sin multi-copia: usar fijada o pedir.
     final deviceId = await DeviceIdentity.getOrCreateId(businessId);
     final pinnedKey = await ReceiptPrinterPreference.read(deviceId);
 
@@ -3504,23 +3618,28 @@ class _CartView extends ConsumerWidget {
         orElse: () => PrintDestination.screenOnly(),
       );
       if (pinned.kind == PrintDestinationKind.printer) {
-        return pinned.printer;
+        return (primary: pinned.printer, extras: const <PrinterConfig>[]);
       }
     }
 
-    if (!context.mounted) return null;
+    if (!context.mounted) {
+      return (primary: null, extras: const <PrinterConfig>[]);
+    }
     final chosen = await showPrintDestinationPicker(
       context,
       destinations: printerDestinations, // sin screen-only para receipt
       title: '¿Dónde imprimir el recibo?',
       recentlyUsedKey: pinnedKey,
     );
-    if (chosen == null) return null; // canceló → fallback legacy
+    if (chosen == null) {
+      return (primary: null, extras: const <PrinterConfig>[]);
+    }
 
     // Auto-fijar la elección para próximas facturas.
     unawaited(ReceiptPrinterPreference.save(deviceId, chosen.persistKey));
-    return chosen.printer;
+    return (primary: chosen.printer, extras: const <PrinterConfig>[]);
   }
+
 
   Future<void> _handlePrintFlow(
     BuildContext context,
@@ -3546,6 +3665,10 @@ class _CartView extends ConsumerWidget {
       // Si el usuario ya eligió impresora en el selector v2 (Printing v2),
       // usar esa y saltar la auto-resolución legacy.
       PrinterConfig? assignedPrinter = forcedPrinter;
+      // Slice B: extras para fan-out de recibo (multi-copia). Solo se
+      // popula si el business activó print_receipt_multi_copy y hay >1
+      // impresora receipt-capable. Se imprime al final, después del primary.
+      List<PrinterConfig> extraReceiptPrinters = const [];
 
       if (assignedPrinter == null) {
         // 1. Try register-specific printer first (each cash register can have its own)
@@ -3562,16 +3685,16 @@ class _CartView extends ConsumerWidget {
           } catch (_) {}
         }
 
-        // 2. Printing v2 (Slice 3): selector de receipt al primer cobro.
-        //    Solo cuando type='invoice' Y no hay cash_register.receipt_printer_id
-        //    asignada (paso 1 no resolvió). Si hay >1 destino receipt, usa el
-        //    pinned del device o muestra picker para que el cajero elija.
+        // 2. Printing v2 (Slice 3 + B): selector de receipt al primer
+        //    cobro o fan-out multi-copia si está activado.
         if (assignedPrinter == null && type == 'invoice' && context.mounted) {
-          assignedPrinter = await _resolveReceiptDestination(
+          final resolved = await _resolveReceiptDestination(
             context,
             ref,
             businessId: businessId,
           );
+          assignedPrinter = resolved.primary;
+          extraReceiptPrinters = resolved.extras;
         }
 
         // 3. Fallback to global area-based printer (legacy auto-resolve)
@@ -3894,8 +4017,77 @@ class _CartView extends ConsumerWidget {
           ),
         );
       }
+
+      // Slice B — fan-out de multi-copia para recibo (paralelo). Solo
+      // se popula cuando type='invoice' y el business activó la setting.
+      // Errores individuales no abortan: el primario ya salió OK.
+      if (extraReceiptPrinters.isNotEmpty) {
+        unawaited(_fanOutExtraReceiptPrinters(
+          context,
+          ref,
+          type: type,
+          data: data,
+          orderObj: orderObj,
+          orderItems: orderItems,
+          payments: payments,
+          tableName: tableName,
+          waiterName: waiterName,
+          extras: extraReceiptPrinters,
+        ));
+      }
     } catch (e) {
       rethrow;
+    }
+  }
+
+  /// Slice B helper: dispara prints paralelos a las impresoras `extras`
+  /// (siempre desde `_handlePrintFlow` con `forcedPrinter` para evitar
+  /// re-auto-resolución). Fire-and-forget: el primario ya tuvo éxito,
+  /// las copias son best-effort.
+  Future<void> _fanOutExtraReceiptPrinters(
+    BuildContext context,
+    WidgetRef ref, {
+    required String type,
+    required Map<String, dynamic> data,
+    Order? orderObj,
+    List<OrderItem>? orderItems,
+    List<Payment>? payments,
+    String? tableName,
+    String? waiterName,
+    required List<PrinterConfig> extras,
+  }) async {
+    final futures = extras.map((p) async {
+      try {
+        await _handlePrintFlow(
+          context,
+          ref,
+          type,
+          data,
+          orderObj: orderObj,
+          orderItems: orderItems,
+          payments: payments,
+          tableName: tableName,
+          waiterName: waiterName,
+          showSnackBar: false,
+          forcedPrinter: p,
+        );
+        return null;
+      } catch (e) {
+        return '${p.name}: $e';
+      }
+    });
+    final errors =
+        (await Future.wait(futures)).whereType<String>().toList(growable: false);
+    if (errors.isNotEmpty && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 4),
+          backgroundColor: const Color(0xFFF59E0B),
+          content: Text(
+            'Algunas copias no salieron:\n${errors.join('\n')}',
+          ),
+        ),
+      );
     }
   }
 
