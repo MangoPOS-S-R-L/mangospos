@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
@@ -67,6 +69,28 @@ class _PrinterConfigurationDialogState
     _macCtrl.dispose();
     _deviceCtrl.dispose();
     super.dispose();
+  }
+
+  /// Printing v2 (Slice A — Auto-discovery): abre un dialog que escanea
+  /// la LAN en vivo y permite elegir una impresora encontrada para
+  /// autocompletar IP/MAC del config.
+  Future<void> _openDiscoverDialog() async {
+    final selected = await showDialog<DiscoveredPrinter>(
+      context: context,
+      builder: (ctx) => _DiscoverPrinterDialog(vmCtrl: widget.vmCtrl),
+    );
+    if (selected == null || !mounted) return;
+    setState(() {
+      if (selected.ip != null && selected.ip!.isNotEmpty) {
+        _ipCtrl.text = selected.ip!;
+      }
+      if (selected.mac != null && selected.mac!.isNotEmpty) {
+        _macCtrl.text = selected.mac!;
+      }
+      if (selected.idHint != null && selected.idHint!.isNotEmpty) {
+        _deviceCtrl.text = selected.idHint!;
+      }
+    });
   }
 
   Future<void> _save() async {
@@ -343,7 +367,32 @@ class _PrinterConfigurationDialogState
         const SizedBox(height: 12),
         _DialogField(
           label: 'Dirección IP configurada',
-          child: TextField(controller: _ipCtrl),
+          child: Row(
+            children: [
+              Expanded(child: TextField(controller: _ipCtrl)),
+              const SizedBox(width: 8),
+              // Printing v2 (Slice A — Auto-discovery): botón visible solo
+              // cuando el tipo es network. Lanza escaneo de la LAN y muestra
+              // las impresoras encontradas para que el admin elija una y
+              // autocompletar IP/MAC sin tener que escribirlas a mano.
+              if (_type == 'network')
+                OutlinedButton.icon(
+                  onPressed: _saving ? null : _openDiscoverDialog,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: MangoColors.primaryOrange,
+                    side: const BorderSide(
+                        color: MangoColors.primaryOrange),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  icon: const Icon(Icons.wifi_find, size: 18),
+                  label: const Text('Detectar IP'),
+                ),
+            ],
+          ),
         ),
         const SizedBox(height: 18),
         const Text(
@@ -609,5 +658,311 @@ class _PaperWidthCard extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// Dialog que escanea la LAN en vivo y muestra impresoras descubiertas
+/// (Printing v2 — Slice A). Al elegir una, retorna el `DiscoveredPrinter`
+/// para que el padre autocomplete los campos IP/MAC.
+class _DiscoverPrinterDialog extends StatefulWidget {
+  const _DiscoverPrinterDialog({required this.vmCtrl});
+
+  final PrintingPrintersViewModel vmCtrl;
+
+  @override
+  State<_DiscoverPrinterDialog> createState() =>
+      _DiscoverPrinterDialogState();
+}
+
+class _DiscoverPrinterDialogState extends State<_DiscoverPrinterDialog> {
+  StreamSubscription<DiscoveredPrinter>? _sub;
+  final List<DiscoveredPrinter> _found = [];
+  bool _scanning = true;
+  int _secondsLeft = 120;
+  Timer? _countdown;
+
+  @override
+  void initState() {
+    super.initState();
+    _startScan();
+  }
+
+  void _startScan() {
+    _countdown = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      setState(() {
+        _secondsLeft = _secondsLeft > 0 ? _secondsLeft - 1 : 0;
+      });
+      if (_secondsLeft <= 0) {
+        t.cancel();
+      }
+    });
+
+    _sub = widget.vmCtrl
+        .scanIntensiveStream(duration: const Duration(seconds: 120))
+        .listen(
+      (d) {
+        if (!mounted) return;
+        final ip = d.ip;
+        final mac = d.mac;
+        final isDup = _found.any((p) {
+          if (ip != null && p.ip == ip) return true;
+          if (mac != null && p.mac == mac) return true;
+          return false;
+        });
+        if (isDup) return;
+        setState(() => _found.add(d));
+      },
+      onDone: () {
+        if (mounted) setState(() => _scanning = false);
+      },
+      onError: (_) {
+        if (mounted) setState(() => _scanning = false);
+      },
+    );
+  }
+
+  void _stopScan() {
+    _sub?.cancel();
+    _sub = null;
+    _countdown?.cancel();
+    _countdown = null;
+    if (mounted) setState(() => _scanning = false);
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    _countdown?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mm = (_secondsLeft ~/ 60).toString().padLeft(1, '0');
+    final ss = (_secondsLeft % 60).toString().padLeft(2, '0');
+
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: 480,
+        height: 560,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.wifi_find,
+                      color: MangoColors.primaryOrange),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Detectar impresoras en la red',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        color: MangoColors.darkGray,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              if (_scanning)
+                Row(
+                  children: [
+                    const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Buscando... quedan $mm:$ss',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: MangoColors.muted,
+                      ),
+                    ),
+                    const Spacer(),
+                    TextButton.icon(
+                      onPressed: _stopScan,
+                      icon: const Icon(Icons.stop_circle_outlined, size: 18),
+                      label: const Text('Detener'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: const Color(0xFFEF4444),
+                      ),
+                    ),
+                  ],
+                )
+              else
+                Row(
+                  children: [
+                    Icon(
+                      _found.isEmpty
+                          ? Icons.info_outline
+                          : Icons.check_circle_outline,
+                      size: 16,
+                      color: _found.isEmpty
+                          ? MangoColors.muted
+                          : const Color(0xFF10B981),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      _found.isEmpty
+                          ? 'No se encontraron impresoras.'
+                          : '${_found.length} impresora(s) encontradas.',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: MangoColors.muted,
+                      ),
+                    ),
+                  ],
+                ),
+              const SizedBox(height: 12),
+              const Divider(height: 1, color: Color(0xFFE5E5E5)),
+              const SizedBox(height: 8),
+              Expanded(
+                child: _found.isEmpty && !_scanning
+                    ? _emptyState()
+                    : ListView.separated(
+                        itemCount: _found.length,
+                        separatorBuilder: (_, _) => const Divider(
+                          height: 1,
+                          color: Color(0xFFF1F1F1),
+                        ),
+                        itemBuilder: (_, i) {
+                          final p = _found[i];
+                          return _PrinterFoundTile(
+                            discovered: p,
+                            onTap: () => Navigator.of(context).pop(p),
+                          );
+                        },
+                      ),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Cancelar'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _emptyState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.search_off, size: 48, color: Color(0xFFAAAAAA)),
+          const SizedBox(height: 12),
+          const Text(
+            'No se detectó ninguna impresora.',
+            style: TextStyle(
+              fontSize: 14,
+              color: MangoColors.darkGray,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 4),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 24),
+            child: Text(
+              'Verificá que la impresora esté encendida, conectada a la '
+              'misma red y que el firewall permita el puerto 9100.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: MangoColors.muted),
+            ),
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: () {
+              setState(() {
+                _found.clear();
+                _secondsLeft = 120;
+                _scanning = true;
+              });
+              _startScan();
+            },
+            icon: const Icon(Icons.refresh, size: 16),
+            label: const Text('Reintentar búsqueda'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PrinterFoundTile extends StatelessWidget {
+  const _PrinterFoundTile({required this.discovered, required this.onTap});
+
+  final DiscoveredPrinter discovered;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+        child: Row(
+          children: [
+            const Icon(Icons.print_outlined,
+                color: MangoColors.darkGray),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    discovered.name,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: MangoColors.darkGray,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    _buildSubtitle(),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: MangoColors.muted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: Color(0xFFAAAAAA)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _buildSubtitle() {
+    final parts = <String>[];
+    if (discovered.ip != null && discovered.ip!.isNotEmpty) {
+      parts.add('IP: ${discovered.ip}');
+    }
+    if (discovered.mac != null && discovered.mac!.isNotEmpty) {
+      parts.add('MAC: ${discovered.mac}');
+    }
+    parts.add(discovered.type.name.toUpperCase());
+    return parts.join(' · ');
   }
 }
