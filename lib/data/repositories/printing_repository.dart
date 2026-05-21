@@ -130,12 +130,19 @@ class PrintingRepository {
     String? hostDeviceId,
   }) async {
     try {
+      // Printing v2: derivar `transport` desde `type` legacy.
+      // BD también tiene trigger fn_printer_autofill_transport (migración
+      // 20260521_0009) como defensa, pero lo mandamos explícito desde acá
+      // para que la query sea autodescriptiva.
+      final transport = _transportFromLegacyType(type);
+
       final data = await _client
           .from('printers')
           .insert({
             'business_id': businessId,
             'name': name,
             'type': type,
+            'transport': transport,
             'ip_address': ipAddress,
             'port': port,
             'device_path': devicePath,
@@ -152,6 +159,20 @@ class PrintingRepository {
       return PrinterConfig.fromMap(data);
     } catch (e) {
       throw Exception('Error al crear impresora: $e');
+    }
+  }
+
+  /// Mapeo del enum legacy `type` → text `transport` de v2.
+  /// Coincide con el trigger BD `fn_printer_autofill_transport`.
+  static String _transportFromLegacyType(String legacyType) {
+    switch (legacyType.toLowerCase()) {
+      case 'bluetooth':
+        return 'bluetooth';
+      case 'usb':
+        return 'usb';
+      case 'network':
+      default:
+        return 'lan';
     }
   }
 
@@ -175,7 +196,12 @@ class PrintingRepository {
       if (name != null) updates['name'] = name;
       if (ipAddress != null) updates['ip_address'] = ipAddress;
       if (port != null) updates['port'] = port;
-      if (type != null) updates['type'] = type;
+      if (type != null) {
+        updates['type'] = type;
+        // Printing v2: cuando se cambia el type legacy, mantener transport
+        // sincronizado para que las queries v2 sigan correctas.
+        updates['transport'] = _transportFromLegacyType(type);
+      }
       if (devicePath != null) updates['device_path'] = devicePath;
       if (mac != null) updates['mac'] = mac;
       // BUG fix: `is_active` es el flag administrativo (habilitada/
