@@ -3130,93 +3130,106 @@ class _CartView extends ConsumerWidget {
                   Row(
                     children: [
                       Expanded(
-                        child: _SecondaryActionButton(
-                          label: 'Pre-Cuenta',
-                          onPressed: precheckLocked
-                              ? null
-                              : () async {
-                                  await _runLockedAction(
-                                    ref,
-                                    precheckLockKey,
-                                    () async {
-                                      if (orderState.order != null) {
-                                        final businessProfile =
-                                            await _loadBusinessReceiptProfile(
-                                              ref,
-                                            );
-                                        final waiterName =
-                                            await _loadWaiterName(
-                                              ref,
-                                              orderState.order!.id,
-                                            ) ??
-                                            ref.read(sessionProvider).userName;
-                                        if (!context.mounted) return;
-                                        final preCheckData = {
-                                          'restaurantName':
-                                              businessProfile.name,
-                                          'businessName':
-                                              businessProfile.businessName,
-                                          'legalName':
-                                              businessProfile.legalName,
-                                          'rnc': businessProfile.rnc,
-                                          'phone': businessProfile.phone,
-                                          'address': businessProfile.address,
-                                          'tableName':
-                                              '$tableCode ${selectedCheckId != null ? "(Cuentas Separadas)" : ""}',
-                                          'waiterName': waiterName,
-                                          'items': displayedItems
-                                              .map(
-                                                (i) => {
-                                                  'quantity': i.quantity,
-                                                  'name': i.productName,
-                                                  'price': itemDisplayTotal(
-                                                    orderState.order,
-                                                    i,
-                                                  ),
-                                                },
-                                              )
-                                              .toList(),
-                                          'subtotal': displaySubtotal,
-                                          'tax': displayTaxTotal,
-                                          'total': displayTotal,
-                                        };
+                        child: Builder(
+                          builder: (btnContext) {
+                            // Printing v2 (Slice 2): la lógica del Pre-Cuenta
+                            // se extrae en una closure local para poder
+                            // dispararla tanto desde onPressed (tap normal,
+                            // usa fijada si existe) como desde onLongPress
+                            // (fuerza el picker para cambiar la fijada).
+                            Future<void> runPrecheck({
+                              required bool forcePicker,
+                            }) async {
+                              await _runLockedAction(
+                                ref,
+                                precheckLockKey,
+                                () async {
+                                  if (orderState.order == null) return;
+                                  final businessProfile =
+                                      await _loadBusinessReceiptProfile(ref);
+                                  final waiterName = await _loadWaiterName(
+                                        ref,
+                                        orderState.order!.id,
+                                      ) ??
+                                      ref.read(sessionProvider).userName;
+                                  if (!context.mounted) return;
+                                  final preCheckData = {
+                                    'restaurantName': businessProfile.name,
+                                    'businessName':
+                                        businessProfile.businessName,
+                                    'legalName': businessProfile.legalName,
+                                    'rnc': businessProfile.rnc,
+                                    'phone': businessProfile.phone,
+                                    'address': businessProfile.address,
+                                    'tableName':
+                                        '$tableCode ${selectedCheckId != null ? "(Cuentas Separadas)" : ""}',
+                                    'waiterName': waiterName,
+                                    'items': displayedItems
+                                        .map(
+                                          (i) => {
+                                            'quantity': i.quantity,
+                                            'name': i.productName,
+                                            'price': itemDisplayTotal(
+                                              orderState.order,
+                                              i,
+                                            ),
+                                          },
+                                        )
+                                        .toList(),
+                                    'subtotal': displaySubtotal,
+                                    'tax': displayTaxTotal,
+                                    'total': displayTotal,
+                                  };
 
-                                        try {
-                                          await _runPrecheckWithDestinationPicker(
-                                            context,
-                                            ref,
-                                            preCheckData: preCheckData,
-                                            orderObj: orderState.order!,
-                                            orderItems: displayedItems,
-                                          );
-                                        } catch (e) {
-                                          if (context.mounted) {
-                                            // Precuenta: no bloquea otra
-                                            // operacion, fire-and-forget.
-                                            unawaited(
-                                              _showReimpresionDialog(
-                                                context: context,
-                                                ref: ref,
-                                                type: 'precheck',
-                                                data: preCheckData,
-                                                orderObj: orderState.order!,
-                                                orderItems: displayedItems,
-                                                tableName:
-                                                    preCheckData['tableName']
-                                                        as String?,
-                                                waiterName:
-                                                    preCheckData['waiterName']
-                                                        as String?,
-                                                errorMsg: e.toString(),
-                                              ),
-                                            );
-                                          }
-                                        }
-                                      }
-                                    },
-                                  );
+                                  try {
+                                    await _runPrecheckWithDestinationPicker(
+                                      context,
+                                      ref,
+                                      preCheckData: preCheckData,
+                                      orderObj: orderState.order!,
+                                      orderItems: displayedItems,
+                                      forcePicker: forcePicker,
+                                    );
+                                  } catch (e) {
+                                    if (context.mounted) {
+                                      // Precuenta: no bloquea otra
+                                      // operacion, fire-and-forget.
+                                      unawaited(
+                                        _showReimpresionDialog(
+                                          context: context,
+                                          ref: ref,
+                                          type: 'precheck',
+                                          data: preCheckData,
+                                          orderObj: orderState.order!,
+                                          orderItems: displayedItems,
+                                          tableName:
+                                              preCheckData['tableName']
+                                                  as String?,
+                                          waiterName:
+                                              preCheckData['waiterName']
+                                                  as String?,
+                                          errorMsg: e.toString(),
+                                        ),
+                                      );
+                                    }
+                                  }
                                 },
-                          icon: Icons.receipt_long_outlined,
+                              );
+                            }
+
+                            return _SecondaryActionButton(
+                              label: 'Pre-Cuenta',
+                              icon: Icons.receipt_long_outlined,
+                              onPressed: precheckLocked
+                                  ? null
+                                  : () => runPrecheck(forcePicker: false),
+                              // Long press → fuerza el picker para cambiar
+                              // la impresora fijada (UX de Slice 2).
+                              onLongPress: precheckLocked
+                                  ? null
+                                  : () => runPrecheck(forcePicker: true),
+                            );
+                          },
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -3319,16 +3332,21 @@ class _CartView extends ConsumerWidget {
     );
   }
 
-  /// Pre-Cuenta v2: si hay >1 destino configurado, muestra el selector
-  /// (bottom sheet) y rutea según la elección. Memoriza la última opción
-  /// por device. Si hay 1 o 0 destinos, cae al flujo legacy [_handlePrintFlow]
-  /// (auto-resolución de impresora).
+  /// Pre-Cuenta v2: si hay >1 destino configurado, decide entre:
+  ///   - Imprimir directo en la impresora "fijada" para este device
+  ///     (saltando el picker — UX rápida para alto volumen).
+  ///   - Mostrar el bottom sheet si no hay fijada, o si [forcePicker]=true
+  ///     (long press en el botón Pre-Cuenta).
+  ///
+  /// Al elegir una impresora en el picker, queda automáticamente fijada
+  /// para próximas veces.
   Future<void> _runPrecheckWithDestinationPicker(
     BuildContext context,
     WidgetRef ref, {
     required Map<String, dynamic> preCheckData,
     required Order orderObj,
     required List<OrderItem> orderItems,
+    bool forcePicker = false,
   }) async {
     final session = ref.read(sessionProvider);
     final businessId = session.activeBusinessId;
@@ -3359,18 +3377,39 @@ class _CartView extends ConsumerWidget {
     PrintDestination? chosen;
     if (printerDestinations.length > 1) {
       final deviceId = await DeviceIdentity.getOrCreateId(businessId);
-      final lastUsedKey = await PrechecPrinterPreference.read(deviceId);
+      final pinnedKey = await PrechecPrinterPreference.read(deviceId);
 
-      if (!context.mounted) return;
-      chosen = await showPrintDestinationPicker(
-        context,
-        destinations: destinations,
-        recentlyUsedKey: lastUsedKey,
-      );
-      if (chosen == null) return; // usuario canceló
+      // ── Atajo: si hay una impresora "fijada" para este device y todavía
+      // existe entre los destinos disponibles, imprime directo. UX rápida
+      // para cajeros que siempre usan la misma impresora.
+      // ── Excepción: forcePicker=true (long press) ignora la fijada y
+      // muestra el picker para permitir cambiar la fijación.
+      if (!forcePicker && pinnedKey != null) {
+        final pinned = destinations.firstWhere(
+          (d) => d.persistKey == pinnedKey &&
+              d.kind == PrintDestinationKind.printer,
+          orElse: () => PrintDestination.screenOnly(),
+        );
+        if (pinned.kind == PrintDestinationKind.printer) {
+          chosen = pinned;
+        }
+      }
 
-      // Persistir elección (fire-and-forget, no bloquea).
-      unawaited(PrechecPrinterPreference.save(deviceId, chosen.persistKey));
+      // Si no hubo atajo (no había fijada, ya no existe, o forcePicker)
+      // → mostrar el selector.
+      if (chosen == null) {
+        if (!context.mounted) return;
+        chosen = await showPrintDestinationPicker(
+          context,
+          destinations: destinations,
+          recentlyUsedKey: pinnedKey,
+        );
+        if (chosen == null) return; // usuario canceló
+
+        // Auto-fijar la elección — primer tap = fija. Si el usuario quiere
+        // cambiarla después, long press en Pre-Cuenta.
+        unawaited(PrechecPrinterPreference.save(deviceId, chosen.persistKey));
+      }
     } else if (printerDestinations.length == 1) {
       // Una sola impresora → comportamiento actual (sin picker), usa esa.
       chosen = printerDestinations.first;
@@ -4656,12 +4695,14 @@ class _ActionButton extends StatelessWidget {
 class _SecondaryActionButton extends StatelessWidget {
   final String label;
   final VoidCallback? onPressed;
+  final VoidCallback? onLongPress;
   final IconData icon;
 
   const _SecondaryActionButton({
     required this.label,
     required this.onPressed,
     required this.icon,
+    this.onLongPress,
   });
 
   @override
@@ -4673,6 +4714,7 @@ class _SecondaryActionButton extends StatelessWidget {
       constraints: const BoxConstraints(minHeight: TouchTargets.primary),
       child: OutlinedButton(
         onPressed: onPressed,
+        onLongPress: onLongPress,
         style: OutlinedButton.styleFrom(
           backgroundColor: onPressed == null
               ? _salesTabActiveBg.withValues(alpha: 0.45)
