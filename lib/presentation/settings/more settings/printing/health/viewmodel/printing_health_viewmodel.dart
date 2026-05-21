@@ -109,17 +109,98 @@ class PrintingHealthViewModel extends AutoDisposeNotifier<PrintingHealthState> {
           .toList(growable: false);
 
       if (_disposed) return;
+
+      // Slice C.2: detectar transiciones a peor estado para emitir
+      // notificaciones. Compara el snapshot anterior con el nuevo —
+      // si alguna impresora cambió de ok → warning/down, se agrega a
+      // pendingTransitions. La UI las consume y llama a clearTransitions.
+      final transitions = _detectTransitions(state.printers, printers);
+
       state = state.copyWith(
         printers: printers,
         activeJobs: jobs,
         loading: false,
         lastUpdatedAt: DateTime.now(),
         clearError: true,
+        pendingTransitions: transitions,
       );
     } catch (e, st) {
       debugPrint('[PrintingHealth] _fetch error: $e\n$st');
       if (_disposed) return;
       state = state.copyWith(loading: false, error: e.toString());
+    }
+  }
+
+  /// Slice C.2: identifica impresoras que pasaron de ok → warning/down.
+  /// Solo emite la primera vez (no re-notifica si sigue en el mismo mal
+  /// estado). No emite para transiciones a mejor (warning → ok).
+  List<PrinterStateTransition> _detectTransitions(
+    List<PrinterHealth> previous,
+    List<PrinterHealth> current,
+  ) {
+    if (previous.isEmpty) {
+      // Primer load — no notificar (sería ruido al abrir la pantalla).
+      return const [];
+    }
+    final prevById = {for (final p in previous) p.id: p};
+    final result = <PrinterStateTransition>[];
+    for (final cur in current) {
+      final prev = prevById[cur.id];
+      if (prev == null) continue; // impresora nueva, no notificamos.
+      if (prev.level == cur.level) continue;
+      // Solo notificar transiciones a peor.
+      final isWorse = (prev.level == PrinterHealthLevel.ok &&
+              cur.level != PrinterHealthLevel.ok) ||
+          (prev.level == PrinterHealthLevel.warning &&
+              cur.level == PrinterHealthLevel.down);
+      if (!isWorse) continue;
+      result.add(PrinterStateTransition(
+        printerId: cur.id,
+        printerName: cur.name,
+        previous: prev.level,
+        current: cur.level,
+        granularLabel: cur.granularStatusLabel,
+      ));
+    }
+    return result;
+  }
+
+  /// Slice C.2: limpiar transiciones pendientes después de mostrarlas
+  /// para que no se re-emitan en cada rebuild de la UI.
+  void clearTransitions() {
+    if (_disposed) return;
+    if (state.pendingTransitions.isEmpty) return;
+    state = state.copyWith(pendingTransitions: const []);
+  }
+
+  /// Slice C.3: jobs ya impresos en las últimas 24h para que el cajero
+  /// pueda reimprimir si algo no salió bien físicamente. NO se cachea
+  /// en state — se pide on-demand al abrir el bottom sheet.
+  Future<List<PrintJobRow>> loadRecentlyPrinted({int limit = 30}) async {
+    final bid = _businessId;
+    if (bid == null) return const [];
+    try {
+      final rows = await _repo.getRecentPrintedJobs(bid, limit: limit);
+      return rows
+          .map((m) => PrintJobRow.fromMap(Map<String, dynamic>.from(m)))
+          .toList(growable: false);
+    } catch (e) {
+      debugPrint('[PrintingHealth] loadRecentlyPrinted error: $e');
+      return const [];
+    }
+  }
+
+  /// Slice C.3: reimprime un job ya impreso. Clona payload y encola
+  /// nuevo job pending. Retorna true si se logró encolar.
+  Future<bool> reprintJob(String jobId) async {
+    try {
+      await _repo.reprintJob(jobId);
+      // Refrescar la cola para que el nuevo job aparezca.
+      await _fetch();
+      return true;
+    } catch (e) {
+      debugPrint('[PrintingHealth] reprintJob error: $e');
+      return false;
     }
   }
 

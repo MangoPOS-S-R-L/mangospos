@@ -243,12 +243,51 @@ class PrintJobRow extends Equatable {
   ];
 }
 
+/// Slice C.2 — Transición detectada al refrescar el dashboard. Permite
+/// avisar al usuario con un snackbar/banner que el estado de una
+/// impresora cambió a worse (ok → down/warning).
+class PrinterStateTransition extends Equatable {
+  final String printerId;
+  final String printerName;
+  final PrinterHealthLevel previous;
+  final PrinterHealthLevel current;
+  final String? granularLabel;
+
+  const PrinterStateTransition({
+    required this.printerId,
+    required this.printerName,
+    required this.previous,
+    required this.current,
+    this.granularLabel,
+  });
+
+  /// Mensaje human-readable para mostrar como notificación.
+  String get message {
+    final detail = granularLabel != null ? ' ($granularLabel)' : '';
+    if (current == PrinterHealthLevel.down) {
+      return 'Impresora "$printerName" requiere atención$detail.';
+    }
+    if (current == PrinterHealthLevel.warning) {
+      return 'Impresora "$printerName" con advertencia$detail.';
+    }
+    return 'Impresora "$printerName" cambió de estado.';
+  }
+
+  @override
+  List<Object?> get props =>
+      [printerId, printerName, previous, current, granularLabel];
+}
+
 class PrintingHealthState extends Equatable {
   final List<PrinterHealth> printers;
   final List<PrintJobRow> activeJobs;
   final bool loading;
   final String? error;
   final DateTime? lastUpdatedAt;
+  /// Slice C.2: transiciones a peor estado detectadas en el último
+  /// refresh. La UI las consume para mostrar snackbars y luego llama a
+  /// `clearTransitions` para no re-notificar.
+  final List<PrinterStateTransition> pendingTransitions;
 
   const PrintingHealthState({
     this.printers = const [],
@@ -256,6 +295,7 @@ class PrintingHealthState extends Equatable {
     this.loading = false,
     this.error,
     this.lastUpdatedAt,
+    this.pendingTransitions = const [],
   });
 
   PrintingHealthState copyWith({
@@ -265,6 +305,7 @@ class PrintingHealthState extends Equatable {
     String? error,
     bool clearError = false,
     DateTime? lastUpdatedAt,
+    List<PrinterStateTransition>? pendingTransitions,
   }) {
     return PrintingHealthState(
       printers: printers ?? this.printers,
@@ -272,6 +313,7 @@ class PrintingHealthState extends Equatable {
       loading: loading ?? this.loading,
       error: clearError ? null : (error ?? this.error),
       lastUpdatedAt: lastUpdatedAt ?? this.lastUpdatedAt,
+      pendingTransitions: pendingTransitions ?? this.pendingTransitions,
     );
   }
 
@@ -291,5 +333,6 @@ class PrintingHealthState extends Equatable {
     loading,
     error,
     lastUpdatedAt,
+    pendingTransitions,
   ];
 }

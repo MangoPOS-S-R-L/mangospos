@@ -1000,6 +1000,71 @@ class PrintingRepository {
     }
   }
 
+  /// Printing v2 — Slice C.3: lista los jobs ya IMPRESOS recientemente.
+  /// Útil para el flujo "el cajero dice 'no salió el ticket' y quiere
+  /// reimprimir desde historial".
+  Future<List<Map<String, dynamic>>> getRecentPrintedJobs(
+    String businessId, {
+    int limit = 30,
+    Duration window = const Duration(hours: 24),
+  }) async {
+    try {
+      final since = DateTime.now().toUtc().subtract(window);
+      final data = await _client
+          .from('print_jobs')
+          .select(
+            'id, business_id, printer_id, area_code, kind, status, '
+            'retry_count, last_error, error, next_retry_at, created_at, '
+            'claimed_at, original_printer_id, failover_count, printed_at, '
+            'printers!print_jobs_printer_id_fkey(name, type)',
+          )
+          .eq('business_id', businessId)
+          .eq('status', 'printed')
+          .gte('printed_at', since.toIso8601String())
+          .order('printed_at', ascending: false)
+          .limit(limit);
+
+      return List<Map<String, dynamic>>.from(data as List);
+    } catch (e) {
+      throw Exception('Error al obtener jobs impresos: $e');
+    }
+  }
+
+  /// Printing v2 — Slice C.3: clona un job existente y lo encola como
+  /// nuevo (pending). El job original se mantiene intacto. Útil para
+  /// reimprimir cuando el papel se atoró o el cliente pidió una copia.
+  ///
+  /// IMPORTANTE: copia data_hex/payload exactamente (es la representación
+  /// ESC/POS del ticket original). El nuevo job toma su propio id +
+  /// idempotency_key para no chocar con el unique parcial.
+  Future<String> reprintJob(String sourceJobId) async {
+    try {
+      final source = await _client
+          .from('print_jobs')
+          .select('business_id, printer_id, data_hex, ip, port, area_code, kind')
+          .eq('id', sourceJobId)
+          .single();
+
+      final inserted = await _client.from('print_jobs').insert({
+        'business_id': source['business_id'],
+        'printer_id': source['printer_id'],
+        'data_hex': source['data_hex'],
+        'ip': source['ip'],
+        'port': source['port'],
+        'area_code': source['area_code'],
+        'kind': source['kind'],
+        'status': 'pending',
+        'retry_count': 0,
+        // idempotency_key vacío → no choca con unique parcial.
+      }).select('id').single();
+
+      _clearLookupCaches();
+      return inserted['id']?.toString() ?? '';
+    } catch (e) {
+      throw Exception('Error al reimprimir job: $e');
+    }
+  }
+
   /// Sprint 5 — Suscripción realtime al stream de print_jobs del
   /// negocio. La pantalla de salud se refresca al recibir cualquier
   /// cambio. Caller debe llamar `.unsubscribe()` al desmontar.
