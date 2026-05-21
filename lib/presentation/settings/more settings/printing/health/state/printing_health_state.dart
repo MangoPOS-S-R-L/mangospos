@@ -7,6 +7,8 @@
 
 import 'package:equatable/equatable.dart';
 
+import 'package:mangopos/data/models/printing_v2.dart';
+
 /// Nivel de salud agregado por impresora. Lo deriva la viewmodel a
 /// partir de online + last_seen + counts de jobs.
 enum PrinterHealthLevel {
@@ -33,6 +35,11 @@ class PrinterHealth extends Equatable {
   final int pendingCount;
   final int failedCount;
   final int printingCount;
+  /// Slice C — Status granular reportado por el agent vía `printer_health`
+  /// (Fase 1). NULL = nunca reportó (el agent no soporta probe o no corrió
+  /// todavía). Posibles: online / offline / low_paper / no_paper /
+  /// cover_open / error / unknown.
+  final PrinterHealthStatus? granularStatus;
 
   const PrinterHealth({
     required this.id,
@@ -45,6 +52,7 @@ class PrinterHealth extends Equatable {
     this.pendingCount = 0,
     this.failedCount = 0,
     this.printingCount = 0,
+    this.granularStatus,
   });
 
   factory PrinterHealth.fromMap(Map<String, dynamic> map) {
@@ -64,12 +72,51 @@ class PrinterHealth extends Equatable {
     );
   }
 
+  PrinterHealth copyWith({
+    PrinterHealthStatus? granularStatus,
+  }) {
+    return PrinterHealth(
+      id: id,
+      name: name,
+      type: type,
+      online: online,
+      lastSeen: lastSeen,
+      hostDeviceId: hostDeviceId,
+      fallbackPrinterId: fallbackPrinterId,
+      pendingCount: pendingCount,
+      failedCount: failedCount,
+      printingCount: printingCount,
+      granularStatus: granularStatus ?? this.granularStatus,
+    );
+  }
+
   /// Calcula el nivel de salud agregado. Reglas:
-  /// - `down`: offline, o failedCount > 0 (jobs terminales).
-  /// - `warning`: online pero con pendingCount ≥ 5 o printingCount alto
-  ///   (cola congestionada), o lastSeen entre 60s y 5min.
+  /// - `down`: offline, jobs failed terminales, o status granular crítico
+  ///   (offline / cover_open / error).
+  /// - `warning`: online pero con pendingCount ≥ 5, printingCount alto,
+  ///   lastSeen entre 60s y 5min, o status granular menor (no_paper /
+  ///   low_paper).
   /// - `ok`: el resto (online, sin colas grandes, heartbeat fresco).
+  ///
+  /// Slice C: el `granularStatus` (de printer_health table) tiene
+  /// PRECEDENCIA cuando está poblado — refleja un probe real al hardware
+  /// más reciente que los heurísticos de jobs/heartbeat.
   PrinterHealthLevel get level {
+    // Si el agent reportó status granular, usar eso como verdad principal.
+    final granular = granularStatus;
+    if (granular != null) {
+      if (granular == PrinterHealthStatus.offline ||
+          granular == PrinterHealthStatus.coverOpen ||
+          granular == PrinterHealthStatus.error) {
+        return PrinterHealthLevel.down;
+      }
+      if (granular == PrinterHealthStatus.noPaper ||
+          granular == PrinterHealthStatus.lowPaper) {
+        return PrinterHealthLevel.warning;
+      }
+      // online / unknown → seguir con heurísticos legacy.
+    }
+
     if (!online) return PrinterHealthLevel.down;
     if (failedCount > 0) return PrinterHealthLevel.down;
     final ls = lastSeen;
@@ -86,6 +133,19 @@ class PrinterHealth extends Equatable {
     return PrinterHealthLevel.ok;
   }
 
+  /// Slice C: label human-readable del status granular para mostrar en UI.
+  /// Retorna NULL si no hay granular reportado (caer al display legacy).
+  String? get granularStatusLabel => switch (granularStatus) {
+        null => null,
+        PrinterHealthStatus.online => null, // no agrega info
+        PrinterHealthStatus.offline => 'Offline',
+        PrinterHealthStatus.lowPaper => 'Poco papel',
+        PrinterHealthStatus.noPaper => 'Sin papel',
+        PrinterHealthStatus.coverOpen => 'Tapa abierta',
+        PrinterHealthStatus.error => 'Error',
+        PrinterHealthStatus.unknown => null,
+      };
+
   @override
   List<Object?> get props => [
     id,
@@ -98,6 +158,7 @@ class PrinterHealth extends Equatable {
     pendingCount,
     failedCount,
     printingCount,
+    granularStatus,
   ];
 }
 

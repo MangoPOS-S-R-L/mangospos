@@ -17,7 +17,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../../../../core/business/business_resolver.dart';
+import '../../../../../../data/models/printing_v2.dart';
 import '../../../../../../data/repositories/printing_repository.dart';
+import '../../../../../../data/repositories/printing_v2_repository.dart';
 import '../state/printing_health_state.dart';
 
 final printingHealthRepositoryProvider = Provider<PrintingRepository>((ref) {
@@ -82,10 +84,25 @@ class PrintingHealthViewModel extends AutoDisposeNotifier<PrintingHealthState> {
     try {
       final printersFuture = _repo.getPrintersHealth(bid);
       final jobsFuture = _repo.getActivePrintJobs(bid);
-      final results = await Future.wait([printersFuture, jobsFuture]);
+      // Slice C: status granular (no_paper/cover_open/error) desde
+      // la tabla printer_health (Fase 1).
+      final granularHealthFuture = _fetchGranularHealth(bid);
+      final results = await Future.wait([
+        printersFuture,
+        jobsFuture,
+        granularHealthFuture,
+      ]);
+
+      final granularByPrinterId =
+          results[2] as Map<String, PrinterHealthRecord>;
 
       final printers = (results[0] as List)
           .map((m) => PrinterHealth.fromMap(m as Map<String, dynamic>))
+          .map((h) {
+            final record = granularByPrinterId[h.id];
+            if (record == null) return h;
+            return h.copyWith(granularStatus: record.status);
+          })
           .toList(growable: false);
       final jobs = (results[1] as List)
           .map((m) => PrintJobRow.fromMap(m as Map<String, dynamic>))
@@ -103,6 +120,21 @@ class PrintingHealthViewModel extends AutoDisposeNotifier<PrintingHealthState> {
       debugPrint('[PrintingHealth] _fetch error: $e\n$st');
       if (_disposed) return;
       state = state.copyWith(loading: false, error: e.toString());
+    }
+  }
+
+  /// Slice C: lee la tabla `printer_health` (Fase 1) joineada con printers
+  /// del business. Retorna map por printer_id para enriquecer la lista
+  /// principal con status granular.
+  Future<Map<String, PrinterHealthRecord>> _fetchGranularHealth(
+      String businessId) async {
+    try {
+      final repo = PrinterHealthRepository(Supabase.instance.client);
+      final list = await repo.getHealthForBusiness(businessId);
+      return {for (final r in list) r.printerId: r};
+    } catch (e) {
+      debugPrint('[PrintingHealth] granular health fetch failed: $e');
+      return const {};
     }
   }
 

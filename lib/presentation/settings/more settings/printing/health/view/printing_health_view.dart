@@ -319,6 +319,10 @@ class _PrinterHealthCard extends StatelessWidget {
   }
 
   String _statusLabel() {
+    // Slice C: si el agent reportó status granular, mostrarlo — es más
+    // específico que el agregado (no_paper > "Con atención").
+    final granular = printer.granularStatusLabel;
+    if (granular != null) return granular;
     switch (printer.level) {
       case PrinterHealthLevel.ok:
         return 'Operativa';
