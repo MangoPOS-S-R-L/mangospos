@@ -86,6 +86,9 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
           printsOrders: false,
           printsPrebills: printsPrebills,
           printsReceipts: printsReceipts,
+          // Printing v2 (Slice 1.5): no exclusivo — permite múltiples
+          // impresoras por tipo de comprobante.
+          exclusive: false,
         );
     if (!mounted) return;
     setState(() => _busy = false);

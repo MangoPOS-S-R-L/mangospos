@@ -2278,6 +2278,17 @@ finally {
     }
   }
 
+  /// Asigna una impresora a un área con flags específicos (orders / prebills /
+  /// receipts).
+  ///
+  /// [exclusive] controla si esta asignación es la ÚNICA para el(los) flag(s)
+  /// dados dentro del área:
+  ///   - `true`  (legacy, default): apaga el mismo flag en otras impresoras
+  ///     del área. Útil cuando solo una impresora puede ser la "primaria"
+  ///     de un tipo (ej. impresora de órdenes a cocina caliente).
+  ///   - `false` (Printing v2 — Slice 1.5): respeta otras asignaciones, solo
+  ///     agrega/actualiza esta. Útil para multi-destino (ej. precuenta
+  ///     duplicada en 2 impresoras).
   Future<void> setAreaPrinterAssignment({
     required String businessId,
     required String areaId,
@@ -2286,56 +2297,59 @@ finally {
     bool printsPrebills = false,
     bool printsReceipts = false,
     int priority = 1,
+    bool exclusive = true,
   }) async {
     try {
       if (!printsOrders && !printsPrebills && !printsReceipts) {
         throw Exception('Debes indicar al menos un tipo de impresión.');
       }
 
-      final rows = await _client
-          .from('print_area_printers')
-          .select(
-            'area_id, printer_id, prints_orders, prints_prebills, prints_receipts',
-          )
-          .eq('business_id', businessId)
-          .eq('area_id', areaId);
+      if (exclusive) {
+        final rows = await _client
+            .from('print_area_printers')
+            .select(
+              'area_id, printer_id, prints_orders, prints_prebills, prints_receipts',
+            )
+            .eq('business_id', businessId)
+            .eq('area_id', areaId);
 
-      for (final row in rows) {
-        final rowPrinterId = row['printer_id']?.toString();
-        if (rowPrinterId == null || rowPrinterId.isEmpty) continue;
+        for (final row in rows) {
+          final rowPrinterId = row['printer_id']?.toString();
+          if (rowPrinterId == null || rowPrinterId.isEmpty) continue;
 
-        final nextOrders = (row['prints_orders'] == true) && !printsOrders;
-        final nextPrebills =
-            (row['prints_prebills'] == true) && !printsPrebills;
-        final nextReceipts =
-            (row['prints_receipts'] == true) && !printsReceipts;
+          final nextOrders = (row['prints_orders'] == true) && !printsOrders;
+          final nextPrebills =
+              (row['prints_prebills'] == true) && !printsPrebills;
+          final nextReceipts =
+              (row['prints_receipts'] == true) && !printsReceipts;
 
-        final touchesSameType =
-            (printsOrders && row['prints_orders'] == true) ||
-            (printsPrebills && row['prints_prebills'] == true) ||
-            (printsReceipts && row['prints_receipts'] == true);
+          final touchesSameType =
+              (printsOrders && row['prints_orders'] == true) ||
+              (printsPrebills && row['prints_prebills'] == true) ||
+              (printsReceipts && row['prints_receipts'] == true);
 
-        if (!touchesSameType || rowPrinterId == printerId) continue;
+          if (!touchesSameType || rowPrinterId == printerId) continue;
 
-        if (!nextOrders && !nextPrebills && !nextReceipts) {
-          await _client
-              .from('print_area_printers')
-              .delete()
-              .eq('business_id', businessId)
-              .eq('area_id', areaId)
-              .eq('printer_id', rowPrinterId);
-        } else {
-          await _client
-              .from('print_area_printers')
-              .update({
-                'prints_orders': nextOrders,
-                'prints_prebills': nextPrebills,
-                'prints_receipts': nextReceipts,
-                'enabled': nextOrders || nextPrebills || nextReceipts,
-              })
-              .eq('business_id', businessId)
-              .eq('area_id', areaId)
-              .eq('printer_id', rowPrinterId);
+          if (!nextOrders && !nextPrebills && !nextReceipts) {
+            await _client
+                .from('print_area_printers')
+                .delete()
+                .eq('business_id', businessId)
+                .eq('area_id', areaId)
+                .eq('printer_id', rowPrinterId);
+          } else {
+            await _client
+                .from('print_area_printers')
+                .update({
+                  'prints_orders': nextOrders,
+                  'prints_prebills': nextPrebills,
+                  'prints_receipts': nextReceipts,
+                  'enabled': nextOrders || nextPrebills || nextReceipts,
+                })
+                .eq('business_id', businessId)
+                .eq('area_id', areaId)
+                .eq('printer_id', rowPrinterId);
+          }
         }
       }
 

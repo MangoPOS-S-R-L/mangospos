@@ -198,6 +198,11 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
     }
   }
 
+  /// Vincula una impresora a un área para tipo(s) de impresión específicos.
+  ///
+  /// [exclusive]: si `true` (default, legacy), apaga el mismo flag en otras
+  /// impresoras del área (semántica 1-de-N). Si `false` (Printing v2),
+  /// respeta otras asignaciones — útil para multi-destino.
   Future<bool> linkAreaPrinter({
     required String areaId,
     required String printerId,
@@ -205,6 +210,7 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
     bool printsOrders = true,
     bool printsPrebills = false,
     bool printsReceipts = false,
+    bool exclusive = true,
   }) async {
     try {
       final b = await _ensureBusiness();
@@ -216,6 +222,7 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
         printsOrders: enabled && printsOrders,
         printsPrebills: enabled && printsPrebills,
         printsReceipts: enabled && printsReceipts,
+        exclusive: exclusive,
       );
       return true;
     } catch (e) {
