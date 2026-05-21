@@ -145,6 +145,9 @@ class PrintingService {
       final receiptItemDisplayModeFuture = PosSettingsRepository(
         _client,
       ).getReceiptItemDisplayMode(businessId);
+      final kitchenBannersFuture = PosSettingsRepository(
+        _client,
+      ).getKitchenBanners(businessId);
       final order = await orderFuture;
       if (order == null) {
         throw Exception('Orden no encontrada');
@@ -169,6 +172,7 @@ class PrintingService {
       final orderData = await orderDataFuture;
       final businessName = await businessNameFuture;
       final receiptItemDisplayMode = await receiptItemDisplayModeFuture;
+      final kitchenBanners = await kitchenBannersFuture;
 
       // 4. Agrupar items por área de impresión
       final itemsByArea = await _groupItemsByPrintArea(draftItems);
@@ -230,6 +234,8 @@ class PrintingService {
           businessName: businessName,
           areaCode: areaCode,
           receiptItemDisplayMode: receiptItemDisplayMode,
+          showDineInBanner: kitchenBanners.dineIn,
+          showTakeoutBanner: kitchenBanners.takeout,
         );
 
         final outcome = await _dispatchKitchenTicket(
@@ -476,23 +482,84 @@ class PrintingService {
   }
 
   /// Agrupa items por su `print_area_code` para enrutarlos a las
-  /// impresoras correctas. Si algún item no trae `print_area_code`
-  /// (admin no eligió area al crear el producto, o producto importado
-  /// vía bulk), lanza [ItemsWithoutPrintAreaException] con la lista de
-  /// nombres afectados — sin defaults silenciosos a `'kitchen_hot'`.
+  /// impresoras correctas.
+  ///
+  /// Printing v2 (Slice 4.C): un producto puede tener MÚLTIPLES áreas
+  /// asignadas vía `menu_item_print_areas` (N:M). Lookup batch para no
+  /// hacer N queries.
+  ///
+  /// Estrategia de resolución por item:
+  ///   1. Si productId está poblado, mirar el mapa N:M:
+  ///       - 1+ áreas → repartir el item en cada una.
+  ///       - 0 áreas (entrada vacía o nada) → fallback al paso 2.
+  ///   2. Fallback legacy: `item.printAreaCode` (1-de-1). Si está poblado,
+  ///      usarlo como única área del item.
+  ///   3. Si ninguno aplica → orphan.
+  ///
+  /// Si algún item queda sin ninguna área asignada lanza
+  /// [ItemsWithoutPrintAreaException] con la lista de nombres afectados.
   Future<Map<String, List<OrderItem>>> _groupItemsByPrintArea(
     List<OrderItem> items,
   ) async {
+    final productIds = items
+        .map((i) => i.productId)
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+
+    // Lookup batch del N:M. Si la query falla o la tabla está vacía,
+    // el map queda vacío y todo cae al legacy print_area_code.
+    final nmCodesByMenuItemId = <String, List<String>>{};
+    if (productIds.isNotEmpty) {
+      try {
+        final rows = await _client
+            .from('menu_item_print_areas')
+            .select('menu_item_id, print_areas!inner(code, is_active)')
+            .inFilter('menu_item_id', productIds);
+
+        for (final row in (rows as List<dynamic>)) {
+          final r = Map<String, dynamic>.from(row as Map);
+          final mid = r['menu_item_id']?.toString();
+          final areaMap = r['print_areas'] as Map?;
+          if (mid == null || areaMap == null) continue;
+          final isActive = areaMap['is_active'] != false;
+          if (!isActive) continue;
+          final code = areaMap['code']?.toString();
+          if (code == null || code.isEmpty) continue;
+          nmCodesByMenuItemId.putIfAbsent(mid, () => <String>[]).add(code);
+        }
+      } catch (e) {
+        debugPrint('groupItemsByPrintArea: N:M lookup falló, fallback '
+            'a print_area_code legacy: $e');
+      }
+    }
+
     final itemsByArea = <String, List<OrderItem>>{};
     final orphans = <String>[];
 
     for (final item in items) {
-      final areaCode = item.printAreaCode?.trim();
-      if (areaCode == null || areaCode.isEmpty) {
-        orphans.add(item.productName);
-        continue;
+      List<String> codesForItem;
+
+      // 1) N:M (preferido si hay asignaciones).
+      final pid = item.productId;
+      if (pid != null && pid.isNotEmpty &&
+          (nmCodesByMenuItemId[pid]?.isNotEmpty ?? false)) {
+        codesForItem = nmCodesByMenuItemId[pid]!;
+      } else {
+        // 2) Legacy print_area_code (1-de-1).
+        final legacyCode = item.printAreaCode?.trim();
+        if (legacyCode != null && legacyCode.isNotEmpty) {
+          codesForItem = [legacyCode];
+        } else {
+          orphans.add(item.productName);
+          continue;
+        }
       }
-      itemsByArea.putIfAbsent(areaCode, () => <OrderItem>[]).add(item);
+
+      for (final code in codesForItem) {
+        itemsByArea.putIfAbsent(code, () => <OrderItem>[]).add(item);
+      }
     }
 
     if (orphans.isNotEmpty) {
@@ -678,6 +745,9 @@ class PrintingService {
     final receiptItemDisplayMode = await PosSettingsRepository(
       _client,
     ).getReceiptItemDisplayMode(businessId);
+    final kitchenBanners = await PosSettingsRepository(
+      _client,
+    ).getKitchenBanners(businessId);
     final createdJobs = <String, String>{};
 
     for (final entry in itemsByArea.entries) {
@@ -713,6 +783,8 @@ class PrintingService {
         businessName: resolvedBusinessName,
         areaCode: areaCode,
         receiptItemDisplayMode: receiptItemDisplayMode,
+        showDineInBanner: kitchenBanners.dineIn,
+        showTakeoutBanner: kitchenBanners.takeout,
       );
 
       final dispatchId = _createLocalDispatchId(areaCode);
@@ -762,6 +834,9 @@ class PrintingService {
       final receiptItemDisplayMode = await PosSettingsRepository(
         _client,
       ).getReceiptItemDisplayMode(businessId);
+      final kitchenBanners = await PosSettingsRepository(
+        _client,
+      ).getKitchenBanners(businessId);
       final orderData = await _getOrderDisplayData(orderId);
       final itemsByArea = await _groupItemsByPrintArea(items);
 
@@ -789,6 +864,8 @@ class PrintingService {
           areaCode: areaCode,
           isReprint: true,
           receiptItemDisplayMode: receiptItemDisplayMode,
+          showDineInBanner: kitchenBanners.dineIn,
+          showTakeoutBanner: kitchenBanners.takeout,
         );
 
         await _dispatchKitchenTicket(
@@ -852,6 +929,9 @@ class PrintingService {
       final receiptItemDisplayMode = await PosSettingsRepository(
         _client,
       ).getReceiptItemDisplayMode(businessId);
+      final kitchenBanners = await PosSettingsRepository(
+        _client,
+      ).getKitchenBanners(businessId);
       final itemsByArea = await _groupItemsByPrintArea(readyItems);
 
       for (final entry in itemsByArea.entries) {
@@ -876,6 +956,8 @@ class PrintingService {
           areaCode: areaCode,
           isReprint: true,
           receiptItemDisplayMode: receiptItemDisplayMode,
+          showDineInBanner: kitchenBanners.dineIn,
+          showTakeoutBanner: kitchenBanners.takeout,
         );
 
         await _dispatchKitchenTicket(

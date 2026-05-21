@@ -11,6 +11,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../../data/repositories/products_repository.dart';
+import '../../../data/repositories/printing_v2_repository.dart';
 
 final productsRepositoryProvider = Provider<ProductsRepository>((ref) {
   return ProductsRepository(Supabase.instance.client);
@@ -145,6 +146,21 @@ class ProductsViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Resetea búsqueda y filtros de categoría/menú en una sola pasada.
+  /// Útil para el botón "Limpiar filtros" cuando el cajero ya no recuerda
+  /// qué filtros tiene puestos.
+  void clearAllFilters() {
+    _searchQuery = '';
+    _selectedCategoryFilterId = null;
+    _selectedMenuFilterId = null;
+    notifyListeners();
+  }
+
+  bool get hasActiveFilters =>
+      _searchQuery.isNotEmpty ||
+      _selectedCategoryFilterId != null ||
+      _selectedMenuFilterId != null;
+
   Future<void> _fetchProducts() async {
     if (_businessId == null) return;
     _products = await _repository.getProducts(_businessId!);
@@ -199,6 +215,9 @@ class ProductsViewModel extends ChangeNotifier {
     bool isActive = true,
     String itemType = 'standard',
     String? printAreaCode,
+    // Printing v2 (Slice 4.B): N:M de áreas. Si no se provee, no se
+    // toca la tabla menu_item_print_areas.
+    List<String>? printAreaIds,
     File? imageFile,
     Uint8List? imageBytes,
     List<String> taxIds = const [],
@@ -237,7 +256,7 @@ class ProductsViewModel extends ChangeNotifier {
         imageUrl = storage.getPublicUrl(key);
       }
 
-      await _repository.createProduct(
+      final created = await _repository.createProduct(
         businessId: _businessId!,
         name: name,
         price: price,
@@ -259,6 +278,19 @@ class ProductsViewModel extends ChangeNotifier {
         initialStock: initialStock,
         allowNegativeSale: allowNegativeSale,
       );
+
+      // Printing v2 (Slice 4.B): persistir N:M con el id recién creado.
+      final newId = created['id']?.toString();
+      if (printAreaIds != null && newId != null && newId.isNotEmpty) {
+        try {
+          final mipa = MenuItemPrintAreaRepository(_supabase);
+          await mipa.setAreasForMenuItem(newId, printAreaIds);
+        } catch (e) {
+          // No bloquear el flujo si el N:M falla; el legacy print_area_code
+          // ya quedó persistido en createProduct y cubre el caso 1-de-1.
+          debugPrint('addProduct: fallo guardando N:M áreas: $e');
+        }
+      }
 
       await _fetchProducts();
       _error = null;
@@ -284,6 +316,9 @@ class ProductsViewModel extends ChangeNotifier {
     bool hasVariants = false,
     String itemType = 'standard',
     String? printAreaCode,
+    // Printing v2 (Slice 4.B): N:M de áreas. NULL = no tocar; lista vacía
+    // = limpiar todas las asignaciones.
+    List<String>? printAreaIds,
     File? imageFile,
     Uint8List? imageBytes,
     List<String> taxIds = const [],
@@ -343,6 +378,17 @@ class ProductsViewModel extends ChangeNotifier {
         initialStock: initialStock,
         allowNegativeSale: allowNegativeSale,
       );
+
+      // Printing v2 (Slice 4.B): persistir N:M de áreas si el dialog
+      // las proveyó. setAreasForMenuItem hace replace atómico.
+      if (printAreaIds != null) {
+        try {
+          final mipa = MenuItemPrintAreaRepository(_supabase);
+          await mipa.setAreasForMenuItem(id, printAreaIds);
+        } catch (e) {
+          debugPrint('updateProduct: fallo guardando N:M áreas: $e');
+        }
+      }
 
       await _fetchProducts();
       _error = null;
