@@ -1,14 +1,17 @@
 -- Rollback de `20260521_0007_print_jobs_extend_v2.sql`.
 --
--- Jobs en estados `retry` o `dead` (introducidos en v2) quedan inconsistentes
--- con el CHECK viejo. Antes del rollback, convertir esos a 'failed':
---   update public.print_jobs set status = 'failed' where status in ('retry','dead');
+-- Antes del rollback se normalizan los status nuevos (v2) a sus equivalentes
+-- legacy para que el sistema viejo pueda seguir operando:
+--   - retry / dead → failed
+--   - in_progress  → printing (alias legacy)
+-- Los estados legacy (pending/printing/printed/failed/cancelled) se mantienen
+-- intactos. El CHECK original (si lo había) era abierto/sin restricción.
 
 begin;
 
--- Convertir status nuevos a valores compat
+-- Normalizar v2 → legacy
 update public.print_jobs set status = 'failed' where status in ('retry','dead');
-update public.print_jobs set status = 'pending' where status = 'in_progress';
+update public.print_jobs set status = 'printing' where status = 'in_progress';
 
 drop function if exists public.fn_claim_print_job(uuid, text);
 drop function if exists public.fn_mark_print_job_printed(uuid);

@@ -16,13 +16,25 @@
 --   que usa ip+port y status simple sigue funcionando — las columnas nuevas
 --   se ignoran. Código nuevo del orchestrator usa printer_id+transport+retry.
 --
--- ESTADOS de status:
---   - pending      — recién encolado, espera a ser tomado
---   - in_progress  — agent lo está procesando
---   - printed      — impresión exitosa
---   - failed       — falló pero será reintentado (attempts < max_attempts)
---   - dead         — falló definitivamente (attempts >= max_attempts)
---   - retry        — explícitamente reencolado para reintento
+-- ESTADOS de status (CHECK acepta legacy + v2 para 100% backward compat):
+--
+--   Legacy (en uso por 20260513_0008 cloud queue + RPCs antiguas):
+--     - pending      — recién encolado, espera a ser tomado
+--     - printing     — agent lo está procesando (alias legacy de in_progress)
+--     - printed      — impresión exitosa
+--     - failed       — falló (con retry o sin él según contexto)
+--     - cancelled    — cancelado por admin/sistema
+--
+--   v2 (nuevos, usados por el orchestrator nuevo):
+--     - in_progress  — agent lo está procesando (sinónimo de 'printing')
+--     - dead         — falló definitivamente (attempts >= max_attempts)
+--     - retry        — explícitamente reencolado para reintento con backoff
+--
+--   `printing` y `in_progress` son **sinónimos**. Las RPCs viejas
+--   (`fn_claim_next_print_job`) escriben `printing`; las nuevas
+--   (`fn_claim_print_job`) escriben `in_progress`. Lectores deben tratar
+--   ambos como "en proceso". Cuando todo el código migre a v2, deprecar
+--   `printing` en una fase futura.
 --
 -- COMPATIBILIDAD:
 --   Aditivo puro. `ip` y `port` se mantienen NOT NULL (compat con código
@@ -71,7 +83,12 @@ alter table public.print_jobs
   drop constraint if exists print_jobs_status_check_v2;
 alter table public.print_jobs
   add constraint print_jobs_status_check_v2
-  check (status in ('pending','in_progress','printed','failed','dead','retry'));
+  check (status in (
+    -- legacy (migración 20260513_0008 + RPCs antiguas)
+    'pending','printing','printed','failed','cancelled',
+    -- v2 (este sprint)
+    'in_progress','dead','retry'
+  ));
 
 alter table public.print_jobs
   drop constraint if exists print_jobs_attempts_check;
