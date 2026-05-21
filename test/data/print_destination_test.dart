@@ -134,4 +134,36 @@ void main() {
       expect(await PrechecPrinterPreference.read('dev-1'), 'new');
     });
   });
+
+  group('ReceiptPrinterPreference', () {
+    setUp(() {
+      WidgetsFlutterBinding.ensureInitialized();
+      SharedPreferences.setMockInitialValues({});
+    });
+
+    test('read retorna null cuando no hay valor guardado', () async {
+      expect(await ReceiptPrinterPreference.read('dev-1'), isNull);
+    });
+
+    test('save + read roundtrip por device', () async {
+      await ReceiptPrinterPreference.save('dev-1', 'printer-receipt-A');
+      expect(await ReceiptPrinterPreference.read('dev-1'), 'printer-receipt-A');
+    });
+
+    test('receipt y precheck tienen storage SEPARADO (claves distintas)',
+        () async {
+      await PrechecPrinterPreference.save('dev-1', 'printer-PRECHECK');
+      await ReceiptPrinterPreference.save('dev-1', 'printer-RECEIPT');
+
+      expect(await PrechecPrinterPreference.read('dev-1'), 'printer-PRECHECK');
+      expect(await ReceiptPrinterPreference.read('dev-1'), 'printer-RECEIPT');
+    });
+
+    test('save no afecta a otro device', () async {
+      await ReceiptPrinterPreference.save('dev-1', 'A');
+      await ReceiptPrinterPreference.save('dev-2', 'B');
+      expect(await ReceiptPrinterPreference.read('dev-1'), 'A');
+      expect(await ReceiptPrinterPreference.read('dev-2'), 'B');
+    });
+  });
 }

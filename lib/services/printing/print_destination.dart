@@ -125,7 +125,42 @@ class PrintDestinationResolver {
     required String businessId,
     bool includeScreenOnly = true,
   }) async {
-    final printers = await _fetchPrechecPrinters(businessId);
+    return _resolveByFlag(
+      businessId: businessId,
+      printsPrebills: true,
+      includeScreenOnly: includeScreenOnly,
+    );
+  }
+
+  /// Destinos para factura/recibo final (post-pago). Filtra impresoras
+  /// marcadas con `prints_receipts=true`. No incluye screen-only por
+  /// default — la factura DEBE quedar en papel para registro.
+  Future<List<PrintDestination>> resolveForReceipt({
+    required String businessId,
+    bool includeScreenOnly = false,
+  }) async {
+    return _resolveByFlag(
+      businessId: businessId,
+      printsReceipts: true,
+      includeScreenOnly: includeScreenOnly,
+    );
+  }
+
+  /// Helper compartido. Filtra impresoras activas de un business que
+  /// tengan el flag pedido y enriquece con health.
+  Future<List<PrintDestination>> _resolveByFlag({
+    required String businessId,
+    bool printsOrders = false,
+    bool printsPrebills = false,
+    bool printsReceipts = false,
+    bool includeScreenOnly = false,
+  }) async {
+    final printers = await _fetchPrintersWithFlag(
+      businessId: businessId,
+      printsOrders: printsOrders,
+      printsPrebills: printsPrebills,
+      printsReceipts: printsReceipts,
+    );
     final healthByPrinterId = await _fetchHealthMap(
       printers.map((p) => p.id).toList(growable: false),
     );
@@ -143,25 +178,25 @@ class PrintDestinationResolver {
     return destinations;
   }
 
-  /// Trae todas las impresoras activas del business que estén asignadas
-  /// a algún área con `prints_prebills = true`. Usa la tabla legacy
-  /// `print_area_printers` — es la fuente de verdad hasta que la UI
-  /// migre por completo a `purpose`.
-  Future<List<PrinterConfig>> _fetchPrechecPrinters(String businessId) async {
-    // Consulta: print_area_printers JOIN printers donde:
-    //   - business_id = X
-    //   - enabled = true
-    //   - prints_prebills = true
-    //   - printers.is_active = true
-    // distinct por printer_id (la misma impresora puede estar asignada
-    // a varias áreas con prints_prebills=true; solo nos interesa una
-    // entrada).
-    final rows = await _client
+  /// Trae todas las impresoras activas del business asignadas a algún área
+  /// con el flag pedido. Usa la tabla legacy `print_area_printers`.
+  Future<List<PrinterConfig>> _fetchPrintersWithFlag({
+    required String businessId,
+    bool printsOrders = false,
+    bool printsPrebills = false,
+    bool printsReceipts = false,
+  }) async {
+    var query = _client
         .from('print_area_printers')
         .select('printer_id, printers!inner(*)')
         .eq('business_id', businessId)
-        .eq('enabled', true)
-        .eq('prints_prebills', true);
+        .eq('enabled', true);
+
+    if (printsOrders) query = query.eq('prints_orders', true);
+    if (printsPrebills) query = query.eq('prints_prebills', true);
+    if (printsReceipts) query = query.eq('prints_receipts', true);
+
+    final rows = await query;
 
     final seen = <String>{};
     final result = <PrinterConfig>[];

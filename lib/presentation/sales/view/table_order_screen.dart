@@ -3451,6 +3451,77 @@ class _CartView extends ConsumerWidget {
     );
   }
 
+  /// Printing v2 (Slice 3): resuelve la impresora para el recibo final
+  /// cuando la caja no tiene una `cash_register.receipt_printer_id`
+  /// asignada (el paso 1 del fallback no resolvió).
+  ///
+  /// Lógica:
+  ///   - 0 destinos receipt-capable: retorna null → cae al fallback legacy
+  ///     (area-based) que ya estaba antes.
+  ///   - 1 destino: lo usa directo, sin picker.
+  ///   - 2+ destinos:
+  ///     - Si hay impresora "fijada" para receipts en este device y todavía
+  ///       existe entre los destinos → la usa.
+  ///     - Sino → muestra picker rápido. Al elegir, queda fijada.
+  ///
+  /// El gesto de "cambiar la fijada" no existe a este nivel — el admin
+  /// puede ir a Ajustes → Impresión → Asignar por comprobantes (Slice 1.5)
+  /// para reconfigurar, o a Ajustes → Cajas para setear
+  /// cash_register.receipt_printer_id (tiene precedencia sobre el pin).
+  Future<PrinterConfig?> _resolveReceiptDestination(
+    BuildContext context,
+    WidgetRef ref, {
+    required String businessId,
+  }) async {
+    List<PrintDestination> destinations = const [];
+    try {
+      final resolver = ref.read(printDestinationResolverProvider);
+      destinations = await resolver.resolveForReceipt(businessId: businessId);
+    } catch (_) {
+      // Resolver falló (RLS, red); que el fallback legacy se encargue.
+      return null;
+    }
+
+    final printerDestinations = destinations
+        .where((d) => d.kind == PrintDestinationKind.printer)
+        .toList(growable: false);
+
+    if (printerDestinations.isEmpty) {
+      return null;
+    }
+    if (printerDestinations.length == 1) {
+      return printerDestinations.first.printer;
+    }
+
+    // >1 destinos receipt-capable: usar fijada o pedir al cajero.
+    final deviceId = await DeviceIdentity.getOrCreateId(businessId);
+    final pinnedKey = await ReceiptPrinterPreference.read(deviceId);
+
+    if (pinnedKey != null) {
+      final pinned = destinations.firstWhere(
+        (d) => d.persistKey == pinnedKey &&
+            d.kind == PrintDestinationKind.printer,
+        orElse: () => PrintDestination.screenOnly(),
+      );
+      if (pinned.kind == PrintDestinationKind.printer) {
+        return pinned.printer;
+      }
+    }
+
+    if (!context.mounted) return null;
+    final chosen = await showPrintDestinationPicker(
+      context,
+      destinations: printerDestinations, // sin screen-only para receipt
+      title: '¿Dónde imprimir el recibo?',
+      recentlyUsedKey: pinnedKey,
+    );
+    if (chosen == null) return null; // canceló → fallback legacy
+
+    // Auto-fijar la elección para próximas facturas.
+    unawaited(ReceiptPrinterPreference.save(deviceId, chosen.persistKey));
+    return chosen.printer;
+  }
+
   Future<void> _handlePrintFlow(
     BuildContext context,
     WidgetRef ref,
@@ -3491,7 +3562,19 @@ class _CartView extends ConsumerWidget {
           } catch (_) {}
         }
 
-        // 2. Fallback to global area-based printer
+        // 2. Printing v2 (Slice 3): selector de receipt al primer cobro.
+        //    Solo cuando type='invoice' Y no hay cash_register.receipt_printer_id
+        //    asignada (paso 1 no resolvió). Si hay >1 destino receipt, usa el
+        //    pinned del device o muestra picker para que el cajero elija.
+        if (assignedPrinter == null && type == 'invoice' && context.mounted) {
+          assignedPrinter = await _resolveReceiptDestination(
+            context,
+            ref,
+            businessId: businessId,
+          );
+        }
+
+        // 3. Fallback to global area-based printer (legacy auto-resolve)
         assignedPrinter ??= await printRepo.getAssignedPrinterForType(
           businessId: businessId,
           preferredAreaCodes: type == 'invoice'

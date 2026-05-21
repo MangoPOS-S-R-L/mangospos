@@ -39,12 +39,19 @@ Future<PrintDestination?> showPrintDestinationPicker(
   );
 }
 
-/// Persistencia de la última elección por device.
+/// Persistencia de la impresora fijada por device para pre-cuenta.
+///
+/// Aunque el nombre histórico es 'Precheck', semánticamente desde Slice 2
+/// representa la impresora "fijada" para este device — la primera elección
+/// queda persistida y se reusa hasta que el cajero la cambie (long press
+/// en Pre-Cuenta para forzar el picker).
+///
+/// Para la impresora de recibos post-pago ver [ReceiptPrinterPreference].
 class PrechecPrinterPreference {
   static const _keyPrefix = 'precheck_last_destination_';
 
-  /// Lee el persistKey de la última elección para este device. Retorna
-  /// null si nunca se eligió o el preference no es accesible.
+  /// Lee el persistKey fijado para este device. Retorna null si nunca
+  /// se fijó o el preference no es accesible.
   static Future<String?> read(String deviceId) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -56,6 +63,36 @@ class PrechecPrinterPreference {
 
   /// Guarda el persistKey. Fail-soft: si SharedPreferences truena, no
   /// rompe el flujo de impresión.
+  static Future<void> save(String deviceId, String persistKey) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('$_keyPrefix$deviceId', persistKey);
+    } catch (_) {
+      // ignore
+    }
+  }
+}
+
+/// Persistencia de la impresora fijada por device para factura/recibo
+/// post-pago (Slice 3). Diferente storage que PrechecPrinterPreference —
+/// el cajero puede tener una impresora distinta para precuenta vs recibo
+/// si así lo quiere.
+///
+/// NOTA: tiene precedencia menor que `cash_register.receipt_printer_id`.
+/// Si el admin asignó una impresora a la caja, esa gana siempre y este
+/// pin nunca se usa.
+class ReceiptPrinterPreference {
+  static const _keyPrefix = 'receipt_pinned_destination_';
+
+  static Future<String?> read(String deviceId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString('$_keyPrefix$deviceId');
+    } catch (_) {
+      return null;
+    }
+  }
+
   static Future<void> save(String deviceId, String persistKey) async {
     try {
       final prefs = await SharedPreferences.getInstance();
