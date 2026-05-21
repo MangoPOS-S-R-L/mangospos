@@ -285,6 +285,23 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
     );
   }
 
+  /// Printing v2 (Slice 1.5): devuelve TODAS las impresoras por (área, tipo),
+  /// no solo la primera. Usado por la pantalla "Asignar por comprobantes"
+  /// para mostrar lista en vez de slot único.
+  Future<Map<String, List<String>>> loadAllPrinterIdsByType({
+    bool printsOrders = false,
+    bool printsPrebills = false,
+    bool printsReceipts = false,
+  }) async {
+    final b = await _ensureBusiness();
+    return _repo.getAllPrinterIdsByType(
+      businessId: b,
+      printsOrders: printsOrders,
+      printsPrebills: printsPrebills,
+      printsReceipts: printsReceipts,
+    );
+  }
+
   Future<PrintArea> ensureSystemArea({
     required String code,
     required String name,
@@ -312,16 +329,28 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
 
     await refresh();
 
-    final prebills = await loadPrinterSelectionsByType(printsPrebills: true);
-    final receipts = await loadPrinterSelectionsByType(printsReceipts: true);
+    // Printing v2 (Slice 1.5): traer TODAS las impresoras por área/tipo.
+    final prebillsAll =
+        await loadAllPrinterIdsByType(printsPrebills: true);
+    final receiptsAll =
+        await loadAllPrinterIdsByType(printsReceipts: true);
+
+    final prebillIds = prebillsAll[cashierArea.id] ?? const <String>[];
+    final receiptIds = receiptsAll[fiscalArea.id] ?? const <String>[];
+    final closureIds = receiptsAll[closureArea.id] ?? const <String>[];
 
     return ReceiptAssignmentsBootstrap(
       cashierArea: cashierArea,
       fiscalArea: fiscalArea,
       closureArea: closureArea,
-      selectedPrebillPrinter: prebills[cashierArea.id],
-      selectedReceiptPrinter: receipts[fiscalArea.id],
-      selectedClosurePrinter: receipts[closureArea.id],
+      // Legacy: primer ID por área (mantiene compat con callers viejos).
+      selectedPrebillPrinter: prebillIds.isEmpty ? null : prebillIds.first,
+      selectedReceiptPrinter: receiptIds.isEmpty ? null : receiptIds.first,
+      selectedClosurePrinter: closureIds.isEmpty ? null : closureIds.first,
+      // v2: listas completas.
+      prebillPrinterIds: prebillIds,
+      receiptPrinterIds: receiptIds,
+      closurePrinterIds: closureIds,
     );
   }
 
@@ -358,12 +387,20 @@ class ReceiptAssignmentsBootstrap {
     required this.selectedPrebillPrinter,
     required this.selectedReceiptPrinter,
     required this.selectedClosurePrinter,
+    this.prebillPrinterIds = const [],
+    this.receiptPrinterIds = const [],
+    this.closurePrinterIds = const [],
   });
 
   final PrintArea cashierArea;
   final PrintArea fiscalArea;
   final PrintArea closureArea;
+  // Legacy: primer printer asignado (mantiene compat con consumidores viejos).
   final String? selectedPrebillPrinter;
   final String? selectedReceiptPrinter;
   final String? selectedClosurePrinter;
+  // v2 (Slice 1.5): listas completas para soportar N impresoras por tipo.
+  final List<String> prebillPrinterIds;
+  final List<String> receiptPrinterIds;
+  final List<String> closurePrinterIds;
 }

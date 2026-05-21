@@ -490,6 +490,51 @@ class PrintingRepository {
     }
   }
 
+  /// Printing v2 (Slice 1.5): devuelve TODAS las impresoras asignadas por área
+  /// para un tipo de comprobante, no solo la primera.
+  ///
+  /// Retorna `Map<area_id, List<printer_id>>` con el orden por priority asc.
+  /// Permite la UX de N impresoras por tipo (precheck / receipt / orders).
+  Future<Map<String, List<String>>> getAllPrinterIdsByType({
+    required String businessId,
+    bool printsOrders = false,
+    bool printsPrebills = false,
+    bool printsReceipts = false,
+  }) async {
+    try {
+      var query = _client
+          .from('print_area_printers')
+          .select('area_id, printer_id, priority')
+          .eq('business_id', businessId)
+          .eq('enabled', true);
+
+      if (printsOrders) query = query.eq('prints_orders', true);
+      if (printsPrebills) query = query.eq('prints_prebills', true);
+      if (printsReceipts) query = query.eq('prints_receipts', true);
+
+      final data = await query.order('priority', ascending: true);
+
+      final result = <String, List<String>>{};
+      for (final row in data) {
+        final areaId = row['area_id']?.toString();
+        final printerId = row['printer_id']?.toString();
+        if (areaId == null ||
+            areaId.isEmpty ||
+            printerId == null ||
+            printerId.isEmpty) {
+          continue;
+        }
+        final list = result.putIfAbsent(areaId, () => <String>[]);
+        if (!list.contains(printerId)) {
+          list.add(printerId);
+        }
+      }
+      return result;
+    } catch (e) {
+      throw Exception('Error al obtener impresoras de área por tipo: $e');
+    }
+  }
+
   Future<PrinterConfig?> getAssignedPrinterForType({
     required String businessId,
     required List<String> preferredAreaCodes,
