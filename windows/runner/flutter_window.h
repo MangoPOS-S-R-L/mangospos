@@ -1,8 +1,12 @@
 #ifndef RUNNER_FLUTTER_WINDOW_H_
 #define RUNNER_FLUTTER_WINDOW_H_
 
+#include <windows.h>
+
 #include <flutter/dart_project.h>
+#include <flutter/encodable_value.h>
 #include <flutter/flutter_view_controller.h>
+#include <flutter/method_channel.h>
 
 #include <memory>
 
@@ -28,6 +32,23 @@ class FlutterWindow : public Win32Window {
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+
+  // mangopos/window channel for native fullscreen toggle. Kept as a member
+  // so its handler survives past OnCreate(); destroying the channel would
+  // unregister the handler.
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      window_channel_;
+
+  // Native fullscreen state (replaces window_manager on Windows, which is
+  // disabled because of historical crashes in this app). Captured the first
+  // time enterFullscreen is called and replayed on exit.
+  bool fullscreen_ = false;
+  WINDOWPLACEMENT saved_placement_ = { sizeof(WINDOWPLACEMENT) };
+  LONG saved_style_ = 0;
+  LONG saved_exstyle_ = 0;
+
+  void EnterFullscreen();
+  void ExitFullscreen();
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

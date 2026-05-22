@@ -2,8 +2,15 @@
 
 #include <optional>
 
+#include <flutter/method_channel.h>
+#include <flutter/standard_method_codec.h>
+
 #include "flutter/generated_plugin_registrant.h"
 #include "startup_log.h"
+
+namespace {
+constexpr const char* kWindowChannelName = "mangopos/window";
+}  // namespace
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -48,6 +55,33 @@ bool FlutterWindow::OnCreate() {
   RegisterPlugins(flutter_controller_->engine());
   StartupLog::Log("Plugins registered");
 
+  // mangopos/window channel: native fullscreen toggle because window_manager
+  // is intentionally disabled on Windows in lib/main.dart.
+  window_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(),
+          kWindowChannelName,
+          &flutter::StandardMethodCodec::GetInstance());
+
+  window_channel_->SetMethodCallHandler(
+      [this](
+          const flutter::MethodCall<flutter::EncodableValue>& call,
+          std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+              result) {
+        const std::string& name = call.method_name();
+        if (name == "isFullscreen") {
+          result->Success(flutter::EncodableValue(this->fullscreen_));
+        } else if (name == "enterFullscreen") {
+          this->EnterFullscreen();
+          result->Success();
+        } else if (name == "exitFullscreen") {
+          this->ExitFullscreen();
+          result->Success();
+        } else {
+          result->NotImplemented();
+        }
+      });
+
   StartupLog::Log("Setting child content...");
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
   StartupLog::Log("Child content set");
@@ -75,6 +109,54 @@ void FlutterWindow::OnDestroy() {
   }
 
   Win32Window::OnDestroy();
+}
+
+void FlutterWindow::EnterFullscreen() {
+  HWND hwnd = GetHandle();
+  if (!hwnd || fullscreen_) {
+    return;
+  }
+
+  // Capture pre-fullscreen state so we can restore exactly to the same window
+  // chrome, position, and dimensions on exit.
+  saved_placement_.length = sizeof(WINDOWPLACEMENT);
+  ::GetWindowPlacement(hwnd, &saved_placement_);
+  saved_style_ = ::GetWindowLongW(hwnd, GWL_STYLE);
+  saved_exstyle_ = ::GetWindowLongW(hwnd, GWL_EXSTYLE);
+
+  // Bounds of the monitor that hosts the window. Multi-monitor friendly.
+  HMONITOR monitor = ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+  MONITORINFO mi{};
+  mi.cbSize = sizeof(MONITORINFO);
+  if (!::GetMonitorInfoW(monitor, &mi)) {
+    return;
+  }
+
+  ::SetWindowLongW(hwnd, GWL_STYLE, saved_style_ & ~WS_OVERLAPPEDWINDOW);
+  ::SetWindowLongW(hwnd, GWL_EXSTYLE,
+                    saved_exstyle_ & ~(WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE |
+                                       WS_EX_CLIENTEDGE | WS_EX_STATICEDGE));
+  ::SetWindowPos(hwnd, HWND_TOP,
+                 mi.rcMonitor.left, mi.rcMonitor.top,
+                 mi.rcMonitor.right - mi.rcMonitor.left,
+                 mi.rcMonitor.bottom - mi.rcMonitor.top,
+                 SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+  fullscreen_ = true;
+}
+
+void FlutterWindow::ExitFullscreen() {
+  HWND hwnd = GetHandle();
+  if (!hwnd || !fullscreen_) {
+    return;
+  }
+
+  ::SetWindowLongW(hwnd, GWL_STYLE, saved_style_);
+  ::SetWindowLongW(hwnd, GWL_EXSTYLE, saved_exstyle_);
+  ::SetWindowPlacement(hwnd, &saved_placement_);
+  ::SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                     SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+  fullscreen_ = false;
 }
 
 LRESULT

@@ -85,6 +85,14 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     StartupLog::Log("WARNING: window.Show() returned false during startup fallback");
   }
 
+  // POS environments always boot maximized so the cashier sees the full UI
+  // without manual resizing. Apply after Show() so foreground/focus state
+  // from Win32Window::Show() is preserved.
+  if (HWND hwnd = window.GetHandle()) {
+    ::ShowWindow(hwnd, SW_MAXIMIZE);
+    StartupLog::Log("Native window maximized on startup");
+  }
+
   window.SetQuitOnClose(true);
   StartupLog::Log("Entering message loop (Flutter should render first frame soon)...");
 
