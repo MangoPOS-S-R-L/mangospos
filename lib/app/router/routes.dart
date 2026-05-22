@@ -77,6 +77,7 @@ class AppRoutes {
   static const settingsCashRegisters = '$settings/cash-registers';
   static const settingsCashCloseMode = '$settings/cash-close-mode';
   static const settingsBusinessFeatures = '$settings/business-features';
+  static const settingsComandasConfig = '$settings/comandas-config';
   static const settingsCurrencies = '$settings/currencies';
   static const settingsRegional = '$settings/regional';
   static const inventoryKardex = '$settings/inventory-kardex';

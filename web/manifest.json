@@ -1,6 +1,6 @@
 {
-    "name": "mangopos",
-    "short_name": "mangopos",
+    "name": "MangoPOS",
+    "short_name": "MangoPOS",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#ffffff",

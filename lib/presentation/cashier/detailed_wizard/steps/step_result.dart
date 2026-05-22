@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/presentation/cashier/services/print_service.dart';
 import 'package:mangopos/presentation/cashier/state/blind_cash_close_models.dart';
 import 'package:mangopos/presentation/cashier/state/cash_close_formatters.dart';
@@ -21,12 +22,27 @@ class StepResult extends StatefulWidget {
     required this.result,
     required this.denominations,
     required this.onClose,
+    this.cashRegisterSessionId,
+    this.canRecount = false,
+    this.onRecount,
   });
 
   final CashCloseInput input;
   final CashCloseResult result;
   final List<DenominationCount> denominations;
   final VoidCallback onClose;
+
+  /// Id de la sesión de caja. Si está presente, el ticket de cierre
+  /// consulta `audit_logs` para contar cuántas veces el cajero recontó
+  /// antes de firmar y muestra esa estadística en el reporte.
+  final String? cashRegisterSessionId;
+
+  /// Cuando true, después del auto-print aparece un botón "Volver a
+  /// contar" que dispara [onRecount]. Solo lo controla el wizard padre
+  /// — combina el toggle `allow_recount` del business con el límite de
+  /// máximo 1 reconteo por sesión.
+  final bool canRecount;
+  final VoidCallback? onRecount;
 
   @override
   State<StepResult> createState() => _StepResultState();
@@ -55,12 +71,23 @@ class _StepResultState extends State<StepResult> {
       _lastPrintError = null;
     });
     try {
-      final service = CashClosePrintService(Supabase.instance.client);
+      final client = Supabase.instance.client;
+      // Carga el count de reconteos para enriquecer el ticket. Solo se
+      // ejecuta si tenemos el sessionId — para reimpresiones sin
+      // contexto (improbable) defaultea a 0 y no se imprime la línea.
+      int recountCount = 0;
+      final sessionId = widget.cashRegisterSessionId;
+      if (sessionId != null && sessionId.isNotEmpty) {
+        recountCount = await PosSettingsRepository(client)
+            .getCashRecountCount(sessionId);
+      }
+      final service = CashClosePrintService(client);
       await service.printCloseTicket(
         input: widget.input,
         result: widget.result,
         denominations: widget.denominations,
         printedAt: DateTime.now(),
+        recountCount: recountCount,
       );
       if (!mounted) return;
       if (!silent) {
@@ -232,25 +259,48 @@ class _StepResultState extends State<StepResult> {
             },
           ),
           const SizedBox(height: 12),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: OutlinedButton.icon(
-              onPressed: _printing ? null : () => _printTicket(),
-              icon: const Icon(Icons.print_outlined, size: 16),
-              label: const Text('Reimprimir'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: MangoColors.darkGray,
-                side: const BorderSide(color: MangoColors.cardBorder),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 8,
+          Row(
+            children: [
+              OutlinedButton.icon(
+                onPressed: _printing ? null : () => _printTicket(),
+                icon: const Icon(Icons.print_outlined, size: 16),
+                label: const Text('Reimprimir'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: MangoColors.darkGray,
+                  side: const BorderSide(color: MangoColors.cardBorder),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 8,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  textStyle: const TextStyle(fontWeight: FontWeight.w500),
                 ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                textStyle: const TextStyle(fontWeight: FontWeight.w500),
               ),
-            ),
+              if (widget.canRecount && widget.onRecount != null) ...[
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: widget.onRecount,
+                  icon: const Icon(Icons.replay_rounded, size: 16),
+                  label: const Text('Volver a contar'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: MangoColors.primaryOrange,
+                    side: const BorderSide(
+                      color: MangoColors.primaryOrange,
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 8,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    textStyle: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ],
           ),
           const SizedBox(height: 10),
         ],

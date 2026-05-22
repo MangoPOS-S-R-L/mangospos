@@ -94,6 +94,15 @@ class PrintTicketService {
     String? areaCode,
     bool isReprint = false,
     String receiptItemDisplayMode = 'grouped',
+    /// Flags de franjas (banners inversos) por sección. Cada uno
+    /// controla si SU sección lleva la franja arriba:
+    ///   - [showDineInBanner]  → franja "PARA COMER AQUI" para items dine-in.
+    ///   - [showTakeoutBanner] → franja "PARA LLEVAR" para items takeout.
+    /// Los items siempre se separan por isTakeout; los flags solo
+    /// deciden si cada sección imprime su banner. Default: ambos true
+    /// (comportamiento histórico).
+    bool showDineInBanner = true,
+    bool showTakeoutBanner = true,
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
     final printableItems = _buildPrintableItems(
@@ -102,7 +111,9 @@ class PrintTicketService {
     );
 
     // Particionar por isTakeout. Mantener orden relativo dentro de cada
-    // grupo igual al orden original.
+    // grupo igual al orden original. Cuando el sectionMode fuerza una
+    // sola franja, las listas regular/takeout se ignoran y se usa una
+    // única lista combinada bajo el label correspondiente.
     final regularItems = printableItems.where((i) => !i.isTakeout).toList();
     final takeoutItems = printableItems.where((i) => i.isTakeout).toList();
 
@@ -169,17 +180,28 @@ class PrintTicketService {
     }
     gen.doubleSeparator();
 
-    // ─── BLOQUE PARA COMER AQUI ─────────────────────────────────────
+    // ─── BLOQUES DE FRANJAS ─────────────────────────────────────────
+    // Los items siempre se separan por isTakeout. Cada flag decide si
+    // SU sección lleva la franja inversa arriba:
+    //   showDineInBanner=true,  showTakeoutBanner=true  → ambas franjas (legacy).
+    //   showDineInBanner=true,  showTakeoutBanner=false → solo franja dine-in.
+    //   showDineInBanner=false, showTakeoutBanner=true  → solo franja takeout.
+    //   showDineInBanner=false, showTakeoutBanner=false → todo pelado.
     if (regularItems.isNotEmpty) {
-      _renderItemsList(gen, label: 'PARA COMER AQUI', items: regularItems);
+      _renderItemsList(
+        gen,
+        label: 'PARA COMER AQUI',
+        items: regularItems,
+        showBanner: showDineInBanner,
+      );
     }
-
-    // ─── BLOQUE PARA LLEVAR ─────────────────────────────────────────
-    // Mismo estilo que PARA COMER AQUI: la diferenciación visual la da
-    // la banda inversa del header (full-ancho blanco-sobre-negro) y el
-    // texto del label, sin marco ASCII pesado.
     if (takeoutItems.isNotEmpty) {
-      _renderItemsList(gen, label: 'PARA LLEVAR', items: takeoutItems);
+      _renderItemsList(
+        gen,
+        label: 'PARA LLEVAR',
+        items: takeoutItems,
+        showBanner: showTakeoutBanner,
+      );
     }
 
     // ─── FOOTER ─────────────────────────────────────────────────────
@@ -241,23 +263,30 @@ class PrintTicketService {
   /// que los diferencia es el fondo invertido. Modificadores/notas
   /// indentados a tamaño normal, separador thin entre items con aire
   /// vertical, y `doubleSeparator` (`===`) cerrando la sección.
+  ///
+  /// [showBanner] permite renderizar solo los items, sin la franja
+  /// inversa — usado por el modo `takeout_banner_only` para emitir los
+  /// items dine-in "pelados" antes del banner de takeout.
   static void _renderItemsList(
     EscPosGenerator gen, {
     required String label,
     required List<OrderItem> items,
+    bool showBanner = true,
   }) {
-    // Banda inversa 2x2: padding a 24 chars (line max a width:2). El
-    // padding hace que el fondo negro se extienda full-ancho. Sin
-    // padding solo se invertiria sobre los chars del label dando una
-    // banda flaca.
-    gen.setInverse(true);
-    gen.setTextSize(width: 2, height: 2);
-    gen.setBold(true);
-    gen.text(_centerInWidth(label.toUpperCase(), 24));
-    gen.setBold(false);
-    gen.setTextSize();
-    gen.setInverse(false);
-    gen.lineFeed();
+    if (showBanner) {
+      // Banda inversa 2x2: padding a 24 chars (line max a width:2). El
+      // padding hace que el fondo negro se extienda full-ancho. Sin
+      // padding solo se invertiria sobre los chars del label dando una
+      // banda flaca.
+      gen.setInverse(true);
+      gen.setTextSize(width: 2, height: 2);
+      gen.setBold(true);
+      gen.text(_centerInWidth(label.toUpperCase(), 24));
+      gen.setBold(false);
+      gen.setTextSize();
+      gen.setInverse(false);
+      gen.lineFeed();
+    }
 
     for (var i = 0; i < items.length; i++) {
       final item = items[i];

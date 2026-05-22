@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/business/business_resolver.dart';
+import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/presentation/cashier/state/blind_cash_close_models.dart';
 
 import 'state/detailed_wizard_state.dart';
@@ -58,12 +60,104 @@ class _CashCloseDetailedWizardState
   CashCloseResult? _signedResult;
   List<DenominationCount>? _signedDenominations;
   double _zoomFactor = 1.0;
+  // Toggle de "Permitir recontar" cargado desde business_settings al
+  // abrir el wizard. Si es true, después de firmar+imprimir el step
+  // de resultado expone un botón "Volver a contar" (máximo 1 vez).
+  bool _allowRecount = false;
+  // Número del intento actual. Empieza en 1; cuando el cajero pulsa
+  // "Volver a contar" en el step de resultado, se incrementa a 2 y se
+  // reabre el wizard al paso 0. Después del 2 ya no se permite más.
+  int _currentAttempt = 1;
 
   static const _stepLabels = [
     'Efectivo',
     'Tarjeta y transferencia',
     'Confirmar',
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(_loadAllowRecount);
+  }
+
+  Future<void> _loadAllowRecount() async {
+    try {
+      final businessId = await BusinessResolver.ensure('auto');
+      final repo = ref.read(posSettingsRepositoryProvider);
+      final allow = await repo.getAllowRecount(businessId);
+      if (!mounted) return;
+      setState(() => _allowRecount = allow);
+    } catch (_) {
+      // Falla silenciosa: si no podemos leer el flag, asumimos `false`
+      // (comportamiento legacy sin botón de reconteo).
+    }
+  }
+
+  /// Acción del botón "Volver a contar" en el step de resultado. Solo
+  /// disponible cuando `_allowRecount` está activo y `_currentAttempt < 2`.
+  /// Reabre el wizard al paso 0 con los montos en cero; el próximo
+  /// firmado insertará una fila nueva en `cash_count_blind` con
+  /// `attempt_number = 2` (la original queda intacta como evidencia).
+  Future<void> _onRecountAfterSign() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: const Text('Volver a contar'),
+        content: const Text(
+          'Se hará un segundo conteo. El primer cierre quedará guardado '
+          'como evidencia; el segundo se firma e imprime como cierre '
+          'definitivo. Solo se permite un reconteo por turno.\n\n'
+          '¿Continuar?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: MangoColors.primaryOrange,
+              foregroundColor: MangoColors.white,
+            ),
+            child: const Text('Sí, recontar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    // Audit log: registra el evento con los montos del primer cierre
+    // (best-effort, no bloquea el reconteo si falla).
+    final result = _signedResult;
+    try {
+      final businessId = await BusinessResolver.ensure('auto');
+      if (mounted && result != null) {
+        await ref
+            .read(posSettingsRepositoryProvider)
+            .recordCashRecount(
+              businessId: businessId,
+              sessionId: widget.cashRegisterSessionId,
+              cashTotal: result.totalCounted.toDouble(),
+              cardTotal: result.numericCard,
+              transferTotal: result.numericTransfer,
+            );
+      }
+    } catch (_) {
+      // Silencioso.
+    }
+    if (!mounted) return;
+
+    // Reabre el wizard: limpia state, vuelve al paso 0, marca attempt=2.
+    ref.read(detailedWizardProvider(widget.input).notifier).resetCounts();
+    setState(() {
+      _signedResult = null;
+      _signedDenominations = null;
+      _currentStep = 0;
+      _currentAttempt = 2;
+    });
+  }
 
   void _goTo(int step) {
     final clamped = step.clamp(0, _stepLabels.length - 1);
@@ -103,7 +197,11 @@ class _CashCloseDetailedWizardState
       return;
     }
     final notifier = ref.read(detailedWizardProvider(widget.input).notifier);
-    final snapshot = notifier.snapshot();
+    // Si el cajero ya completó el primer cierre y pulsó "Volver a
+    // contar", `_currentAttempt` está en 2 y el snapshot lleva ese
+    // attempt para que el INSERT inserte una fila nueva sin colisionar
+    // con la primera (UNIQUE en session + attempt).
+    final snapshot = notifier.snapshot(attemptNumber: _currentAttempt);
     final confirmed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -222,6 +320,13 @@ class _CashCloseDetailedWizardState
                         denominations:
                             _signedDenominations ?? const [],
                         onClose: _onCancel,
+                        cashRegisterSessionId:
+                            widget.cashRegisterSessionId,
+                        // Botón "Volver a contar": solo si el admin
+                        // activó la opción y todavía no se usó el
+                        // segundo intento (máximo 1 reconteo).
+                        canRecount: _allowRecount && _currentAttempt < 2,
+                        onRecount: _onRecountAfterSign,
                       )
                     : _activeStep(),
               ),

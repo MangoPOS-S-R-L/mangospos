@@ -460,6 +460,7 @@ class _CashierViewState extends ConsumerState<CashierView>
                 denominations: snapshot.denominations,
                 openingFloat: snapshot.openingFloat,
                 supervisorNote: snapshot.supervisorNote,
+                attemptNumber: snapshot.attemptNumber,
               );
               final notes =
                   'Cierre detallado | Efectivo: ${snapshot.cashAmount} | '

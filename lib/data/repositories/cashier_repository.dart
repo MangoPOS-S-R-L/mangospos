@@ -152,8 +152,10 @@ class CashierRepository {
   /// Inserta el desglose firmado del cierre detallado.
   ///
   /// La tabla tiene UNIQUE en `cash_register_session_id` y un trigger de
-  /// inmutabilidad post-firma. Si la sesión ya tiene un row firmado,
-  /// PostgreSQL rechaza con violation o con el error del trigger.
+  /// inmutabilidad post-firma. Si la sesión ya tiene un row firmado con
+  /// el mismo attempt_number, PostgreSQL rechaza con violation. Para el
+  /// reconteo el caller pasa `attemptNumber: 2` y se inserta como fila
+  /// nueva (la anterior queda intacta como evidencia).
   Future<void> recordDetailedCashClose({
     required String sessionId,
     required String businessId,
@@ -164,6 +166,7 @@ class CashierRepository {
     required Map<String, dynamic> denominations,
     required double openingFloat,
     String? supervisorNote,
+    int attemptNumber = 1,
   }) async {
     await _client.from('cash_count_blind').insert({
       'cash_register_session_id': sessionId,
@@ -175,7 +178,24 @@ class CashierRepository {
       'opening_float': openingFloat,
       'supervisor_note': supervisorNote,
       'signed_by_user_id': userId,
+      'attempt_number': attemptNumber,
     });
+  }
+
+  /// Cuántos conteos firmados existen para la sesión (1 o 2). 0 si la
+  /// sesión aún no fue cerrada. Útil para decidir si el botón "Volver
+  /// a contar" debe mostrarse (solo si count < 2) y para asignar el
+  /// próximo attempt_number al firmar.
+  Future<int> getCashCloseAttemptCount(String sessionId) async {
+    try {
+      final rows = await _client
+          .from('cash_count_blind')
+          .select('id')
+          .eq('cash_register_session_id', sessionId);
+      return (rows as List).length;
+    } catch (_) {
+      return 0;
+    }
   }
 
   /// Marca el modo de UX usado al cerrar la sesión.
