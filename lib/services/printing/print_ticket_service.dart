@@ -1,6 +1,7 @@
 import '../../data/models/bank_account.dart';
 import '../../data/models/business_profile.dart';
 import '../../data/models/printing_models.dart';
+import '../../data/models/order_item_tax_line.dart';
 import '../../data/models/sales_models.dart';
 import '../../data/models/payment_models.dart';
 import '../../core/utils/app_time.dart';
@@ -303,8 +304,12 @@ class PrintTicketService {
       if (item.modifiers.isNotEmpty) {
         for (final mod in item.modifiers) {
           final isComboChoice = mod.name.contains(': ');
-          final priceSuffix = mod.price > 0
-              ? ' (+RD\$ ${_formatMoney(mod.price)})'
+          // Costo total que suma este modifier a la línea (alineado con
+          // catalogGrossAmount): qty_item × qty_modifier × precio_unitario.
+          final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
+          final modTotal = mod.price * itemQty * mod.qty;
+          final priceSuffix = modTotal > 0
+              ? ' (+RD\$ ${_formatMoney(modTotal)})'
               : '';
           final prefix = isComboChoice ? '   • ' : '   + ';
           _writeWrappedLine(gen, '$prefix${mod.name}$priceSuffix', 48);
@@ -464,19 +469,21 @@ class PrintTicketService {
 
     for (int i = 0; i < consolidatedItems.length; i++) {
       final item = consolidatedItems[i];
-      final unitPrice = item.quantity == 0
-          ? itemDisplayBaseTotal(order, item)
-          : itemDisplayBaseUnitPrice(order, item);
+      // Layout B: la línea principal muestra el PRECIO BASE del producto
+      // (sin sumar modificadores). El modifier sale en su propia línea con
+      // su delta, y el total de la derecha (`itemDisplayBaseTotal`) ya
+      // incluye base + modifiers para que cuadre con SUBTOTAL.
+      final baseUnitPrice = item.unitPrice;
 
       // Nombre del producto en negrita
       gen.setBold(true);
       gen.text(item.productName);
       gen.setBold(false);
 
-      // Cantidad x precio unitario ......... TOTAL
+      // Cantidad x precio unitario base ......... TOTAL CON MODIFICADORES
       final displayQty = _formatQty(item.quantity);
 
-      final leftPart = '$displayQty x RD\$ ${_formatMoney(unitPrice)}';
+      final leftPart = '$displayQty x RD\$ ${_formatMoney(baseUnitPrice)}';
       final rightPart = 'RD\$ ${_formatMoney(itemDisplayBaseTotal(order, item))}';
       gen.dotRow(leftPart, rightPart);
 
@@ -490,7 +497,30 @@ class PrintTicketService {
       // Modificadores con indentación
       if (item.modifiers.isNotEmpty) {
         for (final mod in item.modifiers) {
-          gen.text('  + ${mod.name}');
+          final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
+          final modTotal = mod.price * itemQty * mod.qty;
+          final priceSuffix = modTotal > 0
+              ? ' (+RD\$ ${_formatMoney(modTotal)})'
+              : '';
+          gen.text('  + ${mod.name}$priceSuffix');
+        }
+      }
+
+      // Desglose de impuestos por item: ITBIS, LEY (Propina), o cualquier
+      // tax configurado se lista bajo el item con su amount, leído del
+      // snapshot persistido en `order_item_tax_lines` (PRD 2 §6.1). Los
+      // amounts ya están sumados por el consolidate cuando varios items
+      // duplicados se fusionaron en uno.
+      if (item.taxLines.isNotEmpty) {
+        for (final tax in item.taxLines) {
+          if (tax.amount.abs() < 0.005) continue;
+          final rateLabel = tax.taxRate > 0
+              ? ' ${tax.taxRate.toStringAsFixed(tax.taxRate % 1 == 0 ? 0 : 1)}%'
+              : '';
+          gen.dotRow(
+            '  ${tax.taxName}$rateLabel',
+            'RD\$ ${_formatMoney(tax.amount)}',
+          );
         }
       }
 
@@ -830,7 +860,12 @@ class PrintTicketService {
 
       if (item.modifiers.isNotEmpty) {
         for (final mod in item.modifiers) {
-          gen.text('  + ${mod.name}');
+          final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
+          final modTotal = mod.price * itemQty * mod.qty;
+          final priceSuffix = modTotal > 0
+              ? ' (+RD\$ ${_formatMoney(modTotal)})'
+              : '';
+          gen.text('  + ${mod.name}$priceSuffix');
         }
       }
 
@@ -1066,6 +1101,7 @@ class PrintTicketService {
         tax: existing.tax + item.tax,
         total: existing.total + item.total,
         modifiers: _sumMatchingModifiers(existing.modifiers, item.modifiers),
+        taxLines: _sumMatchingTaxLines(existing.taxLines, item.taxLines),
       );
     }
 
@@ -1085,6 +1121,36 @@ class PrintTicketService {
       return [...a, ...b];
     }
     return List<OrderItemModifier>.from(a);
+  }
+
+  /// Suma los `amount` de tax lines por `taxId` cuando se consolidan items
+  /// duplicados. Necesario para que el desglose por item en la precuenta
+  /// muestre el ITBIS/LEY acumulado de las N filas que se fusionaron en una.
+  static List<OrderItemTaxLine> _sumMatchingTaxLines(
+    List<OrderItemTaxLine> a,
+    List<OrderItemTaxLine> b,
+  ) {
+    if (a.isEmpty) return List<OrderItemTaxLine>.from(b);
+    if (b.isEmpty) return List<OrderItemTaxLine>.from(a);
+
+    final byId = <String, OrderItemTaxLine>{};
+    for (final line in [...a, ...b]) {
+      final existing = byId[line.taxId];
+      if (existing == null) {
+        byId[line.taxId] = line;
+      } else {
+        byId[line.taxId] = OrderItemTaxLine(
+          id: existing.id,
+          orderItemId: existing.orderItemId,
+          taxId: existing.taxId,
+          taxName: existing.taxName,
+          taxRate: existing.taxRate,
+          amount: existing.amount + line.amount,
+          createdAt: existing.createdAt,
+        );
+      }
+    }
+    return byId.values.toList(growable: false);
   }
 
   static List<OrderItem> _separatePrintableItems(List<OrderItem> items) {
@@ -1236,13 +1302,15 @@ class PrintTicketService {
           item,
           preferStoredItemTotals: preferStoredItemTotals,
         ),
-        modifiers: item.modifiers
-            .map(
-              (m) => m.price > 0
-                  ? '${m.name} (+RD\$ ${_formatMoney(m.price)})'
-                  : m.name,
-            )
-            .toList(),
+        modifiers: item.modifiers.map((m) {
+          // Costo total que aporta el modifier a la línea, consistente con
+          // catalogGrossAmount y los demás tickets: qty_item × qty_mod × precio.
+          final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
+          final modTotal = m.price * itemQty * m.qty;
+          return modTotal > 0
+              ? '${m.name} (+RD\$ ${_formatMoney(modTotal)})'
+              : m.name;
+        }).toList(),
       );
       // Indicador para llevar (takeout)
       if (item.isTakeout) {

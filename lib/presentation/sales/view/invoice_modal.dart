@@ -275,15 +275,26 @@ class InvoiceModal extends StatelessWidget {
                                 children: [
                                   Text(item.productName),
                                   if (item.modifiers.isNotEmpty)
-                                    ...item.modifiers.map(
-                                      (m) => Text(
-                                        '+ ${m.name}',
+                                    ...item.modifiers.map((m) {
+                                      // Costo total que suma este modifier a la
+                                      // línea, alineado con la fórmula del
+                                      // backend (catalogGrossAmount): qty_item
+                                      // × qty_modifier × precio_unitario.
+                                      final itemQty = item.quantity <= 0
+                                          ? 1.0
+                                          : item.quantity;
+                                      final modTotal =
+                                          m.price * itemQty * m.qty;
+                                      return Text(
+                                        modTotal > 0
+                                            ? '+ ${m.name} (+RD\$ ${currency.format(modTotal)})'
+                                            : '+ ${m.name}',
                                         style: const TextStyle(
                                           fontSize: 12,
                                           color: Colors.grey,
                                         ),
-                                      ),
-                                    ),
+                                      );
+                                    }),
                                 ],
                               ),
                             ),
