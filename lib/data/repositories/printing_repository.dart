@@ -130,12 +130,19 @@ class PrintingRepository {
     String? hostDeviceId,
   }) async {
     try {
+      // Printing v2: derivar `transport` desde `type` legacy.
+      // BD también tiene trigger fn_printer_autofill_transport (migración
+      // 20260521_0009) como defensa, pero lo mandamos explícito desde acá
+      // para que la query sea autodescriptiva.
+      final transport = _transportFromLegacyType(type);
+
       final data = await _client
           .from('printers')
           .insert({
             'business_id': businessId,
             'name': name,
             'type': type,
+            'transport': transport,
             'ip_address': ipAddress,
             'port': port,
             'device_path': devicePath,
@@ -152,6 +159,20 @@ class PrintingRepository {
       return PrinterConfig.fromMap(data);
     } catch (e) {
       throw Exception('Error al crear impresora: $e');
+    }
+  }
+
+  /// Mapeo del enum legacy `type` → text `transport` de v2.
+  /// Coincide con el trigger BD `fn_printer_autofill_transport`.
+  static String _transportFromLegacyType(String legacyType) {
+    switch (legacyType.toLowerCase()) {
+      case 'bluetooth':
+        return 'bluetooth';
+      case 'usb':
+        return 'usb';
+      case 'network':
+      default:
+        return 'lan';
     }
   }
 
@@ -175,7 +196,12 @@ class PrintingRepository {
       if (name != null) updates['name'] = name;
       if (ipAddress != null) updates['ip_address'] = ipAddress;
       if (port != null) updates['port'] = port;
-      if (type != null) updates['type'] = type;
+      if (type != null) {
+        updates['type'] = type;
+        // Printing v2: cuando se cambia el type legacy, mantener transport
+        // sincronizado para que las queries v2 sigan correctas.
+        updates['transport'] = _transportFromLegacyType(type);
+      }
       if (devicePath != null) updates['device_path'] = devicePath;
       if (mac != null) updates['mac'] = mac;
       // BUG fix: `is_active` es el flag administrativo (habilitada/
@@ -461,6 +487,51 @@ class PrintingRepository {
       return selections;
     } catch (e) {
       throw Exception('Error al obtener asignaciones de áreas: $e');
+    }
+  }
+
+  /// Printing v2 (Slice 1.5): devuelve TODAS las impresoras asignadas por área
+  /// para un tipo de comprobante, no solo la primera.
+  ///
+  /// Retorna `Map<area_id, List<printer_id>>` con el orden por priority asc.
+  /// Permite la UX de N impresoras por tipo (precheck / receipt / orders).
+  Future<Map<String, List<String>>> getAllPrinterIdsByType({
+    required String businessId,
+    bool printsOrders = false,
+    bool printsPrebills = false,
+    bool printsReceipts = false,
+  }) async {
+    try {
+      var query = _client
+          .from('print_area_printers')
+          .select('area_id, printer_id, priority')
+          .eq('business_id', businessId)
+          .eq('enabled', true);
+
+      if (printsOrders) query = query.eq('prints_orders', true);
+      if (printsPrebills) query = query.eq('prints_prebills', true);
+      if (printsReceipts) query = query.eq('prints_receipts', true);
+
+      final data = await query.order('priority', ascending: true);
+
+      final result = <String, List<String>>{};
+      for (final row in data) {
+        final areaId = row['area_id']?.toString();
+        final printerId = row['printer_id']?.toString();
+        if (areaId == null ||
+            areaId.isEmpty ||
+            printerId == null ||
+            printerId.isEmpty) {
+          continue;
+        }
+        final list = result.putIfAbsent(areaId, () => <String>[]);
+        if (!list.contains(printerId)) {
+          list.add(printerId);
+        }
+      }
+      return result;
+    } catch (e) {
+      throw Exception('Error al obtener impresoras de área por tipo: $e');
     }
   }
 
@@ -926,6 +997,71 @@ class PrintingRepository {
       return List<Map<String, dynamic>>.from(data as List);
     } catch (e) {
       throw Exception('Error al obtener jobs activos: $e');
+    }
+  }
+
+  /// Printing v2 — Slice C.3: lista los jobs ya IMPRESOS recientemente.
+  /// Útil para el flujo "el cajero dice 'no salió el ticket' y quiere
+  /// reimprimir desde historial".
+  Future<List<Map<String, dynamic>>> getRecentPrintedJobs(
+    String businessId, {
+    int limit = 30,
+    Duration window = const Duration(hours: 24),
+  }) async {
+    try {
+      final since = DateTime.now().toUtc().subtract(window);
+      final data = await _client
+          .from('print_jobs')
+          .select(
+            'id, business_id, printer_id, area_code, kind, status, '
+            'retry_count, last_error, error, next_retry_at, created_at, '
+            'claimed_at, original_printer_id, failover_count, printed_at, '
+            'printers!print_jobs_printer_id_fkey(name, type)',
+          )
+          .eq('business_id', businessId)
+          .eq('status', 'printed')
+          .gte('printed_at', since.toIso8601String())
+          .order('printed_at', ascending: false)
+          .limit(limit);
+
+      return List<Map<String, dynamic>>.from(data as List);
+    } catch (e) {
+      throw Exception('Error al obtener jobs impresos: $e');
+    }
+  }
+
+  /// Printing v2 — Slice C.3: clona un job existente y lo encola como
+  /// nuevo (pending). El job original se mantiene intacto. Útil para
+  /// reimprimir cuando el papel se atoró o el cliente pidió una copia.
+  ///
+  /// IMPORTANTE: copia data_hex/payload exactamente (es la representación
+  /// ESC/POS del ticket original). El nuevo job toma su propio id +
+  /// idempotency_key para no chocar con el unique parcial.
+  Future<String> reprintJob(String sourceJobId) async {
+    try {
+      final source = await _client
+          .from('print_jobs')
+          .select('business_id, printer_id, data_hex, ip, port, area_code, kind')
+          .eq('id', sourceJobId)
+          .single();
+
+      final inserted = await _client.from('print_jobs').insert({
+        'business_id': source['business_id'],
+        'printer_id': source['printer_id'],
+        'data_hex': source['data_hex'],
+        'ip': source['ip'],
+        'port': source['port'],
+        'area_code': source['area_code'],
+        'kind': source['kind'],
+        'status': 'pending',
+        'retry_count': 0,
+        // idempotency_key vacío → no choca con unique parcial.
+      }).select('id').single();
+
+      _clearLookupCaches();
+      return inserted['id']?.toString() ?? '';
+    } catch (e) {
+      throw Exception('Error al reimprimir job: $e');
     }
   }
 
@@ -2153,16 +2289,29 @@ finally {
   }
 
   /// PRD 5 F4.1: actualizar nombre y/o código de un área existente.
+  ///
+  /// Printing v2 (Slice 4.A): agrega soporte para `color` (hex #RRGGBB) y
+  /// `displayOrder` (int) introducidos en migración 20260521_0002.
+  /// Pasar [clearColor]=true setea color a NULL (volver al default UI).
   Future<PrintArea> updateArea({
     required String areaId,
     String? name,
     String? code,
     bool? isActive,
+    String? color,
+    int? displayOrder,
+    bool clearColor = false,
   }) async {
     final patch = <String, dynamic>{};
     if (name != null) patch['name'] = name.trim();
     if (code != null) patch['code'] = code.trim().toLowerCase();
     if (isActive != null) patch['is_active'] = isActive;
+    if (clearColor) {
+      patch['color'] = null;
+    } else if (color != null) {
+      patch['color'] = color.trim();
+    }
+    if (displayOrder != null) patch['display_order'] = displayOrder;
 
     if (patch.isEmpty) {
       throw Exception('No hay cambios para guardar.');
@@ -2207,6 +2356,17 @@ finally {
     }
   }
 
+  /// Asigna una impresora a un área con flags específicos (orders / prebills /
+  /// receipts).
+  ///
+  /// [exclusive] controla si esta asignación es la ÚNICA para el(los) flag(s)
+  /// dados dentro del área:
+  ///   - `true`  (legacy, default): apaga el mismo flag en otras impresoras
+  ///     del área. Útil cuando solo una impresora puede ser la "primaria"
+  ///     de un tipo (ej. impresora de órdenes a cocina caliente).
+  ///   - `false` (Printing v2 — Slice 1.5): respeta otras asignaciones, solo
+  ///     agrega/actualiza esta. Útil para multi-destino (ej. precuenta
+  ///     duplicada en 2 impresoras).
   Future<void> setAreaPrinterAssignment({
     required String businessId,
     required String areaId,
@@ -2215,56 +2375,59 @@ finally {
     bool printsPrebills = false,
     bool printsReceipts = false,
     int priority = 1,
+    bool exclusive = true,
   }) async {
     try {
       if (!printsOrders && !printsPrebills && !printsReceipts) {
         throw Exception('Debes indicar al menos un tipo de impresión.');
       }
 
-      final rows = await _client
-          .from('print_area_printers')
-          .select(
-            'area_id, printer_id, prints_orders, prints_prebills, prints_receipts',
-          )
-          .eq('business_id', businessId)
-          .eq('area_id', areaId);
+      if (exclusive) {
+        final rows = await _client
+            .from('print_area_printers')
+            .select(
+              'area_id, printer_id, prints_orders, prints_prebills, prints_receipts',
+            )
+            .eq('business_id', businessId)
+            .eq('area_id', areaId);
 
-      for (final row in rows) {
-        final rowPrinterId = row['printer_id']?.toString();
-        if (rowPrinterId == null || rowPrinterId.isEmpty) continue;
+        for (final row in rows) {
+          final rowPrinterId = row['printer_id']?.toString();
+          if (rowPrinterId == null || rowPrinterId.isEmpty) continue;
 
-        final nextOrders = (row['prints_orders'] == true) && !printsOrders;
-        final nextPrebills =
-            (row['prints_prebills'] == true) && !printsPrebills;
-        final nextReceipts =
-            (row['prints_receipts'] == true) && !printsReceipts;
+          final nextOrders = (row['prints_orders'] == true) && !printsOrders;
+          final nextPrebills =
+              (row['prints_prebills'] == true) && !printsPrebills;
+          final nextReceipts =
+              (row['prints_receipts'] == true) && !printsReceipts;
 
-        final touchesSameType =
-            (printsOrders && row['prints_orders'] == true) ||
-            (printsPrebills && row['prints_prebills'] == true) ||
-            (printsReceipts && row['prints_receipts'] == true);
+          final touchesSameType =
+              (printsOrders && row['prints_orders'] == true) ||
+              (printsPrebills && row['prints_prebills'] == true) ||
+              (printsReceipts && row['prints_receipts'] == true);
 
-        if (!touchesSameType || rowPrinterId == printerId) continue;
+          if (!touchesSameType || rowPrinterId == printerId) continue;
 
-        if (!nextOrders && !nextPrebills && !nextReceipts) {
-          await _client
-              .from('print_area_printers')
-              .delete()
-              .eq('business_id', businessId)
-              .eq('area_id', areaId)
-              .eq('printer_id', rowPrinterId);
-        } else {
-          await _client
-              .from('print_area_printers')
-              .update({
-                'prints_orders': nextOrders,
-                'prints_prebills': nextPrebills,
-                'prints_receipts': nextReceipts,
-                'enabled': nextOrders || nextPrebills || nextReceipts,
-              })
-              .eq('business_id', businessId)
-              .eq('area_id', areaId)
-              .eq('printer_id', rowPrinterId);
+          if (!nextOrders && !nextPrebills && !nextReceipts) {
+            await _client
+                .from('print_area_printers')
+                .delete()
+                .eq('business_id', businessId)
+                .eq('area_id', areaId)
+                .eq('printer_id', rowPrinterId);
+          } else {
+            await _client
+                .from('print_area_printers')
+                .update({
+                  'prints_orders': nextOrders,
+                  'prints_prebills': nextPrebills,
+                  'prints_receipts': nextReceipts,
+                  'enabled': nextOrders || nextPrebills || nextReceipts,
+                })
+                .eq('business_id', businessId)
+                .eq('area_id', areaId)
+                .eq('printer_id', rowPrinterId);
+          }
         }
       }
 

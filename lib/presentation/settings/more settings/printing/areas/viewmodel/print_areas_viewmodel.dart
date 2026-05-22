@@ -113,6 +113,9 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
     String? name,
     String? code,
     bool? isActive,
+    String? color,
+    int? displayOrder,
+    bool clearColor = false,
   }) async {
     final trimmedName = name?.trim();
     if (trimmedName != null && trimmedName.isEmpty) {
@@ -121,6 +124,25 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
       );
       return false;
     }
+
+    // Validar formato hex del color si se provee (debe match #RRGGBB).
+    if (color != null && color.trim().isNotEmpty) {
+      final hex = color.trim();
+      if (!RegExp(r'^#[0-9A-Fa-f]{6}$').hasMatch(hex)) {
+        state = state.copyWith(
+          errorMessage: 'Color inválido. Formato esperado: #RRGGBB.',
+        );
+        return false;
+      }
+    }
+
+    if (displayOrder != null && displayOrder < 0) {
+      state = state.copyWith(
+        errorMessage: 'El orden debe ser un número positivo.',
+      );
+      return false;
+    }
+
     try {
       state = state.copyWith(isLoading: true, errorMessage: null);
       final b = await _ensureBusiness();
@@ -138,6 +160,9 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
         name: trimmedName,
         code: finalCode,
         isActive: isActive,
+        color: color?.trim().isEmpty == true ? null : color?.trim(),
+        displayOrder: displayOrder,
+        clearColor: clearColor,
       );
       await load(businessId: b, force: true);
       return true;
@@ -198,6 +223,11 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
     }
   }
 
+  /// Vincula una impresora a un área para tipo(s) de impresión específicos.
+  ///
+  /// [exclusive]: si `true` (default, legacy), apaga el mismo flag en otras
+  /// impresoras del área (semántica 1-de-N). Si `false` (Printing v2),
+  /// respeta otras asignaciones — útil para multi-destino.
   Future<bool> linkAreaPrinter({
     required String areaId,
     required String printerId,
@@ -205,6 +235,7 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
     bool printsOrders = true,
     bool printsPrebills = false,
     bool printsReceipts = false,
+    bool exclusive = true,
   }) async {
     try {
       final b = await _ensureBusiness();
@@ -216,6 +247,7 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
         printsOrders: enabled && printsOrders,
         printsPrebills: enabled && printsPrebills,
         printsReceipts: enabled && printsReceipts,
+        exclusive: exclusive,
       );
       return true;
     } catch (e) {
@@ -285,6 +317,23 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
     );
   }
 
+  /// Printing v2 (Slice 1.5): devuelve TODAS las impresoras por (área, tipo),
+  /// no solo la primera. Usado por la pantalla "Asignar por comprobantes"
+  /// para mostrar lista en vez de slot único.
+  Future<Map<String, List<String>>> loadAllPrinterIdsByType({
+    bool printsOrders = false,
+    bool printsPrebills = false,
+    bool printsReceipts = false,
+  }) async {
+    final b = await _ensureBusiness();
+    return _repo.getAllPrinterIdsByType(
+      businessId: b,
+      printsOrders: printsOrders,
+      printsPrebills: printsPrebills,
+      printsReceipts: printsReceipts,
+    );
+  }
+
   Future<PrintArea> ensureSystemArea({
     required String code,
     required String name,
@@ -312,16 +361,28 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
 
     await refresh();
 
-    final prebills = await loadPrinterSelectionsByType(printsPrebills: true);
-    final receipts = await loadPrinterSelectionsByType(printsReceipts: true);
+    // Printing v2 (Slice 1.5): traer TODAS las impresoras por área/tipo.
+    final prebillsAll =
+        await loadAllPrinterIdsByType(printsPrebills: true);
+    final receiptsAll =
+        await loadAllPrinterIdsByType(printsReceipts: true);
+
+    final prebillIds = prebillsAll[cashierArea.id] ?? const <String>[];
+    final receiptIds = receiptsAll[fiscalArea.id] ?? const <String>[];
+    final closureIds = receiptsAll[closureArea.id] ?? const <String>[];
 
     return ReceiptAssignmentsBootstrap(
       cashierArea: cashierArea,
       fiscalArea: fiscalArea,
       closureArea: closureArea,
-      selectedPrebillPrinter: prebills[cashierArea.id],
-      selectedReceiptPrinter: receipts[fiscalArea.id],
-      selectedClosurePrinter: receipts[closureArea.id],
+      // Legacy: primer ID por área (mantiene compat con callers viejos).
+      selectedPrebillPrinter: prebillIds.isEmpty ? null : prebillIds.first,
+      selectedReceiptPrinter: receiptIds.isEmpty ? null : receiptIds.first,
+      selectedClosurePrinter: closureIds.isEmpty ? null : closureIds.first,
+      // v2: listas completas.
+      prebillPrinterIds: prebillIds,
+      receiptPrinterIds: receiptIds,
+      closurePrinterIds: closureIds,
     );
   }
 
@@ -358,12 +419,20 @@ class ReceiptAssignmentsBootstrap {
     required this.selectedPrebillPrinter,
     required this.selectedReceiptPrinter,
     required this.selectedClosurePrinter,
+    this.prebillPrinterIds = const [],
+    this.receiptPrinterIds = const [],
+    this.closurePrinterIds = const [],
   });
 
   final PrintArea cashierArea;
   final PrintArea fiscalArea;
   final PrintArea closureArea;
+  // Legacy: primer printer asignado (mantiene compat con consumidores viejos).
   final String? selectedPrebillPrinter;
   final String? selectedReceiptPrinter;
   final String? selectedClosurePrinter;
+  // v2 (Slice 1.5): listas completas para soportar N impresoras por tipo.
+  final List<String> prebillPrinterIds;
+  final List<String> receiptPrinterIds;
+  final List<String> closurePrinterIds;
 }

@@ -20,6 +20,10 @@ class ProductsView extends ConsumerStatefulWidget {
 
 class _ProductsViewState extends ConsumerState<ProductsView> {
   String? _lastBusinessId;
+  // Controller del campo de búsqueda. Lo manejamos manualmente para poder
+  // limpiarlo con el botón X (sin recrear el widget) y para sincronizar
+  // con clearAllFilters() del viewmodel.
+  final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
@@ -30,6 +34,12 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
       ref.read(productsViewModelProvider).init(businessId: businessId);
       ref.read(taxesVmProvider.notifier).load(businessId: 'auto');
     });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   @override
@@ -109,63 +119,12 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                     const SizedBox(height: AppSpacing.lg),
                   ],
 
-                  // Toolbar
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          onChanged: viewModel.setSearchQuery,
-                          decoration: InputDecoration(
-                            hintText:
-                                'Busca tu elemento del men\u00fa aqu\u00ed',
-                            prefixIcon: Icon(
-                              Icons.search,
-                              color: AppColors.mutedForeground,
-                            ),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(
-                                AppRadius.button,
-                              ),
-                              borderSide: BorderSide(color: AppColors.border),
-                            ),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(
-                                AppRadius.button,
-                              ),
-                              borderSide: BorderSide(color: AppColors.border),
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(
-                                AppRadius.button,
-                              ),
-                              borderSide: BorderSide(
-                                color: AppColors.primary,
-                                width: 1.5,
-                              ),
-                            ),
-                            contentPadding: const EdgeInsets.symmetric(
-                              vertical: 0,
-                              horizontal: AppSpacing.lg,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: AppSpacing.lg),
-                      _buildDropdownButton(
-                        label: 'Todas',
-                        items: viewModel.categories,
-                        value: viewModel.selectedCategoryFilterId,
-                        onChanged: viewModel.setCategoryFilter,
-                      ),
-                      const SizedBox(width: AppSpacing.lg),
-                      _buildDropdownButton(
-                        label: 'Todos',
-                        items: viewModel.menus,
-                        value: viewModel.selectedMenuFilterId,
-                        onChanged: viewModel.setMenuFilter,
-                      ),
-                    ],
-                  ),
+                  // Toolbar responsive: en m\u00f3vil apila vertical (b\u00fasqueda
+                  // full-width + fila con los dos dropdowns); en desktop
+                  // mantiene la fila horizontal original. Sincroniza el
+                  // controller con el viewmodel para que clearAllFilters()
+                  // tambi\u00e9n limpie el texto visible.
+                  _buildToolbar(context, viewModel),
                   const SizedBox(height: AppSpacing.xxl),
 
                   _ProductsTable(
@@ -182,6 +141,139 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
               ),
             ),
     );
+  }
+
+  Widget _buildToolbar(BuildContext context, ProductsViewModel viewModel) {
+    final compact = Breakpoints.isCompact(context);
+
+    final searchField = _buildSearchField(viewModel);
+    final categoryDropdown = _buildDropdownButton(
+      label: 'Todas',
+      items: viewModel.categories,
+      value: viewModel.selectedCategoryFilterId,
+      onChanged: viewModel.setCategoryFilter,
+    );
+    final menuDropdown = _buildDropdownButton(
+      label: 'Todos',
+      items: viewModel.menus,
+      value: viewModel.selectedMenuFilterId,
+      onChanged: viewModel.setMenuFilter,
+    );
+    final clearButton = TextButton.icon(
+      onPressed: () => _clearFilters(viewModel),
+      icon: const Icon(Icons.filter_alt_off_outlined, size: 18),
+      label: const Text('Limpiar filtros'),
+      style: TextButton.styleFrom(
+        foregroundColor: AppColors.destructive,
+      ),
+    );
+
+    if (compact) {
+      // Móvil: apilamos vertical. Búsqueda full-width arriba; los dos
+      // dropdowns expandidos en una segunda fila para que cada uno tenga
+      // espacio suficiente y no se trunque el texto.
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          searchField,
+          const SizedBox(height: AppSpacing.md),
+          Row(
+            children: [
+              Expanded(child: categoryDropdown),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(child: menuDropdown),
+            ],
+          ),
+          if (viewModel.hasActiveFilters) ...[
+            const SizedBox(height: AppSpacing.xs),
+            Align(
+              alignment: Alignment.centerRight,
+              child: clearButton,
+            ),
+          ],
+        ],
+      );
+    }
+
+    // Desktop/tablet: layout horizontal original. Si hay filtros activos
+    // mostramos el botón al final de la fila.
+    return Row(
+      children: [
+        Expanded(child: searchField),
+        const SizedBox(width: AppSpacing.lg),
+        categoryDropdown,
+        const SizedBox(width: AppSpacing.lg),
+        menuDropdown,
+        if (viewModel.hasActiveFilters) ...[
+          const SizedBox(width: AppSpacing.lg),
+          clearButton,
+        ],
+      ],
+    );
+  }
+
+  Widget _buildSearchField(ProductsViewModel viewModel) {
+    // Sincronizamos el controller cuando el viewmodel se reseteó por
+    // fuera (ej. cambio de business). Sin esto, el texto en el TextField
+    // quedaría desincronizado del searchQuery real.
+    if (_searchController.text != viewModel.searchQuery) {
+      _searchController.value = TextEditingValue(
+        text: viewModel.searchQuery,
+        selection: TextSelection.collapsed(
+          offset: viewModel.searchQuery.length,
+        ),
+      );
+    }
+    return TextField(
+      controller: _searchController,
+      onChanged: viewModel.setSearchQuery,
+      textInputAction: TextInputAction.search,
+      decoration: InputDecoration(
+        hintText: 'Buscar por nombre, SKU o código de barras',
+        prefixIcon: Icon(
+          Icons.search,
+          color: AppColors.mutedForeground,
+        ),
+        suffixIcon: viewModel.searchQuery.isNotEmpty
+            ? IconButton(
+                icon: Icon(
+                  Icons.close,
+                  color: AppColors.mutedForeground,
+                  size: 20,
+                ),
+                tooltip: 'Limpiar búsqueda',
+                onPressed: () {
+                  _searchController.clear();
+                  viewModel.setSearchQuery('');
+                },
+              )
+            : null,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(AppRadius.button),
+          borderSide: BorderSide(color: AppColors.border),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(AppRadius.button),
+          borderSide: BorderSide(color: AppColors.border),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(AppRadius.button),
+          borderSide: BorderSide(
+            color: AppColors.primary,
+            width: 1.5,
+          ),
+        ),
+        contentPadding: const EdgeInsets.symmetric(
+          vertical: 0,
+          horizontal: AppSpacing.lg,
+        ),
+      ),
+    );
+  }
+
+  void _clearFilters(ProductsViewModel viewModel) {
+    _searchController.clear();
+    viewModel.clearAllFilters();
   }
 
   Widget _buildDropdownButton({
@@ -246,6 +338,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
               isActive = true,
               itemType = 'standard',
               printAreaCode,
+              printAreaIds,
               imageFile,
               imageBytes,
               taxIds = const [],
@@ -267,6 +360,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                 isActive: isActive,
                 itemType: itemType,
                 printAreaCode: printAreaCode,
+                printAreaIds: printAreaIds,
                 imageFile: imageFile,
                 imageBytes: imageBytes,
                 taxIds: taxIds,
@@ -291,6 +385,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
               hasVariants = false,
               itemType = 'standard',
               printAreaCode,
+              printAreaIds,
               imageFile,
               imageBytes,
               taxIds = const [],
@@ -313,6 +408,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                 hasVariants: hasVariants,
                 itemType: itemType,
                 printAreaCode: printAreaCode,
+                printAreaIds: printAreaIds,
                 imageFile: imageFile,
                 imageBytes: imageBytes,
                 taxIds: taxIds,

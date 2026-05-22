@@ -19,6 +19,7 @@ class CashCloseModeView extends ConsumerStatefulWidget {
 class _CashCloseModeViewState extends ConsumerState<CashCloseModeView> {
   String? _resolvedBusinessId;
   String? _selected;
+  bool _allowRecount = false;
   bool _loading = true;
   bool _saving = false;
   String? _error;
@@ -34,10 +35,12 @@ class _CashCloseModeViewState extends ConsumerState<CashCloseModeView> {
       final id = await BusinessResolver.ensure(widget.businessId);
       final repo = ref.read(posSettingsRepositoryProvider);
       final mode = await repo.getCashCloseMode(id);
+      final allowRecount = await repo.getAllowRecount(id);
       if (!mounted) return;
       setState(() {
         _resolvedBusinessId = id;
         _selected = mode;
+        _allowRecount = allowRecount;
         _loading = false;
       });
     } catch (e) {
@@ -45,6 +48,42 @@ class _CashCloseModeViewState extends ConsumerState<CashCloseModeView> {
       setState(() {
         _error = 'No se pudo cargar la preferencia: $e';
         _loading = false;
+      });
+    }
+  }
+
+  Future<void> _setAllowRecount(bool enabled) async {
+    if (_saving || _resolvedBusinessId == null || enabled == _allowRecount) {
+      return;
+    }
+    final previous = _allowRecount;
+    setState(() {
+      _allowRecount = enabled;
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await ref
+          .read(posSettingsRepositoryProvider)
+          .setAllowRecount(businessId: _resolvedBusinessId!, enabled: enabled);
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            enabled
+                ? 'Reconteo habilitado: el cajero verá el botón «Volver a contar».'
+                : 'Reconteo deshabilitado.',
+          ),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _allowRecount = previous;
+        _saving = false;
+        _error = 'No se pudo guardar el cambio: $e';
       });
     }
   }
@@ -142,7 +181,108 @@ class _CashCloseModeViewState extends ConsumerState<CashCloseModeView> {
           highlighted: true,
           onChanged: _saving ? null : _select,
         ),
+        const SizedBox(height: 24),
+        const _SectionLabel('Reconteo'),
+        const SizedBox(height: 8),
+        _RecountSwitch(
+          value: _allowRecount,
+          onChanged: _saving ? null : _setAllowRecount,
+        ),
       ],
+    );
+  }
+}
+
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text.toUpperCase(),
+      style: const TextStyle(
+        fontSize: 12,
+        fontWeight: FontWeight.w800,
+        color: Colors.black54,
+        letterSpacing: 0.8,
+      ),
+    );
+  }
+}
+
+class _RecountSwitch extends StatelessWidget {
+  const _RecountSwitch({required this.value, required this.onChanged});
+
+  final bool value;
+  final ValueChanged<bool>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: value ? MangoColors.primaryOrange : MangoColors.cardBorder,
+          width: value ? 1.5 : 1,
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: value
+                  ? const Color(0xFFFFEDD5)
+                  : const Color(0xFFF3F4F6),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(
+              Icons.replay_rounded,
+              color: value ? MangoColors.primaryOrange : MangoColors.muted,
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text(
+                  'Permitir recontar antes de firmar',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.black87,
+                  ),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  'Si está activado, el cajero verá un botón «Volver a '
+                  'contar» en el flujo de cierre que limpia los montos y '
+                  'reinicia el conteo. Solo aplica antes de firmar; una '
+                  'vez confirmado el cierre, no se puede revertir.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.black54,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Switch.adaptive(
+            value: value,
+            activeTrackColor: MangoColors.primaryOrange,
+            onChanged: onChanged,
+          ),
+        ],
+      ),
     );
   }
 }

@@ -328,6 +328,7 @@ class SettingsView extends ConsumerWidget {
             subtitle: 'Formato y comportamiento de comandas',
             icon: Icons.list_alt_rounded,
             color: Color(0xFFFFE6D5),
+            route: AppRoutes.settingsComandasConfig,
           ),
           _SettingsOption(
             title: 'Config. de Precuentas',

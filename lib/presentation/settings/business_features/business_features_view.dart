@@ -523,6 +523,7 @@ class _InventoryModeOption extends StatelessWidget {
   }
 }
 
+
 class _FlagTile extends StatelessWidget {
   final IconData icon;
   final String label;

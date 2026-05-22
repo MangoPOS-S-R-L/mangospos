@@ -43,10 +43,157 @@ class _PrintingHealthViewState extends ConsumerState<PrintingHealthView> {
     });
   }
 
+  /// Slice C.3: bottom sheet con últimos tickets impresos (24h) + acción
+  /// de reimprimir. El cajero lo usa cuando "no salió" un recibo en
+  /// papel y necesita volver a tirarlo sin re-cobrar la mesa.
+  Future<void> _openReprintHistorySheet(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final vm = ref.read(printingHealthViewModelProvider.notifier);
+    final messenger = ScaffoldMessenger.of(context);
+    final jobs = await vm.loadRecentlyPrinted();
+    if (!context.mounted) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(ctx).size.height * 0.7,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 12),
+                Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE5E5E5),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 20),
+                  child: Row(
+                    children: [
+                      Icon(Icons.history,
+                          color: MangoColors.darkGray, size: 20),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Tickets impresos recientes (últimas 24h)',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15,
+                            color: MangoColors.darkGray,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Divider(height: 1, color: Color(0xFFE5E5E5)),
+                Flexible(
+                  child: jobs.isEmpty
+                      ? const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 32),
+                          child: Center(
+                            child: Text(
+                              'No hay tickets impresos en las últimas 24h.',
+                              style: TextStyle(color: MangoColors.muted),
+                            ),
+                          ),
+                        )
+                      : ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: jobs.length,
+                          separatorBuilder: (_, _) => const Divider(
+                            height: 1,
+                            color: Color(0xFFF1F1F1),
+                          ),
+                          itemBuilder: (_, i) {
+                            final j = jobs[i];
+                            return _PrintedJobReprintTile(
+                              job: j,
+                              onReprint: () async {
+                                Navigator.of(ctx).pop();
+                                final ok = await vm.reprintJob(j.id);
+                                if (!context.mounted) return;
+                                messenger.showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      ok
+                                          ? 'Ticket reencolado para imprimir.'
+                                          : 'No se pudo reimprimir el ticket.',
+                                    ),
+                                  ),
+                                );
+                              },
+                            );
+                          },
+                        ),
+                ),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(printingHealthViewModelProvider);
     final vm = ref.read(printingHealthViewModelProvider.notifier);
+
+    // Slice C.2: cuando el VM detecta transiciones a peor (ok→down/warn),
+    // mostrar snackbar por cada una y limpiar la lista para no repetir.
+    ref.listen<PrintingHealthState>(
+      printingHealthViewModelProvider,
+      (prev, next) {
+        if (next.pendingTransitions.isEmpty) return;
+        final messenger = ScaffoldMessenger.of(context);
+        for (final t in next.pendingTransitions) {
+          messenger.showSnackBar(
+            SnackBar(
+              backgroundColor: t.current == PrinterHealthLevel.down
+                  ? const Color(0xFFEF4444)
+                  : const Color(0xFFF59E0B),
+              duration: const Duration(seconds: 5),
+              content: Row(
+                children: [
+                  Icon(
+                    t.current == PrinterHealthLevel.down
+                        ? Icons.error_outline
+                        : Icons.warning_amber_rounded,
+                    color: Colors.white,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      t.message,
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+        vm.clearTransitions();
+      },
+    );
 
     return Scaffold(
       backgroundColor: const Color(0xFFF7F7F7),
@@ -87,7 +234,21 @@ class _PrintingHealthViewState extends ConsumerState<PrintingHealthView> {
 
             const SizedBox(height: 28),
 
-            const _SectionTitle('Cola pendiente'),
+            Row(
+              children: [
+                const Expanded(child: _SectionTitle('Cola pendiente')),
+                // Slice C.3: botón para reimprimir tickets ya impresos
+                // dentro de las últimas 24h.
+                TextButton.icon(
+                  onPressed: () => _openReprintHistorySheet(context, ref),
+                  icon: const Icon(Icons.replay, size: 18),
+                  label: const Text('Reimprimir ticket reciente'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: MangoColors.primaryOrange,
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 12),
             if (state.activeJobs.isEmpty && !state.loading)
               const _EmptyTile(
@@ -319,6 +480,10 @@ class _PrinterHealthCard extends StatelessWidget {
   }
 
   String _statusLabel() {
+    // Slice C: si el agent reportó status granular, mostrarlo — es más
+    // específico que el agregado (no_paper > "Con atención").
+    final granular = printer.granularStatusLabel;
+    if (granular != null) return granular;
     switch (printer.level) {
       case PrinterHealthLevel.ok:
         return 'Operativa';
@@ -658,5 +823,59 @@ class _EmptyTile extends StatelessWidget {
         style: const TextStyle(fontSize: 13, color: MangoColors.muted),
       ),
     );
+  }
+}
+
+/// Slice C.3: tile para cada ticket impreso reciente que se puede
+/// reimprimir. Muestra impresora, kind, hora y un botón "Reimprimir".
+class _PrintedJobReprintTile extends StatelessWidget {
+  const _PrintedJobReprintTile({
+    required this.job,
+    required this.onReprint,
+  });
+
+  final PrintJobRow job;
+  final VoidCallback onReprint;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: const Icon(Icons.receipt_long_outlined),
+      title: Text(
+        job.printerName ?? 'Impresora',
+        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+      ),
+      subtitle: Text(
+        _subtitle(),
+        style: const TextStyle(fontSize: 12, color: MangoColors.muted),
+      ),
+      trailing: OutlinedButton.icon(
+        onPressed: onReprint,
+        icon: const Icon(Icons.replay, size: 16),
+        label: const Text('Reimprimir'),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: MangoColors.primaryOrange,
+          side: const BorderSide(color: MangoColors.primaryOrange),
+        ),
+      ),
+    );
+  }
+
+  String _subtitle() {
+    final parts = <String>[];
+    final kind = job.kind;
+    if (kind != null && kind.isNotEmpty) parts.add(kind);
+    final area = job.areaCode;
+    if (area != null && area.isNotEmpty) parts.add(area);
+    parts.add(_formatTime(job.createdAt));
+    return parts.join(' · ');
+  }
+
+  String _formatTime(DateTime dt) {
+    final age = DateTime.now().toUtc().difference(dt.toUtc());
+    if (age.inSeconds < 60) return 'Hace ${age.inSeconds}s';
+    if (age.inMinutes < 60) return 'Hace ${age.inMinutes}m';
+    if (age.inHours < 24) return 'Hace ${age.inHours}h';
+    return 'Hace ${age.inDays}d';
   }
 }

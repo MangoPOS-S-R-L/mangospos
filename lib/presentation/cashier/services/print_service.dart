@@ -21,12 +21,14 @@ class CashClosePrintService {
     required List<DenominationCount> denominations,
     required DateTime printedAt,
     String? cashRegisterId,
+    int recountCount = 0,
   }) async {
     final bytes = _buildEscPos(
       input: input,
       result: result,
       denominations: denominations,
       printedAt: printedAt,
+      recountCount: recountCount,
     );
 
     await _printThermalOrThrow(bytes, cashRegisterId: cashRegisterId);
@@ -37,6 +39,7 @@ class CashClosePrintService {
     required CashCloseResult result,
     required List<DenominationCount> denominations,
     required DateTime printedAt,
+    int recountCount = 0,
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
     gen.initialize();
@@ -108,6 +111,12 @@ class CashClosePrintService {
     gen.setBold(false);
     gen.textRow('Total Ventas', formatRD(input.totalSales));
     gen.textRow('Transacciones', input.transactionCount.toString());
+    // Auditoría: cuántas veces el cajero presionó "Volver a contar"
+    // antes de firmar este cierre. Solo se imprime si hubo al menos
+    // uno — un cierre limpio no necesita ensuciar el ticket.
+    if (recountCount > 0) {
+      gen.textRow('Reconteos', recountCount.toString());
+    }
     gen.doubleSeparator();
 
     // Sprint Caja Pro — Listado detallado de depósitos / retiros /

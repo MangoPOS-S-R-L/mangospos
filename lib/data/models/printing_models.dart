@@ -9,6 +9,10 @@ class PrintArea extends Equatable {
   final String name;
   final String code; // 'kitchen_hot', 'kitchen_cold', 'bar', 'cashier', 'fiscal'
   final bool isActive;
+  // v2: metadata visual (migración 20260521_0002_print_areas_extend).
+  // null/0 cuando aún no fueron seteadas — UI usa defaults.
+  final String? color;
+  final int displayOrder;
 
   const PrintArea({
     required this.id,
@@ -16,6 +20,8 @@ class PrintArea extends Equatable {
     required this.name,
     required this.code,
     required this.isActive,
+    this.color,
+    this.displayOrder = 0,
   });
 
   factory PrintArea.fromMap(Map<String, dynamic> map) {
@@ -25,11 +31,16 @@ class PrintArea extends Equatable {
       name: map['name'] ?? '',
       code: map['code'] ?? '',
       isActive: map['is_active'] ?? true,
+      color: (map['color'] as String?)?.trim().isEmpty == true
+          ? null
+          : map['color'] as String?,
+      displayOrder: (map['display_order'] as num?)?.toInt() ?? 0,
     );
   }
 
   @override
-  List<Object?> get props => [id, businessId, name, code, isActive];
+  List<Object?> get props =>
+      [id, businessId, name, code, isActive, color, displayOrder];
 }
 
 /// 🔗 Asignación de impresora a área

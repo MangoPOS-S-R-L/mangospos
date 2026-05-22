@@ -8,7 +8,9 @@ import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_radius.dart';
 import 'package:mangopos/core/theme/app_shadows.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
+import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/data/repositories/modifiers_repository.dart';
+import 'package:mangopos/data/repositories/printing_v2_repository.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/areas/viewmodel/print_areas_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/state/taxes_state.dart';
 import 'package:mangopos/presentation/settings/more settings/system settings/tax/viewmodel/taxes_viewmodel.dart';
@@ -34,6 +36,7 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     bool isActive,
     String itemType,
     String? printAreaCode,
+    List<String>? printAreaIds,
     File? imageFile,
     Uint8List? imageBytes,
     List<String> taxIds,
@@ -58,6 +61,7 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     bool hasVariants,
     String itemType,
     String? printAreaCode,
+    List<String>? printAreaIds,
     File? imageFile,
     Uint8List? imageBytes,
     List<String> taxIds,
@@ -99,7 +103,24 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
   String _itemType = 'standard';
   /// `null` = el admin no eligió area todavía. Send-to-kitchen bloquea
   /// con error claro si esto se queda asi.
+  ///
+  /// LEGACY: este campo es 1-de-1 (un producto, una área). Coexiste con
+  /// [_selectedPrintAreaIds] (Printing v2 — Slice 4.B), que es N:M.
+  /// Al guardar:
+  ///  - 0 áreas seleccionadas → printAreaCode = null.
+  ///  - 1 área   → printAreaCode = código de esa área (compat 100%).
+  ///  - 2+ áreas → printAreaCode = código de la PRIMERA (legacy lectores
+  ///    aún la ven), el resto vive en menu_item_print_areas.
   String? _printAreaCode;
+
+  /// Printing v2 (Slice 4.B): IDs de las áreas asignadas al producto en
+  /// N:M (tabla menu_item_print_areas). Multi-selección.
+  ///
+  /// Bootstrap:
+  ///  - Producto NUEVO (sin id) → set vacío.
+  ///  - Producto existente → se carga del repo en initState async.
+  Set<String> _selectedPrintAreaIds = <String>{};
+  bool _printAreasLoaded = false;
 
   /// Si true, el producto consume stock al venderse. Al activarlo en un
   /// producto nuevo o existente sin tracking previo, se pide stock inicial
@@ -178,6 +199,50 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
             .read(printingAreasViewModelProvider.notifier)
             .load(businessId: 'auto');
       } catch (_) {}
+
+      // Printing v2 (Slice 4.B): cargar las áreas N:M ya asignadas al
+      // producto. Solo aplica si estamos editando uno existente.
+      final productId = widget.product?['id']?.toString();
+      if (productId != null && productId.isNotEmpty) {
+        try {
+          final repo = MenuItemPrintAreaRepository(Supabase.instance.client);
+          final ids = await repo.getAreaIdsForMenuItem(productId);
+          if (mounted) {
+            setState(() {
+              _selectedPrintAreaIds = ids.toSet();
+              _printAreasLoaded = true;
+            });
+            return;
+          }
+        } catch (_) {
+          // Si falla la query, caemos al legacy print_area_code.
+        }
+      }
+      // Si no hay producto o falla la query, derivar del legacy code
+      // (mantenemos consistencia en lectores que solo conocen el code).
+      if (mounted) {
+        setState(() {
+          if (_printAreaCode != null) {
+            final areas = ref
+                .read(printingAreasViewModelProvider)
+                .items;
+            final match = areas.firstWhere(
+              (a) => a.code == _printAreaCode,
+              orElse: () => const PrintArea(
+                id: '',
+                businessId: '',
+                name: '',
+                code: '',
+                isActive: false,
+              ),
+            );
+            if (match.id.isNotEmpty) {
+              _selectedPrintAreaIds = {match.id};
+            }
+          }
+          _printAreasLoaded = true;
+        });
+      }
     });
 
     if (p != null) {
@@ -1009,30 +1074,129 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
       );
     }
 
-    // Si el código guardado en el producto no coincide con ninguna area
-    // activa (e.g. area renombrada/desactivada después), forzamos null para
-    // que el dropdown no crashee y el admin reasigne explícitamente.
-    final hasCurrentValue =
-        _printAreaCode != null &&
-        activeAreas.any((a) => a.code == _printAreaCode);
-    final dropdownValue = hasCurrentValue ? _printAreaCode : null;
-
-    return _buildDropdown<String>(
-      value: dropdownValue,
-      hint: 'Selecciona un área',
-      items: activeAreas
-          .map(
-            (area) => DropdownMenuItem<String>(
-              value: area.code,
-              child: Text(area.name),
+    // Printing v2 (Slice 4.B): multi-select de áreas. Un producto puede
+    // ir a varias estaciones (ej. combo "Hamburguesa + Cerveza" → Cocina
+    // Caliente + Bar). Cada chip es toggle. Vacío = sin área asignada
+    // (send-to-kitchen bloqueará con error claro).
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(AppRadius.button),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (!_printAreasLoaded && widget.product != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Cargando asignaciones...',
+                    style: TextStyle(
+                      color: AppColors.mutedForeground,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          )
-          .toList(growable: false),
-      onChanged: (value) {
-        if (value == null) return;
-        setState(() => _printAreaCode = value);
-      },
+          Text(
+            'Selecciona una o más áreas. El producto se imprimirá en cada '
+            'una al enviar la comanda.',
+            style: TextStyle(
+              color: AppColors.mutedForeground,
+              fontSize: 12,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: activeAreas.map((area) {
+              final selected = _selectedPrintAreaIds.contains(area.id);
+              final color = _resolveAreaColor(area.color);
+              return FilterChip(
+                label: Text(area.name),
+                selected: selected,
+                showCheckmark: false,
+                avatar: color != null
+                    ? CircleAvatar(backgroundColor: color, radius: 8)
+                    : null,
+                selectedColor: AppColors.primary.withValues(alpha: 0.12),
+                side: BorderSide(
+                  color: selected ? AppColors.primary : AppColors.border,
+                ),
+                onSelected: (value) {
+                  setState(() {
+                    if (value) {
+                      _selectedPrintAreaIds.add(area.id);
+                    } else {
+                      _selectedPrintAreaIds.remove(area.id);
+                    }
+                    // Sincronizar legacy print_area_code: primer ID
+                    // seleccionado dicta el code (consistencia con
+                    // lectores legacy que solo ven print_area_code).
+                    if (_selectedPrintAreaIds.isEmpty) {
+                      _printAreaCode = null;
+                    } else {
+                      final firstId = _selectedPrintAreaIds.first;
+                      final firstArea = activeAreas.firstWhere(
+                        (a) => a.id == firstId,
+                        orElse: () => area,
+                      );
+                      _printAreaCode = firstArea.code;
+                    }
+                  });
+                },
+              );
+            }).toList(),
+          ),
+          if (_selectedPrintAreaIds.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: AppSpacing.sm),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.warning_amber_rounded,
+                    size: 14,
+                    color: AppColors.mutedForeground,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Sin áreas asignadas: el producto no se enviará a '
+                      'ninguna cocina/bar al enviar la comanda.',
+                      style: TextStyle(
+                        color: AppColors.mutedForeground,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
     );
+  }
+
+  /// Convierte hex (#RRGGBB) a Color. NULL si formato inválido o ausente.
+  Color? _resolveAreaColor(String? hex) {
+    if (hex == null || hex.isEmpty) return null;
+    if (!RegExp(r'^#[0-9A-Fa-f]{6}$').hasMatch(hex)) return null;
+    return Color(int.parse('FF${hex.substring(1)}', radix: 16));
   }
 
   Widget _buildDropdown<T>({
@@ -1296,6 +1460,9 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     final allowNegativeChanged =
         _allowNegativeSale != _wasAllowNegativeSaleInitially;
 
+    // Printing v2 (Slice 4.B): pasar la lista N:M completa.
+    final printAreaIds = _selectedPrintAreaIds.toList(growable: false);
+
     if (widget.product != null) {
       widget.onUpdate(
         id: widget.product!['id'],
@@ -1312,6 +1479,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         hasVariants: _hasVariants,
         itemType: _itemType,
         printAreaCode: _printAreaCode,
+        printAreaIds: printAreaIds,
         imageFile: _pickedImageFile,
         imageBytes: _pickedImageBytes,
         taxIds: _selectedTaxIds.toList(),
@@ -1334,6 +1502,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         isActive: _isActive,
         itemType: _itemType,
         printAreaCode: _printAreaCode,
+        printAreaIds: printAreaIds,
         imageFile: _pickedImageFile,
         imageBytes: _pickedImageBytes,
         taxIds: _selectedTaxIds.toList(),

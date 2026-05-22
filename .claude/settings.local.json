@@ -3,7 +3,26 @@
     "allow": [
       "Bash(powershell.exe -ExecutionPolicy Bypass -File installer/windows/build_inno.ps1)",
       "Read(//d d:/MangoPos/Dev/**)",
-      "Bash(find . -name \"*.dart\" -type f -exec grep -l \"_loadBusinesses\\\\|SelectBusinessView\" {} \\\\;)"
+      "Bash(find . -name \"*.dart\" -type f -exec grep -l \"_loadBusinesses\\\\|SelectBusinessView\" {} \\\\;)",
+      "Bash(which psql *)",
+      "Read(//opt/homebrew/opt/**)",
+      "Bash(/opt/homebrew/opt/postgresql@15/bin/initdb -D pg_lint_tmp --auth-local=trust --no-locale --encoding=UTF8 -U postgres)",
+      "Bash(/opt/homebrew/opt/postgresql@15/bin/pg_ctl -D /tmp/pg_lint_tmp -l /tmp/pg_lint_tmp/server.log -o \"-p 54329 -k /tmp\" start)",
+      "Bash(/opt/homebrew/opt/postgresql@15/bin/createdb -p 54329 -h /tmp -U postgres mangos_lint)",
+      "Bash(/opt/homebrew/opt/postgresql@15/bin/psql -p 54329 -h /tmp -U postgres -d mangos_lint -v ON_ERROR_STOP=1 -f /tmp/mangos_stubs.sql)",
+      "Bash(/opt/homebrew/opt/postgresql@15/bin/psql -p 54329 -h /tmp -U postgres -d mangos_lint -c \"create role authenticated;\")",
+      "Bash(/opt/homebrew/opt/postgresql@15/bin/dropdb -p 54329 -h /tmp -U postgres mangos_lint)",
+      "Bash(/opt/homebrew/opt/postgresql@15/bin/pg_ctl -D /tmp/pg_lint_tmp stop)",
+      "Bash(git mv *)",
+      "Bash(/opt/homebrew/opt/postgresql@15/bin/initdb -D pg_lint_tmp2 --auth-local=trust --no-locale --encoding=UTF8 -U postgres)",
+      "Bash(/opt/homebrew/opt/postgresql@15/bin/pg_ctl -D /tmp/pg_lint_tmp2 -l /tmp/pg_lint_tmp2/server.log -o \"-p 54330 -k /tmp\" start)",
+      "Bash(/opt/homebrew/opt/postgresql@15/bin/createdb -p 54330 -h /tmp -U postgres mangos_lint2)",
+      "Bash(/opt/homebrew/opt/postgresql@15/bin/psql -p 54330 -h /tmp -U postgres -d mangos_lint2 -v ON_ERROR_STOP=1 -f /tmp/mangos_stubs2.sql)",
+      "Bash(/opt/homebrew/opt/postgresql@15/bin/psql -p 54330 -h /tmp -U postgres -d mangos_lint2 -c ' *)",
+      "Bash(/opt/homebrew/opt/postgresql@15/bin/psql -p 54330 -h /tmp -U postgres -d mangos_lint2 -v ON_ERROR_STOP=1 -f /Users/cristiangomez/dev/mangospos/supabase/migrations/20260521_0005_device_agents_extend_ROLLBACK.sql)",
+      "Bash(/opt/homebrew/opt/postgresql@15/bin/pg_ctl -D /tmp/pg_lint_tmp2 stop)",
+      "Bash(git commit -m ' *)",
+      "Bash(/opt/homebrew/opt/postgresql@15/bin/pg_ctl -D /tmp/pg_lint_tmp4 stop)"
     ]
   }
 }

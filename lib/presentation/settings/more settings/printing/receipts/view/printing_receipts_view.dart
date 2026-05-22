@@ -25,10 +25,16 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
   PrintArea? _cashierArea;
   PrintArea? _fiscalArea;
   PrintArea? _closureArea;
-  String? _selectedPrebillPrinter;
-  String? _selectedReceiptPrinter;
-  String? _selectedClosurePrinter;
+  // Printing v2 (Slice 1.5): listas en vez de IDs únicos. Permite asignar
+  // N impresoras por tipo de comprobante, lo que destrabba la UX del
+  // selector de Pre-Cuenta (que solo aparece con >1 destino).
+  List<String> _prebillPrinterIds = const [];
+  List<String> _receiptPrinterIds = const [];
+  List<String> _closurePrinterIds = const [];
   String _receiptItemDisplayMode = PosSettingsRepository.receiptItemsGrouped;
+  // Slice B: multi-copia automática (sin picker) por tipo de comprobante.
+  bool _precheckMultiCopy = false;
+  bool _receiptMultiCopy = false;
   bool _busy = false;
 
   @override
@@ -56,16 +62,60 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
     final receiptItemDisplayMode = businessId.isEmpty
         ? PosSettingsRepository.receiptItemsGrouped
         : await settingsRepo.getReceiptItemDisplayMode(businessId);
+    // Slice B: leer flags multi-copia.
+    final multiCopy = businessId.isEmpty
+        ? (precheck: false, receipt: false)
+        : await settingsRepo.getPrintMultiCopyModes(businessId);
     if (!mounted) return;
     setState(() {
       _cashierArea = bootstrap.cashierArea;
       _fiscalArea = bootstrap.fiscalArea;
       _closureArea = bootstrap.closureArea;
-      _selectedPrebillPrinter = bootstrap.selectedPrebillPrinter;
-      _selectedReceiptPrinter = bootstrap.selectedReceiptPrinter;
-      _selectedClosurePrinter = bootstrap.selectedClosurePrinter;
+      _prebillPrinterIds = bootstrap.prebillPrinterIds;
+      _receiptPrinterIds = bootstrap.receiptPrinterIds;
+      _closurePrinterIds = bootstrap.closurePrinterIds;
       _receiptItemDisplayMode = receiptItemDisplayMode;
+      _precheckMultiCopy = multiCopy.precheck;
+      _receiptMultiCopy = multiCopy.receipt;
     });
+  }
+
+  /// Slice B: toggle del flag multi-copia para precheck o receipt.
+  Future<void> _toggleMultiCopy(String kind, bool enabled) async {
+    final businessId = _resolvedBusinessId;
+    if (businessId.isEmpty) return;
+    setState(() {
+      _busy = true;
+      if (kind == 'precheck') _precheckMultiCopy = enabled;
+      if (kind == 'receipt') _receiptMultiCopy = enabled;
+    });
+    try {
+      await ref.read(posSettingsRepositoryProvider).setPrintMultiCopy(
+            businessId: businessId,
+            kind: kind,
+            enabled: enabled,
+          );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(enabled
+              ? 'Multi-copia activada para ${kind == 'precheck' ? 'pre-cuentas' : 'recibos'}.'
+              : 'Multi-copia desactivada.'),
+        ),
+      );
+    } catch (e) {
+      // Revertir en caso de error.
+      if (!mounted) return;
+      setState(() {
+        if (kind == 'precheck') _precheckMultiCopy = !enabled;
+        if (kind == 'receipt') _receiptMultiCopy = !enabled;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo guardar el cambio: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _saveAssignment({
@@ -83,6 +133,9 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
           printsOrders: false,
           printsPrebills: printsPrebills,
           printsReceipts: printsReceipts,
+          // Printing v2 (Slice 1.5): no exclusivo — permite múltiples
+          // impresoras por tipo de comprobante.
+          exclusive: false,
         );
     if (!mounted) return;
     setState(() => _busy = false);
@@ -175,25 +228,40 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
     }
   }
 
-  Future<void> _replacePrinter({
+  /// Abre el picker de impresoras y AGREGA la elegida a la asignación
+  /// (no la reemplaza). Excluye del picker las que ya están asignadas.
+  Future<void> _addPrinter({
     required PrintArea area,
     required String dialogTitle,
     required bool printsPrebills,
     required bool printsReceipts,
-    required ValueChanged<String> onSelected,
+    required List<String> alreadyAssignedIds,
   }) async {
-    final printers =
+    final available =
         List<PrinterDevice>.from(
           ref.read(printingPrintersViewModelProvider).items,
-        )..sort((a, b) {
-          if (a.online == b.online) return a.name.compareTo(b.name);
-          return a.online ? -1 : 1;
-        });
+        )
+          ..removeWhere((p) => alreadyAssignedIds.contains(p.id))
+          ..sort((a, b) {
+            if (a.online == b.online) return a.name.compareTo(b.name);
+            return a.online ? -1 : 1;
+          });
+
+    if (available.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No quedan impresoras disponibles para asignar a este comprobante.',
+          ),
+        ),
+      );
+      return;
+    }
 
     final selected = await showDialog<PrinterDevice>(
       context: context,
       builder: (dialogContext) =>
-          _ReceiptPrinterPickerDialog(title: dialogTitle, printers: printers),
+          _ReceiptPrinterPickerDialog(title: dialogTitle, printers: available),
     );
     if (selected == null) return;
 
@@ -203,8 +271,6 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
       printsPrebills: printsPrebills,
       printsReceipts: printsReceipts,
     );
-    if (!mounted) return;
-    setState(() => onSelected(selected.id));
   }
 
   @override
@@ -214,20 +280,18 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
     final loading =
         printersState.isLoading || _cashierArea == null || _fiscalArea == null;
 
-    PrinterDevice? prebillPrinter;
-    PrinterDevice? receiptPrinter;
-    PrinterDevice? closurePrinter;
-    for (final printer in printers) {
-      if (printer.id == _selectedPrebillPrinter) {
-        prebillPrinter = printer;
-      }
-      if (printer.id == _selectedReceiptPrinter) {
-        receiptPrinter = printer;
-      }
-      if (printer.id == _selectedClosurePrinter) {
-        closurePrinter = printer;
-      }
+    final printersById = {for (final p in printers) p.id: p};
+
+    List<PrinterDevice> resolve(List<String> ids) {
+      return ids
+          .map((id) => printersById[id])
+          .whereType<PrinterDevice>()
+          .toList(growable: false);
     }
+
+    final prebillPrinters = resolve(_prebillPrinterIds);
+    final receiptPrinters = resolve(_receiptPrinterIds);
+    final closurePrinters = resolve(_closurePrinterIds);
 
     return Scaffold(
       backgroundColor: const Color(0xFFF3F4F6),
@@ -281,30 +345,26 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
                       child: _DocumentAssignmentCard(
                         title: 'C.Final',
                         trailingLabel: 'Area fiscal',
-                        printer: receiptPrinter,
+                        assigned: receiptPrinters,
                         busy: _busy,
-                        onAddOrReplace: () => _replacePrinter(
+                        multiCopy: _receiptMultiCopy,
+                        onMultiCopyChanged: (v) =>
+                            _toggleMultiCopy('receipt', v),
+                        onAdd: () => _addPrinter(
                           area: _fiscalArea!,
                           dialogTitle:
                               'Selecciona impresora para comprobante final',
                           printsPrebills: false,
                           printsReceipts: true,
-                          onSelected: (id) => _selectedReceiptPrinter = id,
+                          alreadyAssignedIds: _receiptPrinterIds,
                         ),
-                        onDelete: receiptPrinter == null
-                            ? null
-                            : () => _removeAssignment(
-                                area: _fiscalArea!,
-                                printerId: receiptPrinter!.id,
-                                removesPrebills: false,
-                                removesReceipts: true,
-                                onRemoved: (_) =>
-                                    _selectedReceiptPrinter = null,
-                              ),
-                        onConfigure: receiptPrinter == null
-                            ? null
-                            : () => _configurePrinter(receiptPrinter!),
-                        replaceLabel: 'Reemplazar',
+                        onDelete: (printer) => _removeAssignment(
+                          area: _fiscalArea!,
+                          printerId: printer.id,
+                          removesPrebills: false,
+                          removesReceipts: true,
+                        ),
+                        onConfigure: _configurePrinter,
                       ),
                     ),
                     SizedBox(
@@ -312,29 +372,25 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
                       child: _DocumentAssignmentCard(
                         title: 'Prefactura',
                         trailingLabel: 'Area caja',
-                        printer: prebillPrinter,
+                        assigned: prebillPrinters,
                         busy: _busy,
-                        onAddOrReplace: () => _replacePrinter(
+                        multiCopy: _precheckMultiCopy,
+                        onMultiCopyChanged: (v) =>
+                            _toggleMultiCopy('precheck', v),
+                        onAdd: () => _addPrinter(
                           area: _cashierArea!,
                           dialogTitle: 'Selecciona impresora para prefactura',
                           printsPrebills: true,
                           printsReceipts: false,
-                          onSelected: (id) => _selectedPrebillPrinter = id,
+                          alreadyAssignedIds: _prebillPrinterIds,
                         ),
-                        onDelete: prebillPrinter == null
-                            ? null
-                            : () => _removeAssignment(
-                                area: _cashierArea!,
-                                printerId: prebillPrinter!.id,
-                                removesPrebills: true,
-                                removesReceipts: false,
-                                onRemoved: (_) =>
-                                    _selectedPrebillPrinter = null,
-                              ),
-                        onConfigure: prebillPrinter == null
-                            ? null
-                            : () => _configurePrinter(prebillPrinter!),
-                        replaceLabel: 'Reemplazar',
+                        onDelete: (printer) => _removeAssignment(
+                          area: _cashierArea!,
+                          printerId: printer.id,
+                          removesPrebills: true,
+                          removesReceipts: false,
+                        ),
+                        onConfigure: _configurePrinter,
                       ),
                     ),
                     if (_closureArea != null)
@@ -343,30 +399,23 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
                         child: _DocumentAssignmentCard(
                           title: 'Cierre de caja',
                           trailingLabel: 'Area cierre',
-                          printer: closurePrinter,
+                          assigned: closurePrinters,
                           busy: _busy,
-                          onAddOrReplace: () => _replacePrinter(
+                          onAdd: () => _addPrinter(
                             area: _closureArea!,
                             dialogTitle:
                                 'Selecciona impresora para cierre de caja',
                             printsPrebills: false,
                             printsReceipts: true,
-                            onSelected: (id) => _selectedClosurePrinter = id,
+                            alreadyAssignedIds: _closurePrinterIds,
                           ),
-                          onDelete: closurePrinter == null
-                              ? null
-                              : () => _removeAssignment(
-                                  area: _closureArea!,
-                                  printerId: closurePrinter!.id,
-                                  removesPrebills: false,
-                                  removesReceipts: true,
-                                  onRemoved: (_) =>
-                                      _selectedClosurePrinter = null,
-                                ),
-                          onConfigure: closurePrinter == null
-                              ? null
-                              : () => _configurePrinter(closurePrinter!),
-                          replaceLabel: 'Reemplazar',
+                          onDelete: (printer) => _removeAssignment(
+                            area: _closureArea!,
+                            printerId: printer.id,
+                            removesPrebills: false,
+                            removesReceipts: true,
+                          ),
+                          onConfigure: _configurePrinter,
                         ),
                       ),
                   ],
@@ -443,26 +492,34 @@ class _ReceiptItemModeCard extends StatelessWidget {
   }
 }
 
+/// Tarjeta de asignación de impresoras por comprobante. Soporta múltiples
+/// impresoras (Printing v2 — Slice 1.5): cada una se muestra en su propio
+/// panel con botones individuales de eliminar/configurar, y un botón
+/// "Agregar otra" al final para sumar más.
 class _DocumentAssignmentCard extends StatelessWidget {
   const _DocumentAssignmentCard({
     required this.title,
     required this.trailingLabel,
-    required this.printer,
+    required this.assigned,
     required this.busy,
-    required this.onAddOrReplace,
+    required this.onAdd,
     required this.onDelete,
     required this.onConfigure,
-    required this.replaceLabel,
+    this.multiCopy,
+    this.onMultiCopyChanged,
   });
 
   final String title;
   final String trailingLabel;
-  final PrinterDevice? printer;
+  final List<PrinterDevice> assigned;
   final bool busy;
-  final VoidCallback onAddOrReplace;
-  final VoidCallback? onDelete;
-  final VoidCallback? onConfigure;
-  final String replaceLabel;
+  final VoidCallback onAdd;
+  final ValueChanged<PrinterDevice> onDelete;
+  final ValueChanged<PrinterDevice> onConfigure;
+  /// Slice B: si NO es null, muestra un switch para activar/desactivar
+  /// modo "multi-copia" (imprime en TODAS las asignadas, sin picker).
+  final bool? multiCopy;
+  final ValueChanged<bool>? onMultiCopyChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -486,11 +543,11 @@ class _DocumentAssignmentCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
-          if (printer == null)
+          if (assigned.isEmpty)
             SizedBox(
               width: double.infinity,
               child: TextButton.icon(
-                onPressed: busy ? null : onAddOrReplace,
+                onPressed: busy ? null : onAdd,
                 style: TextButton.styleFrom(
                   backgroundColor: const Color(0xFFEAF1FB),
                   foregroundColor: MangoColors.primaryOrange,
@@ -503,113 +560,195 @@ class _DocumentAssignmentCard extends StatelessWidget {
                 label: const Text('Agregar impresora'),
               ),
             )
-          else
-            PrintingDashedPanel(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.print_outlined,
-                        size: 22,
-                        color: MangoColors.darkGray,
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              printer!.name,
-                              style: const TextStyle(
-                                fontSize: 17,
-                                fontWeight: FontWeight.w800,
-                                color: MangoColors.darkGray,
-                              ),
-                            ),
-                            const Text(
-                              'Generica',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: MangoColors.muted,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      PrintingStatusCluster(online: printer!.online),
-                      const SizedBox(width: 10),
-                      OutlinedButton(
-                        onPressed: onConfigure,
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: MangoColors.primaryOrange,
-                          side: const BorderSide(color: MangoColors.primaryOrange),
-                          minimumSize: const Size(44, 38),
-                          padding: EdgeInsets.zero,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                        ),
-                        child: const Icon(Icons.print_outlined),
-                      ),
-                    ],
+          else ...[
+            for (final p in assigned) ...[
+              _AssignedPrinterRow(
+                printer: p,
+                busy: busy,
+                onDelete: () => onDelete(p),
+                onConfigure: () => onConfigure(p),
+              ),
+              const SizedBox(height: 10),
+            ],
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: busy ? null : onAdd,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: MangoColors.primaryOrange,
+                  side: const BorderSide(color: MangoColors.primaryOrange),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
                   ),
-                  const SizedBox(height: 12),
-                  const Divider(height: 1, color: Color(0xFFD4D4D4)),
-                  const SizedBox(height: 12),
-                  Text(
-                    'IP: ${printer!.ip?.isNotEmpty == true ? printer!.ip! : 'No configurada'}',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: MangoColors.darkGray,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    printer!.type == PrinterType.usb
-                        ? 'USB: ${printer!.devicePath?.isNotEmpty == true ? printer!.devicePath! : (printer!.mac?.isNotEmpty == true ? printer!.mac! : 'No disponible')}'
-                        : 'MAC: ${printer!.mac?.isNotEmpty == true ? printer!.mac! : 'No disponible'}',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: MangoColors.darkGray,
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Row(
-                    children: [
-                      PrintingActionButton(
-                        label: 'Eliminar',
-                        icon: Icons.delete_outline,
-                        foreground: const Color(0xFFEF5350),
-                        background: const Color(0xFFFFF1F1),
-                        onPressed: busy ? null : onDelete,
-                      ),
-                      const SizedBox(width: 10),
-                      PrintingActionButton(
-                        label: 'Conf. imp.',
-                        icon: Icons.settings_outlined,
-                        foreground: const Color(0xFF376E86),
-                        background: const Color(0xFFE7EFF1),
-                        onPressed: busy ? null : onConfigure,
-                      ),
-                      const SizedBox(width: 10),
-                      PrintingActionButton(
-                        label: replaceLabel,
-                        icon: Icons.replay_outlined,
-                        foreground: MangoColors.primaryOrange,
-                        background: const Color(0xFFEAF1FB),
-                        onPressed: busy ? null : onAddOrReplace,
-                      ),
-                    ],
-                  ),
-                ],
+                ),
+                icon: const Icon(Icons.add_circle_outline),
+                label: const Text('Agregar otra impresora'),
               ),
             ),
+            // Slice B: switch de multi-copia. Solo visible cuando hay >1
+            // impresora asignada (con 1 sola no tiene sentido el modo).
+            if (multiCopy != null &&
+                onMultiCopyChanged != null &&
+                assigned.length > 1) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF9FAFB),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFE5E7EB)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.copy_all_outlined,
+                      size: 18,
+                      color: MangoColors.darkGray,
+                    ),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Imprimir en todas (multi-copia)',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                              color: MangoColors.darkGray,
+                            ),
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            'Sin picker: el ticket sale en cada impresora '
+                            'asignada al mismo tiempo.',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: MangoColors.muted,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Switch(
+                      value: multiCopy!,
+                      onChanged: busy ? null : onMultiCopyChanged,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
         ],
       ),
     );
   }
+}
+
+class _AssignedPrinterRow extends StatelessWidget {
+  const _AssignedPrinterRow({
+    required this.printer,
+    required this.busy,
+    required this.onDelete,
+    required this.onConfigure,
+  });
+
+  final PrinterDevice printer;
+  final bool busy;
+  final VoidCallback onDelete;
+  final VoidCallback onConfigure;
+
+  @override
+  Widget build(BuildContext context) {
+    return PrintingDashedPanel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.print_outlined,
+                size: 22,
+                color: MangoColors.darkGray,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      printer.name,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                        color: MangoColors.darkGray,
+                      ),
+                    ),
+                    Text(
+                      _transportLabel(printer.type),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: MangoColors.muted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              PrintingStatusCluster(online: printer.online),
+            ],
+          ),
+          const SizedBox(height: 12),
+          const Divider(height: 1, color: Color(0xFFD4D4D4)),
+          const SizedBox(height: 12),
+          Text(
+            'IP: ${printer.ip?.isNotEmpty == true ? printer.ip! : 'No configurada'}',
+            style: const TextStyle(
+              fontSize: 13,
+              color: MangoColors.darkGray,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            printer.type == PrinterType.usb
+                ? 'USB: ${printer.devicePath?.isNotEmpty == true ? printer.devicePath! : (printer.mac?.isNotEmpty == true ? printer.mac! : 'No disponible')}'
+                : 'MAC: ${printer.mac?.isNotEmpty == true ? printer.mac! : 'No disponible'}',
+            style: const TextStyle(
+              fontSize: 13,
+              color: MangoColors.darkGray,
+            ),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              PrintingActionButton(
+                label: 'Eliminar',
+                icon: Icons.delete_outline,
+                foreground: const Color(0xFFEF5350),
+                background: const Color(0xFFFFF1F1),
+                onPressed: busy ? null : onDelete,
+              ),
+              const SizedBox(width: 10),
+              PrintingActionButton(
+                label: 'Conf. imp.',
+                icon: Icons.settings_outlined,
+                foreground: const Color(0xFF376E86),
+                background: const Color(0xFFE7EFF1),
+                onPressed: busy ? null : onConfigure,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _transportLabel(PrinterType type) => switch (type) {
+        PrinterType.network => 'Red / LAN',
+        PrinterType.bluetooth => 'Bluetooth',
+        PrinterType.usb => 'USB',
+      };
 }
 
 class _ReceiptPrinterPickerDialog extends StatelessWidget {

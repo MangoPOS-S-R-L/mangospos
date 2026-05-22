@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -46,6 +48,22 @@ InventoryMode _inventoryModeFromWire(String? raw) {
   }
 }
 
+// Las franjas (banners inversos) de la comanda de cocina se controlan
+// con dos switches independientes: uno para la sección "PARA COMER AQUI"
+// (items dine-in) y otro para "PARA LLEVAR" (items takeout). Cada
+// switch decide si la franja se imprime para SU sección — los items
+// siempre se separan por isTakeout. Las 4 combinaciones cubren todos
+// los casos prácticos sin forzar opciones excluyentes:
+//   ON  + ON  → ambas franjas (default, legacy)
+//   ON  + OFF → solo franja en dine-in
+//   OFF + ON  → solo franja en takeout (cocinero asume dine-in)
+//   OFF + OFF → sin franjas, todos los items pelados
+//
+// Hubo una iteración previa con un enum `KitchenTicketSectionMode` de
+// 4 valores excluyentes. La migración 20260518_0003 backfilleó los
+// valores a estos dos booleanos; la columna vieja queda huérfana en BD
+// para rollback.
+
 /// Feature flags por negocio. Default: todo prendido (preserva el
 /// comportamiento histórico del POS). El admin puede apagar lo que
 /// no usa desde Ajustes → Modos de negocio.
@@ -59,6 +77,8 @@ class BusinessFeatures {
   final InventoryMode inventoryMode;
   final bool multimeseroEnabled;
   final bool transfersRequireApproval;
+  final bool kitchenBannerDineIn;
+  final bool kitchenBannerTakeout;
 
   const BusinessFeatures({
     this.salesModeTableEnabled = true,
@@ -70,6 +90,8 @@ class BusinessFeatures {
     this.inventoryMode = InventoryMode.none,
     this.multimeseroEnabled = false,
     this.transfersRequireApproval = false,
+    this.kitchenBannerDineIn = true,
+    this.kitchenBannerTakeout = true,
   });
 
   /// Defaults aplicados cuando no hay fila en business_settings o
@@ -90,6 +112,10 @@ class BusinessFeatures {
       inventoryMode: _inventoryModeFromWire(map['inventory_mode']?.toString()),
       multimeseroEnabled: map['multimesero_enabled'] == true,
       transfersRequireApproval: map['transfers_require_approval'] == true,
+      // Default `true` cuando la columna no viene en el SELECT o vale
+      // NULL: preserva el comportamiento histórico (ambas franjas).
+      kitchenBannerDineIn: map['kitchen_banner_dine_in'] != false,
+      kitchenBannerTakeout: map['kitchen_banner_takeout'] != false,
     );
   }
 
@@ -103,6 +129,8 @@ class BusinessFeatures {
     InventoryMode? inventoryMode,
     bool? multimeseroEnabled,
     bool? transfersRequireApproval,
+    bool? kitchenBannerDineIn,
+    bool? kitchenBannerTakeout,
   }) {
     return BusinessFeatures(
       salesModeTableEnabled:
@@ -119,6 +147,8 @@ class BusinessFeatures {
       multimeseroEnabled: multimeseroEnabled ?? this.multimeseroEnabled,
       transfersRequireApproval:
           transfersRequireApproval ?? this.transfersRequireApproval,
+      kitchenBannerDineIn: kitchenBannerDineIn ?? this.kitchenBannerDineIn,
+      kitchenBannerTakeout: kitchenBannerTakeout ?? this.kitchenBannerTakeout,
     );
   }
 
@@ -177,6 +207,81 @@ class PosSettingsRepository {
       'business_id': businessId,
       'cash_close_mode': normalized,
     }, onConflict: 'business_id');
+  }
+
+  /// Flag por negocio: si TRUE, durante el cierre de caja el cajero
+  /// puede usar el botón "Volver a contar" / "Recontar" para limpiar
+  /// los montos y empezar el flujo de nuevo (siempre antes de firmar).
+  /// Default `false` (preserva comportamiento legacy).
+  Future<bool> getAllowRecount(String businessId) async {
+    try {
+      final row = await _client
+          .from('business_settings')
+          .select('allow_recount')
+          .eq('business_id', businessId)
+          .maybeSingle();
+      return row?['allow_recount'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> setAllowRecount({
+    required String businessId,
+    required bool enabled,
+  }) async {
+    await _client.from('business_settings').upsert({
+      'business_id': businessId,
+      'allow_recount': enabled,
+    }, onConflict: 'business_id');
+  }
+
+  /// Auditoría: registra un evento "Volver a contar" en `audit_logs`.
+  /// Captura los montos previos al reset para que el admin pueda ver
+  /// patrones (e.g. cuánto varió el cajero entre conteos). Tolerante a
+  /// fallos: si la inserción falla, no propaga la excepción para no
+  /// bloquear al cajero por un error de auditoría.
+  Future<void> recordCashRecount({
+    required String businessId,
+    required String sessionId,
+    required double cashTotal,
+    required double cardTotal,
+    required double transferTotal,
+  }) async {
+    try {
+      final userId = _client.auth.currentUser?.id;
+      await _client.from('audit_logs').insert({
+        'business_id': businessId,
+        'user_id': userId,
+        'action': 'cash_recount',
+        'ref_table': 'cash_register_sessions',
+        'ref_id': sessionId,
+        'reason': jsonEncode({
+          'cash': cashTotal,
+          'card': cardTotal,
+          'transfer': transferTotal,
+        }),
+      });
+    } catch (_) {
+      // Silencioso: el reconteo en sí es más importante que su auditoría.
+    }
+  }
+
+  /// Devuelve el número de reconteos registrados para una sesión de
+  /// caja. Se usa al imprimir el reporte de cierre para mostrar
+  /// "Reconteos: N" en las estadísticas del turno.
+  Future<int> getCashRecountCount(String sessionId) async {
+    try {
+      final rows = await _client
+          .from('audit_logs')
+          .select('id')
+          .eq('action', 'cash_recount')
+          .eq('ref_table', 'cash_register_sessions')
+          .eq('ref_id', sessionId);
+      return (rows as List).length;
+    } catch (_) {
+      return 0;
+    }
   }
 
   Future<bool> getPromptPeopleCountOnTableOpen(String businessId) async {
@@ -249,6 +354,64 @@ class PosSettingsRepository {
     );
   }
 
+  /// Printing v2 — Slice B: lee los flags de multi-copia automática para
+  /// pre-cuenta y recibo. Default false si la fila no existe o falla.
+  /// Cuando true, el orchestrator imprime en TODAS las impresoras del
+  /// tipo paralelo (sin picker, sin fijada).
+  Future<({bool precheck, bool receipt})> getPrintMultiCopyModes(
+    String businessId,
+  ) async {
+    try {
+      final row = await _client
+          .from('business_settings')
+          .select(
+              'print_precheck_multi_copy, print_receipt_multi_copy')
+          .eq('business_id', businessId)
+          .maybeSingle();
+      final precheck = row?['print_precheck_multi_copy'] == true;
+      final receipt = row?['print_receipt_multi_copy'] == true;
+      return (precheck: precheck, receipt: receipt);
+    } catch (_) {
+      return (precheck: false, receipt: false);
+    }
+  }
+
+  Future<void> setPrintMultiCopy({
+    required String businessId,
+    required String kind, // 'precheck' | 'receipt'
+    required bool enabled,
+  }) async {
+    final column = kind == 'precheck'
+        ? 'print_precheck_multi_copy'
+        : 'print_receipt_multi_copy';
+    await _client.from('business_settings').upsert({
+      'business_id': businessId,
+      column: enabled,
+    }, onConflict: 'business_id');
+  }
+
+  /// Devuelve los dos flags de franjas de la comanda como un record. Si
+  /// la fila no existe o la query falla, default a (true, true) para
+  /// preservar el comportamiento legacy. Patrón gemelo a
+  /// `getReceiptItemDisplayMode`; `printing_service` lo consume sin
+  /// acoplarse al modelo `BusinessFeatures` completo.
+  Future<({bool dineIn, bool takeout})> getKitchenBanners(
+    String businessId,
+  ) async {
+    try {
+      final row = await _client
+          .from('business_settings')
+          .select('kitchen_banner_dine_in, kitchen_banner_takeout')
+          .eq('business_id', businessId)
+          .maybeSingle();
+      final dineIn = row?['kitchen_banner_dine_in'] != false;
+      final takeout = row?['kitchen_banner_takeout'] != false;
+      return (dineIn: dineIn, takeout: takeout);
+    } catch (_) {
+      return (dineIn: true, takeout: true);
+    }
+  }
+
   // Feature flags por negocio (2026-05-13).
 
   /// Carga los feature flags del negocio. Si la fila no existe o la
@@ -261,7 +424,8 @@ class PosSettingsRepository {
             'sales_mode_table_enabled, sales_mode_manual_enabled, '
             'sales_mode_quick_enabled, sales_mode_delivery_enabled, '
             'kitchen_enabled, barcode_enabled, inventory_mode, '
-            'multimesero_enabled, transfers_require_approval',
+            'multimesero_enabled, transfers_require_approval, '
+            'kitchen_banner_dine_in, kitchen_banner_takeout',
           )
           .eq('business_id', businessId)
           .maybeSingle();
@@ -291,6 +455,8 @@ class PosSettingsRepository {
       'inventory_mode': features.inventoryMode.wireValue,
       'multimesero_enabled': features.multimeseroEnabled,
       'transfers_require_approval': features.transfersRequireApproval,
+      'kitchen_banner_dine_in': features.kitchenBannerDineIn,
+      'kitchen_banner_takeout': features.kitchenBannerTakeout,
     }, onConflict: 'business_id');
   }
 }

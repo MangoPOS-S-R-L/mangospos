@@ -130,10 +130,23 @@ class DetailedWizardViewModel extends StateNotifier<DetailedWizardState> {
     state = state.copyWith(currentStep: clamped);
   }
 
+  /// Resetea el conteo a cero: efectivo (todas las denominaciones),
+  /// tarjeta, transferencia, nota de supervisor. Mantiene `input` y
+  /// resetea `currentStep` a 0. Para el flujo "Volver a contar" cuando
+  /// el cajero detecta un error antes de firmar.
+  void resetCounts() {
+    state = DetailedWizardState(
+      input: state.input,
+      denominations: List.unmodifiable(_baseDenominations),
+    );
+  }
+
   /// Snapshot inmutable del estado actual al momento de firmar. Útil para
   /// pasarlo al repo sin race conditions con cambios subsiguientes (que
-  /// además están deshabilitados por la pantalla loading).
-  DetailedWizardSnapshot snapshot() {
+  /// además están deshabilitados por la pantalla loading). El caller
+  /// pasa `attemptNumber` (1 original, 2 reconteo) para que la fila
+  /// nueva de `cash_count_blind` use el attempt correcto.
+  DetailedWizardSnapshot snapshot({int attemptNumber = 1}) {
     final denomMap = <String, dynamic>{};
     for (final d in state.denominations) {
       if (d.count == 0) continue;
@@ -149,6 +162,7 @@ class DetailedWizardViewModel extends StateNotifier<DetailedWizardState> {
           ? null
           : state.supervisorNote.trim(),
       result: state.result,
+      attemptNumber: attemptNumber,
     );
   }
 
@@ -169,6 +183,11 @@ class DetailedWizardSnapshot {
   final double openingFloat;
   final String? supervisorNote;
   final CashCloseResult result;
+  /// Número del intento (1 = original, 2 = reconteo). El wizard lo
+  /// incrementa cuando el cajero pulsa "Volver a contar" en el step
+  /// de resultado. El caller debe pasar este valor al repositorio para
+  /// que la fila nueva de `cash_count_blind` use el attempt correcto.
+  final int attemptNumber;
 
   const DetailedWizardSnapshot({
     required this.cashAmount,
@@ -178,6 +197,7 @@ class DetailedWizardSnapshot {
     required this.openingFloat,
     required this.supervisorNote,
     required this.result,
+    this.attemptNumber = 1,
   });
 }
 

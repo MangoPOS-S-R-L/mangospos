@@ -271,13 +271,72 @@ class PrinterUsageSummary {
   final int receiptAssignments;
 }
 
+/// Printing v2: transport unificado.
+///
+/// Reemplaza conceptualmente al enum `PrinterType` (que se mantiene por
+/// compat). Permite agregar tecnologías nuevas sin modificar un enum.
+/// Mapea 1:1 con `printers.transport` en BD (migración
+/// 20260521_0001_printers_extend_v2.sql).
+enum PrinterTransport { lan, usb, bluetooth, serial, cups }
+
+extension PrinterTransportX on PrinterTransport {
+  String get wireName => switch (this) {
+    PrinterTransport.lan => 'lan',
+    PrinterTransport.usb => 'usb',
+    PrinterTransport.bluetooth => 'bluetooth',
+    PrinterTransport.serial => 'serial',
+    PrinterTransport.cups => 'cups',
+  };
+
+  static PrinterTransport fromName(String? value) {
+    final normalized = value?.trim().toLowerCase();
+    return switch (normalized) {
+      'usb' => PrinterTransport.usb,
+      'bluetooth' || 'bt' => PrinterTransport.bluetooth,
+      'serial' => PrinterTransport.serial,
+      'cups' => PrinterTransport.cups,
+      'lan' || 'network' || 'tcp' || null || '' => PrinterTransport.lan,
+      _ => PrinterTransport.lan,
+    };
+  }
+}
+
+/// Printing v2: rol por defecto de la impresora.
+///
+/// Mapea 1:1 con `printers.purpose` en BD. `general` = sin rol fijo, el
+/// orchestrator decide en runtime según `print_area_printers` (legacy)
+/// o asignación explícita por destino.
+enum PrinterPurpose { receipt, precheck, kitchen, label, general }
+
+extension PrinterPurposeX on PrinterPurpose {
+  String get wireName => switch (this) {
+    PrinterPurpose.receipt => 'receipt',
+    PrinterPurpose.precheck => 'precheck',
+    PrinterPurpose.kitchen => 'kitchen',
+    PrinterPurpose.label => 'label',
+    PrinterPurpose.general => 'general',
+  };
+
+  static PrinterPurpose fromName(String? value) {
+    final normalized = value?.trim().toLowerCase();
+    return switch (normalized) {
+      'receipt' => PrinterPurpose.receipt,
+      'precheck' => PrinterPurpose.precheck,
+      'kitchen' => PrinterPurpose.kitchen,
+      'label' => PrinterPurpose.label,
+      'general' || null || '' => PrinterPurpose.general,
+      _ => PrinterPurpose.general,
+    };
+  }
+}
+
 /// 🖨️ Configuración de impresora (legacy support)
 @immutable
 class PrinterConfig {
   final String id;
   final String businessId;
   final String name;
-  final String type; // 'network', 'usb', 'bluetooth'
+  final String type; // 'network', 'usb', 'bluetooth' — legacy
   final String? ipAddress;
   final int? port;
   final String? devicePath;
@@ -298,6 +357,23 @@ class PrinterConfig {
   /// NULL = sin respaldo.
   final String? fallbackPrinterId;
 
+  // ───────────────────────────────────────────────────────────────────────
+  // Printing v2 — migración 20260521_0001_printers_extend_v2.sql
+  // ───────────────────────────────────────────────────────────────────────
+
+  /// Transport unificado. Si BD aún no migrada, se deriva de `type`.
+  final PrinterTransport transport;
+
+  /// Rol por defecto. Default `general`.
+  final PrinterPurpose purpose;
+
+  /// Configuración específica del transport (jsonb en BD). Esquema varía
+  /// por transport — ver MANUAL_TECNICO_IMPRESION.md.
+  final Map<String, dynamic> connectionConfig;
+
+  /// Último error registrado al imprimir. NULL = sin errores recientes.
+  final String? lastError;
+
   const PrinterConfig({
     required this.id,
     required this.businessId,
@@ -314,15 +390,21 @@ class PrinterConfig {
     required this.createdAt,
     this.hostDeviceId,
     this.fallbackPrinterId,
+    this.transport = PrinterTransport.lan,
+    this.purpose = PrinterPurpose.general,
+    this.connectionConfig = const {},
+    this.lastError,
   });
 
   factory PrinterConfig.fromMap(Map<String, dynamic> map) {
     final normalized = PrinterFieldMapper.normalize(map);
+    final rawTransport = map['transport']?.toString();
+    final legacyType = (normalized['type'] as String?) ?? PrinterType.network.name;
     return PrinterConfig(
       id: normalized['id'] as String,
       businessId: normalized['business_id'] as String,
       name: normalized['name'] as String,
-      type: (normalized['type'] as String?) ?? PrinterType.network.name,
+      type: legacyType,
       ipAddress: normalized['ip'] as String?,
       port: normalized['port'] as int?,
       devicePath: normalized['device_path'] as String?,
@@ -334,6 +416,15 @@ class PrinterConfig {
       createdAt: normalized['created_at'] as DateTime,
       hostDeviceId: map['host_device_id'] as String?,
       fallbackPrinterId: map['fallback_printer_id'] as String?,
+      // v2: si BD ya migró, usa transport explícito; si no, derívalo del type legacy.
+      transport: rawTransport != null
+          ? PrinterTransportX.fromName(rawTransport)
+          : _transportFromLegacyType(legacyType),
+      purpose: PrinterPurposeX.fromName(map['purpose']?.toString()),
+      connectionConfig: _readJsonMap(map['connection_config']),
+      lastError: (map['last_error'] as String?)?.trim().isEmpty == true
+          ? null
+          : map['last_error'] as String?,
     );
   }
 
@@ -343,6 +434,15 @@ class PrinterConfig {
   PrinterType get printerType => PrinterTypeX.fromName(type);
   bool get online => isActive;
   String? get ip => ipAddress;
+
+  // Helpers v2: leer config con fallback al campo legacy correspondiente.
+  // Útil mientras conviven los dos modelos.
+  String? get effectiveIp =>
+      (connectionConfig['ip'] as String?) ?? ipAddress;
+  int? get effectivePort =>
+      (connectionConfig['port'] as int?) ?? port;
+  String? get effectiveMac =>
+      (connectionConfig['mac'] as String?) ?? mac;
 
   Map<String, dynamic> toMap() {
     final ipValue = ipAddress?.trim();
@@ -365,7 +465,33 @@ class PrinterConfig {
       'created_at': createdAt.toIso8601String(),
       'host_device_id': hostDeviceId,
       'fallback_printer_id': fallbackPrinterId,
+      // v2
+      'transport': transport.wireName,
+      'purpose': purpose.wireName,
+      'connection_config': connectionConfig,
+      'last_error': lastError,
     };
+  }
+
+  static PrinterTransport _transportFromLegacyType(String legacy) {
+    return switch (legacy.toLowerCase()) {
+      'bluetooth' => PrinterTransport.bluetooth,
+      'usb' => PrinterTransport.usb,
+      _ => PrinterTransport.lan,
+    };
+  }
+
+  static Map<String, dynamic> _readJsonMap(dynamic raw) {
+    if (raw == null) return const {};
+    if (raw is Map<String, dynamic>) return raw;
+    if (raw is Map) return Map<String, dynamic>.from(raw);
+    if (raw is String && raw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map<String, dynamic>) return decoded;
+      } catch (_) {}
+    }
+    return const {};
   }
 }
 

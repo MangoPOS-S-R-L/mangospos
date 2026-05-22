@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/presentation/cashier/services/print_service.dart';
 import 'package:mangopos/presentation/cashier/state/blind_cash_close_models.dart';
 import 'package:mangopos/presentation/cashier/state/cash_close_formatters.dart';
@@ -933,12 +934,19 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
   }) async {
     setState(() => _processingPrint = true);
     try {
-      final service = CashClosePrintService(Supabase.instance.client);
+      final client = Supabase.instance.client;
+      // Carga el count de reconteos de la sesión para enriquecer el
+      // ticket. Si la query falla, defaultea a 0 (la línea no se
+      // imprime) y el cierre sigue normalmente.
+      final recountCount = await PosSettingsRepository(client)
+          .getCashRecountCount(widget.sessionId);
+      final service = CashClosePrintService(client);
       await service.printCloseTicket(
         input: state.input,
         result: state.result,
         denominations: state.denominations,
         printedAt: DateTime.now(),
+        recountCount: recountCount,
       );
       if (!silent && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

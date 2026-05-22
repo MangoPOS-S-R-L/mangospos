@@ -71,7 +71,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   Win32Window::Size size(winWidth, winHeight);
 
   StartupLog::Log("Calling window.Create()...");
-  if (!window.Create(L"mangopos", origin, size)) {
+  if (!window.Create(L"MangoPOS", origin, size)) {
     StartupLog::Log("ERROR: window.Create() FAILED - exiting");
     StartupLog::Close();
     return EXIT_FAILURE;
