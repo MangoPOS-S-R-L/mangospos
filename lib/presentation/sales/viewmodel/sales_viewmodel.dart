@@ -1984,11 +1984,30 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             'order_id': orderId,
           },
         );
-        await _persistCurrentState(localOnly: true);
+
+        // Espejo local del RPC fn_confirm_order_to_kitchen: marca los
+        // items en estado draft/open como pending para que la UI los
+        // muestre bajo "ENVIADOS A COCINA". Sin esto, el cajero ve el
+        // ticket imprimirse pero los items quedan visualmente en "POR
+        // CONFIRMAR" — bug reportado tras ver Pizza ✓ + Agua ✗ aunque
+        // ambos salieron en la comanda.
+        //
+        // Los items ya en pending/preparing/ready/served no se tocan
+        // (idempotente). Al sync, el replay del action 'send_to_kitchen'
+        // dispara el RPC real que persiste estos statuses en server.
+        final updatedItems = state.items.map((item) {
+          if (item.status == 'draft' || item.status == 'open') {
+            return item.copyWith(status: 'pending');
+          }
+          return item;
+        }).toList(growable: false);
+
         state = state.copyWith(
+          items: updatedItems,
           loading: false,
           error: 'Comanda impresa/localmente. Pendiente de sincronizar.',
         );
+        await _persistCurrentState(localOnly: true);
         return null;
       }
 
