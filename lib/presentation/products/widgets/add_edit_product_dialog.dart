@@ -1113,8 +1113,9 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
               ),
             ),
           Text(
-            'Selecciona una o más áreas. El producto se imprimirá en cada '
-            'una al enviar la comanda.',
+            'Selecciona el área donde se imprimirá la comanda. '
+            'Solo se permite un área por producto. Toca el área seleccionada '
+            'para deseleccionarla.',
             style: TextStyle(
               color: AppColors.mutedForeground,
               fontSize: 12,
@@ -1141,22 +1142,18 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
                 onSelected: (value) {
                   setState(() {
                     if (value) {
-                      _selectedPrintAreaIds.add(area.id);
+                      // Selección de UN solo área: limpiamos cualquier
+                      // selección previa antes de agregar la nueva. Esto
+                      // hace que los chips se comporten como radio buttons
+                      // en lugar de checkboxes. La N:M de la tabla sigue
+                      // existiendo pero por ahora la limitamos a 1 fila.
+                      _selectedPrintAreaIds
+                        ..clear()
+                        ..add(area.id);
+                      _printAreaCode = area.code;
                     } else {
                       _selectedPrintAreaIds.remove(area.id);
-                    }
-                    // Sincronizar legacy print_area_code: primer ID
-                    // seleccionado dicta el code (consistencia con
-                    // lectores legacy que solo ven print_area_code).
-                    if (_selectedPrintAreaIds.isEmpty) {
                       _printAreaCode = null;
-                    } else {
-                      final firstId = _selectedPrintAreaIds.first;
-                      final firstArea = activeAreas.firstWhere(
-                        (a) => a.id == firstId,
-                        orElse: () => area,
-                      );
-                      _printAreaCode = firstArea.code;
                     }
                   });
                 },

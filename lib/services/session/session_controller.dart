@@ -2,7 +2,8 @@ import 'dart:async';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode, kIsWeb;
+import 'package:mangopos/core/auth/offline_auth_service.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/core/network/supabase_config.dart';
 import 'package:mangopos/core/security/access_control_catalog.dart';
@@ -335,6 +336,14 @@ class SessionController extends Notifier<SessionState> {
         permissions: perms,
       ),
     );
+
+    // Fase 2.6 — auto-sync del roster offline al login y cada hora mientras
+    // la app esté abierta + al recuperar conectividad. Idempotente: si ya
+    // hay un ciclo corriendo para este business, no duplica. Si el device
+    // no fue vinculado, internamente se vuelve no-op.
+    if (businessId != null && businessId.isNotEmpty) {
+      unawaited(OfflineAuthService().startBackgroundSync(businessId));
+    }
   }
 
   void setActiveBusiness(String businessId) {
@@ -662,6 +671,35 @@ class SessionController extends Notifier<SessionState> {
     PinAccessLevel level = PinAccessLevel.any,
   }) async {
     final businessId = state.activeBusinessId;
+
+    // 1) Offline-first: roster cacheado con pin_hash.
+    //
+    //    Validar contra el cache local antes de pegarle al server tiene dos
+    //    beneficios: (a) funciona sin internet (Fase 2 — auth offline nivel
+    //    Toast), (b) cuando hay internet pero el server está degradado, no
+    //    queda colgado en timeouts. Si el roster está vacío o stale,
+    //    seguimos al path online como fallback.
+    if (businessId != null && businessId.isNotEmpty) {
+      try {
+        final matched = await OfflineAuthService().verifyPin(
+          businessId: businessId,
+          pin: pin,
+        );
+        if (matched != null) {
+          if (level == PinAccessLevel.any) return true;
+          final role = _mapRole(matched.role);
+          if (role != null && _meetsPinAccess(role, level)) return true;
+          // Rol no alcanza el nivel pedido: caemos al fallback en lugar de
+          // negar de plano, por si la versión online del rol cambió.
+        }
+      } catch (e) {
+        debugPrint('verifyPin: offline check falló (continuamos online): $e');
+      }
+    }
+
+    // 2) Online fallback (path histórico). Mientras `pin` plaintext exista
+    //    en employees, esto sigue funcionando para apps que aún no hicieron
+    //    bindDevice/syncRoster.
     if (businessId != null && businessId.isNotEmpty) {
       final client = Supabase.instance.client;
       try {
@@ -702,10 +740,16 @@ class SessionController extends Notifier<SessionState> {
       } catch (_) {}
     }
 
-    for (final user in pinLoginUsers) {
-      if (user.pin != pin) continue;
-      for (final role in user.roles) {
-        if (_meetsPinAccess(role, level)) return true;
+    // 3) DEBUG ONLY: PINs hardcodeados de demo (1111/2222/...). Antes
+    //    actuaban como fallback en producción, lo que era un agujero de
+    //    seguridad (audit offline §H1). Ahora SOLO se activan en builds
+    //    de debug para preservar el flujo de desarrollo local.
+    if (kDebugMode) {
+      for (final user in pinLoginUsers) {
+        if (user.pin != pin) continue;
+        for (final role in user.roles) {
+          if (_meetsPinAccess(role, level)) return true;
+        }
       }
     }
     return false;
@@ -715,6 +759,30 @@ class SessionController extends Notifier<SessionState> {
     final businessId = state.activeBusinessId;
     final userId = state.userId;
 
+    // 1) Offline-first: validar contra el roster cacheado, restringido al
+    //    usuario actualmente logueado. Si el PIN matchea pero pertenece a
+    //    OTRO usuario, NO devolvemos true — esa es la diferencia clave con
+    //    `verifyPin` (que valida "cualquier autorizado").
+    if (businessId != null &&
+        businessId.isNotEmpty &&
+        userId != null &&
+        userId.isNotEmpty) {
+      try {
+        final matched = await OfflineAuthService().verifyPin(
+          businessId: businessId,
+          pin: pin,
+        );
+        if (matched != null && matched.userId == userId) {
+          return true;
+        }
+      } catch (e) {
+        debugPrint(
+          'verifyCurrentUserPin: offline check falló (continuamos online): $e',
+        );
+      }
+    }
+
+    // 2) Online fallback (path histórico).
     if (businessId != null &&
         businessId.isNotEmpty &&
         userId != null &&
@@ -735,11 +803,16 @@ class SessionController extends Notifier<SessionState> {
       } catch (_) {}
     }
 
-    final currentUserId = state.userId;
-    if (currentUserId != null && currentUserId.isNotEmpty) {
-      for (final user in pinLoginUsers) {
-        if (user.id == currentUserId && user.pin == pin) {
-          return true;
+    // 3) DEBUG ONLY: PINs demo hardcodeados. Antes era el fallback en
+    //    producción (audit §H1 — agujero de seguridad). Ahora solo en
+    //    builds de debug.
+    if (kDebugMode) {
+      final currentUserId = state.userId;
+      if (currentUserId != null && currentUserId.isNotEmpty) {
+        for (final user in pinLoginUsers) {
+          if (user.id == currentUserId && user.pin == pin) {
+            return true;
+          }
         }
       }
     }

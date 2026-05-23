@@ -69,6 +69,7 @@ import '../../presentation/settings/business_features/business_features_view.dar
 import '../../presentation/settings/cash_close_mode/cash_close_mode_view.dart';
 import '../../presentation/settings/comandas_config/comandas_config_view.dart';
 import '../../presentation/settings/currencies/view/currencies_view.dart';
+import '../../presentation/settings/more settings/system settings/device/view/device_binding_view.dart';
 import '../../presentation/settings/regional/view/regional_view.dart';
 import 'package:mangopos/core/utils/logger.dart';
 import 'route_permissions.dart';
@@ -604,6 +605,10 @@ class AppRouter {
           GoRoute(
             path: AppRoutes.settingsRegional,
             builder: (context, state) => const RegionalView(),
+          ),
+          GoRoute(
+            path: AppRoutes.settingsDeviceBinding,
+            builder: (context, state) => const DeviceBindingView(),
           ),
           GoRoute(
             path: AppRoutes.inventoryHome,
