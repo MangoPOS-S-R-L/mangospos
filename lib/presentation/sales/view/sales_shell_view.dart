@@ -18,6 +18,7 @@ import 'package:mangopos/presentation/sales/state/sales_state.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/sales/view/theme/sales_theme.dart';
 import 'package:mangopos/presentation/sales/view/widgets/tax_config_error_banner.dart';
+import 'package:mangopos/presentation/shell/connectivity_diagnostics_dialog.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 
 enum SalesTab { byZone, manual, quick, delivery, selfService }
@@ -423,6 +424,14 @@ class _SalesSyncBanner extends ConsumerWidget {
               ),
             ),
           const SizedBox(width: 8),
+          IconButton(
+            tooltip: 'Diagnostico de conectividad',
+            visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.all(4),
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            icon: const Icon(Icons.help_outline, size: 18),
+            onPressed: () => ConnectivityDiagnosticsDialog.show(context),
+          ),
           TextButton.icon(
             onPressed: state.syncInFlight
                 ? null

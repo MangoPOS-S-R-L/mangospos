@@ -51,6 +51,19 @@ class OfflineQueueDao {
         );
   }
 
+  /// Borra TODAS las acciones de la cola de este business (pendientes y
+  /// failed). NO toca completed_ops/fingerprints — esos son marcadores
+  /// para evitar replay de acciones que ya se aplicaron en server. Usado
+  /// por el boton "Limpiar cola" cuando el cajero quiere descartar
+  /// operaciones bloqueadas por bugs anteriores o conflictos irresolubles.
+  /// Devuelve cuantas filas se borraron.
+  Future<int> deleteAllPending(String businessId) async {
+    final deleted = await (_db.delete(_db.queueActions)
+          ..where((t) => t.businessId.equals(businessId)))
+        .go();
+    return deleted;
+  }
+
   Future<void> writeQueue(
     String businessId,
     List<Map<String, dynamic>> actions,

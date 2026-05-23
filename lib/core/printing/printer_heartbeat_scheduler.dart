@@ -248,16 +248,34 @@ class PrinterHeartbeatScheduler {
   Future<String> _toShareableUrl(String url) async {
     if (!url.contains('127.0.0.1') && !url.contains('localhost')) return url;
     try {
-      // Enumeramos interfaces directamente (sin connectivity_plus) porque
-      // en macOS el check puede no devolver wifi/ethernet aunque haya red.
+      // Preferencia: usar la IP que el OS escoge para rutear a internet.
+      // Esto evita el bug de Windows con VirtualBox/Hyper-V/WSL donde
+      // `NetworkInterface.list()` devuelve el adapter virtual (192.168.56.x,
+      // por ej) ANTES del adapter LAN real y el primero que matcheaba IP
+      // privada se quedaba — registrando un URL inalcanzable desde otros
+      // devices del business.
+      final routedIp = await _localIpWithInternetRoute();
+      if (routedIp != null) {
+        final shareable = url
+            .replaceFirst('127.0.0.1', routedIp)
+            .replaceFirst('localhost', routedIp);
+        debugPrint(
+          '[Heartbeat] agent_url shareable: $url → $shareable (routed)',
+        );
+        return shareable;
+      }
+
+      // Fallback: enumerar interfaces, saltando las virtuales conocidas.
       final ifaces = await NetworkInterface.list(
         includeLoopback: false,
         includeLinkLocal: false,
         type: InternetAddressType.IPv4,
       );
       for (final iface in ifaces) {
+        if (_isVirtualInterface(iface.name)) continue;
         for (final addr in iface.addresses) {
           final ip = addr.address;
+          if (_isVirtualSubnet(ip)) continue;
           if (ip.startsWith('192.') ||
               ip.startsWith('10.') ||
               ip.startsWith('172.')) {
@@ -278,6 +296,57 @@ class PrinterHeartbeatScheduler {
       debugPrint('[Heartbeat] _toShareableUrl error: $e');
     }
     return url;
+  }
+
+  /// Pide al OS la IP local que usaria para alcanzar internet. Trick: abrir
+  /// un UDP socket "connect" a 8.8.8.8 — no manda nada pero el OS resuelve
+  /// el routing y bindea el socket a la interfaz correcta. Solo lee el
+  /// address y cierra. Sin trafico real, sin DNS.
+  Future<String?> _localIpWithInternetRoute() async {
+    RawDatagramSocket? socket;
+    try {
+      socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+      // El send fuerza al OS a elegir interface. Datagram puede fallar
+      // si el firewall bloquea UDP saliente — en ese caso caemos al
+      // fallback de enumerar. No esperamos respuesta.
+      socket.send(const [0], InternetAddress('8.8.8.8'), 53);
+      // Esperar un microtask para que el bind quede establecido.
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      final addr = socket.address.address;
+      if (addr == '0.0.0.0' || addr.isEmpty) return null;
+      if (_isVirtualSubnet(addr)) return null;
+      return addr;
+    } catch (_) {
+      return null;
+    } finally {
+      socket?.close();
+    }
+  }
+
+  bool _isVirtualInterface(String name) {
+    final n = name.toLowerCase();
+    return n.contains('virtualbox') ||
+        n.contains('vmware') ||
+        n.contains('vethernet') ||
+        n.contains('hyper-v') ||
+        n.contains('hyperv') ||
+        n.contains('wsl') ||
+        n.contains('bluetooth') ||
+        n.contains('loopback') ||
+        n.contains('docker') ||
+        n.contains('npcap') ||
+        n.contains('tap-windows') ||
+        n.contains('tap adapter');
+  }
+
+  bool _isVirtualSubnet(String ip) {
+    // VirtualBox Host-Only por defecto.
+    if (ip.startsWith('192.168.56.')) return true;
+    // APIPA / link-local (sin DHCP exitoso).
+    if (ip.startsWith('169.254.')) return true;
+    // Docker default bridge.
+    if (ip.startsWith('172.17.')) return true;
+    return false;
   }
 }
 

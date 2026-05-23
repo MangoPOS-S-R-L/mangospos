@@ -280,6 +280,113 @@ class _MainShellState extends ConsumerState<MainShell> {
 class _OfflineQueueBadge extends ConsumerWidget {
   const _OfflineQueueBadge();
 
+  Future<void> _showMenu(BuildContext context, WidgetRef ref) async {
+    final box = context.findRenderObject() as RenderBox?;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (box == null || overlay == null) return;
+
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        box.localToGlobal(Offset.zero, ancestor: overlay),
+        box.localToGlobal(box.size.bottomRight(Offset.zero), ancestor: overlay),
+      ),
+      Offset.zero & overlay.size,
+    );
+
+    final action = await showMenu<String>(
+      context: context,
+      position: position,
+      items: const [
+        PopupMenuItem(
+          value: 'sync',
+          child: Row(
+            children: [
+              Icon(Icons.sync_rounded, size: 18, color: Color(0xFF111827)),
+              SizedBox(width: 8),
+              Text('Sincronizar ahora'),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'clear',
+          child: Row(
+            children: [
+              Icon(Icons.delete_outline,
+                  size: 18, color: Color(0xFFEF4444)),
+              SizedBox(width: 8),
+              Text('Limpiar cola...',
+                  style: TextStyle(color: Color(0xFFEF4444))),
+            ],
+          ),
+        ),
+      ],
+    );
+
+    if (!context.mounted) return;
+
+    if (action == 'sync') {
+      await ref
+          .read(currentOrderProvider.notifier)
+          .syncPendingOfflineActions(force: true);
+    } else if (action == 'clear') {
+      await _confirmAndClear(context, ref);
+    }
+  }
+
+  Future<void> _confirmAndClear(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final pending = ref.read(offlineQueueStatusProvider).pending;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Color(0xFFEF4444)),
+            SizedBox(width: 8),
+            Expanded(child: Text('Limpiar cola offline')),
+          ],
+        ),
+        content: Text(
+          'Vas a descartar $pending operacion(es) pendiente(s) sin sincronizar al server. '
+          'Solo usalo si estan bloqueadas por errores irresolubles (ej: referencias a recursos '
+          'borrados). Las operaciones YA aplicadas en server NO se ven afectadas.\n\n'
+          'Esta accion no se puede deshacer.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: const Color(0xFFEF4444)),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Limpiar'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok != true || !context.mounted) return;
+
+    final businessId = ref.read(sessionProvider).activeBusinessId;
+    if (businessId == null || businessId.isEmpty) return;
+
+    final deleted = await OfflinePosService().clearPendingActions(businessId);
+    await ref.read(offlineQueueStatusProvider.notifier).refreshNow();
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: const Color(0xFF22C55E),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 3),
+        content: Text('Cola limpiada: $deleted operacion(es) descartada(s).'),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final status = ref.watch(offlineQueueStatusProvider);
@@ -289,18 +396,14 @@ class _OfflineQueueBadge extends ConsumerWidget {
 
     return Tooltip(
       message: hasPending
-          ? '$count operación(es) offline pendiente(s) de sincronizar'
+          ? '$count operación(es) offline pendiente(s) — click para sync o limpiar'
           : 'Todo sincronizado',
       child: MouseRegion(
         cursor: hasPending
             ? SystemMouseCursors.click
             : SystemMouseCursors.basic,
         child: GestureDetector(
-          onTap: hasPending
-              ? () => ref
-                    .read(currentOrderProvider.notifier)
-                    .syncPendingOfflineActions(force: true)
-              : null,
+          onTap: hasPending ? () => _showMenu(context, ref) : null,
           child: Stack(
             clipBehavior: Clip.none,
             children: [

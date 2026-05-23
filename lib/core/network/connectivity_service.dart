@@ -5,6 +5,34 @@ import 'package:http/http.dart' as http;
 
 import '../../env/env.dart';
 
+/// Snapshot de diagnostico para la UI. Muestra exactamente que rompio
+/// el probe sin necesidad de abrir consola debug.
+class ConnectivityDiagnostics {
+  const ConnectivityDiagnostics({
+    required this.adapterUp,
+    required this.reachable,
+    required this.failedProbes,
+    required this.supabaseUrl,
+    this.lastProbeAt,
+    this.lastProbeUrl,
+    this.lastProbeStatus,
+    this.lastProbeError,
+    this.lastProbeDuration,
+  });
+
+  final bool adapterUp;
+  final bool reachable;
+  final int failedProbes;
+  final String supabaseUrl;
+  final DateTime? lastProbeAt;
+  final String? lastProbeUrl;
+  final int? lastProbeStatus;
+  final String? lastProbeError;
+  final Duration? lastProbeDuration;
+
+  bool get isConnected => adapterUp && reachable;
+}
+
 /// Servicio de monitoreo de conectividad.
 ///
 /// `isConnected` combina dos señales:
@@ -27,6 +55,15 @@ class ConnectivityService {
   bool _initialized = false;
   int _failedProbes = 0;
 
+  // Diagnostico del ultimo probe — expuesto via [diagnostics] para
+  // que la UI muestre exactamente que rompio (path probado, status,
+  // error, duracion). Sin esto el cajero tiene que abrir consola debug.
+  DateTime? _lastProbeAt;
+  String? _lastProbeUrl;
+  int? _lastProbeStatus;
+  String? _lastProbeError;
+  Duration? _lastProbeDuration;
+
   StreamSubscription<List<ConnectivityResult>>? _subscription;
   Timer? _reachabilityTimer;
 
@@ -34,11 +71,33 @@ class ConnectivityService {
   /// Evita falsos positivos por blips de red transitorios.
   static const int _failureThreshold = 2;
 
-  /// Periodicidad del healthcheck cuando el adapter está up.
+  /// Periodicidad del healthcheck cuando el adapter está up Y reachable.
   static const Duration _probeInterval = Duration(seconds: 30);
 
-  /// Timeout corto del healthcheck. Si tarda más, el server está degradado.
-  static const Duration _probeTimeout = Duration(seconds: 3);
+  /// Periodicidad acelerada cuando estamos marcados como offline — para
+  /// recuperar mas rapido cuando vuelve la conectividad (sin esperar
+  /// 30s de la cadencia normal). Antes el cajero veia "Sin conexion"
+  /// durante medio minuto despues de que la red ya estaba OK.
+  static const Duration _probeIntervalFast = Duration(seconds: 5);
+
+  /// Timeout del healthcheck. 8s da margen para TLS handshake lento
+  /// (Coolify/Cloudflare detras pueden agregar 1-3s en cold start) sin
+  /// dejar al cajero esperando una eternidad.
+  static const Duration _probeTimeout = Duration(seconds: 8);
+
+  /// Endpoints a probar en orden. Aceptamos cualquier respuesta del
+  /// server (incluso 401/404) como "alcanzable" — el solo hecho de
+  /// recibir respuesta HTTP prueba que la red llego al server. Solo
+  /// timeouts/network errors/5xx cuentan como unreachable.
+  ///
+  /// Multiples paths porque diferentes deploys de Supabase tienen
+  /// configuraciones distintas: el self-hosted via Kong puede tener
+  /// /auth/v1/health bloqueado pero /rest/v1/ accesible, etc.
+  static List<String> get _probePaths => [
+        '/auth/v1/health',
+        '/rest/v1/',
+        '/',
+      ];
 
   ConnectivityService._();
 
@@ -61,6 +120,19 @@ class ConnectivityService {
 
   /// Última lectura del healthcheck (sin contar el adapter).
   bool get isReachable => _reachable;
+
+  /// Snapshot de diagnostico para la UI de troubleshooting.
+  ConnectivityDiagnostics get diagnostics => ConnectivityDiagnostics(
+        adapterUp: _adapterUp,
+        reachable: _reachable,
+        failedProbes: _failedProbes,
+        supabaseUrl: Env.supabaseUrl,
+        lastProbeAt: _lastProbeAt,
+        lastProbeUrl: _lastProbeUrl,
+        lastProbeStatus: _lastProbeStatus,
+        lastProbeError: _lastProbeError,
+        lastProbeDuration: _lastProbeDuration,
+      );
 
   /// Inicializar monitoreo de conectividad
   Future<void> initialize() async {
@@ -146,35 +218,70 @@ class ConnectivityService {
   }
 
   /// Lanza healthcheck contra Supabase y actualiza `_reachable`.
+  ///
+  /// Estrategia: probamos varios endpoints en orden y aceptamos cualquier
+  /// respuesta HTTP < 500 como "alcanzable". El razonamiento: el solo
+  /// hecho de recibir respuesta (incluso 401 "no auth" o 404 "ruta no
+  /// existe") prueba que la red llego al server. Antes el probe pedia
+  /// status 2xx/3xx exactos contra /auth/v1/health — si ese path estaba
+  /// bloqueado por el proxy o requeria auth, el cajero se quedaba
+  /// "offline" indefinidamente aunque el resto del Supabase respondiera.
   Future<void> _probeReachability({bool emit = false}) async {
     if (!_adapterUp) {
       _reachable = false;
+      _lastProbeAt = DateTime.now();
+      _lastProbeUrl = null;
+      _lastProbeStatus = null;
+      _lastProbeError = 'adapter down';
+      _lastProbeDuration = null;
       return;
     }
 
     final wasConnected = isConnected;
+    final base = Env.supabaseUrl;
+    String? lastReason;
+    String? lastUrl;
+    int? lastStatus;
+    bool reached = false;
+    final stopwatch = Stopwatch()..start();
 
-    try {
-      final url = Uri.parse('${Env.supabaseUrl}/auth/v1/health');
-      final response = await http
-          .get(url)
-          .timeout(_probeTimeout);
-
-      // Supabase auth/health responde 200 con `{"description":"...","name":"GoTrue"}`.
-      // Cualquier 2xx/3xx vale como "alcanzable".
-      if (response.statusCode >= 200 && response.statusCode < 400) {
-        _failedProbes = 0;
-        if (!_reachable) {
-          _reachable = true;
-          debugPrint('Supabase reachable again');
+    for (final path in _probePaths) {
+      final url = '$base$path';
+      lastUrl = url;
+      try {
+        final response = await http.get(Uri.parse(url)).timeout(_probeTimeout);
+        lastStatus = response.statusCode;
+        // 5xx == server respondio pero esta roto → NO contamos como
+        // alcanzable (siguiente probe path puede estar OK).
+        if (response.statusCode < 500) {
+          reached = true;
+          break;
         }
-      } else {
-        _markProbeFailure('status ${response.statusCode}');
+        lastReason = 'status ${response.statusCode} en $path';
+      } on TimeoutException {
+        lastStatus = null;
+        lastReason = 'timeout en $path';
+      } catch (e) {
+        lastStatus = null;
+        lastReason = 'error en $path: $e';
       }
-    } on TimeoutException {
-      _markProbeFailure('timeout');
-    } catch (e) {
-      _markProbeFailure('$e');
+    }
+    stopwatch.stop();
+
+    _lastProbeAt = DateTime.now();
+    _lastProbeUrl = lastUrl;
+    _lastProbeStatus = lastStatus;
+    _lastProbeError = reached ? null : lastReason;
+    _lastProbeDuration = stopwatch.elapsed;
+
+    if (reached) {
+      _failedProbes = 0;
+      if (!_reachable) {
+        _reachable = true;
+        debugPrint('Supabase reachable again');
+      }
+    } else {
+      _markProbeFailure(lastReason ?? 'unknown');
     }
 
     if (emit && wasConnected != isConnected) {
@@ -200,9 +307,19 @@ class ConnectivityService {
 
   void _startReachabilityPolling() {
     _reachabilityTimer?.cancel();
-    _reachabilityTimer = Timer.periodic(_probeInterval, (_) async {
+    // Polling adaptativo: cuando estamos sin red, polleamos cada 5s para
+    // recuperar al toque. Cuando estamos OK, cada 30s (el background load
+    // es minimo). Si el estado cambia, _reschedulePolling() se re-arma.
+    final interval = _reachable ? _probeInterval : _probeIntervalFast;
+    _reachabilityTimer = Timer.periodic(interval, (_) async {
       if (!_adapterUp) return;
+      final wasReachable = _reachable;
       await _probeReachability(emit: true);
+      // Si el estado cambio, re-arrancamos el timer con la cadencia
+      // correcta (fast↔normal) sin esperar al siguiente tick.
+      if (wasReachable != _reachable) {
+        _startReachabilityPolling();
+      }
     });
   }
 

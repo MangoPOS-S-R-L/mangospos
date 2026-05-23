@@ -354,6 +354,21 @@ class OfflinePosService {
     return queue.where((item) => !_isCompleted(item)).length;
   }
 
+  /// Descarta todas las acciones de la cola para este business. Pensado
+  /// para el boton "Limpiar cola" del banner offline — recurso de
+  /// emergencia cuando hay acciones bloqueadas por bugs anteriores o
+  /// conflictos irresolubles (ej: order_id que ya no existe en server).
+  ///
+  /// NO toca completed_ops/fingerprints: esos son markers que evitan
+  /// re-aplicar acciones que SI llegaron al server. Borrarlos podria
+  /// causar dobles ventas si una accion completed se re-encola luego.
+  ///
+  /// Devuelve cuantas acciones se borraron para feedback al cajero.
+  Future<int> clearPendingActions(String businessId) async {
+    if (businessId.isEmpty) return 0;
+    return _queueDao.deleteAllPending(businessId);
+  }
+
   Future<OfflineQueueSyncResult> syncPendingActions({
     required String businessId,
     required SalesRepository salesRepository,

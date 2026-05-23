@@ -31,7 +31,13 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
     // Initialize data
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final businessId = ref.read(sessionProvider).activeBusinessId;
-      ref.read(productsViewModelProvider).init(businessId: businessId);
+      final vm = ref.read(productsViewModelProvider);
+      // Reset filtros al ENTRAR a la pantalla. Sin esto, el viewmodel
+      // (singleton via riverpod) conserva searchQuery/category/menu de
+      // la sesion anterior — el cajero salia con "a" en el buscador,
+      // volvia, y veia solo productos con "a" sin entender por que.
+      vm.clearAllFilters();
+      vm.init(businessId: businessId);
       ref.read(taxesVmProvider.notifier).load(businessId: 'auto');
     });
   }

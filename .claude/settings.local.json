@@ -23,7 +23,13 @@
       "Bash(/opt/homebrew/opt/postgresql@15/bin/pg_ctl -D /tmp/pg_lint_tmp2 stop)",
       "Bash(git commit -m ' *)",
       "Bash(/opt/homebrew/opt/postgresql@15/bin/pg_ctl -D /tmp/pg_lint_tmp4 stop)",
-      "PowerShell(Set-Location \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\installer\\\\windows\"; powershell -ExecutionPolicy Bypass -File .\\\\build_inno.ps1 2>&1 | Tee-Object -FilePath \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\build\\\\installer\\\\build_inno_v1.0.0+41.log\")"
+      "PowerShell(Set-Location \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\installer\\\\windows\"; powershell -ExecutionPolicy Bypass -File .\\\\build_inno.ps1 2>&1 | Tee-Object -FilePath \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\build\\\\installer\\\\build_inno_v1.0.0+41.log\")",
+      "Bash(git log *)",
+      "PowerShell(Set-Location \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\installer\\\\windows\"; powershell -ExecutionPolicy Bypass -File .\\\\build_inno.ps1 2>&1 | Tee-Object -FilePath \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\build\\\\installer\\\\build_inno_v1.1.0+1.log\")",
+      "PowerShell(Set-Location \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\installer\\\\windows\"; powershell -ExecutionPolicy Bypass -File .\\\\build_inno.ps1 2>&1 | Tee-Object -FilePath \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\build\\\\installer\\\\build_inno_v1.1.0+2.log\")",
+      "PowerShell(Set-Location \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\installer\\\\windows\"; powershell -ExecutionPolicy Bypass -File .\\\\build_inno.ps1 2>&1 | Tee-Object -FilePath \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\build\\\\installer\\\\build_inno_v1.1.0+3.log\")",
+      "PowerShell(Set-Location \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\installer\\\\windows\"; powershell -ExecutionPolicy Bypass -File .\\\\build_inno.ps1 2>&1 | Tee-Object -FilePath \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\build\\\\installer\\\\build_inno_v1.1.0+4.log\")",
+      "PowerShell(Set-Location \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\installer\\\\windows\"; powershell -ExecutionPolicy Bypass -File .\\\\build_inno.ps1 2>&1 | Tee-Object -FilePath \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\build\\\\installer\\\\build_inno_v1.1.1+1.log\")"
     ]
   }
 }
