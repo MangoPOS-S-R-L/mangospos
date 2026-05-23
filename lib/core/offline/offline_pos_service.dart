@@ -493,6 +493,35 @@ class OfflinePosService {
             remoteItemId: createdItemId,
           );
         }
+
+        // Re-aplicar modifiers seleccionados al item recién creado en el
+        // server. La acción los lleva como snapshot en `selected_modifiers`
+        // (List<{name, qty, price}>). Antes esto se perdía: la orden offline
+        // llegaba al server SIN modifiers, dejando totales inconsistentes.
+        final rawModifiers = action['selected_modifiers'];
+        if (rawModifiers is List && rawModifiers.isNotEmpty) {
+          final modifiers = rawModifiers
+              .whereType<Map>()
+              .map<Map<String, dynamic>>(
+                (m) => Map<String, dynamic>.from(m),
+              )
+              .toList(growable: false);
+          if (modifiers.isNotEmpty) {
+            try {
+              await salesRepository.addOrderItemModifiers(
+                itemId: createdItemId,
+                modifiers: modifiers,
+              );
+            } catch (e) {
+              // No abortamos el sync por un fallo de modifiers — el item
+              // ya está en el server. Loggeamos para que el operador lo
+              // pueda diagnosticar en pantalla de cola pendiente.
+              debugPrint(
+                'Offline sync: error agregando modifiers a $createdItemId: $e',
+              );
+            }
+          }
+        }
         return resolvedOrderId;
       case 'delete_item':
         final resolvedItemId = await _resolveItemIdForAction(

@@ -64,31 +64,34 @@ class MenuItemPrintAreaRepository {
         .toList(growable: false);
   }
 
-  /// Reemplaza atómicamente el set de áreas de un producto. Borra las que
-  /// no están en [newAreaIds] e inserta las nuevas. Si [newAreaIds] está
-  /// vacío, deja al producto sin áreas N:M (cae al legacy print_area_code).
+  /// Reemplaza el set de áreas de un producto. Borra todas las asignaciones
+  /// actuales e inserta las nuevas. Si [newAreaIds] está vacío, deja al
+  /// producto sin áreas N:M (cae al legacy print_area_code).
+  ///
+  /// Antes intentaba un delete con filtro `NOT IN (...)` para preservar
+  /// las que no cambiaban, pero PostgREST trataba las comillas dobles
+  /// alrededor de cada UUID como parte del literal y el filtro no matcheaba
+  /// → el delete no borraba nada y el usuario quedaba sin poder reasignar
+  /// áreas. Ahora hacemos delete-total + insert que es más simple, más
+  /// robusto, y no depende del quoting de PostgREST. El gap entre delete
+  /// e insert es de milisegundos y los lectores fallback al legacy
+  /// `print_area_code` mientras tanto, así que el riesgo operativo es
+  /// despreciable.
   Future<void> setAreasForMenuItem(
     String menuItemId,
     List<String> newAreaIds,
   ) async {
     final unique = newAreaIds.toSet().toList(growable: false);
 
-    // 1) borrar las que ya no están
-    if (unique.isEmpty) {
-      await _client
-          .from('menu_item_print_areas')
-          .delete()
-          .eq('menu_item_id', menuItemId);
-      return;
-    }
-
+    // 1) Borrar todas las asignaciones actuales del producto.
     await _client
         .from('menu_item_print_areas')
         .delete()
-        .eq('menu_item_id', menuItemId)
-        .not('print_area_id', 'in', '(${unique.map((id) => '"$id"').join(',')})');
+        .eq('menu_item_id', menuItemId);
 
-    // 2) upsert de las nuevas
+    if (unique.isEmpty) return;
+
+    // 2) Insertar las nuevas (si hay).
     final payload = unique
         .map((areaId) => {
               'menu_item_id': menuItemId,
@@ -96,7 +99,7 @@ class MenuItemPrintAreaRepository {
             })
         .toList(growable: false);
 
-    await _client.from('menu_item_print_areas').upsert(payload);
+    await _client.from('menu_item_print_areas').insert(payload);
   }
 
   Future<void> addArea(String menuItemId, String printAreaId) async {

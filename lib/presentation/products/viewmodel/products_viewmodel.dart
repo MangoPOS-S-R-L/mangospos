@@ -288,7 +288,12 @@ class ProductsViewModel extends ChangeNotifier {
         } catch (e) {
           // No bloquear el flujo si el N:M falla; el legacy print_area_code
           // ya quedó persistido en createProduct y cubre el caso 1-de-1.
+          // Pero SÍ surfaceamos el error en state.error para que el cajero
+          // sepa que las áreas multi-print no se guardaron — antes se
+          // tragaba silencioso y se reportaba "no puedo reasignar áreas".
           debugPrint('addProduct: fallo guardando N:M áreas: $e');
+          _error =
+              'Producto guardado, pero las áreas de impresión multi-print no se actualizaron: $e';
         }
       }
 
@@ -380,13 +385,15 @@ class ProductsViewModel extends ChangeNotifier {
       );
 
       // Printing v2 (Slice 4.B): persistir N:M de áreas si el dialog
-      // las proveyó. setAreasForMenuItem hace replace atómico.
+      // las proveyó. setAreasForMenuItem hace replace (delete-all + insert).
       if (printAreaIds != null) {
         try {
           final mipa = MenuItemPrintAreaRepository(_supabase);
           await mipa.setAreasForMenuItem(id, printAreaIds);
         } catch (e) {
           debugPrint('updateProduct: fallo guardando N:M áreas: $e');
+          _error =
+              'Producto guardado, pero las áreas de impresión multi-print no se actualizaron: $e';
         }
       }
 

@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:mangopos/core/printing/bluetooth_print_service.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
 import 'package:mangopos/core/services/local_print_service.dart';
+import 'package:mangopos/core/storage/storage_service.dart';
 
 import '../models/printing_models.dart';
 
@@ -578,6 +579,9 @@ class PrintingRepository {
         if (printer != null) {
           final resolved = PrinterConfig.fromMap(printer);
           _writeCached(_assignedPrinterCache, cacheKey, resolved);
+          // Persistir en disco para que precuenta/factura funcionen offline
+          // tras un restart de la app (Fase 1.5 — fix audit §H4).
+          await _persistAssignedPrinter(cacheKey, resolved);
           return resolved;
         }
       }
@@ -585,8 +589,54 @@ class PrintingRepository {
       _writeCached<PrinterConfig?>(_assignedPrinterCache, cacheKey, null);
       return null;
     } catch (e) {
+      // Offline fallback: si la query a print_area_printers falla por
+      // conectividad, intentar restaurar la última impresora conocida
+      // desde el cache persistente. Esto permite imprimir precuenta y
+      // factura no-fiscal sin internet, asumiendo que la app se abrió
+      // online al menos una vez con esa misma configuración de impresora.
+      final persisted = await _readPersistedAssignedPrinter(cacheKey);
+      if (persisted != null) {
+        debugPrint(
+          '⚠️ Usando cache local de impresora asignada ($cacheKey): $e',
+        );
+        _writeCached(_assignedPrinterCache, cacheKey, persisted);
+        return persisted;
+      }
       throw Exception('Error al obtener la impresora asignada: $e');
     }
+  }
+
+  String _assignedPrinterPersistKey(String cacheKey) =>
+      'printing_assigned_printer_$cacheKey';
+
+  Future<void> _persistAssignedPrinter(
+    String cacheKey,
+    PrinterConfig printer,
+  ) async {
+    try {
+      final storage = await StorageService.getInstance();
+      await storage.write(
+        _assignedPrinterPersistKey(cacheKey),
+        jsonEncode(printer.toMap()),
+      );
+    } catch (e) {
+      debugPrint('printing: error persistiendo impresora asignada: $e');
+    }
+  }
+
+  Future<PrinterConfig?> _readPersistedAssignedPrinter(String cacheKey) async {
+    try {
+      final storage = await StorageService.getInstance();
+      final raw = await storage.read(_assignedPrinterPersistKey(cacheKey));
+      if (raw == null || raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        return PrinterConfig.fromMap(Map<String, dynamic>.from(decoded));
+      }
+    } catch (e) {
+      debugPrint('printing: error leyendo impresora persistida: $e');
+    }
+    return null;
   }
 
   /// Asignar impresora a área

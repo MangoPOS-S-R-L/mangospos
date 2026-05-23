@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -8,6 +12,7 @@ import 'package:mangopos/data/utils/payment_amount_utils.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/core/cache/cache_manager.dart';
 import 'package:mangopos/core/cache/cache_config.dart';
+import 'package:mangopos/core/storage/storage_service.dart';
 import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
@@ -50,6 +55,61 @@ class CashierViewModel extends ChangeNotifier {
   String? _error;
 
   CashierViewModel(this._repository, this._salesRepository);
+
+  // ───────────────────────────────────────────────────────────────────
+  // Persistencia local de la sesión de caja (Fase 1.4a offline)
+  // ───────────────────────────────────────────────────────────────────
+  // Guardamos un snapshot de `_lastSession` (cuando está open) en
+  // SharedPreferences para que un restart de la app sin internet pueda
+  // recuperar el estado de caja abierta. Sin esto, después de cerrar y
+  // reabrir la app offline el cajero queda bloqueado en `ensureCashOpenFast`.
+  String? _cachedSessionKey() {
+    if (_businessId == null || _currentRegisterId == null) return null;
+    return 'cashier_last_session_${_businessId}_$_currentRegisterId';
+  }
+
+  Future<void> _persistLastSession(Map<String, dynamic>? session) async {
+    final key = _cachedSessionKey();
+    if (key == null) return;
+    try {
+      final storage = await StorageService.getInstance();
+      // Solo cacheamos sesiones abiertas. Sesiones cerradas / null limpian
+      // el cache para no reabrir indebidamente al volver offline.
+      if (session != null && session['status'] == 'open') {
+        await storage.write(key, jsonEncode(session));
+      } else {
+        await storage.delete(key);
+      }
+    } catch (e) {
+      debugPrint('cashier: error persistiendo lastSession: $e');
+    }
+  }
+
+  Future<Map<String, dynamic>?> _readCachedLastSession() async {
+    final key = _cachedSessionKey();
+    if (key == null) return null;
+    try {
+      final storage = await StorageService.getInstance();
+      final raw = await storage.read(key);
+      if (raw == null || raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        return Map<String, dynamic>.from(decoded);
+      }
+    } catch (e) {
+      debugPrint('cashier: error leyendo lastSession cacheada: $e');
+    }
+    return null;
+  }
+
+  /// Setter helper que mantiene el cache local sincronizado con `_lastSession`.
+  /// Reemplaza asignaciones directas para que toda actualización pase por aquí.
+  void _setLastSession(Map<String, dynamic>? session) {
+    _lastSession = session;
+    // Persistir en background (fire-and-forget). Los lectores ven el cambio
+    // sincrónico en memoria; el disco es eventual.
+    unawaited(_persistLastSession(session));
+  }
 
   bool get isLoading => _isLoading;
   String? get error => _error;
@@ -133,12 +193,12 @@ class CashierViewModel extends ChangeNotifier {
             _currentRegisterId!,
           );
           if (registerSession != null) {
-            _lastSession = registerSession.toMap();
+            _setLastSession(registerSession.toMap());
           } else {
             // Fallback: última sesión del usuario (cerrada o abierta) para
             // mostrar histórico cuando no hay caja activa.
-            _lastSession = await _repository.getLastSession(
-              _currentRegisterId!,
+            _setLastSession(
+              await _repository.getLastSession(_currentRegisterId!),
             );
           }
 
@@ -154,6 +214,19 @@ class CashierViewModel extends ChangeNotifier {
     } catch (e) {
       debugPrint('Error loading cashier data: $e');
       _error = 'Error al cargar datos de caja.';
+
+      // Fase 1.4a — fallback offline: si la consulta al server falló y NO
+      // tenemos sesión en memoria, intentar restaurar de SharedPreferences.
+      // Esto permite que un restart de la app sin internet no bloquee al
+      // cajero cuando ya había caja abierta antes de perder la conexión.
+      if (_lastSession == null) {
+        final cached = await _readCachedLastSession();
+        if (cached != null && cached['status'] == 'open') {
+          _lastSession = cached;
+          _lastCashOpenValidationAt = AppTime.nowAst();
+          debugPrint('cashier: restaurada caja abierta desde cache offline');
+        }
+      }
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -754,9 +827,11 @@ class CashierViewModel extends ChangeNotifier {
           _currentRegisterId!,
         );
         if (registerSession != null) {
-          _lastSession = registerSession.toMap();
+          _setLastSession(registerSession.toMap());
         } else {
-          _lastSession = await _repository.getLastSession(_currentRegisterId!);
+          _setLastSession(
+            await _repository.getLastSession(_currentRegisterId!),
+          );
         }
         _lastCashOpenValidationAt = AppTime.nowAst();
         _pendingTables = await _salesRepository.getOpenTablesCount(
@@ -809,14 +884,27 @@ class CashierViewModel extends ChangeNotifier {
         _currentRegisterId!,
       );
       if (registerSession != null) {
-        _lastSession = registerSession.toMap();
+        _setLastSession(registerSession.toMap());
       } else {
-        _lastSession = await _repository.getLastSession(_currentRegisterId!);
+        _setLastSession(
+          await _repository.getLastSession(_currentRegisterId!),
+        );
       }
       _lastCashOpenValidationAt = now;
       return _lastSession?['status'] == 'open';
     } catch (e) {
       debugPrint('Error validating cash session quickly: $e');
+      // Fase 1.4a — offline: si no hay sesión en memoria pero hay una
+      // cacheada del último login online, restaurarla para no bloquear al
+      // cajero. El TTL del cache es implícito: si el cajero cierra caja en
+      // otro dispositivo, este queda con stale "open" hasta volver online
+      // — mismo tradeoff que ya documenta `refreshSilently`.
+      if (_lastSession == null) {
+        final cached = await _readCachedLastSession();
+        if (cached != null && cached['status'] == 'open') {
+          _lastSession = cached;
+        }
+      }
       return _lastSession?['status'] == 'open';
     }
   }

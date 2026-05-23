@@ -577,6 +577,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     } catch (e) {
       final businessId = _activeBusinessId;
       if (businessId != null && businessId.isNotEmpty) {
+        // 1. Snapshot previo (la mesa ya se abrió antes online u offline).
         final offlineState = await _offlinePos.loadSnapshot(
           businessId: businessId,
           slotId: tableId,
@@ -587,6 +588,30 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
               loading: false,
               error: 'Modo offline: usando copia local de la mesa.',
               origin: 'table',
+            ),
+          );
+          _tableCache[tableId] = state;
+          return;
+        }
+
+        // 2. Sin snapshot previo pero estamos offline: crear draft local
+        //    nuevo. `_resolveOrderIdForAction` con origin='table' usará el
+        //    tableId al sincronizar para abrir la mesa real en el server.
+        //    Solo cuando estamos offline — si Supabase respondió error real
+        //    (server down con LAN OK), `_connectivity.isConnected` baja por
+        //    el healthcheck y entramos aquí; si fue otro error transitorio
+        //    propagamos al usuario.
+        if (!_connectivity.isConnected) {
+          final draft = await _offlinePos.createLocalDraft(
+            businessId: businessId,
+            origin: 'table',
+            tableId: tableId,
+          );
+          state = _normalizeHydratedState(
+            draft.copyWith(
+              loading: false,
+              error:
+                  'Mesa abierta offline: los items se sincronizarán al recuperar conexión.',
             ),
           );
           _tableCache[tableId] = state;
@@ -1050,6 +1075,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             'notes': notes,
             'product_name': productName,
             'product_price': productPrice,
+            // Snapshot de modifiers seleccionados. Al sincronizar el replay
+            // los re-aplica vía addOrderItemModifiers contra el item ya
+            // creado en el server. Antes esto se perdía y los extras nunca
+            // llegaban al server (bug del audit offline §sync).
+            'selected_modifiers': selectedModifiers
+                .map((m) => m.toMap())
+                .toList(growable: false),
           },
         );
         await _persistCurrentState(localOnly: true);
