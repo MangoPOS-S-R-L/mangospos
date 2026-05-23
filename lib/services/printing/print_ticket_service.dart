@@ -506,23 +506,11 @@ class PrintTicketService {
         }
       }
 
-      // Desglose de impuestos por item: ITBIS, LEY (Propina), o cualquier
-      // tax configurado se lista bajo el item con su amount, leído del
-      // snapshot persistido en `order_item_tax_lines` (PRD 2 §6.1). Los
-      // amounts ya están sumados por el consolidate cuando varios items
-      // duplicados se fusionaron en uno.
-      if (item.taxLines.isNotEmpty) {
-        for (final tax in item.taxLines) {
-          if (tax.amount.abs() < 0.005) continue;
-          final rateLabel = tax.taxRate > 0
-              ? ' ${tax.taxRate.toStringAsFixed(tax.taxRate % 1 == 0 ? 0 : 1)}%'
-              : '';
-          gen.dotRow(
-            '  ${tax.taxName}$rateLabel',
-            'RD\$ ${_formatMoney(tax.amount)}',
-          );
-        }
-      }
+      // Desglose de impuestos por item: REMOVIDO por preferencia del
+      // cliente — los impuestos solo se muestran consolidados en la
+      // sección TOTALES al final del ticket. El snapshot persistido en
+      // `order_item_tax_lines` se sigue manteniendo para la factura
+      // fiscal y el sumatorio del bloque TOTALES.
 
       // Notas especiales destacadas
       if (item.notes != null && item.notes!.isNotEmpty) {
