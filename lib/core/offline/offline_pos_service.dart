@@ -3,9 +3,12 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
+import 'package:mangopos/core/offline/storage/offline_queue_dao.dart';
+import 'package:mangopos/core/offline/storage/offline_queue_db.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
 import 'package:mangopos/core/storage/storage_service.dart';
 import 'package:mangopos/data/models/sales_models.dart';
+import 'package:mangopos/data/repositories/cashier_repository.dart';
 import 'package:mangopos/data/repositories/inventory_repository.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/data/repositories/sales_repository.dart';
@@ -48,6 +51,65 @@ class OfflinePosService {
 
   Future<StorageService> get _storage async => StorageService.getInstance();
 
+  /// DAO de drift/sqlite para cola + completed_ops + fingerprints.
+  /// El resto del cache (snapshots, mappings, catalog, inventory) sigue
+  /// en SharedPreferences vía [_storage] — es alcance de Fase 6 solo
+  /// migrar lo que tiene problema real de volumen.
+  late final OfflineQueueDao _queueDao =
+      OfflineQueueDao(OfflineQueueDb.getInstance());
+
+  /// Guard one-time POR BUSINESS: la primera vez que se toca la cola
+  /// tras actualizar la app, importamos lo que haya en SharedPreferences
+  /// a sqlite y borramos las SP keys legacy. Necesita ser per-business
+  /// porque un owner de varias sucursales tendría las cola legacy
+  /// distintas en cada SP key — si lo memoizáramos global, la segunda
+  /// sucursal saltaría la migración al cambiar de business y perdería
+  /// su cola pendiente.
+  final Set<String> _migratedBusinesses = <String>{};
+  Future<void> _ensureMigratedFromSp(String businessId) async {
+    if (_migratedBusinesses.contains(businessId)) return;
+    _migratedBusinesses.add(businessId);
+    try {
+      final storage = await _storage;
+      final legacyQueue =
+          await storage.readList(_queueKey(businessId)) ?? const [];
+      final legacyOps =
+          await storage.readList(_completedOpsKey(businessId)) ?? const [];
+      final legacyFps =
+          await storage.readList(_completedFingerprintsKey(businessId)) ??
+              const [];
+      if (legacyQueue.isEmpty && legacyOps.isEmpty && legacyFps.isEmpty) {
+        return;
+      }
+      final queueMaps = legacyQueue
+          .whereType<Object?>()
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList(growable: false);
+      if (queueMaps.isNotEmpty) {
+        await _queueDao.writeQueue(businessId, queueMaps);
+      }
+      for (final id in legacyOps.map((e) => e.toString())) {
+        if (id.isEmpty) continue;
+        await _queueDao.markOpCompleted(businessId: businessId, opId: id);
+      }
+      for (final fp in legacyFps.map((e) => e.toString())) {
+        if (fp.isEmpty) continue;
+        await _queueDao.markFingerprintCompleted(
+          businessId: businessId,
+          fingerprint: fp,
+        );
+      }
+      // Borramos las claves legacy para que no se queden duplicadas y
+      // ocupen espacio. Si la app revierte a una versión vieja, el
+      // cajero pierde la cola pendiente — riesgo aceptado: forward-only.
+      await storage.delete(_queueKey(businessId));
+      await storage.delete(_completedOpsKey(businessId));
+      await storage.delete(_completedFingerprintsKey(businessId));
+    } catch (e) {
+      debugPrint('[offline] migración SP→drift falló: $e');
+    }
+  }
+
   /// Cache memoria por businessId del device_id estable para anotar cada
   /// acción encolada con su origen. Lo usan reports/auditoría
   /// multi-terminal (Fase 5 LWW). Si la lectura falla, devolvemos null
@@ -71,6 +133,8 @@ class OfflinePosService {
   String _printQueueKey(String businessId) => 'offline_print_queue_$businessId';
   String _orderMapKey(String businessId) => 'offline_order_map_$businessId';
   String _itemMapKey(String businessId) => 'offline_item_map_$businessId';
+  String _cashSessionMapKey(String businessId) =>
+      'offline_cash_session_map_$businessId';
   String _completedOpsKey(String businessId) =>
       'offline_completed_ops_$businessId';
   String _completedFingerprintsKey(String businessId) =>
@@ -195,7 +259,6 @@ class OfflinePosService {
     required String businessId,
     required Map<String, dynamic> action,
   }) async {
-    final storage = await _storage;
     final current = await _readQueue(businessId);
     // Anotamos device_id de origen (audit LWW). Best-effort: si falla
     // la lectura del id no bloqueamos el enqueue.
@@ -206,7 +269,7 @@ class OfflinePosService {
     }
     current.add(_normalizeAction(enriched));
     final compacted = _compactQueue(current);
-    await storage.writeList(_queueKey(businessId), compacted);
+    await _writeQueue(businessId, compacted);
   }
 
   Future<void> enqueuePrintJob({
@@ -230,9 +293,9 @@ class OfflinePosService {
     required SalesRepository salesRepository,
     required PrintingService printingService,
     required InventoryRepository inventoryRepository,
+    required CashierRepository cashierRepository,
     bool force = false,
   }) async {
-    final storage = await _storage;
     final queue = await _readQueue(businessId);
     if (queue.isEmpty) {
       return const OfflineQueueSyncResult();
@@ -245,8 +308,9 @@ class OfflinePosService {
     String? lastMappedOrderId;
     String? lastError;
 
-    final completedOps = await _readCompletedOps(businessId);
-    final completedFingerprints = await _readCompletedFingerprints(businessId);
+    final completedOps = await _queueDao.readCompletedOps(businessId);
+    final completedFingerprints =
+        await _queueDao.readCompletedFingerprints(businessId);
 
     for (var i = 0; i < queue.length; i++) {
       final action = queue[i];
@@ -270,7 +334,9 @@ class OfflinePosService {
         ..['status'] = _statusProcessing
         ..['processing_started_at'] = DateTime.now().toIso8601String();
       queue[i] = processing;
-      await storage.writeList(_queueKey(businessId), queue);
+      // UPSERT puntual de la action que cambió de estado, en lugar de
+      // reescribir la lista completa (O(n²) con N actions y N pasos).
+      await _queueDao.upsertAction(businessId, processing);
 
       try {
         final mappedOrderId = await _replayAction(
@@ -279,6 +345,7 @@ class OfflinePosService {
           salesRepository: salesRepository,
           printingService: printingService,
           inventoryRepository: inventoryRepository,
+          cashierRepository: cashierRepository,
         );
         lastMappedOrderId = mappedOrderId ?? lastMappedOrderId;
         final done = Map<String, dynamic>.from(processing)
@@ -291,11 +358,17 @@ class OfflinePosService {
         queue[i] = done;
         completed++;
         if (actionId != null && actionId.isNotEmpty) {
-          await _markOperationCompleted(businessId, actionId);
+          await _queueDao.markOpCompleted(
+            businessId: businessId,
+            opId: actionId,
+          );
         }
         final fingerprint = processing['fingerprint']?.toString();
         if (fingerprint != null && fingerprint.isNotEmpty) {
-          await _markFingerprintCompleted(businessId, fingerprint);
+          await _queueDao.markFingerprintCompleted(
+            businessId: businessId,
+            fingerprint: fingerprint,
+          );
         }
       } catch (e) {
         final attempts = ((processing['attempts'] as num?)?.toInt() ?? 0) + 1;
@@ -313,7 +386,9 @@ class OfflinePosService {
         failed++;
       }
 
-      await storage.writeList(_queueKey(businessId), queue);
+      // UPSERT puntual del action final (completed o failed). Idem
+      // optimización anterior: evita reescribir la cola entera.
+      await _queueDao.upsertAction(businessId, queue[i]);
       if (failed > 0) break;
     }
 
@@ -331,12 +406,15 @@ class OfflinePosService {
   }
 
   Future<List<Map<String, dynamic>>> _readQueue(String businessId) async {
-    final storage = await _storage;
-    final raw = await storage.readList(_queueKey(businessId)) ?? <dynamic>[];
-    return raw
-        .whereType<Object?>()
-        .map((item) => Map<String, dynamic>.from(item as Map))
-        .toList(growable: true);
+    await _ensureMigratedFromSp(businessId);
+    return _queueDao.readQueue(businessId);
+  }
+
+  Future<void> _writeQueue(
+    String businessId,
+    List<Map<String, dynamic>> queue,
+  ) async {
+    await _queueDao.writeQueue(businessId, queue);
   }
 
   Map<String, dynamic> _normalizeAction(Map<String, dynamic> action) {
@@ -492,9 +570,35 @@ class OfflinePosService {
     required SalesRepository salesRepository,
     required PrintingService printingService,
     required InventoryRepository inventoryRepository,
+    required CashierRepository cashierRepository,
   }) async {
     final type = action['type']?.toString();
     switch (type) {
+      case 'open_cash_session':
+        // Llamamos al RPC real. El response lleva `session_id` (uuid
+        // remoto). Guardamos el mapping local→remoto para que los
+        // payments encolados después con cashier_session_id local
+        // puedan traducirse al remoto en su propio replay.
+        final response = await cashierRepository.openSession(
+          cashRegisterId: action['cash_register_id']?.toString() ?? '',
+          userId: action['user_id']?.toString() ?? '',
+          startAmount: ((action['start_amount'] ?? 0) as num).toDouble(),
+          deviceId: action['device_id']?.toString() ?? '',
+          deviceName: action['device_name']?.toString(),
+        );
+        final remoteSessionId = response['session_id']?.toString();
+        final localSessionId = action['local_session_id']?.toString();
+        if (remoteSessionId != null &&
+            remoteSessionId.isNotEmpty &&
+            localSessionId != null &&
+            localSessionId.isNotEmpty) {
+          await _saveCashSessionMapping(
+            businessId: businessId,
+            localSessionId: localSessionId,
+            remoteSessionId: remoteSessionId,
+          );
+        }
+        return null;
       case 'inventory_adjust':
         // El RPC fn_inventory_adjust calcula delta server-side con FOR
         // UPDATE: si otro terminal tocó el stock mientras estábamos
@@ -696,6 +800,24 @@ class OfflinePosService {
         if (rawPaidAt != null && rawPaidAt.isNotEmpty) {
           paidAt = DateTime.tryParse(rawPaidAt);
         }
+        // cashier_session_id local (`local-cash-session-X`) → uuid
+        // remoto via mapping guardado al replay de open_cash_session.
+        // FIFO de la cola garantiza que open_cash_session ya pasó
+        // cuando este payment se replaya.
+        var cashierSessionId = action['cashier_session_id']?.toString();
+        if (cashierSessionId != null &&
+            cashierSessionId.startsWith('local-cash-session-')) {
+          final sessionMap = await _readCashSessionMap(businessId);
+          final remote = sessionMap[cashierSessionId]?.toString();
+          if (remote == null || remote.isEmpty) {
+            throw Exception(
+              'No se pudo resolver la sesión de caja local '
+              '$cashierSessionId al sincronizar el pago. ¿La acción '
+              'open_cash_session se replayó antes?',
+            );
+          }
+          cashierSessionId = remote;
+        }
         await salesRepository.processPayment(
           orderId: resolvedOrderId,
           checkId: action['check_id']?.toString(),
@@ -704,7 +826,7 @@ class OfflinePosService {
           reference: action['reference']?.toString(),
           customerId: action['customer_id']?.toString(),
           customerRnc: action['customer_rnc']?.toString(),
-          cashierSessionId: action['cashier_session_id']?.toString(),
+          cashierSessionId: cashierSessionId,
           changeAmount: ((action['change_amount'] ?? 0) as num).toDouble(),
           paidAt: paidAt,
         );
@@ -966,14 +1088,17 @@ class OfflinePosService {
     String businessId,
     List<Map<String, dynamic>> queue,
   ) async {
-    final storage = await _storage;
     final pending = queue.where((item) => !_isCompleted(item)).toList(growable: false);
     final completed = queue.where(_isCompleted).toList(growable: false);
     final keepCompleted = completed.length > 20
         ? completed.sublist(completed.length - 20)
         : completed;
     final compacted = [...pending, ...keepCompleted];
-    await storage.writeList(_queueKey(businessId), compacted);
+    await _writeQueue(businessId, compacted);
+    // Cap del histórico de completed_ops/fingerprints en sqlite: borramos
+    // entradas más viejas de 30 días. Antes el cap era 500 entries en
+    // memoria; el cap por tiempo es más robusto y predecible.
+    await _queueDao.pruneCompletedOlderThan(const Duration(days: 30));
   }
 
   Future<Map<String, dynamic>> _readOrderMap(String businessId) async {
@@ -999,6 +1124,23 @@ class OfflinePosService {
         <String, dynamic>{};
   }
 
+  Future<Map<String, dynamic>> _readCashSessionMap(String businessId) async {
+    final storage = await _storage;
+    return await storage.readJson(_cashSessionMapKey(businessId)) ??
+        <String, dynamic>{};
+  }
+
+  Future<void> _saveCashSessionMapping({
+    required String businessId,
+    required String localSessionId,
+    required String remoteSessionId,
+  }) async {
+    final storage = await _storage;
+    final current = await _readCashSessionMap(businessId);
+    current[localSessionId] = remoteSessionId;
+    await storage.writeJson(_cashSessionMapKey(businessId), current);
+  }
+
   Future<void> _saveItemMapping({
     required String businessId,
     required String localItemId,
@@ -1008,44 +1150,6 @@ class OfflinePosService {
     final current = await _readItemMap(businessId);
     current[localItemId] = remoteItemId;
     await storage.writeJson(_itemMapKey(businessId), current);
-  }
-
-  Future<Set<String>> _readCompletedOps(String businessId) async {
-    final storage = await _storage;
-    final raw = await storage.readList(_completedOpsKey(businessId)) ?? const [];
-    return raw.map((item) => item.toString()).where((item) => item.isNotEmpty).toSet();
-  }
-
-  Future<void> _markOperationCompleted(String businessId, String actionId) async {
-    final storage = await _storage;
-    final current = await _readCompletedOps(businessId);
-    current.add(actionId);
-    final ordered = current.toList(growable: false);
-    final capped = ordered.length > 500
-        ? ordered.sublist(ordered.length - 500)
-        : ordered;
-    await storage.writeList(_completedOpsKey(businessId), capped);
-  }
-
-  Future<Set<String>> _readCompletedFingerprints(String businessId) async {
-    final storage = await _storage;
-    final raw =
-        await storage.readList(_completedFingerprintsKey(businessId)) ?? const [];
-    return raw.map((item) => item.toString()).where((item) => item.isNotEmpty).toSet();
-  }
-
-  Future<void> _markFingerprintCompleted(
-    String businessId,
-    String fingerprint,
-  ) async {
-    final storage = await _storage;
-    final current = await _readCompletedFingerprints(businessId);
-    current.add(fingerprint);
-    final ordered = current.toList(growable: false);
-    final capped = ordered.length > 500
-        ? ordered.sublist(ordered.length - 500)
-        : ordered;
-    await storage.writeList(_completedFingerprintsKey(businessId), capped);
   }
 
   Map<String, dynamic> _encodeState(CurrentOrderState state) {

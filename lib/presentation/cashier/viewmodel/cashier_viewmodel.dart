@@ -1,10 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
+import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/data/repositories/cashier_repository.dart';
 import 'package:mangopos/data/repositories/sales_repository.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
@@ -738,12 +741,27 @@ class CashierViewModel extends ChangeNotifier {
       if (businessId == null) {
         throw Exception('No se pudo identificar el negocio');
       }
-      final created = await _repository.createCashRegister(
-        businessId: businessId,
-        name: 'Caja principal',
-      );
-      _currentRegisterId = created['id'] as String;
-      _currentRegisterName = created['name']?.toString() ?? 'Caja principal';
+      try {
+        final created = await _repository.createCashRegister(
+          businessId: businessId,
+          name: 'Caja principal',
+        );
+        _currentRegisterId = created['id'] as String;
+        _currentRegisterName = created['name']?.toString() ?? 'Caja principal';
+      } catch (e) {
+        // Sin red Y sin register_id local: único caso donde abrir caja
+        // offline es imposible. Device totalmente nuevo en esta sucursal
+        // que nunca operó antes.
+        if (_isConnectivityError(e)) {
+          throw const CashRegisterException(
+            errorCode: 'NO_REGISTER_OFFLINE',
+            message:
+                'No hay una caja configurada en este dispositivo. '
+                'Conéctate a internet al menos una vez para crearla.',
+          );
+        }
+        rethrow;
+      }
     }
     final userId = Supabase.instance.client.auth.currentUser?.id;
     if (userId == null) throw Exception('No user logged in');
@@ -754,51 +772,134 @@ class CashierViewModel extends ChangeNotifier {
       final deviceId = await DeviceUtils.getDeviceId();
       final deviceName = DeviceUtils.getDeviceName();
 
-      // Final check before sending to DB to provide better error message
-      final existingDeviceSession = await _repository.getDeviceActiveSession(
-        deviceId,
-      );
-      if (existingDeviceSession != null) {
-        throw const CashRegisterException(
-          errorCode: 'DEVICE_ALREADY_OPEN',
-          message:
-              'No se puede abrir otra caja ya que hay una caja abierta actualmente en este dispositivo.',
+      // Guards previos: si fallan POR RED NO bloqueamos — el RPC server-
+      // side los re-valida al sync. Si fallan por estado real (sesión ya
+      // abierta) sí propagamos el error.
+      try {
+        final existingDeviceSession = await _repository.getDeviceActiveSession(
+          deviceId,
         );
+        if (existingDeviceSession != null) {
+          throw const CashRegisterException(
+            errorCode: 'DEVICE_ALREADY_OPEN',
+            message:
+                'No se puede abrir otra caja ya que hay una caja abierta actualmente en este dispositivo.',
+          );
+        }
+
+        // Escopear el chequeo al business actual: si el usuario es owner
+        // de varias sucursales, la migración 20260509_0002 le permite
+        // abrir caja simultánea en cada una. Filtrar sin business_id
+        // bloquearía aunque el backend lo permita. El RPC sigue siendo
+        // la autoridad final y rechaza si Rule B aplica para no-owners.
+        final businessIdScope = _businessId;
+        final existingUserSession = businessIdScope != null
+            ? await _repository.getCurrentUserActiveSessionForBusiness(
+                businessId: businessIdScope,
+              )
+            : await _repository.getCurrentUserActiveSession();
+        if (existingUserSession != null) {
+          throw const CashRegisterException(
+            errorCode: 'USER_ALREADY_OPEN',
+            message:
+                'Ya tienes una sesión de caja abierta en esta sucursal.',
+          );
+        }
+      } on CashRegisterException {
+        rethrow;
+      } catch (e) {
+        if (!_isConnectivityError(e)) rethrow;
+        debugPrint('[openBox] guards skipped por falta de red: $e');
       }
 
-      // Escopear el chequeo al business actual: si el usuario es owner
-      // de varias sucursales, la migración 20260509_0002 le permite
-      // abrir caja simultánea en cada una. Filtrar sin business_id
-      // bloquearía aunque el backend lo permita. El RPC sigue siendo
-      // la autoridad final y rechaza si Rule B aplica para no-owners.
-      final businessIdScope = _businessId;
-      final existingUserSession = businessIdScope != null
-          ? await _repository.getCurrentUserActiveSessionForBusiness(
-              businessId: businessIdScope,
-            )
-          : await _repository.getCurrentUserActiveSession();
-      if (existingUserSession != null) {
-        throw const CashRegisterException(
-          errorCode: 'USER_ALREADY_OPEN',
-          message:
-              'Ya tienes una sesión de caja abierta en esta sucursal.',
+      try {
+        await _repository.openSession(
+          cashRegisterId: _currentRegisterId!,
+          userId: userId,
+          startAmount: amount,
+          deviceId: deviceId,
+          deviceName: deviceName,
+        );
+        await init(); // Refresh — solo en path online (lee server state).
+      } catch (e) {
+        if (!_isConnectivityError(e)) rethrow;
+        // Fallback offline: sesión local + encolar para replay al sync.
+        await _openBoxOfflineFallback(
+          amount: amount,
+          userId: userId,
+          deviceId: deviceId,
+          deviceName: deviceName,
         );
       }
-
-      await _repository.openSession(
-        cashRegisterId: _currentRegisterId!,
-        userId: userId,
-        startAmount: amount,
-        deviceId: deviceId,
-        deviceName: deviceName,
-      );
-      await init(); // Refresh
     } catch (e) {
       rethrow;
     } finally {
       _isLoading = false;
       notifyListeners();
     }
+  }
+
+  /// Rama offline de [openBox]: crea una sesión con id temporal
+  /// `local-cash-session-<ts>`, la persiste vía `_setLastSession` (que
+  /// ya hace cache en SharedPreferences) y encola `open_cash_session`.
+  /// Al sync, el replay llamará al RPC real y guardará el mapping
+  /// `local-id → remote-uuid` en OfflinePosService — los payments
+  /// encolados con `cashier_session_id` local se traducen al replay.
+  Future<void> _openBoxOfflineFallback({
+    required double amount,
+    required String userId,
+    required String deviceId,
+    required String deviceName,
+  }) async {
+    final businessId = _businessId;
+    if (businessId == null) {
+      throw Exception('No se pudo identificar el negocio offline');
+    }
+    final openedAt = DateTime.now().toUtc();
+    // UUID v4 garantiza unicidad incluso con dos aperturas en la misma
+    // milésima (improbable en producción, posible en emuladores lentos
+    // o tests). El prefijo `local-cash-session-` se mantiene como
+    // marker para que OfflinePosService.replay detecte el id local y
+    // lo traduzca al remoto vía el mapping.
+    final localId = 'local-cash-session-${const Uuid().v4()}';
+
+    await OfflinePosService().enqueueAction(
+      businessId: businessId,
+      action: {
+        'type': 'open_cash_session',
+        'local_session_id': localId,
+        'cash_register_id': _currentRegisterId,
+        'user_id': userId,
+        'start_amount': amount,
+        'device_id': deviceId,
+        'device_name': deviceName,
+        'opened_at': openedAt.toIso8601String(),
+      },
+    );
+
+    _setLastSession({
+      'id': localId,
+      'cash_register_id': _currentRegisterId,
+      'user_id': userId,
+      'start_amount': amount,
+      'status': 'open',
+      'opened_at': openedAt.toIso8601String(),
+      'closed_at': null,
+      'device_id': deviceId,
+      'device_name': deviceName,
+      'business_id': businessId,
+    });
+    _lastCashOpenValidationAt = AppTime.nowAst();
+  }
+
+  bool _isConnectivityError(Object e) {
+    if (e is SocketException) return true;
+    if (e is TimeoutException) return true;
+    final msg = e.toString().toLowerCase();
+    return msg.contains('socket') ||
+        msg.contains('failed host lookup') ||
+        msg.contains('clientexception') ||
+        (msg.contains('connection') && msg.contains('refused'));
   }
 
   /// Silent background refresh — loads all data in parallel without showing

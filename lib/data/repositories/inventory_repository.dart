@@ -126,20 +126,17 @@ class InventoryRepository {
         'is_active, costing_method, barcode, tracks_lots, item_classification';
     final normalized = query?.trim();
     try {
-      final itemsResponse = normalized != null && normalized.isNotEmpty
-          ? await _client
-                .from(InventoryQueries.tableInventoryItems)
-                .select(columns)
-                .eq('business_id', businessId)
-                .or(
-                  'name.ilike.%${normalized.replaceAll(',', '')}%,sku.ilike.%${normalized.replaceAll(',', '')}%,description.ilike.%${normalized.replaceAll(',', '')}%',
-                )
-                .order('name')
-          : await _client
-                .from(InventoryQueries.tableInventoryItems)
-                .select(columns)
-                .eq('business_id', businessId)
-                .order('name');
+      // SIEMPRE traemos el listado completo sin filtro y aplicamos el
+      // query client-side. Era tentador filtrar server-side cuando había
+      // `query`, pero entonces el cache offline NUNCA se hidrataba en
+      // uso real (el cajero siempre busca). Con catálogos POS típicos
+      // (~hasta unos miles de items) la diferencia es despreciable y
+      // ganamos hidratación garantizada del snapshot offline.
+      final itemsResponse = await _client
+          .from(InventoryQueries.tableInventoryItems)
+          .select(columns)
+          .eq('business_id', businessId)
+          .order('name');
       final itemsRaw = List<Map<String, dynamic>>.from(itemsResponse);
 
       final stockResponse = await _client
@@ -157,23 +154,24 @@ class InventoryRepository {
             : double.tryParse(quantity?.toString() ?? '') ?? 0;
       }
 
-      // Hidratamos el cache offline con el listado completo (sin filtrar
-      // por `query`) sólo cuando NO hay query — así el cache sirve para
-      // cualquier búsqueda offline. Cuando hay query, no pisamos el
-      // snapshot completo con un subset.
-      if (normalized == null || normalized.isEmpty) {
-        unawaited(
-          _cache.saveItemsSnapshot(
-            businessId: businessId,
-            warehouseId: warehouseId,
-            itemsRaw: itemsRaw,
-            stockByItem: stockByItem,
-          ),
-        );
-      }
+      // Hidratamos el cache offline con el listado COMPLETO en cada
+      // lectura exitosa (fire-and-forget). Garantiza que un cajero que
+      // entra a Inventario una vez con red, queda cubierto para uso
+      // offline aunque haya tipeado un query.
+      unawaited(
+        _cache.saveItemsSnapshot(
+          businessId: businessId,
+          warehouseId: warehouseId,
+          itemsRaw: itemsRaw,
+          stockByItem: stockByItem,
+        ),
+      );
 
       _lastReadFromCache = false;
-      return itemsRaw
+      final filtered = (normalized == null || normalized.isEmpty)
+          ? itemsRaw
+          : _filterRawItems(itemsRaw, normalized);
+      return filtered
           .map(
             (item) => InventoryItemSummary.fromMap(
               item,
@@ -192,15 +190,7 @@ class InventoryRepository {
       _lastReadFromCache = true;
       final filtered = (normalized == null || normalized.isEmpty)
           ? snapshot.items
-          : snapshot.items.where((item) {
-              final lower = normalized.toLowerCase();
-              final name = item['name']?.toString().toLowerCase() ?? '';
-              final sku = item['sku']?.toString().toLowerCase() ?? '';
-              final desc = item['description']?.toString().toLowerCase() ?? '';
-              return name.contains(lower) ||
-                  sku.contains(lower) ||
-                  desc.contains(lower);
-            }).toList(growable: false);
+          : _filterRawItems(snapshot.items, normalized);
       return filtered
           .map(
             (item) => InventoryItemSummary.fromMap(
@@ -212,14 +202,39 @@ class InventoryRepository {
     }
   }
 
+  /// Filtro case-insensitive contra name/sku/description. Compartido por
+  /// el branch online (post-fetch, antes de mapear) y por el branch
+  /// offline (sobre el snapshot del cache). Mantenerlo en un solo punto
+  /// evita drift entre los dos paths.
+  List<Map<String, dynamic>> _filterRawItems(
+    List<Map<String, dynamic>> items,
+    String query,
+  ) {
+    final lower = query.toLowerCase();
+    return items.where((item) {
+      final name = item['name']?.toString().toLowerCase() ?? '';
+      final sku = item['sku']?.toString().toLowerCase() ?? '';
+      final desc = item['description']?.toString().toLowerCase() ?? '';
+      return name.contains(lower) ||
+          sku.contains(lower) ||
+          desc.contains(lower);
+    }).toList(growable: false);
+  }
+
   bool _isConnectivityError(Object e) {
     if (e is SocketException) return true;
     if (e is TimeoutException) return true;
+    // Combinamos el flag del adapter ConnectivityService como ground
+    // truth. Si el adapter dice que estamos online, NO interpretamos
+    // strings vagos como "connection refused" como falla de red — eso
+    // confundía RPCs que mencionan "connection" en mensajes legítimos
+    // (e.g. "no connection to RPC X") y caía falsamente al cache stale.
+    if (_connectivity.isConnected == true) return false;
     final msg = e.toString().toLowerCase();
-    return msg.contains('socket') ||
+    return msg.contains('socketexception') ||
         msg.contains('failed host lookup') ||
         msg.contains('network is unreachable') ||
-        msg.contains('connection') && msg.contains('refused');
+        msg.contains('clientexception');
   }
 
   Future<List<InventoryMovementEntry>> getMovements({

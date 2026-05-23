@@ -92,6 +92,15 @@ dependencies:
   multicast_dns: ^0.3.2
   excel: ^4.0.6
 
+  # Storage local sqlite para la cola offline (Fase 6 — solo cola y
+  # completed_ops/fingerprints, no el cache completo). Reemplaza la
+  # versión basada en SharedPreferences que reescribía toda la lista
+  # JSON en cada enqueue/sync — con 500+ items en cola eso era O(n) en
+  # disco. drift + sqlite3_flutter_libs es el setup estándar para
+  # Flutter desktop+mobile+web.
+  drift: ^2.20.2
+  sqlite3_flutter_libs: ^0.5.24
+
 
 dev_dependencies:
   flutter_test:
@@ -105,6 +114,9 @@ dev_dependencies:
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.14.4
   msix: ^3.16.1
+  # Codegen para drift (Fase 6).
+  drift_dev: ^2.20.2
+  build_runner: ^2.4.13
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

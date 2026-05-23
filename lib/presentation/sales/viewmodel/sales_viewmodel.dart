@@ -17,7 +17,10 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../state/sales_state.dart';
 import '../../../data/models/sales_models.dart';
 import '../../../data/models/order_item_tax_line.dart';
-import '../../cashier/viewmodel/cashier_viewmodel.dart';
+import '../../cashier/viewmodel/cashier_viewmodel.dart'
+    show
+        cashierViewModelProvider,
+        cashierRepositoryProvider;
 import '../../inventory/viewmodel/inventory_viewmodel.dart' show inventoryRepositoryProvider;
 import '../../../services/fiscal/fiscal_service.dart';
 import '../../../data/models/fiscal_models.dart';
@@ -2064,6 +2067,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         salesRepository: ref.read(salesRepositoryProvider),
         printingService: ref.read(printingServiceProvider),
         inventoryRepository: ref.read(inventoryRepositoryProvider),
+        cashierRepository: ref.read(cashierRepositoryProvider),
         force: force,
       );
 
