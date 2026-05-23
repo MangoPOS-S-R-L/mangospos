@@ -169,6 +169,13 @@ class _MainShellState extends ConsumerState<MainShell> {
       bg = const Color(0xFFEF4444);
       message =
           'Sync parcial: ${r.completed} OK, ${r.failed} con error. Pendientes: ${r.pending}.';
+    } else if (r.hasConflicts) {
+      // Sync completo pero con conflictos cross-device (ej: items
+      // borrados por otro terminal, modificadores stale). Mostramos en
+      // ambar para que destaque y ofrecemos acción "Ver detalle".
+      bg = const Color(0xFFF59E0B);
+      message =
+          '${r.completed} sincronizada(s) — ${r.conflicts.length} con conflicto entre terminales.';
     } else if (r.completed > 0) {
       bg = const Color(0xFF22C55E);
       message = r.pending > 0
@@ -185,8 +192,86 @@ class _MainShellState extends ConsumerState<MainShell> {
       SnackBar(
         backgroundColor: bg,
         behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 4),
+        duration: Duration(seconds: r.hasConflicts ? 8 : 4),
         content: Text(message),
+        action: r.hasConflicts
+            ? SnackBarAction(
+                label: 'Ver detalle',
+                textColor: Colors.white,
+                onPressed: () => _showConflictsDialog(context, r.conflicts),
+              )
+            : null,
+      ),
+    );
+  }
+
+  void _showConflictsDialog(
+    BuildContext context,
+    List<OfflineSyncConflict> conflicts,
+  ) {
+    showDialog<void>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Color(0xFFF59E0B)),
+            SizedBox(width: 8),
+            Expanded(child: Text('Conflictos al sincronizar')),
+          ],
+        ),
+        content: SizedBox(
+          width: 460,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Otro terminal modifico estos recursos mientras estabas '
+                'offline. Las operaciones se completaron sin reintentar; '
+                'revisa los totales y ajusta si hace falta.',
+                style: TextStyle(fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 320),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: conflicts.length,
+                  separatorBuilder: (_, _) => const Divider(height: 12),
+                  itemBuilder: (_, i) {
+                    final c = conflicts[i];
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Padding(
+                          padding: EdgeInsets.only(top: 2),
+                          child: Icon(
+                            Icons.info_outline,
+                            size: 16,
+                            color: Color(0xFFF59E0B),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            c.reason,
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Entendido'),
+          ),
+        ],
       ),
     );
   }

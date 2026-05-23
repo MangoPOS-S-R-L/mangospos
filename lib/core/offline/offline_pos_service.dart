@@ -23,6 +23,7 @@ class OfflineQueueSyncResult {
     this.pending = 0,
     this.lastMappedOrderId,
     this.lastError,
+    this.conflicts = const <OfflineSyncConflict>[],
   });
 
   final int processed;
@@ -33,8 +34,40 @@ class OfflineQueueSyncResult {
   final String? lastMappedOrderId;
   final String? lastError;
 
+  /// Acciones que sincronizaron OK pero descubrieron un conflicto con otro
+  /// terminal: un item ya borrado, un modificador que ya no existe, un
+  /// update sobre un item desaparecido, etc. La accion se marca como
+  /// completed (no reintenta) pero el cashier debe saberlo.
+  final List<OfflineSyncConflict> conflicts;
+
   bool get didWork => processed > 0;
   bool get hasFailures => failed > 0;
+  bool get hasConflicts => conflicts.isNotEmpty;
+}
+
+/// Descripcion de un conflicto encontrado durante el sync. Se acumulan
+/// en [OfflineQueueSyncResult.conflicts] para que la UI los muestre.
+class OfflineSyncConflict {
+  const OfflineSyncConflict({
+    required this.actionType,
+    required this.reason,
+    this.actionId,
+  });
+
+  final String actionType;
+  final String? actionId;
+  final String reason;
+}
+
+/// Marker exception lanzado desde [_replayAction] cuando una accion ya
+/// no aplica (item borrado por otro terminal, etc). El loop principal
+/// lo captura, marca la accion como completed (idempotente), agrega un
+/// [OfflineSyncConflict] al resultado y continua con la siguiente.
+class _OfflineSyncSkip implements Exception {
+  _OfflineSyncSkip(this.reason);
+  final String reason;
+  @override
+  String toString() => 'OfflineSyncSkip: $reason';
 }
 
 class OfflinePosService {
@@ -48,6 +81,39 @@ class OfflinePosService {
   static const String _statusFailed = 'failed';
 
   factory OfflinePosService() => _instance;
+
+  /// Heuristica para detectar "item ya no existe" durante el sync. Se
+  /// dispara cuando otro terminal borro el mismo item mientras estabamos
+  /// offline. El delete del cajero offline ya no aplica (idempotente —
+  /// el estado deseado, item ausente, ya se cumple); los updates sobre
+  /// ese item se reportan como conflicto visible al cashier.
+  static bool _isItemMissingError(Object e) {
+    final msg = e.toString().toLowerCase();
+    return msg.contains('no se pudo resolver el item') ||
+        msg.contains('pgrst116') ||
+        msg.contains('no rows') ||
+        msg.contains('not found');
+  }
+
+  /// Heuristica para distinguir errores de conectividad (donde NO tiene
+  /// sentido seguir intentando — todas las acciones siguientes fallaran
+  /// por la misma razon) de errores logicos (constraint violation, item
+  /// ya borrado, RPC validation, etc — esos deben saltarse para no
+  /// bloquear el resto de la cola; quedaron marcados con backoff
+  /// individual y reintentaran solos).
+  static bool _isConnectivityError(Object e) {
+    final msg = e.toString().toLowerCase();
+    return msg.contains('socketexception') ||
+        msg.contains('clientexception') ||
+        msg.contains('timeoutexception') ||
+        msg.contains('failed host lookup') ||
+        msg.contains('connection refused') ||
+        msg.contains('connection closed') ||
+        msg.contains('connection reset') ||
+        msg.contains('network is unreachable') ||
+        msg.contains('software caused connection abort') ||
+        msg.contains('handshake');
+  }
 
   Future<StorageService> get _storage async => StorageService.getInstance();
 
@@ -307,6 +373,7 @@ class OfflinePosService {
     var skipped = 0;
     String? lastMappedOrderId;
     String? lastError;
+    final conflicts = <OfflineSyncConflict>[];
 
     final completedOps = await _queueDao.readCompletedOps(businessId);
     final completedFingerprints =
@@ -338,6 +405,7 @@ class OfflinePosService {
       // reescribir la lista completa (O(n²) con N actions y N pasos).
       await _queueDao.upsertAction(businessId, processing);
 
+      bool breakLoop = false;
       try {
         final mappedOrderId = await _replayAction(
           businessId: businessId,
@@ -346,6 +414,7 @@ class OfflinePosService {
           printingService: printingService,
           inventoryRepository: inventoryRepository,
           cashierRepository: cashierRepository,
+          conflicts: conflicts,
         );
         lastMappedOrderId = mappedOrderId ?? lastMappedOrderId;
         final done = Map<String, dynamic>.from(processing)
@@ -355,6 +424,37 @@ class OfflinePosService {
         if (mappedOrderId != null && mappedOrderId.isNotEmpty) {
           done['resolved_order_id'] = mappedOrderId;
         }
+        queue[i] = done;
+        completed++;
+        if (actionId != null && actionId.isNotEmpty) {
+          await _queueDao.markOpCompleted(
+            businessId: businessId,
+            opId: actionId,
+          );
+        }
+        final fingerprint = processing['fingerprint']?.toString();
+        if (fingerprint != null && fingerprint.isNotEmpty) {
+          await _queueDao.markFingerprintCompleted(
+            businessId: businessId,
+            fingerprint: fingerprint,
+          );
+        }
+      } on _OfflineSyncSkip catch (skip) {
+        // Conflicto cross-device detectado: la accion ya no aplica porque
+        // otro terminal modifico el mismo recurso (ej. item borrado).
+        // Tratamos como completed (idempotente — el estado deseado ya
+        // existe o la accion no tiene sentido) pero anotamos el conflicto
+        // para que el cashier lo vea en el snackbar post-sync.
+        conflicts.add(OfflineSyncConflict(
+          actionType: processing['type']?.toString() ?? 'unknown',
+          actionId: actionId,
+          reason: skip.reason,
+        ));
+        final done = Map<String, dynamic>.from(processing)
+          ..['status'] = _statusCompleted
+          ..['completed_at'] = DateTime.now().toIso8601String()
+          ..['skip_reason'] = skip.reason
+          ..['last_error'] = null;
         queue[i] = done;
         completed++;
         if (actionId != null && actionId.isNotEmpty) {
@@ -384,12 +484,18 @@ class OfflinePosService {
               .toIso8601String();
         queue[i] = failedAction;
         failed++;
+        // Solo cortar si fue por conectividad — todas las siguientes
+        // van a fallar por lo mismo. Errores logicos (constraint, RPC
+        // reject, item ya borrado por otro terminal) los saltamos para
+        // no bloquear la cola; la accion fallida ya tiene su backoff
+        // individual y reintenta sola en el siguiente trigger.
+        breakLoop = _isConnectivityError(e);
       }
 
       // UPSERT puntual del action final (completed o failed). Idem
       // optimización anterior: evita reescribir la cola entera.
       await _queueDao.upsertAction(businessId, queue[i]);
-      if (failed > 0) break;
+      if (breakLoop) break;
     }
 
     await _pruneQueue(businessId, queue);
@@ -402,6 +508,7 @@ class OfflinePosService {
       pending: pending,
       lastMappedOrderId: lastMappedOrderId,
       lastError: lastError,
+      conflicts: List<OfflineSyncConflict>.unmodifiable(conflicts),
     );
   }
 
@@ -571,6 +678,7 @@ class OfflinePosService {
     required PrintingService printingService,
     required InventoryRepository inventoryRepository,
     required CashierRepository cashierRepository,
+    required List<OfflineSyncConflict> conflicts,
   }) async {
     final type = action['type']?.toString();
     switch (type) {
@@ -680,88 +788,162 @@ class OfflinePosService {
               );
             } catch (e) {
               // No abortamos el sync por un fallo de modifiers — el item
-              // ya está en el server. Loggeamos para que el operador lo
-              // pueda diagnosticar en pantalla de cola pendiente.
+              // ya está en el server. Pero ahora SI lo reportamos como
+              // conflicto para que el cashier sepa que el total puede
+              // estar diferente de lo que pidio offline (precio del
+              // modificador cambio, o ya no existe, etc).
               debugPrint(
                 'Offline sync: error agregando modifiers a $createdItemId: $e',
               );
+              final productName =
+                  action['product_name']?.toString().trim() ?? 'un item';
+              conflicts.add(OfflineSyncConflict(
+                actionType: 'add_item_modifier',
+                actionId: action['id']?.toString(),
+                reason:
+                    'Los modificadores de "$productName" no se pudieron aplicar (cambiaron de precio o ya no existen). Revisa el total.',
+              ));
             }
           }
         }
         return resolvedOrderId;
       case 'delete_item':
-        final resolvedItemId = await _resolveItemIdForAction(
-          businessId: businessId,
-          action: action,
-          salesRepository: salesRepository,
-        );
-        await salesRepository.deleteItem(itemId: resolvedItemId);
-        return await _resolveOrderIdForAction(
-          businessId: businessId,
-          action: action,
-          salesRepository: salesRepository,
-        );
+        // Tombstone: delete es idempotente. Si el item ya no existe
+        // (probablemente otro terminal lo borro mientras estabamos
+        // offline) el estado deseado ya se cumple → no hay conflicto
+        // que notificar al cajero, terminamos como completed silente.
+        try {
+          final resolvedItemId = await _resolveItemIdForAction(
+            businessId: businessId,
+            action: action,
+            salesRepository: salesRepository,
+          );
+          await salesRepository.deleteItem(itemId: resolvedItemId);
+        } catch (e) {
+          if (!_isItemMissingError(e)) rethrow;
+        }
+        try {
+          return await _resolveOrderIdForAction(
+            businessId: businessId,
+            action: action,
+            salesRepository: salesRepository,
+          );
+        } catch (_) {
+          return null;
+        }
       case 'update_item_quantity':
-        final resolvedItemId = await _resolveItemIdForAction(
-          businessId: businessId,
-          action: action,
-          salesRepository: salesRepository,
-        );
-        await salesRepository.updateItemQuantity(
-          itemId: resolvedItemId,
-          quantity: ((action['quantity'] ?? action['qty'] ?? 1) as num)
-              .toDouble(),
-        );
-        return await _resolveOrderIdForAction(
-          businessId: businessId,
-          action: action,
-          salesRepository: salesRepository,
-        );
+        try {
+          final resolvedItemId = await _resolveItemIdForAction(
+            businessId: businessId,
+            action: action,
+            salesRepository: salesRepository,
+          );
+          await salesRepository.updateItemQuantity(
+            itemId: resolvedItemId,
+            quantity: ((action['quantity'] ?? action['qty'] ?? 1) as num)
+                .toDouble(),
+          );
+        } catch (e) {
+          if (_isItemMissingError(e)) {
+            throw _OfflineSyncSkip(
+              'No se pudo actualizar la cantidad de un item: ya fue eliminado por otro terminal.',
+            );
+          }
+          rethrow;
+        }
+        try {
+          return await _resolveOrderIdForAction(
+            businessId: businessId,
+            action: action,
+            salesRepository: salesRepository,
+          );
+        } catch (_) {
+          return null;
+        }
       case 'update_item_notes':
-        final resolvedItemId = await _resolveItemIdForAction(
-          businessId: businessId,
-          action: action,
-          salesRepository: salesRepository,
-        );
-        await salesRepository.updateItemNotes(
-          itemId: resolvedItemId,
-          notes: action['notes']?.toString() ?? '',
-        );
-        return await _resolveOrderIdForAction(
-          businessId: businessId,
-          action: action,
-          salesRepository: salesRepository,
-        );
+        try {
+          final resolvedItemId = await _resolveItemIdForAction(
+            businessId: businessId,
+            action: action,
+            salesRepository: salesRepository,
+          );
+          await salesRepository.updateItemNotes(
+            itemId: resolvedItemId,
+            notes: action['notes']?.toString() ?? '',
+          );
+        } catch (e) {
+          if (_isItemMissingError(e)) {
+            throw _OfflineSyncSkip(
+              'No se pudo actualizar la nota de un item: ya fue eliminado por otro terminal.',
+            );
+          }
+          rethrow;
+        }
+        try {
+          return await _resolveOrderIdForAction(
+            businessId: businessId,
+            action: action,
+            salesRepository: salesRepository,
+          );
+        } catch (_) {
+          return null;
+        }
       case 'toggle_item_takeout':
-        final resolvedItemId = await _resolveItemIdForAction(
-          businessId: businessId,
-          action: action,
-          salesRepository: salesRepository,
-        );
-        await salesRepository.toggleItemTakeout(
-          itemId: resolvedItemId,
-          isTakeout: action['is_takeout'] == true,
-        );
-        return await _resolveOrderIdForAction(
-          businessId: businessId,
-          action: action,
-          salesRepository: salesRepository,
-        );
+        try {
+          final resolvedItemId = await _resolveItemIdForAction(
+            businessId: businessId,
+            action: action,
+            salesRepository: salesRepository,
+          );
+          await salesRepository.toggleItemTakeout(
+            itemId: resolvedItemId,
+            isTakeout: action['is_takeout'] == true,
+          );
+        } catch (e) {
+          if (_isItemMissingError(e)) {
+            throw _OfflineSyncSkip(
+              'No se pudo cambiar para-llevar de un item: ya fue eliminado por otro terminal.',
+            );
+          }
+          rethrow;
+        }
+        try {
+          return await _resolveOrderIdForAction(
+            businessId: businessId,
+            action: action,
+            salesRepository: salesRepository,
+          );
+        } catch (_) {
+          return null;
+        }
       case 'move_item_to_check':
-        final resolvedItemId = await _resolveItemIdForAction(
-          businessId: businessId,
-          action: action,
-          salesRepository: salesRepository,
-        );
-        await salesRepository.moveItemToCheck(
-          itemId: resolvedItemId,
-          checkPosition: (action['check_pos'] as num?)?.toInt() ?? 1,
-        );
-        return await _resolveOrderIdForAction(
-          businessId: businessId,
-          action: action,
-          salesRepository: salesRepository,
-        );
+        try {
+          final resolvedItemId = await _resolveItemIdForAction(
+            businessId: businessId,
+            action: action,
+            salesRepository: salesRepository,
+          );
+          await salesRepository.moveItemToCheck(
+            itemId: resolvedItemId,
+            checkPosition: (action['check_pos'] as num?)?.toInt() ?? 1,
+          );
+        } catch (e) {
+          if (_isItemMissingError(e)) {
+            throw _OfflineSyncSkip(
+              'No se pudo mover un item a otra cuenta: ya fue eliminado por otro terminal.',
+            );
+          }
+          rethrow;
+        }
+        try {
+          return await _resolveOrderIdForAction(
+            businessId: businessId,
+            action: action,
+            salesRepository: salesRepository,
+          );
+        } catch (_) {
+          return null;
+        }
       case 'mark_order_takeout':
         final resolvedOrderId = await _resolveOrderIdForAction(
           businessId: businessId,

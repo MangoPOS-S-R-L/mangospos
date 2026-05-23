@@ -2048,9 +2048,21 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     if (_syncInFlight) return;
     final businessId = _activeBusinessId;
     if (businessId == null || businessId.isEmpty) return;
+
+    // Si el caller forzo el sync (boton "Sync ahora" del banner), refrescar
+    // el estado de reachability AHORA en vez de esperar al proximo poll de
+    // 30s. El caso comun: Supabase tuvo blips → _reachable quedo en false
+    // → el wifi esta perfecto pero el banner sigue "Sync pausada" hasta el
+    // proximo poll. Con esto el boton hace lo que el cajero espera.
+    if (force && !_connectivity.isConnected) {
+      await _connectivity.forceReachabilityCheck();
+    }
+
     if (!_connectivity.isConnected) {
       await _refreshOfflineMonitor(
-        syncStatus: 'Sin conexión. Sync pausada.',
+        syncStatus: _connectivity.isAdapterUp
+            ? 'Servidor no responde. Intentando reconectar...'
+            : 'Sin conexion. Sync pausada.',
         syncInFlight: false,
       );
       return;

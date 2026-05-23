@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mangopos/core/utils/display_name_utils.dart';
+import 'package:mangopos/core/offline/zones_offline_cache.dart';
 
 import '../models/order_item_tax_line.dart';
 import '../models/sales_models.dart';
@@ -33,15 +36,50 @@ class ZonesRepository {
         .order('sort_index', ascending: true)
         .order('name', ascending: true);
 
-    final zones = (rows as List)
-        .map((e) => Zone.fromMap(e as Map<String, dynamic>))
-        .toList();
+    final rowsList = (rows as List)
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList(growable: false);
+
+    // Persistir el conjunto crudo (sin filtros de virtuales / activos) en el
+    // cache offline. El wrapper [fetchZonesWithCache] lo usa como fallback
+    // cuando Supabase es inalcanzable.
+    unawaited(ZonesOfflineCache().saveZonesSnapshot(
+      businessId: businessId,
+      zonesRaw: rowsList,
+    ));
+
+    final zones = rowsList.map(Zone.fromMap).toList();
 
     if (includeVirtualSalesZones) {
       return zones;
     }
 
     return zones.where((zone) => !_isVirtualSalesZone(zone)).toList();
+  }
+
+  /// Variante de [fetchZones] con fallback al cache offline. Devuelve el
+  /// timestamp del snapshot cuando los datos vienen del cache, para que el
+  /// ViewModel pueda renderizar un banner "modo offline".
+  ///
+  /// Usa los defaults de [fetchZones] (sin virtuales, solo activas). Esos
+  /// son los unicos parametros que la vista "Por zona" necesita.
+  Future<({List<Zone> zones, bool fromCache, DateTime? cachedAt})>
+      fetchZonesWithCache(String businessId) async {
+    try {
+      final zones = await fetchZones(businessId);
+      return (zones: zones, fromCache: false, cachedAt: null);
+    } catch (_) {
+      final snap = await ZonesOfflineCache().loadZonesSnapshot(
+        businessId: businessId,
+      );
+      if (snap == null) rethrow;
+      final zones = snap.zones
+          .where((m) => (m['is_active'] ?? true) == true)
+          .map(Zone.fromMap)
+          .where((z) => !_isVirtualSalesZone(z))
+          .toList();
+      return (zones: zones, fromCache: true, cachedAt: snap.savedAt);
+    }
   }
 
   bool _isVirtualSalesZone(Zone zone) {
@@ -433,7 +471,39 @@ class ZonesRepository {
       }
     }
 
+    // Persistir filas enriquecidas (con waiter_name / customer_name / total
+    // calculado) para el cache offline. fetchByZoneWithCache las reusa.
+    unawaited(ZonesOfflineCache().saveZoneStatusSnapshot(
+      zoneId: zoneId,
+      rowsRaw: rows,
+    ));
+
     return rows.map(TableStatus.fromMap).toList();
+  }
+
+  /// Variante de [fetchByZone] con fallback al cache offline. Devuelve un
+  /// flag + timestamp cuando los datos vienen del cache para que la vista
+  /// pueda mostrar el banner "modo offline".
+  ///
+  /// Importante: los datos del cache pueden estar stale — sesiones abiertas
+  /// en otro terminal mientras estabamos offline no se reflejan hasta que
+  /// el internet vuelva y se llame de nuevo a este metodo.
+  Future<({List<TableStatus> rows, bool fromCache, DateTime? cachedAt})>
+      fetchByZoneWithCache(
+    String zoneId, {
+    String? businessId,
+  }) async {
+    try {
+      final rows = await fetchByZone(zoneId, businessId: businessId);
+      return (rows: rows, fromCache: false, cachedAt: null);
+    } catch (_) {
+      final snap = await ZonesOfflineCache().loadZoneStatusSnapshot(
+        zoneId: zoneId,
+      );
+      if (snap == null) rethrow;
+      final rows = snap.rows.map(TableStatus.fromMap).toList();
+      return (rows: rows, fromCache: true, cachedAt: snap.savedAt);
+    }
   }
 
   /// Detects and releases stale tables: sessions with no open orders that

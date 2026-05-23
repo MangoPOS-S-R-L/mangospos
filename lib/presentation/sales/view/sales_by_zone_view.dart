@@ -381,6 +381,10 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
       }
     }
 
+    final isOffline = ref.watch(byZoneVmProvider.select((s) => s.isOffline));
+    final lastSyncAt =
+        ref.watch(byZoneVmProvider.select((s) => s.lastSyncAt));
+
     return Scaffold(
       backgroundColor: SalesTheme.background,
       appBar: appBarWidget,
@@ -389,7 +393,13 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
         onRefresh: () async {
           await ref.read(byZoneVmProvider.notifier).load(widget.businessId);
         },
-        child: body,
+        child: Column(
+          children: [
+            if (isOffline)
+              _OfflineBanner(lastSyncAt: lastSyncAt),
+            Expanded(child: body),
+          ],
+        ),
       ),
     );
   }
@@ -1069,6 +1079,60 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
       waiterId: ts.sessionId, // Usamos sessionId como waiterId temporalmente
       waiterName: ts.waiterName,
       customerName: ts.customerName,
+    );
+  }
+}
+
+class _OfflineBanner extends StatelessWidget {
+  final DateTime? lastSyncAt;
+
+  const _OfflineBanner({this.lastSyncAt});
+
+  String _formatLastSync(DateTime ts) {
+    final diff = DateTime.now().difference(ts);
+    if (diff.inSeconds < 60) return 'hace unos segundos';
+    if (diff.inMinutes < 60) return 'hace ${diff.inMinutes} min';
+    if (diff.inHours < 24) {
+      final h = diff.inHours;
+      return 'hace $h ${h == 1 ? 'hora' : 'horas'}';
+    }
+    final d = diff.inDays;
+    return 'hace $d ${d == 1 ? 'dia' : 'dias'}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final syncLabel = lastSyncAt == null
+        ? 'Sin conexion'
+        : 'Sin conexion — datos guardados ${_formatLastSync(lastSyncAt!)}';
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: SalesTheme.warning.withValues(alpha: 0.12),
+        border: Border(
+          bottom: BorderSide(
+            color: SalesTheme.warning.withValues(alpha: 0.35),
+          ),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.cloud_off_outlined,
+              size: 18, color: SalesTheme.warning),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              syncLabel,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: SalesTheme.warning,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

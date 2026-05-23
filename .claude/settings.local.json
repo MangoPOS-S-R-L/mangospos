@@ -22,7 +22,8 @@
       "Bash(/opt/homebrew/opt/postgresql@15/bin/psql -p 54330 -h /tmp -U postgres -d mangos_lint2 -v ON_ERROR_STOP=1 -f /Users/cristiangomez/dev/mangospos/supabase/migrations/20260521_0005_device_agents_extend_ROLLBACK.sql)",
       "Bash(/opt/homebrew/opt/postgresql@15/bin/pg_ctl -D /tmp/pg_lint_tmp2 stop)",
       "Bash(git commit -m ' *)",
-      "Bash(/opt/homebrew/opt/postgresql@15/bin/pg_ctl -D /tmp/pg_lint_tmp4 stop)"
+      "Bash(/opt/homebrew/opt/postgresql@15/bin/pg_ctl -D /tmp/pg_lint_tmp4 stop)",
+      "PowerShell(Set-Location \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\installer\\\\windows\"; powershell -ExecutionPolicy Bypass -File .\\\\build_inno.ps1 2>&1 | Tee-Object -FilePath \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\build\\\\installer\\\\build_inno_v1.0.0+41.log\")"
     ]
   }
 }

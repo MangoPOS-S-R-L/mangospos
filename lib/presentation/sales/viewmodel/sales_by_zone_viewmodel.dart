@@ -125,7 +125,8 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
 
       final repo = ref.read(zonesRepoProvider);
 
-      final zones = (await repo.fetchZones(bizId)).where((z) {
+      final result = await repo.fetchZonesWithCache(bizId);
+      final zones = result.zones.where((z) {
         final name = z.name.toLowerCase();
         return name != 'ventas manuales' && name != 'ventas rápidas' && name != 'delivery';
       }).toList();
@@ -147,10 +148,17 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
         statusByZone: filteredStatus,
         loading: false,
         businessId: bizId,
+        isOffline: result.fromCache,
+        lastSyncAt: result.cachedAt ?? DateTime.now(),
       );
 
       _pruneIndexes(validZoneIds);
-      _subscribeRealtime(bizId);
+      // Realtime no funciona offline; solo lo enganchamos cuando hubo
+      // respuesta fresca de Supabase. Cuando el internet vuelva, el
+      // siguiente _loadData periodico re-suscribe.
+      if (!result.fromCache) {
+        _subscribeRealtime(bizId);
+      }
     } catch (e) {
       state = state.copyWith(loading: false, error: '$e');
     }
@@ -159,20 +167,30 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
   Future<void> loadZoneStatus(String zoneId, {bool emitError = true}) async {
     final repo = ref.read(zonesRepoProvider);
     try {
-      final rows = await repo.fetchByZone(zoneId, businessId: state.businessId);
+      final result = await repo.fetchByZoneWithCache(
+        zoneId,
+        businessId: state.businessId,
+      );
+      final rows = result.rows;
       // Natural Sort (Mesa 1, Mesa 2, ..., Mesa 10)
       rows.sort((a, b) => SortingUtils.naturalCompare(a.code, b.code));
 
-      // Detect stale tables (session open but 0 orders) and clean up in background.
-      final hasStale = rows.any(
-        (t) => t.sessionId != null && t.ordersCount == 0 && t.itemsCount == 0,
-      );
-      if (hasStale) {
-        unawaited(_releaseStaleAndReload(zoneId));
+      // Detect stale tables (session open but 0 orders) and clean up in
+      // background. Solo si la lectura fue fresca: offline no podemos
+      // tocar Supabase de todos modos.
+      if (!result.fromCache) {
+        final hasStale = rows.any(
+          (t) => t.sessionId != null && t.ordersCount == 0 && t.itemsCount == 0,
+        );
+        if (hasStale) {
+          unawaited(_releaseStaleAndReload(zoneId));
+        }
       }
 
       state = state.copyWith(
         statusByZone: {...state.statusByZone, zoneId: rows},
+        isOffline: result.fromCache,
+        lastSyncAt: result.cachedAt ?? DateTime.now(),
       );
       _indexZone(zoneId, rows);
     } catch (e) {
