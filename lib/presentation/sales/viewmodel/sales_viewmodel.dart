@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/core/multimesero/active_waiter_provider.dart';
 import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
+import 'package:mangopos/core/offline/offline_queue_status_provider.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/data/repositories/sales_repository.dart';
 import 'package:mangopos/core/tax/tax_engine.dart';
@@ -17,6 +18,7 @@ import '../state/sales_state.dart';
 import '../../../data/models/sales_models.dart';
 import '../../../data/models/order_item_tax_line.dart';
 import '../../cashier/viewmodel/cashier_viewmodel.dart';
+import '../../inventory/viewmodel/inventory_viewmodel.dart' show inventoryRepositoryProvider;
 import '../../../services/fiscal/fiscal_service.dart';
 import '../../../data/models/fiscal_models.dart';
 
@@ -2061,8 +2063,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         businessId: businessId,
         salesRepository: ref.read(salesRepositoryProvider),
         printingService: ref.read(printingServiceProvider),
+        inventoryRepository: ref.read(inventoryRepositoryProvider),
         force: force,
       );
+
+      // Publicamos el resultado al provider central para que el badge
+      // del topbar refresque su count y el shell muestre la notificación
+      // post-sync con detalle (pagos completados, NCFs emitidos, etc.).
+      ref.read(offlineQueueStatusProvider.notifier).publishSyncResult(result);
 
       if (result.completed > 0 &&
           state.order != null &&

@@ -1610,19 +1610,9 @@ class SalesRepository {
     double changeAmount = 0,
     bool closeOrder = true,
     int splitSequence = 0,
+    DateTime? paidAt,
   }) async {
     try {
-      // Intentamos usar el RPC optimizado (v3) que tiene mayor timeout configurado.
-      //
-      // `p_close_order` controla si el RPC debe cerrar la orden tras insertar
-      // este payment. Para split full-order, el caller pasa false para los
-      // splits 1..N-1 (la orden queda abierta) y true para el último (cierra).
-      // Para pagos single-method o split-via-checks, el default true mantiene
-      // el comportamiento previo.
-      //
-      // `p_split_sequence` permite múltiples pagos del mismo método sobre
-      // la misma orden sin chocar contra el unique index (ej: tres clientes
-      // pagando cash separadamente).
       final response = await _client.rpc(
         SalesQueries.rpcProcessPayment,
         params: {
@@ -1638,6 +1628,7 @@ class SalesRepository {
           'p_cashier_session_id': cashierSessionId,
           'p_close_order': closeOrder,
           'p_split_sequence': splitSequence,
+          if (paidAt != null) 'p_paid_at': paidAt.toUtc().toIso8601String(),
         },
       );
 

@@ -563,6 +563,13 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
           throw Exception('No se pudo identificar el negocio');
         }
 
+        // Capturamos el momento del cobro offline. Este timestamp viaja en
+        // el payload y, al sincronizar, el RPC fn_process_payment_v3 lo usa
+        // como payments.created_at (vía p_paid_at). Así el reporte de
+        // ventas, el cierre de caja y el fiscal_document quedan fechados
+        // en la venta real, no en el sync.
+        final paidAtOffline = DateTime.now().toUtc();
+
         await _offlinePos.enqueueAction(
           businessId: businessId,
           action: {
@@ -581,6 +588,7 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
             'customer_rnc': customerRnc,
             'cashier_session_id': state.cashSession?.id,
             'change_amount': state.change,
+            'paid_at': paidAtOffline.toIso8601String(),
           },
         );
 
@@ -599,7 +607,7 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
           changeAmount: state.change,
           status: 'pending',
           sessionId: state.cashSession?.id,
-          createdAt: DateTime.now(),
+          createdAt: paidAtOffline.toLocal(),
         );
 
         state = state.copyWith(

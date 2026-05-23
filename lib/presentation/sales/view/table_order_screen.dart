@@ -1761,6 +1761,16 @@ class _CartView extends ConsumerWidget {
           final items = List<OrderItem>.from(prePaymentItems);
           final printOrder = prePaymentOrder;
 
+          // Si los pagos vienen con status='pending' significa que
+          // PaymentSplitViewModel cayó al fallback offline: no hay NCF
+          // todavía, no hay fiscal_document. Imprimimos PRECUENTA en
+          // lugar de factura — el cajero entrega un comprobante interno
+          // al cliente y, cuando el sync llegue al server, el NCF se
+          // emite con la fecha real (paid_at) y la factura puede
+          // re-imprimirse desde el historial.
+          final isOfflineQueued = payments.isNotEmpty &&
+              payments.every((p) => p.status == 'pending');
+
           final businessProfile = await _loadBusinessReceiptProfile(ref);
           // Pasar el fd_id del payment recién cobrado para obtener EL fd
           // correcto. Una orden con split bill o multi-method tiene N fds
@@ -1827,6 +1837,66 @@ class _CartView extends ConsumerWidget {
             'serviceFee': printOrder.serviceFee,
             'total': printOrder.total,
           };
+
+          // Cobro offline: imprimimos precuenta (sin NCF) en lugar de
+          // la factura. Reusamos el destination picker de precuenta para
+          // que respete la impresora fijada del device.
+          if (isOfflineQueued) {
+            final preCheckData = <String, dynamic>{
+              'restaurantName': businessProfile.name,
+              'businessName': businessProfile.businessName,
+              'legalName': businessProfile.legalName,
+              'rnc': businessProfile.rnc,
+              'phone': businessProfile.phone,
+              'address': businessProfile.address,
+              'tableName': tableName,
+              'waiterName': waiterName,
+              'items': items
+                  .map(
+                    (i) => {
+                      'quantity': i.quantity,
+                      'name': i.productName,
+                      'price': itemDisplayTotal(printOrder, i),
+                    },
+                  )
+                  .toList(),
+              'subtotal': printOrder.subtotal,
+              'tax': printOrder.tax,
+              'serviceFee': printOrder.serviceFee,
+              'total': printOrder.total,
+            };
+            try {
+              await _runPrecheckWithDestinationPicker(
+                context,
+                ref,
+                preCheckData: preCheckData,
+                orderObj: printOrder,
+                orderItems: items,
+                forcePicker: false,
+              );
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    backgroundColor: Color(0xFFF59E0B),
+                    behavior: SnackBarBehavior.floating,
+                    content: Text(
+                      'Pago guardado offline. Precuenta impresa. El comprobante fiscal se emitirá al sincronizar.',
+                    ),
+                  ),
+                );
+              }
+            } catch (e) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    backgroundColor: const Color(0xFFEF4444),
+                    content: Text('No se pudo imprimir la precuenta: $e'),
+                  ),
+                );
+              }
+            }
+            return;
+          }
 
           try {
             await _runLockedAction(ref, invoicePrintLockKey, () async {

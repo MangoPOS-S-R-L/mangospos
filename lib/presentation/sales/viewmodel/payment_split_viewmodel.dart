@@ -1,13 +1,17 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../core/network/connectivity_service.dart';
+import '../../../core/offline/offline_pos_service.dart';
 import '../../../data/models/bank_account.dart';
 import '../../../data/models/sales_models.dart';
 
 import '../../../data/repositories/sales_repository_improved.dart';
+import '../../../data/utils/business_id_resolver.dart';
 import '../../cashier/viewmodel/cashier_viewmodel.dart';
 import '../viewmodel/sales_viewmodel.dart';
 import '../../../services/session/session_controller.dart';
@@ -75,6 +79,10 @@ class PaymentSplitState {
   /// Cuenta bancaria seleccionada para el próximo `addTransaction` cuando
   /// el método activo es transferencia. Se limpia al cambiar de método.
   final BankAccount? selectedBankAccount;
+  /// True cuando el cobro no pudo llegar al server y se encoló para sync.
+  /// El caller usa este flag para imprimir precuenta en vez de factura
+  /// (NCF se emite al sincronizar, no antes).
+  final bool offlineQueued;
 
   const PaymentSplitState({
     this.totalAmount = 0,
@@ -88,6 +96,7 @@ class PaymentSplitState {
     this.orderDetails,
     this.orderItems = const [],
     this.selectedBankAccount,
+    this.offlineQueued = false,
   });
 
   PaymentSplitState copyWith({
@@ -102,6 +111,7 @@ class PaymentSplitState {
     Order? orderDetails,
     List<OrderItem>? orderItems,
     Object? selectedBankAccount = _bankSentinel,
+    bool? offlineQueued,
   }) {
     return PaymentSplitState(
       totalAmount: totalAmount ?? this.totalAmount,
@@ -119,6 +129,7 @@ class PaymentSplitState {
       selectedBankAccount: identical(selectedBankAccount, _bankSentinel)
           ? this.selectedBankAccount
           : selectedBankAccount as BankAccount?,
+      offlineQueued: offlineQueued ?? this.offlineQueued,
     );
   }
 
@@ -137,6 +148,8 @@ class PaymentSplitState {
 
 class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   final SalesRepositoryImproved _salesRepo;
+  final ConnectivityService _connectivity = ConnectivityService();
+  final OfflinePosService _offlinePos = OfflinePosService();
 
   final String _orderId;
   final String? _checkId;
@@ -167,6 +180,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
        _cashierSessionId = cashierSessionId,
        _ref = ref,
        super(PaymentSplitState(totalAmount: total)) {
+    unawaited(_connectivity.initialize());
     _loadOrderForReceipt();
     // Cortesía 100%: cuando total == 0 no hay nada que cobrar, pero el
     // flujo de cierre necesita pasar por processPayment para generar
@@ -432,6 +446,103 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
 
   // --- CONFIRMATION & PRINTING ---
 
+  /// Rama offline de [confirmPayment]: encola una acción `process_payment`
+  /// por cada transacción con `paid_at = now() (UTC)` y devuelve una
+  /// lista de [Payment] locales con `status='pending'`. Estos payments
+  /// NO existen en server; el sync los crea cuando vuelve la red,
+  /// preservando la fecha vía el parámetro `p_paid_at` del RPC.
+  ///
+  /// Retorna null si no se puede resolver el business_id (sin business
+  /// no podemos encolar — el resolver es la única fuente de verdad para
+  /// scopear la cola por negocio activo).
+  Future<List<Payment>?> _confirmPaymentOffline({
+    required String cashierSessionId,
+  }) async {
+    try {
+      final businessId = await resolveBusinessIdOrNull(
+        Supabase.instance.client,
+        'auto',
+      );
+      if (businessId == null || businessId.isEmpty) return null;
+
+      final paidAtOffline = DateTime.now().toUtc();
+      final paidAtIso = paidAtOffline.toIso8601String();
+      final customerRnc = _ref.read(currentOrderProvider).customerTaxId;
+
+      final localPayments = <Payment>[];
+      for (int i = 0; i < state.transactions.length; i++) {
+        final tx = state.transactions[i];
+        final isLast = i == state.transactions.length - 1;
+
+        String methodId;
+        switch (tx.method) {
+          case PaymentMethodType.cash:
+            methodId = 'cash';
+            break;
+          case PaymentMethodType.card:
+            methodId = 'card';
+            break;
+          case PaymentMethodType.transfer:
+            methodId = 'transfer';
+            break;
+          default:
+            methodId = 'cash';
+        }
+
+        await _offlinePos.enqueueAction(
+          businessId: businessId,
+          action: {
+            'type': 'process_payment',
+            'origin': _orderId.startsWith('local-order-')
+                ? 'offline'
+                : 'remote',
+            'order_id': _orderId,
+            'check_id': _checkId,
+            'payment_method_id': methodId,
+            'payment_method_code': methodId,
+            'payment_method_name': tx.methodLabel,
+            'amount': tx.amount,
+            'reference': tx.reference,
+            'customer_id': _customerId,
+            'customer_rnc': isLast ? customerRnc : null,
+            'cashier_session_id': cashierSessionId,
+            'change_amount': isLast ? state.change : 0,
+            'split_sequence': i,
+            'paid_at': paidAtIso,
+            // Bank account se asocia post-RPC en el flujo online vía un
+            // UPDATE puntual. Offline guardamos solo el id; el replay
+            // queda pendiente de hacer ese UPDATE — para esta primera
+            // versión el cajero re-asocia manualmente si hace falta.
+            if (tx.bankAccount != null) 'bank_account_id': tx.bankAccount!.id,
+          },
+        );
+
+        localPayments.add(
+          Payment(
+            id: 'local-payment-${paidAtOffline.millisecondsSinceEpoch}-$i',
+            businessId: businessId,
+            orderId: _orderId,
+            checkId: _checkId,
+            paymentMethodId: methodId,
+            paymentMethodCode: methodId,
+            paymentMethodName: tx.methodLabel,
+            amount: tx.amount,
+            reference: tx.reference,
+            changeAmount: isLast ? state.change : 0,
+            status: 'pending',
+            sessionId: cashierSessionId,
+            createdAt: paidAtOffline.toLocal(),
+            bankAccountId: tx.bankAccount?.id,
+          ),
+        );
+      }
+      return localPayments;
+    } catch (e, s) {
+      debugPrint('❌ Error encolando pago offline: $e\n$s');
+      return null;
+    }
+  }
+
   Future<List<Payment>?> confirmPayment(BuildContext context) async {
     if (state.transactions.isEmpty) {
       state = state.copyWith(
@@ -482,6 +593,28 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
         '💰 Confirming Payment: ${state.transactions.length} transactions',
       );
 
+      // Check de conectividad ANTES del loop. Si no hay red, tomamos la
+      // rama offline completa: encolamos cada transacción con paid_at y
+      // construimos payments locales con status='pending'. Una vez en
+      // sync, el RPC fn_process_payment_v3 los replayará preservando la
+      // fecha (ver 20260522_0003_paid_at_offline_sync.sql).
+      if (!_connectivity.isConnected) {
+        final offlineResult = await _confirmPaymentOffline(
+          cashierSessionId: cashierSessionId,
+        );
+        if (offlineResult != null) {
+          createdPayments.addAll(offlineResult);
+          state = state.copyWith(
+            isProcessing: false,
+            isPrinting: true,
+            offlineQueued: true,
+          );
+          return createdPayments;
+        }
+        // offlineResult==null → error al encolar; cae al flujo online
+        // (que probablemente también fallará) para reportar al usuario.
+      }
+
       // 1. Process all transactions
       for (int i = 0; i < state.transactions.length; i++) {
         final tx = state.transactions[i];
@@ -507,32 +640,60 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
           'Processing Tx $i: method=$methodId, amount=${tx.amount}, checkId=$_checkId',
         );
 
-        final payment = await _salesRepo
-            .processPayment(
-              orderId: _orderId,
-              checkId: _checkId,
-              paymentMethodId: methodId,
-              amount: tx.amount,
-              changeAmount: isLast ? state.change : 0,
-              closeOrder: isLast && _checkId == null,
-              // Para split methods dentro de un check: solo cerrar el
-              // check en la última transacción. Las intermedias dejan el
-              // check abierto para que las siguientes puedan insertarse
-              // sin chocar contra "CHECK_ALREADY_CLOSED".
-              closeCheck: isLast && _checkId != null,
-              customerId: _customerId,
-              customerRnc: isLast
-                  ? _ref.read(currentOrderProvider).customerTaxId
-                  : null,
-              fiscalType: _fiscalType,
+        Payment payment;
+        try {
+          payment = await _salesRepo.processPayment(
+            orderId: _orderId,
+            checkId: _checkId,
+            paymentMethodId: methodId,
+            amount: tx.amount,
+            changeAmount: isLast ? state.change : 0,
+            closeOrder: isLast && _checkId == null,
+            // Para split methods dentro de un check: solo cerrar el
+            // check en la última transacción. Las intermedias dejan el
+            // check abierto para que las siguientes puedan insertarse
+            // sin chocar contra "CHECK_ALREADY_CLOSED".
+            closeCheck: isLast && _checkId != null,
+            customerId: _customerId,
+            customerRnc: isLast
+                ? _ref.read(currentOrderProvider).customerTaxId
+                : null,
+            fiscalType: _fiscalType,
+            cashierSessionId: cashierSessionId,
+            reference: null,
+            splitSequence: i,
+          );
+        } catch (e) {
+          debugPrint('❌ Error in processPayment: $e');
+          // Fallback offline solo si la PRIMERA tx falla por red. Si ya
+          // pasamos transacciones a server (i>0), una mezcla online/
+          // offline sobre la misma orden genera estados inconsistentes
+          // (pagos parciales aplicados, otros encolados) que el RPC no
+          // sabe reconciliar — preferimos fallar limpio y que el cajero
+          // reintente cuando vuelva la red.
+          final isConnectivityError =
+              e is SocketException || e is TimeoutException;
+          if (i == 0 && isConnectivityError) {
+            debugPrint(
+              '[split-offline] tx#0 falló por red, fallback offline',
+            );
+            final offlineResult = await _confirmPaymentOffline(
               cashierSessionId: cashierSessionId,
-              reference: null,
-              splitSequence: i,
-            )
-            .catchError((e) {
-              debugPrint('❌ Error in processPayment: $e');
-              throw e;
-            });
+            );
+            if (offlineResult != null) {
+              createdPayments
+                ..clear()
+                ..addAll(offlineResult);
+              state = state.copyWith(
+                isProcessing: false,
+                isPrinting: true,
+                offlineQueued: true,
+              );
+              return createdPayments;
+            }
+          }
+          rethrow;
+        }
 
         debugPrint('✅ Payment Processed: ${payment.id}');
 

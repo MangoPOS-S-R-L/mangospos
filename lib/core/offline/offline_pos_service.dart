@@ -3,8 +3,10 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
+import 'package:mangopos/core/printing/device_identity.dart';
 import 'package:mangopos/core/storage/storage_service.dart';
 import 'package:mangopos/data/models/sales_models.dart';
+import 'package:mangopos/data/repositories/inventory_repository.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/data/repositories/sales_repository.dart';
 import 'package:mangopos/presentation/sales/state/sales_state.dart';
@@ -45,6 +47,23 @@ class OfflinePosService {
   factory OfflinePosService() => _instance;
 
   Future<StorageService> get _storage async => StorageService.getInstance();
+
+  /// Cache memoria por businessId del device_id estable para anotar cada
+  /// acción encolada con su origen. Lo usan reports/auditoría
+  /// multi-terminal (Fase 5 LWW). Si la lectura falla, devolvemos null
+  /// y el normalize lo omite — no es bloqueante.
+  final Map<String, String> _deviceIdByBusiness = {};
+  Future<String?> _resolveDeviceId(String businessId) async {
+    final cached = _deviceIdByBusiness[businessId];
+    if (cached != null) return cached;
+    try {
+      final id = await DeviceIdentity.getOrCreateId(businessId);
+      _deviceIdByBusiness[businessId] = id;
+      return id;
+    } catch (_) {
+      return null;
+    }
+  }
 
   String _snapshotKey(String businessId, String slotId) =>
       'offline_snapshot_${businessId}_$slotId';
@@ -178,7 +197,14 @@ class OfflinePosService {
   }) async {
     final storage = await _storage;
     final current = await _readQueue(businessId);
-    current.add(_normalizeAction(action));
+    // Anotamos device_id de origen (audit LWW). Best-effort: si falla
+    // la lectura del id no bloqueamos el enqueue.
+    final deviceId = await _resolveDeviceId(businessId);
+    final enriched = Map<String, dynamic>.from(action);
+    if (deviceId != null && enriched['device_id'] == null) {
+      enriched['device_id'] = deviceId;
+    }
+    current.add(_normalizeAction(enriched));
     final compacted = _compactQueue(current);
     await storage.writeList(_queueKey(businessId), compacted);
   }
@@ -203,6 +229,7 @@ class OfflinePosService {
     required String businessId,
     required SalesRepository salesRepository,
     required PrintingService printingService,
+    required InventoryRepository inventoryRepository,
     bool force = false,
   }) async {
     final storage = await _storage;
@@ -251,6 +278,7 @@ class OfflinePosService {
           action: processing,
           salesRepository: salesRepository,
           printingService: printingService,
+          inventoryRepository: inventoryRepository,
         );
         lastMappedOrderId = mappedOrderId ?? lastMappedOrderId;
         final done = Map<String, dynamic>.from(processing)
@@ -463,9 +491,43 @@ class OfflinePosService {
     required Map<String, dynamic> action,
     required SalesRepository salesRepository,
     required PrintingService printingService,
+    required InventoryRepository inventoryRepository,
   }) async {
     final type = action['type']?.toString();
     switch (type) {
+      case 'inventory_adjust':
+        // El RPC fn_inventory_adjust calcula delta server-side con FOR
+        // UPDATE: si otro terminal tocó el stock mientras estábamos
+        // offline, el server toma el conteo físico que el cajero
+        // ingresó (LWW) y emite el movement con su created_at real al
+        // sync. El cache local ya fue actualizado optimísticamente.
+        await inventoryRepository.adjustInventory(
+          businessId: businessId,
+          warehouseId: action['warehouse_id']?.toString() ?? '',
+          itemId: action['item_id']?.toString() ?? '',
+          countedQuantity:
+              ((action['counted_quantity'] ?? 0) as num).toDouble(),
+          reasonCode: action['reason_code']?.toString() ?? 'other',
+          notes: action['notes']?.toString(),
+          costPerUnit: action['cost_per_unit'] == null
+              ? null
+              : (action['cost_per_unit'] as num).toDouble(),
+        );
+        return null;
+      case 'inventory_movement':
+        await inventoryRepository.recordMovement(
+          businessId: businessId,
+          warehouseId: action['warehouse_id']?.toString() ?? '',
+          itemId: action['item_id']?.toString() ?? '',
+          movementType: action['movement_type']?.toString() ?? 'adjustment_out',
+          quantity: ((action['quantity'] ?? 0) as num).toDouble(),
+          costPerUnit: action['cost_per_unit'] == null
+              ? null
+              : (action['cost_per_unit'] as num).toDouble(),
+          notes: action['notes']?.toString(),
+          referenceType: action['reference_type']?.toString(),
+        );
+        return null;
       case 'add_item':
         final resolvedOrderId = await _resolveOrderIdForAction(
           businessId: businessId,
@@ -625,6 +687,15 @@ class OfflinePosService {
           action: action,
           salesRepository: salesRepository,
         );
+        // Si la acción fue encolada offline trae paid_at (ISO-8601 UTC).
+        // Al replayar preservamos esa fecha como payments.created_at vía el
+        // RPC (parámetro p_paid_at). Si falta o no parsea, paidAt queda
+        // null y el RPC cae al comportamiento online (now()).
+        DateTime? paidAt;
+        final rawPaidAt = action['paid_at']?.toString();
+        if (rawPaidAt != null && rawPaidAt.isNotEmpty) {
+          paidAt = DateTime.tryParse(rawPaidAt);
+        }
         await salesRepository.processPayment(
           orderId: resolvedOrderId,
           checkId: action['check_id']?.toString(),
@@ -635,6 +706,7 @@ class OfflinePosService {
           customerRnc: action['customer_rnc']?.toString(),
           cashierSessionId: action['cashier_session_id']?.toString(),
           changeAmount: ((action['change_amount'] ?? 0) as num).toDouble(),
+          paidAt: paidAt,
         );
         return resolvedOrderId;
       default:

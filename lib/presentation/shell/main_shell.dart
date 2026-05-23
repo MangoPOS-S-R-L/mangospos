@@ -6,6 +6,8 @@ import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http; // ✅ check internet
 import 'package:google_fonts/google_fonts.dart';
 
+import 'package:mangopos/core/offline/offline_pos_service.dart';
+import 'package:mangopos/core/offline/offline_queue_status_provider.dart';
 import 'package:mangopos/core/services/fullscreen/fullscreen_service.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/utils/responsive_utils.dart';
@@ -15,15 +17,42 @@ import '../../app/theme/mango_colors.dart';
 import '../../app/router/routes.dart';
 import '../inventory/viewmodel/expiring_lots_badge_provider.dart';
 import '../inventory/viewmodel/low_stock_badge_provider.dart';
+import '../sales/viewmodel/sales_viewmodel.dart';
 import 'mobile_shell.dart';
 import 'shell_destinations.dart';
 
-class MainShell extends ConsumerWidget {
+class MainShell extends ConsumerStatefulWidget {
   final Widget child;
   const MainShell({super.key, required this.child});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<MainShell> createState() => _MainShellState();
+}
+
+class _MainShellState extends ConsumerState<MainShell> {
+  OfflineQueueSyncResult? _lastNotifiedResult;
+
+  @override
+  Widget build(BuildContext context) {
+    final child = widget.child;
+
+    // Escuchamos el resultado del último sync para notificar al cajero
+    // qué se sincronizó. El controller es singleton; usamos referencia
+    // por identidad de OfflineQueueSyncResult para evitar duplicar la
+    // notificación entre rebuilds de otras pantallas.
+    ref.listen<OfflineQueueStatus>(offlineQueueStatusProvider,
+        (previous, next) {
+      final result = next.lastResult;
+      if (result == null) return;
+      if (identical(result, _lastNotifiedResult)) return;
+      if (!result.didWork && result.pending == 0) {
+        _lastNotifiedResult = result;
+        return;
+      }
+      _lastNotifiedResult = result;
+      _showSyncSnackBar(context, result);
+    });
+
     // En anchos compactos (<600dp) usamos el shell móvil con bottom nav +
     // drawer. El topbar horizontal solo tiene sentido en tablet/desktop.
     if (ResponsiveHelper.useCompactShell(context)) {
@@ -97,6 +126,11 @@ class MainShell extends ConsumerWidget {
 
                       const SizedBox(width: 8),
 
+                      // Badge de operaciones offline pendientes
+                      const _OfflineQueueBadge(),
+
+                      const SizedBox(width: 8),
+
                       // Badge de alertas de stock bajo
                       const _NotificationButton(),
 
@@ -118,6 +152,122 @@ class MainShell extends ConsumerWidget {
             // ======= CONTENIDO =======
             Expanded(child: child),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// SnackBar contextual al final de un sync. Mensaje varía según haya
+  /// completados, fallidos, o solo pendientes (caso "no había red real
+  /// todavía"). Se dispara via ref.listen del provider central — no se
+  /// lanza desde el viewmodel para evitar acoplar al BuildContext del
+  /// shell con la lógica de sync.
+  void _showSyncSnackBar(BuildContext context, OfflineQueueSyncResult r) {
+    final Color bg;
+    final String message;
+    if (r.hasFailures) {
+      bg = const Color(0xFFEF4444);
+      message =
+          'Sync parcial: ${r.completed} OK, ${r.failed} con error. Pendientes: ${r.pending}.';
+    } else if (r.completed > 0) {
+      bg = const Color(0xFF22C55E);
+      message = r.pending > 0
+          ? '${r.completed} operación(es) sincronizada(s). Quedan ${r.pending} pendientes.'
+          : '${r.completed} operación(es) sincronizada(s). Cola al día.';
+    } else if (r.pending > 0) {
+      // Sin trabajo hecho pero quedaron operaciones — típicamente sin red.
+      bg = const Color(0xFFF59E0B);
+      message = '${r.pending} operación(es) en espera de conexión.';
+    } else {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: bg,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 4),
+        content: Text(message),
+      ),
+    );
+  }
+}
+
+class _OfflineQueueBadge extends ConsumerWidget {
+  const _OfflineQueueBadge();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final status = ref.watch(offlineQueueStatusProvider);
+    final count = status.pending;
+    final hasPending = count > 0;
+    final badgeText = count > 99 ? '99+' : '$count';
+
+    return Tooltip(
+      message: hasPending
+          ? '$count operación(es) offline pendiente(s) de sincronizar'
+          : 'Todo sincronizado',
+      child: MouseRegion(
+        cursor: hasPending
+            ? SystemMouseCursors.click
+            : SystemMouseCursors.basic,
+        child: GestureDetector(
+          onTap: hasPending
+              ? () => ref
+                    .read(currentOrderProvider.notifier)
+                    .syncPendingOfflineActions(force: true)
+              : null,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: hasPending
+                      ? const Color(0xFFFFF3CD)
+                      : Colors.grey[100],
+                  shape: BoxShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: Icon(
+                  hasPending ? Icons.cloud_off_rounded : Icons.cloud_done_rounded,
+                  color: hasPending
+                      ? const Color(0xFFB45309)
+                      : Colors.grey[500],
+                ),
+              ),
+              if (hasPending)
+                Positioned(
+                  top: -2,
+                  right: -2,
+                  child: Container(
+                    constraints: const BoxConstraints(
+                      minWidth: 18,
+                      minHeight: 18,
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 5,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFB45309),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: Colors.white, width: 1.5),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      badgeText,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        height: 1,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );

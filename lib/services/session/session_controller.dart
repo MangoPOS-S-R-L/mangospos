@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter/foundation.dart' show debugPrint, kDebugMode, kIsWeb;
 import 'package:mangopos/core/auth/offline_auth_service.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
+import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/core/network/supabase_config.dart';
 import 'package:mangopos/core/security/access_control_catalog.dart';
 import 'package:mangopos/core/utils/display_name_utils.dart';
@@ -343,6 +344,17 @@ class SessionController extends Notifier<SessionState> {
     // no fue vinculado, internamente se vuelve no-op.
     if (businessId != null && businessId.isNotEmpty) {
       unawaited(OfflineAuthService().startBackgroundSync(businessId));
+      // Prewarm del cache de impresoras por área. Sin esto, si el cajero
+      // pierde la red antes de imprimir a un área que nunca usó (típico:
+      // "bebidas" en negocios donde solo se había impreso a "cocina"
+      // hasta ahora), sendLocalOrderToKitchen falla con "No hay
+      // impresoras cacheadas para X". Fire-and-forget: si la red falla,
+      // las áreas que sí se pudieron cachear quedan; el resto reintenta
+      // al siguiente login.
+      unawaited(
+        PrintingService(Supabase.instance.client)
+            .prewarmPrinterCache(businessId: businessId),
+      );
     }
   }
 

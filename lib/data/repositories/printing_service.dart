@@ -750,6 +750,12 @@ class PrintingService {
     ).getKitchenBanners(businessId);
     final createdJobs = <String, String>{};
 
+    // Recolectamos áreas sin cache para reportarlas todas juntas al
+    // final, en vez de fallar en la primera. Las que sí tienen cache se
+    // imprimen normalmente. Los items de áreas sin impresora se encolan
+    // como print jobs offline para que el worker los despache al sync.
+    final areasSinImpresora = <String>[];
+
     for (final entry in itemsByArea.entries) {
       final areaCode = entry.key;
       final printers = await _readCachedOrderPrinters(
@@ -766,9 +772,8 @@ class PrintingService {
             'items': entry.value.map((item) => item.productName).toList(),
           },
         );
-        throw Exception(
-          'No hay impresoras cacheadas para $areaCode. Abre online una vez para guardar configuración.',
-        );
+        areasSinImpresora.add(areaCode);
+        continue;
       }
 
       final ticket = PrintTicketService.generateKitchenTicket(
@@ -804,6 +809,81 @@ class PrintingService {
         businessId: businessId,
         orderId: order.id,
       );
+    }
+
+    // Si quedaron áreas sin impresora cacheada (caso típico: prewarm
+    // del login todavía no cubrió esta área, o el cajero está en un
+    // device nuevo), intentamos resolver ONLINE inline antes de fallar.
+    // Si funciona, imprimimos ahora; si no, encolamos y devolvemos un
+    // error específico con los códigos de área faltantes.
+    if (areasSinImpresora.isNotEmpty) {
+      final stillMissing = <String>[];
+      for (final areaCode in areasSinImpresora) {
+        try {
+          final area = await _ensureAreaForCode(businessId, areaCode);
+          final printers = await _getOrderPrintersWithOfflineFallback(
+            businessId: businessId,
+            areaId: area.id,
+            areaCode: areaCode,
+          );
+          if (printers.isEmpty) {
+            stillMissing.add(areaCode);
+            continue;
+          }
+          final itemsForArea = itemsByArea[areaCode] ?? const <OrderItem>[];
+          final ticket = PrintTicketService.generateKitchenTicket(
+            order: order,
+            items: itemsForArea,
+            tableName: tableName,
+            waiterName: waiterName,
+            cashierName: _resolveCashierName(),
+            customerName: localState.customerName,
+            businessName: resolvedBusinessName,
+            areaCode: areaCode,
+            receiptItemDisplayMode: receiptItemDisplayMode,
+            showDineInBanner: kitchenBanners.dineIn,
+            showTakeoutBanner: kitchenBanners.takeout,
+          );
+          final dispatchId = _createLocalDispatchId(areaCode);
+          createdJobs[areaCode] = dispatchId;
+          await _dispatchKitchenTicket(
+            printers: printers,
+            bytes: ticket.escPosCommands,
+            areaCode: areaCode,
+            fallbackData: {
+              'title': 'COMANDA $tableName',
+              'body':
+                  'Orden local ${order.id}\n'
+                  'Mesa: $tableName\n'
+                  'Mesero: ${waiterName ?? 'N/A'}',
+            },
+            businessId: businessId,
+            orderId: order.id,
+          );
+        } catch (e) {
+          debugPrint(
+            '[kitchen-local] fallback online falló para $areaCode: $e',
+          );
+          stillMissing.add(areaCode);
+        }
+      }
+
+      if (stillMissing.isNotEmpty) {
+        await _offlinePos.enqueueAction(
+          businessId: businessId,
+          action: {
+            'type': 'confirm_local_order',
+            'order_id': order.id,
+            'origin': localState.origin,
+            'item_count': draftItems.length,
+          },
+        );
+        throw Exception(
+          'No hay impresora asignada para: ${stillMissing.join(", ")}. '
+          'Ve a Ajustes > Impresión y asigna una mientras estás online, '
+          'luego vuelve a tocar "Enviar a cocina".',
+        );
+      }
     }
 
     await _offlinePos.enqueueAction(
@@ -982,6 +1062,53 @@ class PrintingService {
     } catch (e) {
       throw Exception('Error al imprimir comandas de listos: $e');
     }
+  }
+
+  /// Precarga el cache de impresoras de TODAS las print_areas del business.
+  /// Pensado para llamarse al login/online-startup: garantiza que, si el
+  /// cajero pierde la red después, [sendLocalOrderToKitchen] encuentre
+  /// impresoras cacheadas para cada área sin importar si ya había impreso
+  /// a ese área antes desde este device.
+  ///
+  /// Fail-safe: si la red falla a mitad del prewarm, las áreas ya
+  /// procesadas quedan cacheadas y las restantes se intentarán en el
+  /// próximo prewarm. No lanza — devuelve la lista de areaCodes que
+  /// quedaron cacheados con éxito para que el caller pueda log/notify.
+  Future<List<String>> prewarmPrinterCache({
+    required String businessId,
+  }) async {
+    final cached = <String>[];
+    try {
+      final areas = await _printingRepo.getPrintAreas(businessId);
+      for (final area in areas) {
+        try {
+          final orderPrinters = await _printingRepo.getOrderPrintersForArea(
+            area.id,
+          );
+          await _cacheOrderPrinters(
+            businessId: businessId,
+            areaCode: area.code,
+            printers: orderPrinters,
+          );
+          final readyPrinters = await _printingRepo.getReadyPrintersForArea(
+            area.id,
+          );
+          await _cacheReadyPrinters(
+            businessId: businessId,
+            areaCode: area.code,
+            printers: readyPrinters,
+          );
+          cached.add(area.code);
+        } catch (e) {
+          debugPrint(
+            '⚠️ prewarmPrinterCache: falló para área ${area.code}: $e',
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('⚠️ prewarmPrinterCache: no se pudo listar áreas: $e');
+    }
+    return cached;
   }
 
   Future<List<PrinterConfig>> _getOrderPrintersWithOfflineFallback({

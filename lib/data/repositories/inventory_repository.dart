@@ -1,13 +1,29 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/network/connectivity_service.dart';
+import '../../core/offline/inventory_offline_cache.dart';
+import '../../core/offline/offline_pos_service.dart';
 import '../../presentation/inventory/state/inventory_state.dart';
 import '../../presentation/inventory/state/transfers_state.dart';
 import '../datasources/queries/inventory_queries.dart';
 
 class InventoryRepository {
   final SupabaseClient _client;
+  final InventoryOfflineCache _cache = InventoryOfflineCache();
+  final OfflinePosService _offlinePos = OfflinePosService();
+  final ConnectivityService _connectivity = ConnectivityService();
 
   InventoryRepository(this._client);
+
+  /// True si el último error del repo fue un fallo de conectividad y se
+  /// resolvió contra el cache local. Las pantallas pueden leerlo para
+  /// mostrar un disclaimer "Datos pueden estar desactualizados".
+  bool _lastReadFromCache = false;
+  bool get lastReadFromCache => _lastReadFromCache;
 
   Future<List<InventoryWarehouse>> getWarehouses(String businessId) async {
     final response = await _client
@@ -109,45 +125,101 @@ class InventoryRepository {
         'id, sku, name, description, unit, cost, min_stock, max_stock, '
         'is_active, costing_method, barcode, tracks_lots, item_classification';
     final normalized = query?.trim();
-    final itemsResponse = normalized != null && normalized.isNotEmpty
-        ? await _client
-              .from(InventoryQueries.tableInventoryItems)
-              .select(columns)
-              .eq('business_id', businessId)
-              .or(
-                'name.ilike.%${normalized.replaceAll(',', '')}%,sku.ilike.%${normalized.replaceAll(',', '')}%,description.ilike.%${normalized.replaceAll(',', '')}%',
-              )
-              .order('name')
-        : await _client
-              .from(InventoryQueries.tableInventoryItems)
-              .select(columns)
-              .eq('business_id', businessId)
-              .order('name');
-    final itemsRaw = List<Map<String, dynamic>>.from(itemsResponse);
+    try {
+      final itemsResponse = normalized != null && normalized.isNotEmpty
+          ? await _client
+                .from(InventoryQueries.tableInventoryItems)
+                .select(columns)
+                .eq('business_id', businessId)
+                .or(
+                  'name.ilike.%${normalized.replaceAll(',', '')}%,sku.ilike.%${normalized.replaceAll(',', '')}%,description.ilike.%${normalized.replaceAll(',', '')}%',
+                )
+                .order('name')
+          : await _client
+                .from(InventoryQueries.tableInventoryItems)
+                .select(columns)
+                .eq('business_id', businessId)
+                .order('name');
+      final itemsRaw = List<Map<String, dynamic>>.from(itemsResponse);
 
-    final stockResponse = await _client
-        .from(InventoryQueries.tableInventoryStock)
-        .select('item_id, quantity')
-        .eq('warehouse_id', warehouseId);
+      final stockResponse = await _client
+          .from(InventoryQueries.tableInventoryStock)
+          .select('item_id, quantity')
+          .eq('warehouse_id', warehouseId);
 
-    final stockByItem = <String, double>{};
-    for (final row in List<Map<String, dynamic>>.from(stockResponse)) {
-      final itemId = row['item_id']?.toString();
-      if (itemId == null || itemId.isEmpty) continue;
-      final quantity = row['quantity'];
-      stockByItem[itemId] = quantity is num
-          ? quantity.toDouble()
-          : double.tryParse(quantity?.toString() ?? '') ?? 0;
-    }
+      final stockByItem = <String, double>{};
+      for (final row in List<Map<String, dynamic>>.from(stockResponse)) {
+        final itemId = row['item_id']?.toString();
+        if (itemId == null || itemId.isEmpty) continue;
+        final quantity = row['quantity'];
+        stockByItem[itemId] = quantity is num
+            ? quantity.toDouble()
+            : double.tryParse(quantity?.toString() ?? '') ?? 0;
+      }
 
-    return itemsRaw
-        .map(
-          (item) => InventoryItemSummary.fromMap(
-            item,
-            stock: stockByItem[item['id']?.toString() ?? ''] ?? 0,
+      // Hidratamos el cache offline con el listado completo (sin filtrar
+      // por `query`) sólo cuando NO hay query — así el cache sirve para
+      // cualquier búsqueda offline. Cuando hay query, no pisamos el
+      // snapshot completo con un subset.
+      if (normalized == null || normalized.isEmpty) {
+        unawaited(
+          _cache.saveItemsSnapshot(
+            businessId: businessId,
+            warehouseId: warehouseId,
+            itemsRaw: itemsRaw,
+            stockByItem: stockByItem,
           ),
-        )
-        .toList(growable: false);
+        );
+      }
+
+      _lastReadFromCache = false;
+      return itemsRaw
+          .map(
+            (item) => InventoryItemSummary.fromMap(
+              item,
+              stock: stockByItem[item['id']?.toString() ?? ''] ?? 0,
+            ),
+          )
+          .toList(growable: false);
+    } catch (e) {
+      if (!_isConnectivityError(e)) rethrow;
+      final snapshot = await _cache.loadItemsSnapshot(
+        businessId: businessId,
+        warehouseId: warehouseId,
+      );
+      if (snapshot == null) rethrow;
+      debugPrint('[inventory] getItems cayó al cache local: $e');
+      _lastReadFromCache = true;
+      final filtered = (normalized == null || normalized.isEmpty)
+          ? snapshot.items
+          : snapshot.items.where((item) {
+              final lower = normalized.toLowerCase();
+              final name = item['name']?.toString().toLowerCase() ?? '';
+              final sku = item['sku']?.toString().toLowerCase() ?? '';
+              final desc = item['description']?.toString().toLowerCase() ?? '';
+              return name.contains(lower) ||
+                  sku.contains(lower) ||
+                  desc.contains(lower);
+            }).toList(growable: false);
+      return filtered
+          .map(
+            (item) => InventoryItemSummary.fromMap(
+              item,
+              stock: snapshot.stock[item['id']?.toString() ?? ''] ?? 0,
+            ),
+          )
+          .toList(growable: false);
+    }
+  }
+
+  bool _isConnectivityError(Object e) {
+    if (e is SocketException) return true;
+    if (e is TimeoutException) return true;
+    final msg = e.toString().toLowerCase();
+    return msg.contains('socket') ||
+        msg.contains('failed host lookup') ||
+        msg.contains('network is unreachable') ||
+        msg.contains('connection') && msg.contains('refused');
   }
 
   Future<List<InventoryMovementEntry>> getMovements({
@@ -688,19 +760,95 @@ class InventoryRepository {
     String? notes,
     String? referenceType,
   }) async {
-    await _client.rpc(
-      InventoryQueries.rpcRecordMovement,
-      params: {
-        'p_business_id': businessId,
-        'p_warehouse_id': warehouseId,
-        'p_item_id': itemId,
-        'p_movement_type': movementType,
-        'p_quantity': quantity,
-        'p_cost_per_unit': costPerUnit,
-        'p_notes': notes,
-        'p_reference_type': referenceType,
+    try {
+      await _client.rpc(
+        InventoryQueries.rpcRecordMovement,
+        params: {
+          'p_business_id': businessId,
+          'p_warehouse_id': warehouseId,
+          'p_item_id': itemId,
+          'p_movement_type': movementType,
+          'p_quantity': quantity,
+          'p_cost_per_unit': costPerUnit,
+          'p_notes': notes,
+          'p_reference_type': referenceType,
+        },
+      );
+    } catch (e) {
+      if (!_connectivity.isConnected || _isConnectivityError(e)) {
+        await _enqueueMovementOffline(
+          businessId: businessId,
+          warehouseId: warehouseId,
+          itemId: itemId,
+          movementType: movementType,
+          quantity: quantity,
+          costPerUnit: costPerUnit,
+          notes: notes,
+          referenceType: referenceType,
+        );
+        return;
+      }
+      rethrow;
+    }
+  }
+
+  /// Signos de los movement_type conocidos para mantener el cache local
+  /// alineado con lo que hará el server al replay. Si aparece un tipo no
+  /// listado dejamos delta=0 (el cache se reconciliará al primer sync).
+  ///
+  /// Basado en `fn_inventory_record_movement` (migración 20260308_0016):
+  /// purchase, transfer_in, return_from_customer suman; sale, waste,
+  /// breakage, theft, transfer_out, return_to_supplier restan.
+  static const Map<String, int> _movementSign = {
+    'purchase': 1,
+    'transfer_in': 1,
+    'return_from_customer': 1,
+    'adjustment_in': 1,
+    'sale': -1,
+    'waste': -1,
+    'breakage': -1,
+    'theft': -1,
+    'expiration': -1,
+    'donation': -1,
+    'transfer_out': -1,
+    'return_to_supplier': -1,
+    'adjustment_out': -1,
+  };
+
+  Future<void> _enqueueMovementOffline({
+    required String businessId,
+    required String warehouseId,
+    required String itemId,
+    required String movementType,
+    required double quantity,
+    double? costPerUnit,
+    String? notes,
+    String? referenceType,
+  }) async {
+    final occurredAt = DateTime.now().toUtc();
+    await _offlinePos.enqueueAction(
+      businessId: businessId,
+      action: {
+        'type': 'inventory_movement',
+        'warehouse_id': warehouseId,
+        'item_id': itemId,
+        'movement_type': movementType,
+        'quantity': quantity,
+        'cost_per_unit': costPerUnit,
+        'notes': notes,
+        'reference_type': referenceType,
+        'occurred_at': occurredAt.toIso8601String(),
       },
     );
+    final sign = _movementSign[movementType] ?? 0;
+    if (sign != 0) {
+      await _cache.applyStockDelta(
+        businessId: businessId,
+        warehouseId: warehouseId,
+        itemId: itemId,
+        delta: sign * quantity,
+      );
+    }
   }
 
   /// Sprint Inventario V1.1: ajuste con razón estructurada (migración 0017).
@@ -719,18 +867,48 @@ class InventoryRepository {
     String? notes,
     double? costPerUnit,
   }) async {
-    await _client.rpc(
-      InventoryQueries.rpcAdjustInventory,
-      params: {
-        'p_business_id': businessId,
-        'p_warehouse_id': warehouseId,
-        'p_item_id': itemId,
-        'p_counted_quantity': countedQuantity,
-        'p_reason_code': reasonCode,
-        'p_notes': notes,
-        'p_cost_per_unit': costPerUnit,
-      },
-    );
+    try {
+      await _client.rpc(
+        InventoryQueries.rpcAdjustInventory,
+        params: {
+          'p_business_id': businessId,
+          'p_warehouse_id': warehouseId,
+          'p_item_id': itemId,
+          'p_counted_quantity': countedQuantity,
+          'p_reason_code': reasonCode,
+          'p_notes': notes,
+          'p_cost_per_unit': costPerUnit,
+        },
+      );
+    } catch (e) {
+      if (!_connectivity.isConnected || _isConnectivityError(e)) {
+        await _offlinePos.enqueueAction(
+          businessId: businessId,
+          action: {
+            'type': 'inventory_adjust',
+            'warehouse_id': warehouseId,
+            'item_id': itemId,
+            'counted_quantity': countedQuantity,
+            'reason_code': reasonCode,
+            'notes': notes,
+            'cost_per_unit': costPerUnit,
+            'occurred_at': DateTime.now().toUtc().toIso8601String(),
+          },
+        );
+        // Optimista: el conteo físico ES el stock nuevo. Lo aplicamos al
+        // cache local. Si otro terminal toca el stock mientras estamos
+        // offline, el server resuelve al sync (LWW por created_at del
+        // movement que genera el RPC).
+        await _cache.setStock(
+          businessId: businessId,
+          warehouseId: warehouseId,
+          itemId: itemId,
+          quantity: countedQuantity,
+        );
+        return;
+      }
+      rethrow;
+    }
   }
 
   // ── PRD 9 Fase 1C: Proveedores (CRUD completo) ─────────────────────

@@ -11,9 +11,11 @@ import 'package:go_router/go_router.dart';
 
 import '../../app/router/routes.dart';
 import '../../app/theme/mango_colors.dart';
+import '../../core/offline/offline_queue_status_provider.dart';
 import '../../services/session/session_controller.dart';
 import '../inventory/viewmodel/expiring_lots_badge_provider.dart';
 import '../inventory/viewmodel/low_stock_badge_provider.dart';
+import '../sales/viewmodel/sales_viewmodel.dart';
 import 'shell_destinations.dart';
 
 class MobileShell extends ConsumerStatefulWidget {
@@ -94,6 +96,7 @@ class _MobileShellState extends ConsumerState<MobileShell> {
         ),
         centerTitle: true,
         actions: const [
+          _AppBarOfflineQueueBadge(),
           _AppBarExpiringLotsBadge(),
           SizedBox(width: 4),
           _AppBarLowStockBadge(),
@@ -614,6 +617,56 @@ class _AppBarLowStockBadge extends ConsumerWidget {
                 ),
               ),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AppBarOfflineQueueBadge extends ConsumerWidget {
+  const _AppBarOfflineQueueBadge();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final status = ref.watch(offlineQueueStatusProvider);
+    final count = status.pending;
+    final hasPending = count > 0;
+    if (!hasPending) return const SizedBox.shrink();
+    return IconButton(
+      tooltip: '$count operación(es) offline pendiente(s)',
+      onPressed: () => ref
+          .read(currentOrderProvider.notifier)
+          .syncPendingOfflineActions(force: true),
+      icon: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          const Icon(
+            Icons.cloud_off_rounded,
+            color: Color(0xFFB45309),
+          ),
+          Positioned(
+            top: -4,
+            right: -4,
+            child: Container(
+              constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              decoration: BoxDecoration(
+                color: const Color(0xFFB45309),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: Colors.white, width: 1.5),
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                count > 99 ? '99+' : '$count',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w800,
+                  height: 1,
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );

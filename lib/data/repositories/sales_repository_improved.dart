@@ -317,6 +317,7 @@ class SalesRepositoryImproved {
     bool closeOrder = true,
     int splitSequence = 0,
     bool closeCheck = true,
+    DateTime? paidAt,
   }) async {
     try {
       final response = await _client.rpc(
@@ -335,6 +336,7 @@ class SalesRepositoryImproved {
           'p_close_order': closeOrder,
           'p_split_sequence': splitSequence,
           'p_close_check': closeCheck,
+          if (paidAt != null) 'p_paid_at': paidAt.toUtc().toIso8601String(),
         },
       );
 

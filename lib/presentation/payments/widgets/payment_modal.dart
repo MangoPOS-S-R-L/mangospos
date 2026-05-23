@@ -23,11 +23,19 @@ class PaymentModal extends ConsumerStatefulWidget {
   final OrderCheck? check;
   final VoidCallback onPaymentSuccess;
 
+  /// Hook que dispara cuando el pago se encola offline (sin contacto con
+  /// el server). El caller suele usarlo para imprimir la precuenta — el
+  /// NCF/factura no se puede emitir hasta que el sync llegue al server,
+  /// así que entregamos al cliente un comprobante interno con el monto y
+  /// el método de pago. Si es null, no se hace nada extra.
+  final Future<void> Function()? onOfflineQueued;
+
   const PaymentModal({
     super.key,
     required this.order,
     this.check,
     required this.onPaymentSuccess,
+    this.onOfflineQueued,
   });
 
   @override
@@ -79,6 +87,14 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
       HapticFeedback.mediumImpact();
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
+        // Si el pago se encoló offline, disparamos el hook ANTES del pop
+        // para que el caller imprima la precuenta con el modal todavía
+        // montado (igual patrón que table_order_screen con onConfirmed).
+        // Fire-and-forget: cualquier error del print no debe trabar el
+        // cierre del modal — el pago ya está encolado.
+        if (state.offlineQueued && widget.onOfflineQueued != null) {
+          unawaited(widget.onOfflineQueued!());
+        }
         if (Navigator.of(context).canPop()) {
           Navigator.of(context).pop();
         }
