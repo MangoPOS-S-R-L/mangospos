@@ -435,8 +435,32 @@ class EscPosGenerator {
   // ============================================================
 
   List<int> _encodeText(String text) {
-    // Por ahora usamos latin1, en producción usar encoding específico
-    return latin1.encode(text);
+    // Normalización defensiva: iOS/macOS/Word insertan "smart quotes"
+    // (U+2018/U+2019/U+201C/U+201D), em-dashes, ellipsis, etc. al
+    // teclear. Esos caracteres NO están en Latin-1 y `latin1.encode`
+    // tira FormatException sin atrapar, lo que rompía la impresión de
+    // cierres de caja en negocios cuyo nombre contiene apostrofo
+    // (e.g. "Hailey's", "D'Angelo") tipeado desde iPhone.
+    //
+    // Mapeamos los caracteres más comunes a su equivalente ASCII y
+    // dejamos `allowInvalid: true` como red de seguridad para cualquier
+    // otro caracter exótico (queda como '?' en lugar de tirar excepción).
+    final normalized = text
+        .replaceAll('‘', "'") // ‘  left single quote
+        .replaceAll('’', "'") // ’  right single quote / apostrophe
+        .replaceAll('‚', "'") // ‚  single low-9 quote
+        .replaceAll('‛', "'") // ‛  single high-reversed-9 quote
+        .replaceAll('“', '"') // “  left double quote
+        .replaceAll('”', '"') // ”  right double quote
+        .replaceAll('„', '"') // „  double low-9 quote
+        .replaceAll('–', '-') // –  en-dash
+        .replaceAll('—', '-') // —  em-dash
+        .replaceAll('…', '...') // …  horizontal ellipsis
+        .replaceAll(' ', ' '); // nbsp → espacio normal
+    // `allowInvalid: true` se setea en el codec (no en el método encode),
+    // así caracteres exóticos no normalizados arriba salen como '?' en
+    // lugar de tirar FormatException y matar la impresión.
+    return const Latin1Codec(allowInvalid: true).encode(normalized);
   }
 
   int _getMaxChars() {
