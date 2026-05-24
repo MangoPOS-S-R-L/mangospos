@@ -328,18 +328,31 @@ Future<void> _lockOrientationByDevice() async {
   if (kIsWeb || !(Platform.isAndroid || Platform.isIOS)) return;
 
   // Determinamos teléfono vs tablet usando el lado más corto en dp.
-  // Teléfono (<600dp) → vertical forzado (UX administrativa).
-  // Tablet (≥600dp) → landscape forzado (UX de caja/POS).
+  // Teléfono (<550dp) → vertical forzado (UX administrativa).
+  // Tablet (≥550dp) → landscape forzado (UX de caja/POS).
+  //
+  // El umbral 550dp (antes 600) cubre tablets de 8" como Galaxy Tab A8
+  // y Lenovo M8 que reportaban ~580-598dp y caían erróneamente al
+  // bucket "teléfono". Tablets 7"+ ya son suficiente real estate para
+  // el POS en landscape; cualquier teléfono moderno está por debajo
+  // de 450dp en su lado corto.
   final view = PlatformDispatcher.instance.views.first;
   final shortestSideDp =
       view.physicalSize.shortestSide / view.devicePixelRatio;
 
-  if (shortestSideDp < 600) {
+  debugPrint(
+    '[orientation] shortestSide=${view.physicalSize.shortestSide}px '
+    'dpr=${view.devicePixelRatio} → ${shortestSideDp.toStringAsFixed(1)}dp',
+  );
+
+  if (shortestSideDp < 550) {
+    debugPrint('[orientation] phone → portrait');
     await SystemChrome.setPreferredOrientations(const [
       DeviceOrientation.portraitUp,
       DeviceOrientation.portraitDown,
     ]);
   } else {
+    debugPrint('[orientation] tablet → landscape');
     await SystemChrome.setPreferredOrientations(const [
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
