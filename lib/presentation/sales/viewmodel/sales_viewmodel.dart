@@ -385,6 +385,57 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     return result;
   }
 
+  /// Defensa client-side: filtra `tax_lines` de items takeout sacando los
+  /// impuestos cuyo `applyOnTakeout=false` (tipico: Ley 10%). Cubre el caso
+  /// donde el backend RPC fn_toggle_item_takeout es la version vieja que
+  /// solo cambia is_takeout sin recomputar tax_lines, dejando data stale
+  /// en BD. Sin esto, despues de marcar "para llevar" la UI muestra el
+  /// item con Ley aplicada igual.
+  ///
+  /// Idempotente: items que no son takeout o donde no hay nada que filtrar
+  /// pasan sin cambio (referencia identica).
+  ///
+  /// Solo cubre el toggle ON (de dine-in a takeout). Toggle OFF tambien
+  /// tiene el mismo bug en backend pero requeria re-sintetizar la Ley, que
+  /// es mas complejo — para eso conviene tener la migracion 0002 aplicada.
+  List<OrderItem> _filterTaxLinesByTakeout(List<OrderItem> items) {
+    if (_taxDefs.isEmpty) return items;
+    // TaxDef solo identifica por nombre (no tiene id). tax_lines real y
+    // optimistas (taxId='tmp_tax_NAME', taxName=NAME) ambos exponen taxName,
+    // asi que matchear por nombre normalizado cubre ambos casos.
+    final byName = <String, bool>{};
+    for (final tx in _taxDefs) {
+      byName[tx.name.toLowerCase().trim()] = tx.applyOnTakeout;
+    }
+
+    return items.map((item) {
+      if (!item.isTakeout || item.taxLines.isEmpty) return item;
+
+      final filtered = item.taxLines.where((line) {
+        final applies = byName[line.taxName.toLowerCase().trim()] ?? true;
+        return applies;
+      }).toList(growable: false);
+
+      if (filtered.length == item.taxLines.length) return item;
+
+      // Recompute tax_rate y tax (suma de los amounts filtrados). subtotal
+      // queda igual — summarizeItemPricing recomputa para inclusive items
+      // basado en applicableInclusiveRate derivado de los filtered tax_lines,
+      // y para exclusive items prefiere taxLinesSum sobre item.tax.
+      final newRate = filtered.fold<double>(0, (sum, l) => sum + l.taxRate);
+      final newTaxAmount = filtered.fold<double>(
+        0,
+        (sum, l) => sum + l.amount,
+      );
+
+      return item.copyWith(
+        taxLines: filtered,
+        taxRate: newRate,
+        tax: newTaxAmount,
+      );
+    }).toList(growable: false);
+  }
+
   CurrentOrderState _normalizeHydratedState(CurrentOrderState source) {
     final order = source.order;
     if (order == null || source.items.isEmpty) {
@@ -411,7 +462,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // del negocio, lo que hacia que productos con impuesto desactivado para
     // un origin/area reaparecieran con el precio "normal" al salir y volver.
     // La DB debe ser la fuente de verdad para items ya guardados.
-    final normalizedItems = activeItems;
+    //
+    // EXCEPCION: filtrado client-side de tax_lines para items takeout. Si el
+    // backend RPC fn_toggle_item_takeout es la version vieja (sin migracion
+    // 20260502_0002), los tax_lines en BD para items takeout siguen
+    // incluyendo taxes con applyOnTakeout=false (ej. Ley 10%). Los filtramos
+    // aqui para que la UI no muestre el impuesto incorrecto. La fuente real
+    // de verdad sigue siendo la BD via applyOnTakeout de cada tax.
+    final normalizedItems = _filterTaxLinesByTakeout(activeItems);
 
     // 4. Calcular pricing.
     // PRD 2: el motor backend consolida la propina dentro de `oi.tax`, así
@@ -1500,6 +1558,17 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       await ref
           .read(salesRepositoryProvider)
           .toggleItemTakeout(itemId: itemId, isTakeout: isTakeout);
+      // Defensa client-side antes del refresh: actualizar is_takeout local y
+      // filtrar tax_lines del item para que el cajero NO vea Ley en items
+      // takeout aunque el backend RPC sea viejo (no recomputa tax_lines).
+      // El refresh asincrono va a traer la verdad del server despues, pero
+      // este update inmediato evita el "flash" donde el item sigue cobrando
+      // 10% por ~250ms hasta que llegue la respuesta.
+      final patchedItems = state.items
+          .map((item) =>
+              item.id == itemId ? item.copyWith(isTakeout: isTakeout) : item)
+          .toList(growable: false);
+      state = state.copyWith(items: _filterTaxLinesByTakeout(patchedItems));
       refreshOrder();
     } catch (e) {
       final businessId = _activeBusinessId;
