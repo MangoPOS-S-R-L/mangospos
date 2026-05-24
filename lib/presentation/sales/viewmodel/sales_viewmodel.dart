@@ -408,87 +408,32 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       byName[tx.name.toLowerCase().trim()] = tx.applyOnTakeout;
     }
 
-    // Resolver origin de la orden para saber qué taxes aplican (filtros
-    // apply_on_zone/manual/quick/delivery del editor de impuestos).
-    final origin = parseSaleOrigin(state.origin);
-
-    // Tasa aplicable a items takeout en este origin: suma de las taxes
-    // activas que cumplen appliesTo(origin) Y applyOnTakeout=true. Es la
-    // tasa que debería usar un item takeout cuando NO tiene tax_lines
-    // populated (típico: draft local sin trigger server-side).
-    double takeoutApplicableRate = 0;
-    for (final tx in _taxDefs) {
-      if (!tx.isActive || tx.rate <= 0) continue;
-      if (!tx.appliesTo(origin)) continue;
-      if (!tx.applyOnTakeout) continue;
-      takeoutApplicableRate += tx.rate;
-    }
-
     return items.map((item) {
-      if (!item.isTakeout) return item;
+      if (!item.isTakeout || item.taxLines.isEmpty) return item;
 
-      // Caso 1: item con tax_lines populated → filtrar las que no aplican.
-      if (item.taxLines.isNotEmpty) {
-        final filtered = item.taxLines.where((line) {
-          final applies = byName[line.taxName.toLowerCase().trim()] ?? true;
-          return applies;
-        }).toList(growable: false);
+      final filtered = item.taxLines.where((line) {
+        final applies = byName[line.taxName.toLowerCase().trim()] ?? true;
+        return applies;
+      }).toList(growable: false);
 
-        if (filtered.length == item.taxLines.length) return item;
+      if (filtered.length == item.taxLines.length) return item;
 
-        final newRate = filtered.fold<double>(0, (sum, l) => sum + l.taxRate);
-        final newTaxAmount = filtered.fold<double>(
-          0,
-          (sum, l) => sum + l.amount,
-        );
-
-        return item.copyWith(
-          taxLines: filtered,
-          taxRate: newRate,
-          tax: newTaxAmount,
-        );
-      }
-
-      // Caso 2: item SIN tax_lines (draft local, optimistic, o trigger
-      // server-side que aún no populó). item.tax viene del INSERT inicial
-      // calculado con tax_rate completo (incluye LEY). Como ahora el item
-      // es takeout, recomputamos tax usando solo las rates aplicables al
-      // takeout en este origin. Sin esto, la pantalla muestra LEY 30 en
-      // un item takeout aunque el server-side ya lo haya filtrado.
-      if (item.taxRate.toDouble() <= takeoutApplicableRate + 0.001) {
-        // El item ya tiene rate compatible con takeout (e.g. server ya
-        // lo recomputó). No tocar.
-        return item;
-      }
-
-      final newRate = takeoutApplicableRate;
-      // Para exclusive el cálculo es directo: tax = subtotal * rate.
-      // Para inclusive es más sutil (la base se recomputa en
-      // summarizeItemPricing usando tax_lines), pero como tax_lines está
-      // vacía, también caemos a este path con la rate ajustada.
-      final base = item.subtotal > 0
-          ? item.subtotal
-          : _itemGrossLocal(item);
-      final newTaxAmount =
-          _roundMoney(base * (newRate / 100.0));
+      // Recompute tax_rate y tax (suma de los amounts filtrados). subtotal
+      // queda igual — summarizeItemPricing recomputa para inclusive items
+      // basado en applicableInclusiveRate derivado de los filtered tax_lines,
+      // y para exclusive items prefiere taxLinesSum sobre item.tax.
+      final newRate = filtered.fold<double>(0, (sum, l) => sum + l.taxRate);
+      final newTaxAmount = filtered.fold<double>(
+        0,
+        (sum, l) => sum + l.amount,
+      );
 
       return item.copyWith(
+        taxLines: filtered,
         taxRate: newRate,
         tax: newTaxAmount,
       );
     }).toList(growable: false);
-  }
-
-  /// Gross local del item (precio × cantidad + modifiers) para recomputar
-  /// tax cuando los valores persistidos están stale. Espejo simple del
-  /// helper homónimo en order_pricing_utils.
-  double _itemGrossLocal(OrderItem item) {
-    final qty = item.quantity <= 0 ? 1.0 : item.quantity;
-    final mods = item.modifiers.fold<double>(
-      0,
-      (s, m) => s + (m.price * m.qty * qty),
-    );
-    return _roundMoney(item.unitPrice * qty + mods);
   }
 
   CurrentOrderState _normalizeHydratedState(CurrentOrderState source) {

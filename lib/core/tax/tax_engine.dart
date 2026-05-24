@@ -162,18 +162,7 @@ class ResolvedTaxRates {
 }
 
 /// Resolve which taxes apply for a given [origin] from the full [taxes] list.
-///
-/// [isTakeout] permite filtrar taxes con `applyOnTakeout=false` (típico:
-/// LEY 10% en RD) cuando el item se entrega para llevar. Sin este
-/// filtro, una LEY guardada como tax regular (no `is_service_fee`) se
-/// suma a `effectivePct` y se cobra igual aunque el toggle del editor
-/// la haya marcado como no-aplicable a takeout — el hardcoded skip que
-/// hay abajo solo opera sobre `serviceFeePct`.
-ResolvedTaxRates resolveTaxRates(
-  List<TaxDef> taxes,
-  SaleOrigin origin, {
-  bool isTakeout = false,
-}) {
+ResolvedTaxRates resolveTaxRates(List<TaxDef> taxes, SaleOrigin origin) {
   double effectivePct = 0;
   double fullPct = 0;
   double serviceFeePct = 0;
@@ -182,24 +171,17 @@ ResolvedTaxRates resolveTaxRates(
   for (final tx in taxes) {
     if (!tx.isActive || tx.rate <= 0) continue;
 
-    // fullPct se usa para extraer base en modo inclusive — siempre
-    // representa todos los taxes ACTIVOS del business (no del item),
-    // así que `applyOnTakeout` se aplica acá también: si LEY no aplica
-    // a takeout, el divisor inclusive debe ser solo 1+ITBIS, no 1+ITBIS+LEY.
-    final excludedByTakeout = isTakeout && !tx.applyOnTakeout;
-    if (!excludedByTakeout) {
-      fullPct += tx.rate;
-    }
+    fullPct += tx.rate;
 
     if (tx.effectiveIsServiceFee) {
-      if (tx.appliesTo(origin) && !excludedByTakeout) {
+      if (tx.appliesTo(origin)) {
         serviceFeePct = tx.rate;
         serviceFeeActive = true;
       }
       continue; // service fee is NOT included in effectiveTaxPct
     }
 
-    if (tx.appliesTo(origin) && !excludedByTakeout) {
+    if (tx.appliesTo(origin)) {
       effectivePct += tx.rate;
     }
   }
