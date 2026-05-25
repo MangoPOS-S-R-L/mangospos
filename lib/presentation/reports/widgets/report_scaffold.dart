@@ -11,6 +11,7 @@ import 'package:mangopos/core/theme/app_spacing.dart';
 import 'package:mangopos/presentation/reports/services/reports_csv_export_service.dart';
 import 'package:mangopos/presentation/reports/services/reports_export_service.dart';
 import 'package:mangopos/presentation/reports/viewmodel/reports_viewmodel.dart';
+import 'package:mangopos/presentation/reports/widgets/report_skeleton_view.dart';
 import 'package:mangopos/presentation/reports/widgets/report_widgets.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 
@@ -40,13 +41,17 @@ class _ReportScaffoldState extends ConsumerState<ReportScaffold> {
   @override
   void initState() {
     super.initState();
-    // Cada vez que el usuario entra a un reporte, recargamos los datos
-    // contra la fecha actual. El provider es global (no autoDispose),
-    // así que sin esto seguiría mostrando el snapshot del primer load,
-    // que puede ser de hace horas o de ayer si el preset es "Hoy".
+    // Single point of entry-load. NO duplicar este loadCategory en build:
+    // antes había una segunda llamada cuando _lastBusinessId era null
+    // que disparaba un segundo load en paralelo y creaba race conditions
+    // (tocar un chip durante ese intervalo dejaba data stale sobrescribir
+    // la data fresca del chip nuevo).
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      ref.read(reportsViewModelProvider.notifier).load();
+      _lastBusinessId =
+          ref.read(sessionProvider).activeBusinessId; // sincroniza guard
+      ref.read(reportsViewModelProvider.notifier)
+          .loadCategory(widget.category);
     });
   }
 
@@ -56,11 +61,14 @@ class _ReportScaffoldState extends ConsumerState<ReportScaffold> {
     final state = ref.watch(reportsViewModelProvider);
     final viewModel = ref.read(reportsViewModelProvider.notifier);
 
+    // Solo recargamos si el business cambia DESPUÉS del initState
+    // (ej: usuario cambia de negocio sin salir de la pantalla).
     if (session.activeBusinessId != null &&
+        _lastBusinessId != null &&
         session.activeBusinessId != _lastBusinessId) {
       _lastBusinessId = session.activeBusinessId;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        viewModel.load();
+        viewModel.loadCategory(widget.category);
       });
     }
 
@@ -123,7 +131,9 @@ class _ReportScaffoldState extends ConsumerState<ReportScaffold> {
                         ),
                       IconButton(
                         tooltip: 'Actualizar',
-                        onPressed: state.loading ? null : viewModel.load,
+                        onPressed: state.loading
+                            ? null
+                            : () => viewModel.loadCategory(widget.category),
                         icon: const Icon(Icons.refresh),
                       ),
                     ],
@@ -146,24 +156,36 @@ class _ReportScaffoldState extends ConsumerState<ReportScaffold> {
     );
   }
 
+  /// True si NO hay snapshot cargado para la categoría de esta pantalla.
+  /// Antes el check era global `salesSummary == null` — incorrecto para
+  /// las otras 5 categorías porque mostraba el skeleton aunque el dato
+  /// de esa categoría sí estuviera disponible.
+  bool _hasNoDataForCategory(ReportsState state) {
+    switch (widget.category) {
+      case ReportCategory.sales:
+        return state.salesSummary == null;
+      case ReportCategory.finances:
+        return state.cashSummary == null;
+      case ReportCategory.purchases:
+        return state.purchasesSummary == null;
+      case ReportCategory.inventory:
+        return state.inventorySummary == null;
+      case ReportCategory.taxes:
+        return state.taxSummary == null;
+      case ReportCategory.fiscal:
+        return state.fiscalSummary == null;
+    }
+  }
+
   Widget _buildBody(ReportsState state, ReportsViewModel viewModel) {
-    if (state.loading && state.salesSummary == null) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(color: MangoColors.primaryOrange),
-            const SizedBox(height: AppSpacing.lg),
-            const Text(
-              'Cargando informe...',
-              style: TextStyle(color: AppColors.mutedForeground, fontSize: 14),
-            ),
-          ],
-        ),
-      );
+    final noData = _hasNoDataForCategory(state);
+
+    // Primera carga (sin snapshot todavía): skeleton con shimmer.
+    if (state.loading && noData) {
+      return const ReportSkeletonView();
     }
 
-    if (state.error != null) {
+    if (state.error != null && noData) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(AppSpacing.containerPadding),
@@ -187,7 +209,7 @@ class _ReportScaffoldState extends ConsumerState<ReportScaffold> {
               const SizedBox(height: AppSpacing.lg),
               OutlinedButton.icon(
                 style: reportOutlineButtonStyle(),
-                onPressed: viewModel.load,
+                onPressed: () => viewModel.loadCategory(widget.category),
                 icon: const Icon(Icons.refresh),
                 label: const Text('Reintentar'),
               ),
@@ -197,7 +219,30 @@ class _ReportScaffoldState extends ConsumerState<ReportScaffold> {
       );
     }
 
-    return widget.body(state, viewModel);
+    // Refresh con data previa: stack que mantiene los datos visibles
+    // con opacidad reducida + barra de progreso arriba, así el usuario
+    // sabe que algo está pasando sin perder contexto.
+    return Stack(
+      children: [
+        AnimatedOpacity(
+          opacity: state.loading ? 0.55 : 1.0,
+          duration: const Duration(milliseconds: 150),
+          child: IgnorePointer(
+            ignoring: state.loading,
+            child: widget.body(state, viewModel),
+          ),
+        ),
+        if (state.loading)
+          Positioned(
+            top: 0, left: 0, right: 0,
+            child: LinearProgressIndicator(
+              minHeight: 3,
+              backgroundColor: Colors.transparent,
+              color: MangoColors.primaryOrange,
+            ),
+          ),
+      ],
+    );
   }
 }
 

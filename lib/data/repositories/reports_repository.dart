@@ -64,22 +64,20 @@ class ReportsRepository {
     final fromIso = AppTime.astToUtcIso(from);
     final toIso = AppTime.astToUtcIso(to);
 
-    // Scope al business directamente en la query: PostgREST hace INNER
-    // JOIN payments → orders → table_sessions y filtra por business_id.
-    // Antes traíamos TODAS las payments globales del rango y filtrábamos
-    // en memoria — con el límite default (1000 filas) de PostgREST, en
-    // multi-tenant o alto volumen las ventas más recientes (hoy) caían
-    // fuera del cut-off antes de poder ser filtradas localmente, y el
-    // reporte se quedaba sin ellas. Ordenamos DESC además para que, si
-    // se vuelve a tocar el límite, siempre estén las más nuevas.
-    final selectWithScope =
-        '$select, orders!inner(id, table_sessions!inner(business_id))';
-
+    // payments.business_id existe como columna directa → filtramos ahí
+    // en vez de hacer INNER JOIN payments → orders → table_sessions.
+    // El JOIN evaluaba RLS sobre las 3 tablas y disparaba seq scans con
+    // statement_timeout 57014 en reportes. El índice
+    // (business_id, created_at DESC) sostiene este filter + sort.
+    //
+    // Pre-requisito DB: para evitar perder payments legacy, correr el
+    // backfill que popula payments.business_id desde orders→sessions.
+    // Está documentado al lado del CREATE INDEX correspondiente.
     final paymentRows = List<Map<String, dynamic>>.from(
       await _client
           .from(ReportsQueries.tablePayments)
-          .select(selectWithScope)
-          .eq('orders.table_sessions.business_id', businessId)
+          .select(select)
+          .eq('business_id', businessId)
           .gte('created_at', fromIso)
           .lt('created_at', toIso)
           .order('created_at', ascending: false)

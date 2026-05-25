@@ -641,6 +641,11 @@ class _BusinessProfileScreenState extends ConsumerState<BusinessProfileScreen> {
                       child: Image.network(
                         logoUrl,
                         fit: BoxFit.contain,
+                        // PRD 8 Fase 2 fix #5 — preview de 110px no
+                        // necesita decodificar el logo a resolución
+                        // completa. 220px (2× para retina) basta.
+                        cacheWidth: 220,
+                        cacheHeight: 220,
                         errorBuilder: (_, __, ___) => const Icon(
                           Icons.broken_image_outlined,
                           color: Colors.grey,

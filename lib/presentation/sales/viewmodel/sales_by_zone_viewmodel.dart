@@ -249,13 +249,21 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
     if (_rt != null && _rtBusinessId == businessId) return;
     _rt?.unsubscribe();
 
-    // Realtime con debounce e invalidación incremental por zona.
+    // PRD 7 Fase 4.1 — Realtime con debounce e invalidación incremental
+    // por zona. `filter: business_id=eq.X` server-side donde la columna
+    // existe (table_sessions, payments). orders/order_items/order_checks
+    // dependen de RLS + el filter manual ya implementado en cada callback.
     _rt = sb
         .channel('sales_by_zone_$businessId')
         .onPostgresChanges(
           event: PostgresChangeEvent.all,
           schema: 'public',
           table: 'table_sessions',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'business_id',
+            value: businessId,
+          ),
           callback: (payload) {
             final newRecord = payload.newRecord;
             final oldRecord = payload.oldRecord;
@@ -358,6 +366,11 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
           event: PostgresChangeEvent.all,
           schema: 'public',
           table: 'payments',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'business_id',
+            value: businessId,
+          ),
           callback: (payload) {
             final newRecord = payload.newRecord;
             final oldRecord = payload.oldRecord;

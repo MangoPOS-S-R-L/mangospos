@@ -14,14 +14,18 @@
 // en SharedPreferences — son writes infrecuentes y chicos donde no vale
 // la pena migrar.
 //
+// Web: drift en web requiere WASM y setup adicional. En MangoPOS web
+// la cola cae a SharedPreferences vía guards `kIsWeb` en
+// `OfflinePosService`. La conexión drift se resuelve vía conditional
+// import (`_db_connection_io.dart` en nativo, `_db_connection_web.dart`
+// stub en web) para que el código compile en ambas plataformas.
+//
 // Para regenerar el código: `flutter pub run build_runner build`.
 
-import 'dart:io';
-
 import 'package:drift/drift.dart';
-import 'package:drift/native.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+
+import '_db_connection_io.dart'
+    if (dart.library.html) '_db_connection_web.dart';
 
 part 'offline_queue_db.g.dart';
 
@@ -74,7 +78,9 @@ class CompletedFingerprints extends Table {
 
 @DriftDatabase(tables: [QueueActions, CompletedOps, CompletedFingerprints])
 class OfflineQueueDb extends _$OfflineQueueDb {
-  OfflineQueueDb() : super(_openConnection());
+  // openConnection() viene de `_db_connection_io.dart` (nativo) o
+  // `_db_connection_web.dart` (stub) via conditional import.
+  OfflineQueueDb() : super(openConnection());
 
   /// Para tests: construye una DB en memoria sin tocar disco.
   OfflineQueueDb.inMemory(QueryExecutor executor) : super(executor);
@@ -88,12 +94,4 @@ class OfflineQueueDb extends _$OfflineQueueDb {
   static OfflineQueueDb getInstance() {
     return _instance ??= OfflineQueueDb();
   }
-}
-
-LazyDatabase _openConnection() {
-  return LazyDatabase(() async {
-    final dir = await getApplicationSupportDirectory();
-    final file = File(p.join(dir.path, 'mangopos_offline_queue.db'));
-    return NativeDatabase.createInBackground(file);
-  });
 }

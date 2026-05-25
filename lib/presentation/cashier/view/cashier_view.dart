@@ -30,9 +30,7 @@ class CashierView extends ConsumerStatefulWidget {
 
 class _CashierViewState extends ConsumerState<CashierView>
     with WidgetsBindingObserver {
-  Timer? _refreshTimer;
   String? _lastBusinessId;
-  bool _isVisible = true;
 
   @override
   void initState() {
@@ -41,26 +39,23 @@ class _CashierViewState extends ConsumerState<CashierView>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(cashierViewModelProvider).init();
     });
-
-    // Auto-refresh every 30 seconds using silent refresh (no loading spinner)
-    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      if (mounted && _isVisible) {
-        ref.read(cashierViewModelProvider).refreshSilently();
-      }
-    });
+    // PRD 8 Fase 2 fix #1: el Timer.periodic(30s) que disparaba rebuilds
+    // del dashboard completo se mudó al ViewModel (`startSilentRefresh`)
+    // y ahora hace hash-check antes de notifyListeners — si nada cambió
+    // en el polling, no se rebuild. Lo arranca init() del VM.
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    _isVisible = state == AppLifecycleState.resumed;
-    if (_isVisible) {
+    if (state == AppLifecycleState.resumed) {
+      // Refresh inmediato al volver a foreground. El polling periódico
+      // se mantiene corriendo en el VM independientemente del lifecycle.
       ref.read(cashierViewModelProvider).refreshSilently();
     }
   }
 
   @override
   void dispose() {
-    _refreshTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }

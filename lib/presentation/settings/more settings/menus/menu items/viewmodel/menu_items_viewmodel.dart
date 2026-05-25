@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
+import 'package:mangopos/core/storage/image_upload_helper.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 
@@ -103,25 +104,22 @@ class MenuItemsVm extends Notifier<MenuItemsState> {
 
       // Subida de imagen (soporta web con bytes)
       if (imageFile != null || imageBytes != null) {
-        final ext = _guessExt(imageFile?.path ?? 'upload.jpg');
+        // PRD 7 Fase 2.2: comprimir antes de subir.
+        final rawBytes = imageBytes ?? await imageFile!.readAsBytes();
+        final compressed = await ImageUploadHelper.compressForMenu(rawBytes);
+        final ext = identical(compressed, rawBytes)
+            ? _guessExt(imageFile?.path ?? 'upload.jpg')
+            : 'jpg';
         final biz = await BusinessResolver.ensure(_businessId);
         final key = 'items/$biz/${const Uuid().v4()}.$ext';
 
         final storage = Supabase.instance.client.storage.from('menu-items');
 
-        if (imageBytes != null) {
-          await storage.uploadBinary(
-            key,
-            imageBytes,
-            fileOptions: const FileOptions(upsert: true),
-          );
-        } else {
-          await storage.upload(
-            key,
-            imageFile!,
-            fileOptions: const FileOptions(upsert: true),
-          );
-        }
+        await storage.uploadBinary(
+          key,
+          compressed,
+          fileOptions: const FileOptions(upsert: true),
+        );
 
         imagePath = key;
         imageUrl = storage.getPublicUrl(key); // útil si el bucket es público

@@ -1639,6 +1639,12 @@ class _ImagePickerArea extends StatelessWidget {
       content = CachedNetworkImage(
         imageUrl: existingUrl!.replaceAll('sqdwjjewdqzxglvqerqt.supabase.co', 'supabase.mangopos.do'),
         fit: BoxFit.cover,
+        // PRD 8 Fase 2 fix #5 — downsample (preview de producto en
+        // editor, no necesita resolución completa).
+        memCacheWidth: 600,
+        memCacheHeight: 450,
+        maxWidthDiskCache: 800,
+        maxHeightDiskCache: 600,
         errorWidget: (_, __, ___) =>
             Icon(Icons.broken_image, size: 50, color: AppColors.mutedForeground),
       );

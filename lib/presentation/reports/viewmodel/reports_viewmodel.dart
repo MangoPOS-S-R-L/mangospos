@@ -224,9 +224,13 @@ final reportsViewModelProvider =
 class ReportsViewModel extends StateNotifier<ReportsState> {
   final ReportsRepository _repository;
 
-  ReportsViewModel(this._repository) : super(ReportsState.initial()) {
-    Future<void>.microtask(load);
-  }
+  // Cada loadCategory/loadHubSummary incrementa este token. Si un load
+  // viejo termina después de uno nuevo (race), su token ya no coincide
+  // con `_loadToken` y descarta su escritura — así el último click gana
+  // siempre, incluso si la app entró con un load en vuelo.
+  int _loadToken = 0;
+
+  ReportsViewModel(this._repository) : super(ReportsState.initial());
 
   static ({DateTime from, DateTime to}) resolveRange(
     SalesReportRangePreset preset,
@@ -255,82 +259,164 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
     }
   }
 
-  Future<void> load() async {
-    // Re-resolvemos el rango si el preset es relativo (today, yesterday,
-    // thisWeek, thisMonth). Sin esto, abrir la app un día y volver al
-    // siguiente sigue mostrando el "hoy" del día anterior — la fecha
-    // queda congelada en el state desde que se construyó el provider.
+  // Re-resolvemos el rango si el preset es relativo (today, yesterday,
+  // thisWeek, thisMonth). Sin esto, abrir la app un día y volver al
+  // siguiente sigue mostrando el "hoy" del día anterior — la fecha
+  // queda congelada en el state desde que se construyó el provider.
+  void _refreshRangeIfRelative() {
     if (state.salesRangePreset != SalesReportRangePreset.custom) {
       final fresh = resolveRange(state.salesRangePreset);
-      state = state.copyWith(
-        salesFrom: fresh.from,
-        salesTo: fresh.to,
-      );
+      state = state.copyWith(salesFrom: fresh.from, salesTo: fresh.to);
     }
+  }
 
-    state = state.copyWith(loading: true, clearError: true);
+  Future<String> _requireBusinessId() async {
+    final businessId = await resolveBusinessIdOrNull(
+      Supabase.instance.client,
+      'auto',
+    );
+    if (businessId == null) {
+      throw Exception('No se pudo resolver el negocio actual');
+    }
+    return businessId;
+  }
+
+  /// Carga UNA sola categoría. Lo que usa cada pantalla de detalle al
+  /// abrir o al cambiar de rango — un solo round-trip al backend en vez
+  /// de los 7 que disparaba `load()` antes.
+  Future<void> loadCategory(ReportCategory category) async {
+    final myToken = ++_loadToken;
+    _refreshRangeIfRelative();
+    state = state.copyWith(
+      loading: true,
+      clearError: true,
+      selectedCategory: category,
+    );
 
     try {
-      final businessId = await resolveBusinessIdOrNull(
-        Supabase.instance.client,
-        'auto',
-      );
+      final businessId = await _requireBusinessId();
+      final from = state.salesFrom;
+      final to = state.salesTo;
 
-      if (businessId == null) {
-        throw Exception('No se pudo resolver el negocio actual');
+      switch (category) {
+        case ReportCategory.sales:
+          final results = await Future.wait([
+            _repository.getSalesSummary(
+              businessId: businessId, from: from, to: to),
+            _repository.getMonthlyProductProjection(businessId: businessId),
+          ]);
+          if (myToken != _loadToken) return; // superseded
+          state = state.copyWith(
+            salesSummary: results[0],
+            productProjection:
+                Map<String, double>.from(results[1] as Map),
+          );
+        case ReportCategory.finances:
+          final summary = await _repository.getCashSummary(
+            businessId: businessId, from: from, to: to);
+          if (myToken != _loadToken) return;
+          state = state.copyWith(cashSummary: summary);
+        case ReportCategory.purchases:
+          final summary = await _repository.getPurchasesSummary(
+            businessId: businessId, from: from, to: to);
+          if (myToken != _loadToken) return;
+          state = state.copyWith(purchasesSummary: summary);
+        case ReportCategory.inventory:
+          final summary = await _repository.getInventorySummary(
+            businessId: businessId, from: from, to: to);
+          if (myToken != _loadToken) return;
+          state = state.copyWith(inventorySummary: summary);
+        case ReportCategory.taxes:
+          final summary = await _repository.getTaxSummary(
+            businessId: businessId, from: from, to: to);
+          if (myToken != _loadToken) return;
+          state = state.copyWith(taxSummary: summary);
+        case ReportCategory.fiscal:
+          final summary = await _repository.getFiscalDocumentsSummary(
+            businessId: businessId, from: from, to: to);
+          if (myToken != _loadToken) return;
+          state = state.copyWith(fiscalSummary: summary);
       }
 
-      final results = await Future.wait([
-        _repository.getSalesSummary(
-          businessId: businessId,
-          from: state.salesFrom,
-          to: state.salesTo,
-        ),
-        _repository.getCashSummary(
-          businessId: businessId,
-          from: state.salesFrom,
-          to: state.salesTo,
-        ),
-        _repository.getPurchasesSummary(
-          businessId: businessId,
-          from: state.salesFrom,
-          to: state.salesTo,
-        ),
-        _repository.getInventorySummary(
-          businessId: businessId,
-          from: state.salesFrom,
-          to: state.salesTo,
-        ),
-        _repository.getTaxSummary(
-          businessId: businessId,
-          from: state.salesFrom,
-          to: state.salesTo,
-        ),
-        _repository.getFiscalDocumentsSummary(
-          businessId: businessId,
-          from: state.salesFrom,
-          to: state.salesTo,
-        ),
-        _repository.getMonthlyProductProjection(businessId: businessId),
-      ]);
-
-      state = state.copyWith(
-        loading: false,
-        salesSummary: results[0],
-        cashSummary: results[1],
-        purchasesSummary: results[2],
-        inventorySummary: results[3],
-        taxSummary: results[4],
-        fiscalSummary: results[5],
-        productProjection: Map<String, double>.from(results[6]),
-        clearError: true,
-      );
+      if (myToken != _loadToken) return;
+      state = state.copyWith(loading: false, clearError: true);
     } catch (e) {
+      if (myToken != _loadToken) return;
       state = state.copyWith(
         loading: false,
         error: 'Error cargando reportes: $e',
       );
     }
+  }
+
+  /// Carga las 6 categorías para los tiles del hub. Las hace en serie
+  /// (no Future.wait) para no martillar Supabase con 7 conexiones a la
+  /// vez — cada tile se va llenando a medida que llega su query.
+  Future<void> loadHubSummary() async {
+    final myToken = ++_loadToken;
+    _refreshRangeIfRelative();
+    state = state.copyWith(loading: true, clearError: true);
+
+    try {
+      final businessId = await _requireBusinessId();
+      final from = state.salesFrom;
+      final to = state.salesTo;
+
+      final sales = await _repository.getSalesSummary(
+        businessId: businessId, from: from, to: to);
+      if (myToken != _loadToken) return;
+      state = state.copyWith(salesSummary: sales);
+
+      final cash = await _repository.getCashSummary(
+        businessId: businessId, from: from, to: to);
+      if (myToken != _loadToken) return;
+      state = state.copyWith(cashSummary: cash);
+
+      final purchases = await _repository.getPurchasesSummary(
+        businessId: businessId, from: from, to: to);
+      if (myToken != _loadToken) return;
+      state = state.copyWith(purchasesSummary: purchases);
+
+      final inventory = await _repository.getInventorySummary(
+        businessId: businessId, from: from, to: to);
+      if (myToken != _loadToken) return;
+      state = state.copyWith(inventorySummary: inventory);
+
+      final tax = await _repository.getTaxSummary(
+        businessId: businessId, from: from, to: to);
+      if (myToken != _loadToken) return;
+      state = state.copyWith(taxSummary: tax);
+
+      final fiscal = await _repository.getFiscalDocumentsSummary(
+        businessId: businessId, from: from, to: to);
+      if (myToken != _loadToken) return;
+      state = state.copyWith(fiscalSummary: fiscal);
+
+      state = state.copyWith(loading: false, clearError: true);
+    } catch (e) {
+      if (myToken != _loadToken) return;
+      state = state.copyWith(
+        loading: false,
+        error: 'Error cargando reportes: $e',
+      );
+    }
+  }
+
+  /// Compat: si hay una categoría seleccionada, recarga solo esa. Si no,
+  /// asume que estamos en el hub y carga el resumen completo en serie.
+  Future<void> load() async {
+    final category = state.selectedCategory;
+    if (category != null) {
+      await loadCategory(category);
+    } else {
+      await loadHubSummary();
+    }
+  }
+
+  /// Llamada desde el hub al entrar — borra la marca de "última
+  /// categoría vista" para que `load()` caiga en `loadHubSummary`.
+  void clearSelectedCategory() {
+    state = state.copyWith(clearCategory: true);
   }
 
   Future<void> setSalesPreset(SalesReportRangePreset preset) async {

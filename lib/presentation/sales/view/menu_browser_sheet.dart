@@ -574,6 +574,19 @@ class _ProductCard extends ConsumerWidget {
                         : CachedNetworkImage(
                             imageUrl: item.imageUrl!.replaceAll('sqdwjjewdqzxglvqerqt.supabase.co', 'supabase.mangopos.do'),
                             fit: BoxFit.cover,
+                            // PRD 8 Fase 2 fix #5 — downsample agresivo
+                            // antes de cargar a memoria. Sin esto, una
+                            // foto 2000×2000 se decodifica completa en
+                            // RAM para mostrarse en ~150 px. Con 100
+                            // productos en grid = ~80-100 MB extra
+                            // innecesarios. memCache* mantiene el
+                            // tamaño decodificado en cache; max*Disk
+                            // se queda en disco a tamaño cap pero
+                            // permite ampliar después si es necesario.
+                            memCacheWidth: 400,
+                            memCacheHeight: 300,
+                            maxWidthDiskCache: 600,
+                            maxHeightDiskCache: 450,
                           ),
                   ),
                 ),

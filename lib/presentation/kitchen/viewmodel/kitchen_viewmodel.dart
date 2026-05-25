@@ -172,6 +172,12 @@ class KitchenViewModel extends ChangeNotifier {
 
   void _subscribeRealtime(SupabaseClient client, String businessId) {
     _rtItems?.unsubscribe();
+    // PRD 7 Fase 4.1 — `order_items` no tiene `business_id` directo
+    // (su scope viene via `orders.session_id → table_sessions.business_id`),
+    // así que no podemos aplicar `filter: business_id=eq.X` server-side.
+    // RLS es la barrera real de aislamiento. El channel ya está scoped
+    // por businessId en su nombre para evitar colisiones entre tenants
+    // dentro del mismo cluster Realtime.
     _rtItems = client.channel('rt:kitchen_items:$businessId')
       ..onPostgresChanges(
         event: PostgresChangeEvent.all,

@@ -57,7 +57,50 @@ class CashierViewModel extends ChangeNotifier {
   DateTime? _lastCashOpenValidationAt;
   String? _error;
 
+  // PRD 8 Fase 2 fix #1: el polling vive en el VM, no en el widget.
+  // Antes: cada CashierView.initState arrancaba un Timer que llamaba
+  // notifyListeners cada 30s INCONDICIONALMENTE → rebuild de todo el
+  // dashboard aunque nada hubiera cambiado.
+  // Ahora: Timer en el VM + hash check antes de notify (`_shouldNotify`).
+  // Si nada cambió, no se emite notifyListeners y el subtree queda quieto.
+  Timer? _silentRefreshTimer;
+  static const Duration _silentRefreshInterval = Duration(seconds: 30);
+
   CashierViewModel(this._repository, this._salesRepository);
+
+  /// Arranca el polling silencioso. Idempotente: si ya hay timer, no
+  /// duplica. Lo llama `init()`; el widget no necesita gestionarlo.
+  void startSilentRefresh() {
+    _silentRefreshTimer ??= Timer.periodic(
+      _silentRefreshInterval,
+      (_) => unawaited(refreshSilently()),
+    );
+  }
+
+  /// Hash del subset de state observable. Usado por `refreshSilently`
+  /// para decidir si llamar notifyListeners o no. Si esto NO cambió,
+  /// la pantalla se ve idéntica y el rebuild es desperdicio.
+  String _observableStateHash() {
+    final session = _lastSession;
+    return [
+      session?['id'],
+      session?['status'],
+      session?['end_amount'],
+      session?['start_amount'],
+      _pendingTables,
+      _todaySummary['total'],
+      _todaySummary['transactions'],
+      _recentMovements.length,
+      _activeSessions.length,
+      _totalWeeklySales,
+    ].join('|');
+  }
+
+  @override
+  void dispose() {
+    _silentRefreshTimer?.cancel();
+    super.dispose();
+  }
 
   // ───────────────────────────────────────────────────────────────────
   // Persistencia local de la sesión de caja (Fase 1.4a offline)
@@ -233,6 +276,9 @@ class CashierViewModel extends ChangeNotifier {
     } finally {
       _isLoading = false;
       notifyListeners();
+      // PRD 8 Fase 2 fix #1: arrancar polling silencioso. Idempotente:
+      // si ya hay timer corriendo, no duplica. Se cancela en dispose().
+      startSilentRefresh();
     }
   }
 
@@ -917,10 +963,17 @@ class CashierViewModel extends ChangeNotifier {
     // `init()`: nullear causaba el flash "Caja cerrada" en cada
     // navegacion. La proteccion contra stale "open" esta en
     // `ensureCashOpenFast` (TTL 12s) y la validacion server-side de
-    // `processPayment`. Aqui solo hacemos fetch y emitimos un unico
-    // `notifyListeners` al final con el estado real.
+    // `processPayment`. Aqui solo hacemos fetch y emitimos
+    // notifyListeners SOLO si el state observable cambio.
+    //
+    // PRD 8 Fase 2 fix #1: snapshot del hash ANTES del fetch, comparar
+    // DESPUES. Si nada cambio, skip notify y el widget no rebuild. En
+    // negocios con poca actividad (la mayoria del tiempo), eso evita
+    // ~120 rebuilds/hora del dashboard de caja completo.
     try {
       if (_currentRegisterId != null && _businessId != null) {
+        final prevHash = _observableStateHash();
+
         // Misma resolucion que init(): caja es per-register (cualquier user
         // del local). Si no hay activa, fallback al historico del usuario
         // para mostrar el ultimo cierre en el panel.
@@ -939,7 +992,10 @@ class CashierViewModel extends ChangeNotifier {
           _businessId!,
         );
         await _loadDashboardData(silent: true);
-        notifyListeners();
+
+        if (_observableStateHash() != prevHash) {
+          notifyListeners();
+        }
       }
     } catch (e) {
       debugPrint('Error refreshing cashier data: $e');

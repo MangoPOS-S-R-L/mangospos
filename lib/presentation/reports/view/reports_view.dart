@@ -79,7 +79,11 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
         session.activeBusinessId != _lastBusinessId) {
       _lastBusinessId = session.activeBusinessId;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        viewModel.load();
+        // Hub: refresh secuencial de los 6 tiles. Limpia la categoría
+        // seleccionada para que setSalesPreset desde el hub también
+        // refresque todos los tiles (no solo la última categoría vista).
+        viewModel.clearSelectedCategory();
+        viewModel.loadHubSummary();
       });
     }
 

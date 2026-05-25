@@ -263,20 +263,31 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
   /// - inventory_stock: cualquier cambio → refrescar mapa de stock (badges).
   /// - menu_items UPDATE de is_active: auto-86 activó/desactivó un producto
   ///   → recargar catálogo para que aparezca/desaparezca del grid.
-  void _subscribeStockRealtime() {
+  ///
+  /// PRD 7 Fase 4.1 — channel scoped por businessId + filter explícito en
+  /// menu_items (que sí tiene business_id directo). inventory_stock no
+  /// tiene la columna (se relaciona vía warehouse_id → warehouses.business_id),
+  /// así que confía en RLS.
+  void _subscribeStockRealtime(String businessId) {
     if (_stockChannel != null) return;
     _stockChannel = _client
-        .channel('rt:inventory_realtime')
+        .channel('rt:inventory_realtime:$businessId')
         .onPostgresChanges(
           event: PostgresChangeEvent.all,
           schema: 'public',
           table: 'inventory_stock',
+          // inventory_stock no tiene business_id directo. RLS filtra.
           callback: (_) => _scheduleStockRefresh(),
         )
         .onPostgresChanges(
           event: PostgresChangeEvent.update,
           schema: 'public',
           table: 'menu_items',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'business_id',
+            value: businessId,
+          ),
           callback: (payload) {
             // Solo recargar catálogo cuando is_active cambió (auto-86).
             // Cambios cosméticos (precio, nombre) los maneja otro flujo.
@@ -717,7 +728,7 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
       unawaited(_loadStockMap());
       // Suscribir a cambios de stock en tiempo real para que los badges
       // se actualicen cuando otra tablet venda/reciba inventario.
-      _subscribeStockRealtime();
+      _subscribeStockRealtime(businessId);
     } catch (e) {
       state = state.copyWith(
         loading: false,

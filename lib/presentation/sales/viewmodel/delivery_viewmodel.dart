@@ -87,24 +87,35 @@ class DeliveryViewModel extends Notifier<DeliveryState> {
     if (_rt != null && _rtBusinessId == businessId) return;
     _rt?.unsubscribe();
 
+    // PRD 7 Fase 4.1 — `filter: business_id=eq.X` server-side donde la
+    // columna existe (table_sessions). `orders` y `order_items` no
+    // tienen business_id directo; el aislamiento depende de RLS + el
+    // nombre del channel scoped por businessId.
     _rt = Supabase.instance.client
         .channel('delivery_orders_$businessId')
         .onPostgresChanges(
           event: PostgresChangeEvent.all,
           schema: 'public',
           table: 'table_sessions',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'business_id',
+            value: businessId,
+          ),
           callback: (_) => _queueRefresh(),
         )
         .onPostgresChanges(
           event: PostgresChangeEvent.all,
           schema: 'public',
           table: 'orders',
+          // orders.business_id no existe — scope vía session_id → RLS.
           callback: (_) => _queueRefresh(),
         )
         .onPostgresChanges(
           event: PostgresChangeEvent.all,
           schema: 'public',
           table: 'order_items',
+          // order_items.business_id no existe — scope vía order_id → RLS.
           callback: (_) => _queueRefresh(),
         )
         .subscribe();

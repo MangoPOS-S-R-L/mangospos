@@ -681,19 +681,47 @@ class ZonesRepository {
     return List<Map<String, dynamic>>.from(rows as List);
   }
 
-  // ---- Realtime usado en la pantalla "Por zona" ----
-  RealtimeChannel subscribe(void Function() onChange) {
-    final ch = sb.channel('zones:status')
+  // ---- Realtime de estado de zonas ----
+  //
+  // PRD 7 Fase 4.1 — versión anterior usaba `channel('zones:status')`
+  // global SIN filtro `business_id` en ninguna tabla. Eso provocaba que
+  // el cliente recibiera eventos de TODOS los negocios del cluster
+  // (filtrados luego por RLS, pero igual viajando por la red) y, peor,
+  // el caller nunca llamaba `.unsubscribe()` → memory leak +
+  // suscripción persistente en el server.
+  //
+  // Fix: exigir `businessId`, scopear el nombre del canal a ese
+  // business, y aplicar `filter: business_id=eq.X` server-side en cada
+  // tabla. Las tablas que NO tienen `business_id` directo
+  // (order_items, order_checks, payments) se quedan sin filter — eso
+  // es deuda asumida porque su business_id se infiere via JOINs.
+  // RLS sigue siendo la barrera real para esos casos.
+  //
+  // Devuelve el channel para que el caller PUEDA hacer `.unsubscribe()`
+  // en su dispose. Recomendado encarecidamente (no opcional como antes).
+  RealtimeChannel subscribe({
+    required String businessId,
+    required void Function() onChange,
+  }) {
+    final ch = sb.channel('zones:status:$businessId')
       ..onPostgresChanges(
         event: PostgresChangeEvent.all,
         schema: 'public',
         table: 'table_sessions',
+        filter: PostgresChangeFilter(
+          type: PostgresChangeFilterType.eq,
+          column: 'business_id',
+          value: businessId,
+        ),
         callback: (_) => onChange(),
       )
       ..onPostgresChanges(
         event: PostgresChangeEvent.all,
         schema: 'public',
         table: 'orders',
+        // orders no tiene business_id directo — viene via table_sessions.
+        // RLS filtra cross-tenant. Cambio del table_session padre dispara
+        // refresh igual via la suscripción anterior.
         callback: (_) => onChange(),
       )
       ..onPostgresChanges(
@@ -712,12 +740,19 @@ class ZonesRepository {
         event: PostgresChangeEvent.all,
         schema: 'public',
         table: 'payments',
+        filter: PostgresChangeFilter(
+          type: PostgresChangeFilterType.eq,
+          column: 'business_id',
+          value: businessId,
+        ),
         callback: (_) => onChange(),
       )
       ..onPostgresChanges(
         event: PostgresChangeEvent.all,
         schema: 'public',
         table: 'dining_tables',
+        // dining_tables no tiene business_id directo — está scoped via
+        // zones.business_id (JOIN). RLS lo filtra correctamente.
         callback: (_) => onChange(),
       )
       ..subscribe();

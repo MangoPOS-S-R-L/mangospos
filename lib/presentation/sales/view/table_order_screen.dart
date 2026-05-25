@@ -1154,12 +1154,27 @@ class _MobileCartBar extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final orderState = ref.watch(currentOrderProvider);
-    final openItems = orderState.items
+    // PRD 8 Fase 2 fix #3: `.select` granular en lugar de
+    // `ref.watch(currentOrderProvider)` entero. Antes, cualquier cambio
+    // en loading/error/customerName/fiscalType/taxConfigError/etc.
+    // disparaba rebuild del CartBar aunque el total no cambiara. Ahora
+    // solo se rebuild cuando uno de estos 5 campos REALMENTE cambia.
+    final relevant = ref.watch(
+      currentOrderProvider.select(
+        (s) => (
+          items: s.items,
+          selectedCheckId: s.selectedCheckId,
+          checks: s.checks,
+          order: s.order,
+          origin: s.origin,
+        ),
+      ),
+    );
+    final openItems = relevant.items
         .where((i) => i.status != 'paid' && i.status != 'void')
         .toList(growable: false);
-    final selectedCheckId = orderState.selectedCheckId;
-    final allChecks = orderState.checks;
+    final selectedCheckId = relevant.selectedCheckId;
+    final allChecks = relevant.checks;
     final displayedItems = selectedCheckId != null
         ? openItems
             .where((i) => i.checkId == selectedCheckId)
@@ -1173,9 +1188,9 @@ class _MobileCartBar extends ConsumerWidget {
 
     final itemCount = displayedItems.length;
     final pricingSummary = summarizeOrderPricing(
-      orderState.order,
+      relevant.order,
       displayedItems,
-      forcedOrigin: orderState.origin,
+      forcedOrigin: relevant.origin,
     );
     final total = pricingSummary.total;
     final hasItems = itemCount > 0;
@@ -6788,61 +6803,88 @@ class _SearchField extends StatelessWidget {
   }
 }
 
-class _SegmentedTabs extends StatelessWidget {
+class _SegmentedTabs extends StatefulWidget {
   final TabController controller;
   final List<String> labels;
 
   const _SegmentedTabs({required this.controller, required this.labels});
 
   @override
+  State<_SegmentedTabs> createState() => _SegmentedTabsState();
+}
+
+// PRD 8 Fase 2 fix #4 — antes era StatelessWidget con AnimatedBuilder
+// sobre `controller`. Eso reconstruía el Row entero en cada frame de
+// la animación entre tabs (~16 ms × 300 ms = ~18 rebuilds del Row),
+// pero el visual solo cambia cuando `controller.index` cambia (1 vez
+// por tap). Ahora escuchamos puntualmente el cambio de `index` con un
+// listener y `setState` solo cuando cambia — el Row se rebuild una
+// sola vez por tab switch, no 18.
+class _SegmentedTabsState extends State<_SegmentedTabs> {
+  late int _currentIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.controller.index;
+    widget.controller.addListener(_onTabChange);
+  }
+
+  void _onTabChange() {
+    if (!mounted) return;
+    if (widget.controller.index != _currentIndex) {
+      setState(() => _currentIndex = widget.controller.index);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_onTabChange);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: controller,
-      builder: (context, _) {
-        return Container(
-          height: 40,
-          padding: const EdgeInsets.all(4),
-          decoration: BoxDecoration(
-            color: _salesTabActiveBg,
-            borderRadius: BorderRadius.circular(_salesRadiusTab),
-            border: Border.all(color: _salesDivider),
-          ),
-          child: Row(
-            children: [
-              for (int i = 0; i < labels.length; i++) ...[
-                Expanded(
-                  child: InkWell(
-                    onTap: () => controller.animateTo(i),
+    return Container(
+      height: 40,
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: _salesTabActiveBg,
+        borderRadius: BorderRadius.circular(_salesRadiusTab),
+        border: Border.all(color: _salesDivider),
+      ),
+      child: Row(
+        children: [
+          for (int i = 0; i < widget.labels.length; i++) ...[
+            Expanded(
+              child: InkWell(
+                onTap: () => widget.controller.animateTo(i),
+                borderRadius: BorderRadius.circular(_salesRadiusTab - 2),
+                child: Container(
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: _currentIndex == i
+                        ? _salesSurface
+                        : Colors.transparent,
                     borderRadius: BorderRadius.circular(_salesRadiusTab - 2),
-                    child: Container(
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: controller.index == i
-                            ? _salesSurface
-                            : Colors.transparent,
-                        borderRadius: BorderRadius.circular(
-                          _salesRadiusTab - 2,
-                        ),
-                      ),
-                      child: Text(
-                        labels[i],
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: controller.index == i
-                              ? _salesTextPrimary
-                              : _salesTextSecondary,
-                        ),
-                      ),
+                  ),
+                  child: Text(
+                    widget.labels[i],
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: _currentIndex == i
+                          ? _salesTextPrimary
+                          : _salesTextSecondary,
                     ),
                   ),
                 ),
-                if (i < labels.length - 1) const SizedBox(width: 6),
-              ],
-            ],
-          ),
-        );
-      },
+              ),
+            ),
+            if (i < widget.labels.length - 1) const SizedBox(width: 6),
+          ],
+        ],
+      ),
     );
   }
 }

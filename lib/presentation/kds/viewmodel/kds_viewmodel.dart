@@ -121,7 +121,13 @@ class KdsViewModel extends StateNotifier<KdsState> {
   // 🔔 SUSCRIPCIONES
   // ============================================================
 
-  /// Suscribirse a cambios en tiempo real
+  /// Suscribirse a cambios en tiempo real.
+  ///
+  /// PRD 7 Fase 4.1 — `order_items` no tiene `business_id` directo
+  /// (su scope viene via `orders.session_id → table_sessions.business_id`),
+  /// así que no podemos aplicar `filter: business_id=eq.X` server-side.
+  /// El channel ya está scoped por businessId en el nombre y RLS hace
+  /// la barrera real de aislamiento cross-tenant.
   void _subscribeToOrders() {
     _rtOrderItems?.unsubscribe();
     _rtOrderItems =

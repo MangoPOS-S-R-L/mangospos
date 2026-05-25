@@ -92,6 +92,11 @@ dependencies:
   multicast_dns: ^0.3.2
   excel: ^4.0.6
 
+  # Compresión de imágenes client-side antes de subir a Supabase Storage
+  # (PRD 7 Fase 2.2). Sin esto los uploads van raw — un iPhone foto de
+  # 5MB se persistía tal cual. Con compress: ~150 KB por foto típica.
+  flutter_image_compress: ^2.3.0
+
   # Storage local sqlite para la cola offline (Fase 6 — solo cola y
   # completed_ops/fingerprints, no el cache completo). Reemplaza la
   # versión basada en SharedPreferences que reescribía toda la lista

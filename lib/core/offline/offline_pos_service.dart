@@ -121,8 +121,13 @@ class OfflinePosService {
   /// El resto del cache (snapshots, mappings, catalog, inventory) sigue
   /// en SharedPreferences vía [_storage] — es alcance de Fase 6 solo
   /// migrar lo que tiene problema real de volumen.
-  late final OfflineQueueDao _queueDao =
-      OfflineQueueDao(OfflineQueueDb.getInstance());
+  ///
+  /// En web es `null`: drift requiere `dart:ffi` que no existe en JS.
+  /// Las funciones que tocaban el DAO tienen un guard `kIsWeb` que cae
+  /// al path SharedPreferences (volumen aceptable en cajeros web).
+  late final OfflineQueueDao? _queueDao = kIsWeb
+      ? null
+      : OfflineQueueDao(OfflineQueueDb.getInstance());
 
   /// Guard one-time POR BUSINESS: la primera vez que se toca la cola
   /// tras actualizar la app, importamos lo que haya en SharedPreferences
@@ -133,6 +138,9 @@ class OfflinePosService {
   /// su cola pendiente.
   final Set<String> _migratedBusinesses = <String>{};
   Future<void> _ensureMigratedFromSp(String businessId) async {
+    // En web no hay drift → no hay migración hacia sqlite que hacer.
+    // El path web siempre usa SharedPreferences directamente.
+    if (kIsWeb) return;
     if (_migratedBusinesses.contains(businessId)) return;
     _migratedBusinesses.add(businessId);
     try {
@@ -152,15 +160,15 @@ class OfflinePosService {
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList(growable: false);
       if (queueMaps.isNotEmpty) {
-        await _queueDao.writeQueue(businessId, queueMaps);
+        await _queueDao!.writeQueue(businessId, queueMaps);
       }
       for (final id in legacyOps.map((e) => e.toString())) {
         if (id.isEmpty) continue;
-        await _queueDao.markOpCompleted(businessId: businessId, opId: id);
+        await _queueDao!.markOpCompleted(businessId: businessId, opId: id);
       }
       for (final fp in legacyFps.map((e) => e.toString())) {
         if (fp.isEmpty) continue;
-        await _queueDao.markFingerprintCompleted(
+        await _queueDao!.markFingerprintCompleted(
           businessId: businessId,
           fingerprint: fp,
         );
@@ -366,7 +374,7 @@ class OfflinePosService {
   /// Devuelve cuantas acciones se borraron para feedback al cajero.
   Future<int> clearPendingActions(String businessId) async {
     if (businessId.isEmpty) return 0;
-    return _queueDao.deleteAllPending(businessId);
+    return _deleteAllPending(businessId);
   }
 
   Future<OfflineQueueSyncResult> syncPendingActions({
@@ -390,9 +398,9 @@ class OfflinePosService {
     String? lastError;
     final conflicts = <OfflineSyncConflict>[];
 
-    final completedOps = await _queueDao.readCompletedOps(businessId);
+    final completedOps = await _readCompletedOps(businessId);
     final completedFingerprints =
-        await _queueDao.readCompletedFingerprints(businessId);
+        await _readCompletedFingerprints(businessId);
 
     for (var i = 0; i < queue.length; i++) {
       final action = queue[i];
@@ -418,7 +426,7 @@ class OfflinePosService {
       queue[i] = processing;
       // UPSERT puntual de la action que cambió de estado, en lugar de
       // reescribir la lista completa (O(n²) con N actions y N pasos).
-      await _queueDao.upsertAction(businessId, processing);
+      await _upsertAction(businessId, processing);
 
       bool breakLoop = false;
       try {
@@ -442,14 +450,14 @@ class OfflinePosService {
         queue[i] = done;
         completed++;
         if (actionId != null && actionId.isNotEmpty) {
-          await _queueDao.markOpCompleted(
+          await _markOpCompleted(
             businessId: businessId,
             opId: actionId,
           );
         }
         final fingerprint = processing['fingerprint']?.toString();
         if (fingerprint != null && fingerprint.isNotEmpty) {
-          await _queueDao.markFingerprintCompleted(
+          await _markFingerprintCompleted(
             businessId: businessId,
             fingerprint: fingerprint,
           );
@@ -473,14 +481,14 @@ class OfflinePosService {
         queue[i] = done;
         completed++;
         if (actionId != null && actionId.isNotEmpty) {
-          await _queueDao.markOpCompleted(
+          await _markOpCompleted(
             businessId: businessId,
             opId: actionId,
           );
         }
         final fingerprint = processing['fingerprint']?.toString();
         if (fingerprint != null && fingerprint.isNotEmpty) {
-          await _queueDao.markFingerprintCompleted(
+          await _markFingerprintCompleted(
             businessId: businessId,
             fingerprint: fingerprint,
           );
@@ -509,7 +517,7 @@ class OfflinePosService {
 
       // UPSERT puntual del action final (completed o failed). Idem
       // optimización anterior: evita reescribir la cola entera.
-      await _queueDao.upsertAction(businessId, queue[i]);
+      await _upsertAction(businessId, queue[i]);
       if (breakLoop) break;
     }
 
@@ -527,16 +535,150 @@ class OfflinePosService {
     );
   }
 
+  // ───────────────────────────────────────────────────────────────────
+  // Cola y completed-ops: wrappers con branch web/nativo
+  // ───────────────────────────────────────────────────────────────────
+  // En nativo (Windows, macOS, Linux, Android, iOS) todas estas
+  // operaciones van al DAO drift (`_queueDao!`) que es O(log n) por op.
+  // En web, no podemos usar drift (no hay `dart:ffi`), así que caen
+  // a SharedPreferences via `_storage`. SP es O(n) en cada op porque
+  // serializa la lista entera, pero para cajeros web (caso secundario
+  // del POS) el volumen es bajo y aceptable.
+
   Future<List<Map<String, dynamic>>> _readQueue(String businessId) async {
+    if (kIsWeb) {
+      final storage = await _storage;
+      final raw = await storage.readList(_queueKey(businessId)) ?? const [];
+      return raw
+          .whereType<Object?>()
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList(growable: true);
+    }
     await _ensureMigratedFromSp(businessId);
-    return _queueDao.readQueue(businessId);
+    return _queueDao!.readQueue(businessId);
   }
 
   Future<void> _writeQueue(
     String businessId,
     List<Map<String, dynamic>> queue,
   ) async {
-    await _queueDao.writeQueue(businessId, queue);
+    if (kIsWeb) {
+      final storage = await _storage;
+      await storage.writeList(_queueKey(businessId), queue);
+      return;
+    }
+    await _queueDao!.writeQueue(businessId, queue);
+  }
+
+  Future<void> _markOpCompleted({
+    required String businessId,
+    required String opId,
+  }) async {
+    if (kIsWeb) {
+      final storage = await _storage;
+      final current =
+          (await storage.readList(_completedOpsKey(businessId)) ?? const [])
+              .map((e) => e.toString())
+              .toSet();
+      if (!current.add(opId)) return;
+      await storage.writeList(_completedOpsKey(businessId), current.toList());
+      return;
+    }
+    await _queueDao!.markOpCompleted(businessId: businessId, opId: opId);
+  }
+
+  Future<void> _markFingerprintCompleted({
+    required String businessId,
+    required String fingerprint,
+  }) async {
+    if (kIsWeb) {
+      final storage = await _storage;
+      final current =
+          (await storage.readList(_completedFingerprintsKey(businessId)) ??
+                  const [])
+              .map((e) => e.toString())
+              .toSet();
+      if (!current.add(fingerprint)) return;
+      await storage.writeList(
+        _completedFingerprintsKey(businessId),
+        current.toList(),
+      );
+      return;
+    }
+    await _queueDao!.markFingerprintCompleted(
+      businessId: businessId,
+      fingerprint: fingerprint,
+    );
+  }
+
+  Future<Set<String>> _readCompletedOps(String businessId) async {
+    if (kIsWeb) {
+      final storage = await _storage;
+      final raw =
+          await storage.readList(_completedOpsKey(businessId)) ?? const [];
+      return raw.map((e) => e.toString()).toSet();
+    }
+    return _queueDao!.readCompletedOps(businessId);
+  }
+
+  Future<Set<String>> _readCompletedFingerprints(String businessId) async {
+    if (kIsWeb) {
+      final storage = await _storage;
+      final raw =
+          await storage.readList(_completedFingerprintsKey(businessId)) ??
+              const [];
+      return raw.map((e) => e.toString()).toSet();
+    }
+    return _queueDao!.readCompletedFingerprints(businessId);
+  }
+
+  Future<void> _upsertAction(
+    String businessId,
+    Map<String, dynamic> action,
+  ) async {
+    if (kIsWeb) {
+      // SP no soporta upsert atómico — read+modify+write completo.
+      final queue = await _readQueue(businessId);
+      final id = action['id']?.toString();
+      if (id == null || id.isEmpty) return;
+      final idx = queue.indexWhere((a) => a['id']?.toString() == id);
+      if (idx >= 0) {
+        queue[idx] = action;
+      } else {
+        queue.add(action);
+      }
+      await _writeQueue(businessId, queue);
+      return;
+    }
+    await _queueDao!.upsertAction(businessId, action);
+  }
+
+  Future<int> _deleteAllPending(String businessId) async {
+    if (kIsWeb) {
+      final queue = await _readQueue(businessId);
+      final beforeCount = queue
+          .where((a) => a['status']?.toString() != _statusCompleted)
+          .length;
+      final remaining = queue
+          .where((a) => a['status']?.toString() == _statusCompleted)
+          .toList();
+      await _writeQueue(businessId, remaining);
+      return beforeCount;
+    }
+    return _queueDao!.deleteAllPending(businessId);
+  }
+
+  Future<void> _pruneCompletedOlderThan(Duration olderThan) async {
+    if (kIsWeb) {
+      // En web los completed_ops/fingerprints van a SP — no hay índice
+      // por fecha. Estrategia simple: cap por count en lugar de tiempo.
+      // El cap real lo hacían los métodos legacy con `length > 500`.
+      // Acá no podemos saber la fecha de cada entrada, así que ignoramos
+      // el prune en web — la lista crece linealmente pero las apps web
+      // del POS tienen volumen bajo.
+      return;
+    }
+    await _queueDao!.pruneCompletedOlderThan(olderThan);
   }
 
   Map<String, dynamic> _normalizeAction(Map<String, dynamic> action) {
@@ -1295,7 +1437,7 @@ class OfflinePosService {
     // Cap del histórico de completed_ops/fingerprints en sqlite: borramos
     // entradas más viejas de 30 días. Antes el cap era 500 entries en
     // memoria; el cap por tiempo es más robusto y predecible.
-    await _queueDao.pruneCompletedOlderThan(const Duration(days: 30));
+    await _pruneCompletedOlderThan(const Duration(days: 30));
   }
 
   Future<Map<String, dynamic>> _readOrderMap(String businessId) async {

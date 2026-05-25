@@ -10,6 +10,7 @@ import 'package:excel/excel.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../../../core/storage/image_upload_helper.dart';
 import '../../../data/repositories/products_repository.dart';
 import '../../../data/repositories/printing_v2_repository.dart';
 
@@ -233,24 +234,27 @@ class ProductsViewModel extends ChangeNotifier {
       String? imageUrl;
 
       if (imageFile != null || imageBytes != null) {
-        final ext = _guessExt(imageFile?.path ?? 'upload.jpg');
+        // PRD 7 Fase 2.2: comprimir antes de subir. JPEG, 1024px, q=85.
+        // Una foto típica de iPhone (~5 MB) baja a ~100-150 KB.
+        final rawBytes = imageBytes ?? await imageFile!.readAsBytes();
+        final compressed = await ImageUploadHelper.compressForMenu(rawBytes);
+        // El helper devuelve JPEG (o el original si falla la compresión).
+        // Usamos `.jpg` como extensión salvo que la compresión falle y
+        // los bytes originales sean PNG — el navegador igual lo sirve OK
+        // porque `contentType` se infiere del payload, pero mantenemos
+        // la extensión real para que cached_network_image no se confunda.
+        final ext = identical(compressed, rawBytes)
+            ? _guessExt(imageFile?.path ?? 'upload.jpg')
+            : 'jpg';
         final key =
             'items/$_businessId/${DateTime.now().millisecondsSinceEpoch}.$ext';
         final storage = _supabase.storage.from('menu-items');
 
-        if (imageBytes != null) {
-          await storage.uploadBinary(
-            key,
-            imageBytes,
-            fileOptions: const FileOptions(upsert: true),
-          );
-        } else {
-          await storage.upload(
-            key,
-            imageFile!,
-            fileOptions: const FileOptions(upsert: true),
-          );
-        }
+        await storage.uploadBinary(
+          key,
+          compressed,
+          fileOptions: const FileOptions(upsert: true),
+        );
 
         imagePath = key;
         imageUrl = storage.getPublicUrl(key);
@@ -338,24 +342,21 @@ class ProductsViewModel extends ChangeNotifier {
       String? imageUrl;
 
       if (imageFile != null || imageBytes != null) {
-        final ext = _guessExt(imageFile?.path ?? 'upload.jpg');
+        // PRD 7 Fase 2.2: comprimir client-side (ver addProduct arriba).
+        final rawBytes = imageBytes ?? await imageFile!.readAsBytes();
+        final compressed = await ImageUploadHelper.compressForMenu(rawBytes);
+        final ext = identical(compressed, rawBytes)
+            ? _guessExt(imageFile?.path ?? 'upload.jpg')
+            : 'jpg';
         final key =
             'items/$_businessId/${DateTime.now().millisecondsSinceEpoch}.$ext';
         final storage = _supabase.storage.from('menu-items');
 
-        if (imageBytes != null) {
-          await storage.uploadBinary(
-            key,
-            imageBytes,
-            fileOptions: const FileOptions(upsert: true),
-          );
-        } else {
-          await storage.upload(
-            key,
-            imageFile!,
-            fileOptions: const FileOptions(upsert: true),
-          );
-        }
+        await storage.uploadBinary(
+          key,
+          compressed,
+          fileOptions: const FileOptions(upsert: true),
+        );
 
         imagePath = key;
         imageUrl = storage.getPublicUrl(key);

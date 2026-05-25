@@ -15,6 +15,7 @@ import 'dart:typed_data';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/storage/image_upload_helper.dart';
 import '../../services/printing/logo_esc_pos_builder.dart';
 import '../models/business_profile.dart';
 
@@ -175,9 +176,17 @@ class BusinessProfileRepository {
     final path = '$businessId/logo.$ext';
     final mime = ext == 'png' ? 'image/png' : 'image/jpeg';
 
+    // PRD 7 Fase 2.2: comprimir antes de subir. Logos quedan en 512px
+    // max, calidad 90, JPEG. Si el original era PNG (con posible
+    // transparencia), preservamos PNG para no perder el alpha channel.
+    final compressed = await ImageUploadHelper.compressForLogo(
+      bytes,
+      isPng: ext == 'png',
+    );
+
     await _client.storage.from(logoBucket).uploadBinary(
           path,
-          bytes,
+          compressed,
           fileOptions: FileOptions(
             upsert: true,
             contentType: mime,
