@@ -124,6 +124,39 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
   @override
   CurrentOrderState build() {
+    // Owner / multi-sucursal: cuando cambia el negocio activo, todo el
+    // estado de este viewmodel pertenece al negocio anterior (state.order,
+    // _tableCache, suscripciones realtime, refresh encolado, cache de
+    // impuestos/fiscal, etc.). Sin este reset, el siguiente addItem,
+    // openTable o refresh dispara _loadOrderDetail con un orderId que el
+    // backend rechaza por scope → toast "Esta orden no está disponible en
+    // este negocio". Solo el rol Owner (que puede cambiar de sucursal en
+    // sesión) reproduce el bug.
+    ref.listen(sessionProvider.select((s) => s.activeBusinessId), (
+      previous,
+      next,
+    ) {
+      if (previous == null || previous == next) return;
+      _tableCache.clear();
+      _refreshOrderDebounceTimer?.cancel();
+      _refreshOrderDebounceTimer = null;
+      _queuedRefreshOrderId = null;
+      _queuedClearIfPaid = false;
+      _refreshOrderInFlight = false;
+      _hasManualFiscalTypeSelection = false;
+      _taxSettingsBusinessId = null;
+      _lastTaxLoad = null;
+      _fiscalSettingsBusinessId = null;
+      _lastFiscalSettingsLoad = null;
+      _cachedTaxRatePct = 0.0;
+      _cachedDefaultFiscalType = '';
+      _cachedBusinessTaxes = const [];
+      _realtimeChannel?.unsubscribe();
+      _realtimeChannel = null;
+      _subscribedOrderId = null;
+      state = const CurrentOrderState();
+    });
+
     unawaited(_connectivity.initialize());
     unawaited(_refreshOfflineMonitor());
     _connectivitySubscription ??= _connectivity.connectionStream.listen((
@@ -639,6 +672,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         orderId,
         origin: 'table',
         tableId: tableId,
+        caller: 'openTable',
         preloadedBundle: result.bundle,
       );
     } catch (e) {
@@ -780,7 +814,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         customerLegalName: customerLegalName,
         customerTaxId: customerTaxId,
       );
-      await _loadOrderDetail(order.id, origin: state.origin);
+      await _loadOrderDetail(
+        order.id,
+        origin: state.origin,
+        caller: 'assignCustomer',
+      );
     } catch (e) {
       state = state.copyWith(error: 'Error al asignar cliente: $e');
     }
@@ -850,8 +888,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             origin: origin,
             customerName: null,
             peopleCount: 1,
+            businessId: _activeBusinessId,
           );
-      await _loadOrderDetail(res['order_id'] as String, origin: origin);
+      await _loadOrderDetail(
+        res['order_id'] as String,
+        origin: origin,
+        caller: 'openManualOrQuick:$origin',
+      );
     } catch (e) {
       final businessId = _activeBusinessId;
       // PRD 2.5: ignoramos completamente el cache offline para Quick/Manual.
@@ -1118,7 +1161,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
 
       // Bypassear el debounce para que la respuesta sea instantánea
-      await _loadOrderDetail(orderId);
+      await _loadOrderDetail(orderId, caller: 'addItem');
     } catch (e) {
       final businessId = _activeBusinessId;
       final isOffline =
@@ -2184,10 +2227,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           state.order != null &&
           state.order!.id.startsWith('local-order-') &&
           result.lastMappedOrderId != null) {
-        await _loadOrderDetail(result.lastMappedOrderId!, origin: state.origin);
+        await _loadOrderDetail(
+          result.lastMappedOrderId!,
+          origin: state.origin,
+          caller: 'syncOffline:mapped',
+        );
       } else if (state.order != null &&
           !state.order!.id.startsWith('local-order-')) {
-        await _loadOrderDetail(state.order!.id, origin: state.origin);
+        await _loadOrderDetail(
+          state.order!.id,
+          origin: state.origin,
+          caller: 'syncOffline:existing',
+        );
       }
 
       final syncMessage = !result.didWork
@@ -2245,7 +2296,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         _queuedRefreshOrderId = null;
         _queuedClearIfPaid = false;
 
-        await _loadOrderDetail(orderId);
+        await _loadOrderDetail(orderId, caller: 'scheduledRefresh');
         if (clearIfPaid && (state.order?.isPaid ?? false)) {
           _hasManualFiscalTypeSelection = false;
           state = const CurrentOrderState();
@@ -2270,6 +2321,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     String orderId, {
     String? origin,
     String? tableId,
+    // Identifica el camino que disparó el load. Solo se usa en el log
+    // de "orden no disponible" para poder diagnosticar bugs intermitentes
+    // (state.order stale, _tableCache contaminado, debounce que dispara
+    // un id ya inexistente, etc.) sin tener que pedirle al usuario que
+    // reproduzca con un breakpoint puesto.
+    String caller = 'unknown',
     // Si el caller ya tiene el bundle parseado (ej: openTable usando
     // fn_open_table_and_load), pásalo para evitar el round-trip extra
     // a fn_get_order_bundle.
@@ -2282,6 +2339,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       String? note,
     })? preloadedBundle,
   }) async {
+    final previousOrderId = state.order?.id;
+    final previousOrigin = state.origin;
+    final tableCacheHit = tableId != null && _tableCache.containsKey(tableId);
     if (state.order?.id != orderId) {
       _hasManualFiscalTypeSelection = false;
     }
@@ -2393,10 +2453,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       final diag = 'order=…${tail(orderId)} · business=…${tail(activeBusinessId)}';
 
       debugPrint("===== _loadOrderDetail ERROR =====");
+      debugPrint("caller: $caller");
       debugPrint("orderId: $orderId");
       debugPrint("activeBusinessId: $activeBusinessId");
       debugPrint("loadedByBundle: $loadedByBundle");
       debugPrint("loadError: $loadError");
+      debugPrint("requestedOrigin: $origin");
+      debugPrint("previousOrigin: $previousOrigin");
+      debugPrint("previousOrderId: $previousOrderId");
+      debugPrint("tableId: $tableId");
+      debugPrint("tableCacheHit: $tableCacheHit");
       debugPrint("==================================");
 
       // Recovery: si el orderId no es accesible en el negocio actual, limpiar

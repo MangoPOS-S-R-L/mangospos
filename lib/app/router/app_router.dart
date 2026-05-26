@@ -32,6 +32,7 @@ import '../../tests/cache_test_page.dart';
 import '../../presentation/auth/register/register_step1_view.dart';
 import '../../presentation/auth/register/register_step2_view.dart';
 import '../../presentation/auth/register/register_step3_view.dart';
+import '../../presentation/auth/register/register_step4_view.dart';
 import '../../presentation/auth/cross_auth/cross_auth_view.dart';
 import '../../presentation/dashboard/dashboard_view.dart';
 import '../../presentation/shell/main_shell.dart';
@@ -190,6 +191,7 @@ class AppRouter {
           path == AppRoutes.register ||
           path == AppRoutes.registerStep2 ||
           path == AppRoutes.registerSetup ||
+          path == AppRoutes.registerPaymentMethod ||
           path == AppRoutes.crossAuth ||
           path == AppRoutes.onboardingPaymentResult ||
           path == '/auth';
@@ -321,6 +323,10 @@ class AppRouter {
       GoRoute(
         path: AppRoutes.registerSetup,
         builder: (context, state) => const RegisterStep3View(),
+      ),
+      GoRoute(
+        path: AppRoutes.registerPaymentMethod,
+        builder: (context, state) => const RegisterStep4View(),
       ),
       // Landing público al regresar del Payment Page de Azul (browser externo).
       GoRoute(

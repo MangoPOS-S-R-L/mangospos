@@ -1219,6 +1219,7 @@ class OfflinePosService {
         origin: origin,
         customerName: null,
         peopleCount: 1,
+        businessId: businessId,
       );
     }
     final remoteOrderId = created['order_id']?.toString();

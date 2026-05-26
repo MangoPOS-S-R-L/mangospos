@@ -4,8 +4,9 @@ import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_tokens.dart';
-import 'package:mangopos/core/config/plans_config.dart';
+import 'package:mangopos/data/models/billing_plan.dart';
 import 'package:mangopos/presentation/auth/widgets/auth_shell.dart';
+import 'package:mangopos/presentation/billing/providers/billing_providers.dart';
 import 'register_step1_viewmodel.dart';
 
 class RegisterStep1View extends ConsumerStatefulWidget {
@@ -59,17 +60,37 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
 
   @override
   Widget build(BuildContext context) {
-    final planNotifier = ref.read(registerStep1VmProvider.notifier);
     final state = ref.watch(registerStep1VmProvider);
-    final selectedPlan = PlansConfig.plans.firstWhere(
-      (p) => p.id == state.selectedPlan,
-      orElse: () => PlansConfig.plans.first,
-    );
-    final afterTrialValue = _extractPrice(selectedPlan.price);
-    final featureHighlights = selectedPlan.features
-        .take(4)
-        .map((feature) => feature.title)
-        .toList();
+    final plansAsync = ref.watch(availablePlansProvider);
+
+    // Auto-seleccionar el primer plan disponible si aún no hay selección.
+    // El `initialPlan` (query param) si está, intenta matchear por code; si no
+    // matchea, cae al primero. Esto cubre el caso del deep-link desde landing.
+    final plans = plansAsync.valueOrNull ?? const <BillingPlan>[];
+    if (state.selectedPlanId == null && plans.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final initialCode = widget.initialPlan?.trim().toLowerCase();
+        final preferred = initialCode == null
+            ? plans.first
+            : plans.firstWhere(
+                (p) => p.code == initialCode,
+                orElse: () => plans.first,
+              );
+        ref
+            .read(registerStep1VmProvider.notifier)
+            .setSelectedFromBillingPlan(preferred);
+      });
+    }
+
+    final BillingPlan? selectedPlan = plans.isEmpty
+        ? null
+        : plans.firstWhere(
+            (p) => p.id == state.selectedPlanId,
+            orElse: () => plans.first,
+          );
+    final featureHighlights =
+        selectedPlan?.features.take(4).toList() ?? const <String>[];
 
     return AuthShell(
       brandSubtitle: 'Onboarding de negocios en MangoPOS',
@@ -221,59 +242,107 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
         ),
       ),
       side: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Selecciona tu plan',
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: MangoTokens.secondaryForeground,
-                letterSpacing: 1.5,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Plan para tu cuenta',
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 22,
-                fontWeight: FontWeight.w800,
-                color: MangoTokens.foreground,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              'Solo mostramos los planes disponibles en la web. Todos incluyen 14 días de prueba.',
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 14,
-                height: 1.6,
-                color: MangoTokens.mutedForeground,
-              ),
-            ),
-            const SizedBox(height: 22),
-            Column(
-              children: PlansConfig.plans.map((plan) {
-                final isSelected = plan.id == selectedPlan.id;
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: _PlanOptionCard(
-                    plan: plan,
-                    selected: isSelected,
-                    onTap: () => planNotifier.setSelectedPlan(plan.id),
+        child: plansAsync.when(
+          loading: () => const Padding(
+            padding: EdgeInsets.symmetric(vertical: 32),
+            child: Center(child: CircularProgressIndicator()),
+          ),
+          error: (e, _) => Padding(
+            padding: const EdgeInsets.symmetric(vertical: 32),
+            child: Column(
+              children: [
+                const Icon(Icons.error_outline, color: Color(0xFFB91C1C), size: 32),
+                const SizedBox(height: 10),
+                Text(
+                  'No pudimos cargar los planes.',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
                   ),
-                );
-              }).toList(),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Verifica tu conexión y vuelve a intentar.',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 12,
+                    color: MangoTokens.mutedForeground,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 18),
-            _PlanDetailCard(plan: selectedPlan),
-            const SizedBox(height: 18),
-            _PlanTotalCard(
-              afterTrial: afterTrialValue,
-              planPrice: selectedPlan.price,
-              highlights: featureHighlights,
-            ),
-          ],
+          ),
+          data: (loadedPlans) {
+            if (loadedPlans.isEmpty || selectedPlan == null) {
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 32),
+                child: Text(
+                  'No hay planes disponibles ahora mismo. '
+                  'Contacta a soporte@mangopos.do para asistencia.',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 14,
+                    color: MangoTokens.mutedForeground,
+                    height: 1.5,
+                  ),
+                ),
+              );
+            }
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Selecciona tu plan',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: MangoTokens.secondaryForeground,
+                    letterSpacing: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Plan para tu cuenta',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    color: MangoTokens.foreground,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Todos los planes incluyen ${selectedPlan.trialDays} días de prueba gratis. '
+                  'El primer cobro se hace al terminar el trial.',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 14,
+                    height: 1.6,
+                    color: MangoTokens.mutedForeground,
+                  ),
+                ),
+                const SizedBox(height: 22),
+                Column(
+                  children: loadedPlans.map((plan) {
+                    final isSelected = plan.id == selectedPlan.id;
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: _PlanOptionCard(
+                        plan: plan,
+                        selected: isSelected,
+                        onTap: () => ref
+                            .read(registerStep1VmProvider.notifier)
+                            .setSelectedFromBillingPlan(plan),
+                      ),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 18),
+                _PlanDetailCard(plan: selectedPlan),
+                const SizedBox(height: 18),
+                _PlanTotalCard(
+                  plan: selectedPlan,
+                  highlights: featureHighlights,
+                ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -399,7 +468,7 @@ class _PasswordFieldState extends State<_PasswordField> {
 }
 
 class _PlanOptionCard extends StatelessWidget {
-  final MangoPlan plan;
+  final BillingPlan plan;
   final bool selected;
   final VoidCallback onTap;
 
@@ -461,7 +530,7 @@ class _PlanOptionCard extends StatelessWidget {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        plan.description,
+                        plan.description ?? 'Plan para tu suscripción.',
                         style: GoogleFonts.plusJakartaSans(
                           fontSize: 13,
                           height: 1.5,
@@ -475,7 +544,7 @@ class _PlanOptionCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
                     Text(
-                      plan.price,
+                      '${plan.formattedPrice}/mes',
                       style: GoogleFonts.plusJakartaSans(
                         fontSize: 15,
                         fontWeight: FontWeight.w700,
@@ -516,7 +585,7 @@ class _PlanOptionCard extends StatelessWidget {
 }
 
 class _PlanDetailCard extends StatelessWidget {
-  final MangoPlan plan;
+  final BillingPlan plan;
 
   const _PlanDetailCard({required this.plan});
 
@@ -571,7 +640,7 @@ class _PlanDetailCard extends StatelessWidget {
               ),
             ),
             Text(
-              plan.price,
+              '${plan.formattedPrice}/mes',
               style: GoogleFonts.plusJakartaSans(
                 fontSize: 15,
                 fontWeight: FontWeight.w700,
@@ -586,13 +655,11 @@ class _PlanDetailCard extends StatelessWidget {
 }
 
 class _PlanTotalCard extends StatelessWidget {
-  final String afterTrial;
-  final String planPrice;
+  final BillingPlan plan;
   final List<String> highlights;
 
   const _PlanTotalCard({
-    required this.afterTrial,
-    required this.planPrice,
+    required this.plan,
     required this.highlights,
   });
 
@@ -634,7 +701,7 @@ class _PlanTotalCard extends StatelessWidget {
             Divider(color: MangoTokens.border),
             const SizedBox(height: 12),
             Text(
-              'Después de 14 días',
+              'Después de ${plan.trialDays} días',
               style: GoogleFonts.plusJakartaSans(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
@@ -643,7 +710,7 @@ class _PlanTotalCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              afterTrial,
+              plan.formattedPrice,
               style: GoogleFonts.plusJakartaSans(
                 fontSize: 20,
                 fontWeight: FontWeight.w800,
@@ -652,7 +719,7 @@ class _PlanTotalCard extends StatelessWidget {
             ),
             const SizedBox(height: 2),
             Text(
-              planPrice,
+              'Cobro mensual recurrente',
               style: GoogleFonts.plusJakartaSans(
                 fontSize: 13,
                 color: MangoTokens.mutedForeground,
@@ -730,10 +797,3 @@ InputDecoration _inputDecoration({
   );
 }
 
-String _extractPrice(String raw) {
-  final match = RegExp(r'US\$[\d.,]+').firstMatch(raw);
-  if (match != null) {
-    return match.group(0)!;
-  }
-  return raw;
-}

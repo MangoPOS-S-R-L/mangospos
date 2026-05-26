@@ -258,8 +258,12 @@ class _RegisterStep3ViewState extends ConsumerState<RegisterStep3View> {
         _successMessage = result.message;
       });
       if (!result.requiresEmailConfirmation) {
-        _redirectTimer = Timer(const Duration(milliseconds: 1100), () {
-          if (mounted) context.go(AppRoutes.dashboard);
+        // PRD-Azul §8.1 — tras crear cuenta exitosa, no vamos al dashboard
+        // directo: pasamos por Step 4 (registro de tarjeta) para no perder
+        // el card-on-file. El usuario puede saltar pero queda advertido del
+        // riesgo de suspensión al día 14.
+        _redirectTimer = Timer(const Duration(milliseconds: 900), () {
+          if (mounted) context.go(AppRoutes.registerPaymentMethod);
         });
       }
     } catch (error) {

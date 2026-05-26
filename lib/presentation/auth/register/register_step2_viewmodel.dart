@@ -28,6 +28,7 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
   void setAddress(String v) => _safeSet(state.copyWith(address: v));
   void setPhone(String v) => _safeSet(state.copyWith(phone: v));
   void setSubdomain(String v) => _safeSet(state.copyWith(subdomain: v));
+  void setConsentGranted(bool v) => _safeSet(state.copyWith(consentGranted: v));
 
   void _safeSet(RegisterStep2State next) {
     if (state == next) return;
@@ -52,6 +53,14 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
       }
       if (step2.businessName.trim().isEmpty) {
         throw Exception('Falta el nombre del negocio. Regresa al paso 2.');
+      }
+      if (step1.selectedPlanId == null) {
+        throw Exception('No has seleccionado un plan. Regresa al paso 1.');
+      }
+      if (!step2.consentGranted) {
+        throw Exception(
+          'Para crear tu cuenta debes aceptar el consentimiento de cobro recurrente.',
+        );
       }
 
 
@@ -187,20 +196,63 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
         step2: step2,
       );
 
-      // 4. Create membership
+      // 4. Fetch plan info para calcular trial_days reales (PRD-Azul §5.1).
+      //    Si por alguna razón el plan fue desactivado entre Step 1 y Step 3,
+      //    fallamos con mensaje claro en vez de crear membership huérfana.
+      final selectedPlanId = step1.selectedPlanId!;
+      final Map<String, dynamic>? planRow;
+      try {
+        planRow = await supabase
+            .from('plans')
+            .select('id, trial_days, code')
+            .eq('id', selectedPlanId)
+            .maybeSingle();
+      } on PostgrestException catch (e) {
+        throw Exception(
+            'No se pudo cargar el plan seleccionado: ${_friendlyDbError(e)}');
+      }
+      if (planRow == null) {
+        throw Exception(
+          'El plan seleccionado ya no está disponible. Vuelve al paso 1 y elige otro.',
+        );
+      }
+      final trialDays = (planRow['trial_days'] as num?)?.toInt() ?? 14;
+
+      // 5. Create membership (PRD-Azul-Subscriptions §5.5).
+      //    Esta es la membership ANCHOR del business — la que carga el estado
+      //    de billing para el cron Azul. Setea TODAS las columnas billing.
       final businessId = business['id'] as String;
       final normalizedPlan = _resolveMembershipPlan(step1.selectedPlan);
       final now = DateTime.now();
+      final trialEndsAt = now.add(Duration(days: trialDays));
+      final nextBillingDate = trialEndsAt.add(const Duration(days: 1));
+      final periodStartDate = _toDateOnly(now);
+      final periodEndDate = _toDateOnly(trialEndsAt);
+      final nextBillingDateOnly = _toDateOnly(nextBillingDate);
 
       try {
         await supabase.from('memberships').insert({
+          // Identidad
           'user_id': userId,
           'business_id': businessId,
+
+          // Membership legacy (intactos para compat)
           'plan_type': normalizedPlan,
           'status': 'active',
           'start_date': now.toIso8601String(),
-          'end_date': now.add(const Duration(days: 14)).toIso8601String(),
+          'end_date': trialEndsAt.toIso8601String(),
           'created_at': now.toIso8601String(),
+          'role': 'owner', // Antes quedaba en default 'staff' — bug histórico.
+
+          // Billing (PRD-Azul-Subscriptions §5.5)
+          'plan_id': selectedPlanId,
+          'is_billing_anchor': true,
+          'billing_status': 'trial',
+          'trial_ends_at': trialEndsAt.toIso8601String(),
+          'current_period_start': periodStartDate,
+          'current_period_end': periodEndDate,
+          'next_billing_date': nextBillingDateOnly,
+          'consent_granted_at': now.toIso8601String(),
         });
       } on PostgrestException catch (e) {
         throw Exception(
@@ -342,6 +394,17 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
 
   String buildDomainPreview() {
     return 'app.mangopos.do';
+  }
+
+  /// Convierte un DateTime a string `YYYY-MM-DD` para columnas `date` de
+  /// Postgres (current_period_start/end, next_billing_date). Postgres acepta
+  /// el timestamp completo en `date` pero descarta la hora — esto es más
+  /// explícito y evita timezone weirdness.
+  String _toDateOnly(DateTime dt) {
+    final y = dt.year.toString().padLeft(4, '0');
+    final m = dt.month.toString().padLeft(2, '0');
+    final d = dt.day.toString().padLeft(2, '0');
+    return '$y-$m-$d';
   }
 
   String _resolveMembershipPlan(String? rawPlan) {

@@ -66,10 +66,15 @@ class SalesRepositoryImproved {
   }
 
   /// Abrir venta manual o rápida con reintentos
+  ///
+  /// [businessId] debe pasarse para Owners multi-sucursal (sin él el RPC
+  /// puede abrir la orden en otro tenant). Ver
+  /// 20260526_0003_fix_open_manual_or_quick_business_scope.sql.
   Future<Map<String, dynamic>> openManualOrQuick({
     required String origin,
     String? customerName,
     int peopleCount = 1,
+    String? businessId,
   }) async {
     return DatabaseOperationWrapper.rpc(
       operationName: 'Abrir Venta $origin',
@@ -82,6 +87,8 @@ class SalesRepositoryImproved {
             'p_origin': origin,
             'p_people_count': peopleCount,
             'p_user_id': _client.auth.currentUser?.id,
+            if (businessId != null && businessId.isNotEmpty)
+              'p_business_id': businessId,
           },
         );
 

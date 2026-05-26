@@ -294,7 +294,24 @@ class _SettingsUsersViewState extends ConsumerState<SettingsUsersView> {
     );
   }
 
+  bool _isProtectedOwner(Employee user) {
+    final isOwner = user.roles.any(
+      (r) => normalizeBusinessRole(r) == 'owner',
+    );
+    if (!isOwner) return false;
+    final currentUserId = Supabase.instance.client.auth.currentUser?.id;
+    return user.userId == null || user.userId != currentUserId;
+  }
+
   Future<void> _deleteUser(Employee user) async {
+    if (_isProtectedOwner(user)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Solo el mismo Owner puede modificar su perfil.'),
+        ),
+      );
+      return;
+    }
     try {
       await _repo.deleteEmployee(employeeId: user.id);
       if (mounted) {
@@ -315,6 +332,14 @@ class _SettingsUsersViewState extends ConsumerState<SettingsUsersView> {
   }
 
   Future<void> _openUserDialog(BuildContext context, {Employee? user}) async {
+    if (user != null && _isProtectedOwner(user)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Solo el mismo Owner puede editar su perfil.'),
+        ),
+      );
+      return;
+    }
     final session = ref.read(sessionProvider);
     final activeBusinessId = _businessId ?? widget.businessId;
     final callerRole = session.availableBusinesses

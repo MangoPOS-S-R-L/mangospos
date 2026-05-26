@@ -7,6 +7,12 @@ class RegisterStep2State {
   final String phone;
   final String subdomain;
 
+  /// Consentimiento explícito del comercio al cobro recurrente (PRD §10.5).
+  /// Required en Step 3 antes de submit. Se persiste en
+  /// `memberships.consent_granted_at = now()` al confirmar el registro.
+  /// Defensa primaria contra chargebacks.
+  final bool consentGranted;
+
   const RegisterStep2State({
     this.businessName = '',
     this.branchName = '',
@@ -15,6 +21,7 @@ class RegisterStep2State {
     this.address = '',
     this.phone = '',
     this.subdomain = '',
+    this.consentGranted = false,
   });
 
   RegisterStep2State copyWith({
@@ -25,6 +32,7 @@ class RegisterStep2State {
     String? address,
     String? phone,
     String? subdomain,
+    bool? consentGranted,
   }) {
     return RegisterStep2State(
       businessName: businessName ?? this.businessName,
@@ -34,6 +42,7 @@ class RegisterStep2State {
       address: address ?? this.address,
       phone: phone ?? this.phone,
       subdomain: subdomain ?? this.subdomain,
+      consentGranted: consentGranted ?? this.consentGranted,
     );
   }
 }

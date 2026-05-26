@@ -435,10 +435,17 @@ class SalesRepository {
   }
 
   /// Abrir venta manual o rápida
+  ///
+  /// [businessId] es CRÍTICO para Owners multi-sucursal: el RPC ignora
+  /// `activeBusinessId` del cliente y por defecto elegía siempre el negocio
+  /// más antiguo del usuario, abriendo la orden en otro tenant. Pasarlo
+  /// explícitamente fuerza al RPC a abrir la orden en la sucursal activa.
+  /// Ver migración 20260526_0003_fix_open_manual_or_quick_business_scope.sql.
   Future<Map<String, dynamic>> openManualOrQuick({
     required String origin, // 'manual' o 'quick_sale'
     String? customerName,
     int peopleCount = 1,
+    String? businessId,
   }) async {
     try {
       await _ensureVirtualTableForOrigin(origin);
@@ -449,6 +456,8 @@ class SalesRepository {
           'p_origin': origin,
           'p_people_count': peopleCount,
           'p_user_id': _client.auth.currentUser?.id,
+          if (businessId != null && businessId.isNotEmpty)
+            'p_business_id': businessId,
         },
       );
 

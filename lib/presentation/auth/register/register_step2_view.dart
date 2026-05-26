@@ -4,10 +4,11 @@ import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_tokens.dart';
-import 'package:mangopos/core/config/plans_config.dart';
+import 'package:mangopos/data/models/billing_plan.dart';
 import 'package:mangopos/presentation/auth/register/business_registration_catalog.dart';
 import 'package:mangopos/presentation/auth/register/register_step1_viewmodel.dart';
 import 'package:mangopos/presentation/auth/widgets/auth_shell.dart';
+import 'package:mangopos/presentation/billing/providers/billing_providers.dart';
 import 'register_step2_viewmodel.dart';
 
 class RegisterStep2View extends ConsumerStatefulWidget {
@@ -96,14 +97,18 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
     final vm = ref.read(registerStep2VmProvider.notifier);
     final selectedType = businessTypeByDbValue(_businessType);
     final step1 = ref.watch(registerStep1VmProvider);
-    final selectedPlan = PlansConfig.plans.firstWhere(
-      (plan) => plan.id == step1.selectedPlan,
-      orElse: () => PlansConfig.plans.first,
-    );
+    final step2 = ref.watch(registerStep2VmProvider);
+    final plansAsync = ref.watch(availablePlansProvider);
+    final plans = plansAsync.valueOrNull ?? const <BillingPlan>[];
+    final BillingPlan? selectedPlan = plans.isEmpty
+        ? null
+        : plans.firstWhere(
+            (p) => p.id == step1.selectedPlanId,
+            orElse: () => plans.first,
+          );
     final summaryBranch = _branchCtl.text.trim().isEmpty
         ? 'Sucursal Principal'
         : _branchCtl.text.trim();
-    final afterTrialValue = _extractPrice(selectedPlan.price);
 
     return AuthShell(
       brandSubtitle: 'Registro del negocio',
@@ -324,6 +329,26 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
                         if (!(_formKey.currentState?.validate() ?? false)) {
                           return;
                         }
+                        if (selectedPlan == null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'No hay planes disponibles. Regresa al paso 1.',
+                              ),
+                            ),
+                          );
+                          return;
+                        }
+                        if (!step2.consentGranted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Debes autorizar el cobro recurrente para continuar.',
+                              ),
+                            ),
+                          );
+                          return;
+                        }
                         vm.setBusinessName(_businessCtl.text.trim());
                         vm.setBranch(_branchCtl.text.trim());
                         vm.setBusinessType(_businessType);
@@ -378,8 +403,10 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
               ),
             ),
             const SizedBox(height: 22),
-            _PlanSummaryCard(plan: selectedPlan),
-            const SizedBox(height: 18),
+            if (selectedPlan != null) ...[
+              _PlanSummaryCard(plan: selectedPlan),
+              const SizedBox(height: 18),
+            ],
             DecoratedBox(
               decoration: BoxDecoration(
                 color: Colors.white,
@@ -410,10 +437,15 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
                 ),
               ),
             ),
+            if (selectedPlan != null) ...[
+              const SizedBox(height: 18),
+              _TotalSummaryCard(plan: selectedPlan),
+            ],
             const SizedBox(height: 18),
-            _TotalSummaryCard(
-              afterTrial: afterTrialValue,
-              planPrice: selectedPlan.price,
+            _ConsentBlock(
+              plan: selectedPlan,
+              accepted: step2.consentGranted,
+              onChanged: (v) => vm.setConsentGranted(v),
             ),
           ],
         ),
@@ -508,7 +540,7 @@ class _DetailRow extends StatelessWidget {
 }
 
 class _PlanSummaryCard extends StatelessWidget {
-  final MangoPlan plan;
+  final BillingPlan plan;
 
   const _PlanSummaryCard({required this.plan});
 
@@ -556,7 +588,7 @@ class _PlanSummaryCard extends StatelessWidget {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        plan.description,
+                        plan.description ?? 'Plan para tu suscripción.',
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: GoogleFonts.plusJakartaSans(
@@ -570,7 +602,7 @@ class _PlanSummaryCard extends StatelessWidget {
                 ),
                 const SizedBox(width: 10),
                 Text(
-                  plan.price,
+                  '${plan.formattedPrice}/mes',
                   style: GoogleFonts.plusJakartaSans(
                     fontSize: 15,
                     fontWeight: FontWeight.w700,
@@ -587,10 +619,9 @@ class _PlanSummaryCard extends StatelessWidget {
 }
 
 class _TotalSummaryCard extends StatelessWidget {
-  final String afterTrial;
-  final String planPrice;
+  final BillingPlan plan;
 
-  const _TotalSummaryCard({required this.afterTrial, required this.planPrice});
+  const _TotalSummaryCard({required this.plan});
 
   @override
   Widget build(BuildContext context) {
@@ -630,7 +661,7 @@ class _TotalSummaryCard extends StatelessWidget {
             Divider(color: MangoTokens.border),
             const SizedBox(height: 12),
             Text(
-              'Después de 14 días',
+              'Después de ${plan.trialDays} días',
               style: GoogleFonts.plusJakartaSans(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
@@ -639,7 +670,7 @@ class _TotalSummaryCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              afterTrial,
+              plan.formattedPrice,
               style: GoogleFonts.plusJakartaSans(
                 fontSize: 20,
                 fontWeight: FontWeight.w800,
@@ -648,7 +679,7 @@ class _TotalSummaryCard extends StatelessWidget {
             ),
             const SizedBox(height: 2),
             Text(
-              planPrice,
+              'Cobro mensual recurrente',
               style: GoogleFonts.plusJakartaSans(
                 fontSize: 13,
                 color: MangoTokens.mutedForeground,
@@ -660,6 +691,80 @@ class _TotalSummaryCard extends StatelessWidget {
     );
   }
 }
+
+/// Bloque de consentimiento explícito al cobro recurrente (PRD §10.5).
+/// Required — sin esto el submit del Step 3 lanza error con mensaje claro.
+class _ConsentBlock extends StatelessWidget {
+  final BillingPlan? plan;
+  final bool accepted;
+  final ValueChanged<bool> onChanged;
+
+  const _ConsentBlock({
+    required this.plan,
+    required this.accepted,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final priceLine = plan == null
+        ? 'el precio del plan elegido cada mes'
+        : '${plan!.formattedPrice}/mes a partir del día ${plan!.trialDays + 1}';
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: accepted ? const Color(0xFFF6FBF8) : Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: accepted ? MangoTokens.success : MangoTokens.border,
+          width: accepted ? 1.5 : 1,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Checkbox(
+              value: accepted,
+              onChanged: (v) => onChanged(v ?? false),
+              activeColor: MangoTokens.success,
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Autorizo el cobro recurrente',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                      color: MangoTokens.foreground,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Autorizo a MangoPOS a cobrar mi tarjeta automáticamente '
+                    'por $priceLine. Puedo cambiar de plan o cancelar cuando '
+                    'quiera desde Configuración → Suscripción y pagos.',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 12,
+                      height: 1.45,
+                      color: MangoTokens.mutedForeground,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// (_extractPrice eliminado — los precios ahora vienen formateados desde BillingPlan.)
 
 InputDecoration _inputDecoration({
   required String hint,
@@ -696,10 +801,3 @@ InputDecoration _inputDecoration({
   );
 }
 
-String _extractPrice(String raw) {
-  final match = RegExp(r'US\$[\d.,]+').firstMatch(raw);
-  if (match != null) {
-    return match.group(0)!;
-  }
-  return raw;
-}
