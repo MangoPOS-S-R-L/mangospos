@@ -55,6 +55,7 @@ drop table if exists public.azul_payment_sessions cascade;
 -- dependencia que bloquea el DROP COLUMN si la policy sigue viva.
 drop policy if exists "plans_select_visible" on public.plans;
 drop policy if exists "plans_write_service" on public.plans;
+drop policy if exists "plans_select_active_anon" on public.plans;
 
 -- 6. Quitar columnas/constraints/índices agregados a memberships.
 drop index if exists public.memberships_one_billing_anchor_per_business;

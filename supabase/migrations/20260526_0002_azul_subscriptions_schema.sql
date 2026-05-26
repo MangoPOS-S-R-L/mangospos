@@ -398,6 +398,17 @@ drop policy if exists "plans_write_service" on public.plans;
 create policy "plans_write_service" on public.plans
   for all to service_role using (true) with check (true);
 
+-- plans: usuarios anónimos (durante el signup, sin sesión todavía) deben poder
+-- ver los planes activos para que el Step 1 del registro renderice las cards.
+-- Sin esta policy el FutureProvider devuelve [] y la UI muestra "No hay planes".
+-- Diferenciamos de plans_select_visible (authenticated) que tiene la lógica
+-- extra de mostrar el plan al que ya está suscrito aunque esté desactivado —
+-- caso que no aplica para anon.
+drop policy if exists "plans_select_active_anon" on public.plans;
+create policy "plans_select_active_anon" on public.plans
+  for select to anon
+  using (is_active = true);
+
 -- azul_payment_sessions: SOLO service_role. Las sesiones contienen auth_hash
 -- y datos crudos del callback; no se exponen al cliente.
 drop policy if exists "azul_sessions_service" on public.azul_payment_sessions;
