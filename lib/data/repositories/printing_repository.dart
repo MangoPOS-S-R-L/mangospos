@@ -1451,8 +1451,35 @@ class PrintingRepository {
           );
           return PrintOutcome.directSuccess;
         } catch (e) {
-          // El host remoto está caído o no responde. Si tenemos
-          // idempotencyKey, escalamos al cloud queue. Sino, propagamos.
+          // Fallback inteligente: si el host_device_id apunta a un agent
+          // que ya NO existe (registro huerfano por reinstall del app,
+          // device viejo borrado, etc), no tiene sentido escalar al cloud
+          // — la imp puede estar fisicamente conectada a ESTE device.
+          // Intentamos el path local antes de la cloud queue para que el
+          // ticket salga ya en vez de quedar pendiente. Mismo razonamiento
+          // si el host remoto esta offline (last_heartbeat > 90s): igual
+          // probamos local — si tampoco funciona, ahi si escalamos.
+          //
+          // Caso de uso real: cajero unico que reinstalo el app, el viejo
+          // device_id quedo en printer.host_device_id apuntando a una fila
+          // de device_agents que ya no existe. El test de pagina (que no
+          // mira host_device_id) imprime bien; precuenta/factura/comanda
+          // no. Con este fallback ambos paths quedan equivalentes en
+          // robustez.
+          final shouldTryLocal = _isOrphanHostError(e);
+          if (shouldTryLocal) {
+            try {
+              await _printEscPosLocal(
+                printer: printer,
+                data: data,
+                timeout: timeout,
+              );
+              return PrintOutcome.directSuccess;
+            } catch (_) {
+              // Local tampoco anduvo: caer al cloud queue normal.
+            }
+          }
+
           if (idempotencyKey == null) rethrow;
           await _escalateToCloudQueue(
             printer: printer,
@@ -1485,6 +1512,23 @@ class PrintingRepository {
       );
       return PrintOutcome.escalatedToCloud;
     }
+  }
+
+  /// Detecta los errores de [_printViaRemoteHost] donde la mejor estrategia
+  /// es intentar imprimir local en vez de escalar al cloud queue:
+  ///   - host_device_id apunta a un device_agent que ya no existe en BD
+  ///   - host_device_id existe pero el agent esta offline (heartbeat viejo)
+  ///   - agent_url esta vacio
+  ///
+  /// En cualquiera de estos casos, la imp puede estar fisicamente conectada
+  /// a este device — probar local antes de dar por perdido el ticket.
+  bool _isOrphanHostError(Object e) {
+    final msg = e.toString().toLowerCase();
+    return msg.contains('no esta registrado') ||
+        msg.contains('no está registrado') ||
+        msg.contains('fuera de l') || // 'fuera de línea' / 'fuera de linea'
+        msg.contains('agent_url') ||
+        msg.contains('agent no disponible');
   }
 
   /// Body original de printEscPos extraído para envolverlo con cloud
