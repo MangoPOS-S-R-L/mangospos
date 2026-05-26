@@ -15,6 +15,7 @@ import 'package:mangopos/services/session/session_controller.dart';
 
 import '../../app/theme/mango_colors.dart';
 import '../../app/router/routes.dart';
+import '../billing/widgets/billing_guard.dart';
 import '../inventory/viewmodel/expiring_lots_badge_provider.dart';
 import '../inventory/viewmodel/low_stock_badge_provider.dart';
 import '../sales/viewmodel/sales_viewmodel.dart';
@@ -34,7 +35,11 @@ class _MainShellState extends ConsumerState<MainShell> {
 
   @override
   Widget build(BuildContext context) {
-    final child = widget.child;
+    // Wrap del child con BillingGuard: si la cuenta está suspendida o en trial
+    // sin tarjeta verificada, el guard sustituye el contenido por un overlay
+    // bloqueante. Las rutas /register, /onboarding y /settings/billing son
+    // exentas (el usuario está justamente intentando resolver).
+    final child = BillingGuard(child: widget.child);
 
     // Escuchamos el resultado del último sync para notificar al cajero
     // qué se sincronizó. El controller es singleton; usamos referencia
