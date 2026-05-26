@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/router/routes.dart';
+import '../../../core/currency/usd_equivalent_label.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_shadows.dart';
@@ -13,6 +14,7 @@ import '../../../core/theme/app_spacing.dart';
 import '../../../data/models/bank_account.dart';
 import '../../../data/models/payment_models.dart';
 import '../../../data/models/sales_models.dart';
+import '../../../services/session/session_controller.dart';
 import '../state/payment_state.dart';
 import '../viewmodel/payment_viewmodel.dart';
 import '../../cashier/viewmodel/cashier_viewmodel.dart';
@@ -644,6 +646,23 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
       child: Column(
         children: [
           _SummaryRow(label: 'Total General', value: total, isMain: true),
+          // PRD 6 §6.2: equivalente USD debajo del total, en gris,
+          // ~70% del tamaño del título. Se renderiza solo si el
+          // business activó el toggle y configuró una tasa válida.
+          Builder(
+            builder: (context) {
+              final businessId =
+                  ref.read(sessionProvider).activeBusinessId ?? '';
+              if (businessId.isEmpty) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: UsdEquivalentLabel(
+                  businessId: businessId,
+                  dopTotal: total,
+                ),
+              );
+            },
+          ),
           const Divider(height: 24),
           _SummaryRow(
               label: 'Recibido', value: paid, color: AppColors.success),

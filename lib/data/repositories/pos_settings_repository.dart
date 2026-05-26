@@ -3,6 +3,10 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/currency/usd_display_settings.dart';
+
+export '../../core/currency/usd_display_settings.dart';
+
 final posSettingsRepositoryProvider = Provider<PosSettingsRepository>(
   (ref) => PosSettingsRepository(Supabase.instance.client),
 );
@@ -435,6 +439,45 @@ class PosSettingsRepository {
     } catch (_) {
       return BusinessFeatures.defaults;
     }
+  }
+
+  /// PRD 6 — Settings de moneda secundaria USD (display-only).
+  /// Devuelve los 5 campos relevantes para mostrar el equivalente USD
+  /// en checkout y recibos. Si la fila no existe o algo falla, retorna
+  /// `enabled = false` que es el comportamiento legacy (no muestra
+  /// nada).
+  Future<UsdDisplaySettings> getUsdDisplaySettings(String businessId) async {
+    try {
+      final row = await _client
+          .from('business_settings')
+          .select(
+            'usd_display_enabled, usd_symbol, usd_rate, '
+            'usd_rate_updated_at, usd_symbol_position',
+          )
+          .eq('business_id', businessId)
+          .maybeSingle();
+
+      if (row == null) return const UsdDisplaySettings.disabled();
+      return UsdDisplaySettings.fromMap(row);
+    } catch (_) {
+      return const UsdDisplaySettings.disabled();
+    }
+  }
+
+  /// PRD 6 — Actualiza la config de USD. El trigger en DB pone
+  /// `usd_rate_updated_at` automáticamente cuando `usd_rate` cambia.
+  Future<void> setUsdDisplaySettings({
+    required String businessId,
+    required UsdDisplaySettings settings,
+  }) async {
+    await _client.from('business_settings').upsert({
+      'business_id': businessId,
+      'usd_display_enabled': settings.enabled,
+      'usd_symbol': settings.symbol,
+      // Supabase serializa Decimal a string para el numeric(10,4) en DB.
+      'usd_rate': settings.rate?.toString(),
+      'usd_symbol_position': settings.symbolPosition,
+    }, onConflict: 'business_id');
   }
 
   /// Upsert atómico de los flags. La UI de admin envía el set completo

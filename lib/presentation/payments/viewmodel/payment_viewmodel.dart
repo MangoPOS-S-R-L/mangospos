@@ -5,6 +5,9 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:decimal/decimal.dart';
+
+import '../../../core/currency/usd_conversion.dart';
 import '../../../core/network/connectivity_service.dart';
 import '../../../core/offline/offline_pos_service.dart';
 import '../../../core/tax/tax_exceptions.dart';
@@ -12,6 +15,7 @@ import '../../../data/models/bank_account.dart';
 import '../../../data/models/payment_models.dart';
 import '../../../data/models/sales_models.dart';
 import '../../../data/repositories/cashier_repository.dart';
+import '../../../data/repositories/pos_settings_repository.dart';
 import '../../../data/repositories/sales_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 import '../../sales/viewmodel/sales_viewmodel.dart'; // Import para usar salesRepositoryProvider
@@ -485,6 +489,42 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         // backend cae al default_ncf_type del business (típicamente B02).
         fiscalType: state.selectedNcfType,
       );
+
+      // PRD 6 §6.4: snapshot de tasa y equivalente USD para auditoría.
+      // Se hace post-RPC con UPDATE idempotente (solo si el snapshot
+      // aún es NULL — primera venta de este order). El RPC fiscal no
+      // se toca; este es un side-effect best-effort para reportes
+      // futuros. Si falla, el cobro sigue siendo válido.
+      try {
+        final businessId = await resolveBusinessIdOrNull(
+          Supabase.instance.client,
+          'auto',
+        );
+        if (businessId != null && businessId.isNotEmpty) {
+          final usdSettings = await PosSettingsRepository(
+            Supabase.instance.client,
+          ).getUsdDisplaySettings(businessId);
+          if (usdSettings.isUsable && usdSettings.rate != null) {
+            final equivalent = calculateUsdEquivalent(
+              dopTotal: Decimal.parse(amount.toStringAsFixed(2)),
+              usdRate: usdSettings.rate,
+            );
+            if (equivalent != null) {
+              await Supabase.instance.client
+                  .from('orders')
+                  .update({
+                    'usd_rate_snapshot': usdSettings.rate.toString(),
+                    'usd_equivalent': equivalent.toString(),
+                  })
+                  .eq('id', orderId)
+                  .isFilter('usd_rate_snapshot', null);
+            }
+          }
+        }
+      } catch (e) {
+        // Best-effort: no romper el cobro por un fallo de auditoría.
+        debugPrint('PRD 6: no se pudo guardar snapshot USD: $e');
+      }
 
       // Si el método es transferencia y el cajero seleccionó una cuenta
       // bancaria, escribimos el id en `payments.bank_account_id`. Lo

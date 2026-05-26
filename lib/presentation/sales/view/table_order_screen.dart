@@ -4006,6 +4006,13 @@ class _CartView extends ConsumerWidget {
         final profileForPrint =
             await businessProfileRepo.prepareForInvoicePrinting(businessId);
 
+        // PRD 6: cargar settings de USD para el bloque "≈ US$X" debajo
+        // del TOTAL. Si toggle off / tasa null, el helper salta sin
+        // imprimir nada — el ticket queda idéntico al pre-PRD-6.
+        final usdSettings = await ref
+            .read(posSettingsRepositoryProvider)
+            .getUsdDisplaySettings(businessId);
+
         // PRD F2: si algún payment fue por transferencia con cuenta
         // bancaria asignada, cargar el mapa para que el ticket muestre
         // banco/titular debajo de la línea de pago. Si no hay
@@ -4034,6 +4041,7 @@ class _CartView extends ConsumerWidget {
                 issuedAt: data['issuedAt'] == null
                     ? null
                     : DateTime.tryParse(data['issuedAt'].toString()),
+                usdSettings: usdSettings, // PRD 6
                 title: title,
                 receiptItemDisplayMode: receiptItemDisplayMode,
                 taxBreakdown: printTaxBreakdown,
@@ -4065,6 +4073,7 @@ class _CartView extends ConsumerWidget {
                 businessAddress: data['address'] as String?,
                 businessPhone: data['phone'] as String?,
                 businessRnc: data['rnc'] as String?,
+                usdSettings: usdSettings, // PRD 6
                 title: title,
                 receiptItemDisplayMode: receiptItemDisplayMode,
                 taxBreakdown: printTaxBreakdown,

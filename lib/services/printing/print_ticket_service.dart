@@ -1,3 +1,5 @@
+import 'package:decimal/decimal.dart';
+
 import '../../data/models/bank_account.dart';
 import '../../data/models/business_profile.dart';
 import '../../data/models/printing_models.dart';
@@ -5,6 +7,8 @@ import '../../data/models/order_item_tax_line.dart';
 import '../../data/models/sales_models.dart';
 import '../../data/models/payment_models.dart';
 import '../../core/utils/app_time.dart';
+import '../../core/currency/usd_conversion.dart';
+import '../../core/currency/usd_display_settings.dart';
 import '../../data/utils/order_pricing_utils.dart';
 import 'esc_pos_generator.dart';
 
@@ -380,6 +384,9 @@ class PrintTicketService {
     String? businessAddress,
     String? businessPhone,
     String? businessRnc,
+    // PRD 6: settings de moneda secundaria USD. Si está null o
+    // `enabled = false`, no se imprime nada relacionado a USD.
+    UsdDisplaySettings? usdSettings,
     String title = 'PRECUENTA',
     String receiptItemDisplayMode = 'grouped',
     List<({String label, double amount})> taxBreakdown = const [],
@@ -605,6 +612,9 @@ class PrintTicketService {
     gen.setTextSize();
     gen.setBold(false);
 
+    // PRD 6: equivalente USD debajo del TOTAL si está activo.
+    _renderUsdEquivalent(gen, printableGrandTotal, usdSettings);
+
     // ════════════════════════════════════════════
     // DATOS DE COMPROBANTE FISCAL
     // ════════════════════════════════════════════
@@ -667,6 +677,9 @@ class PrintTicketService {
     String? customerLegalName,
     String? customerTaxId,
     DateTime? issuedAt,
+    // PRD 6: settings de moneda secundaria USD (mismo patrón que
+    // generatePrecheck). Si null o disabled, no imprime nada de USD.
+    UsdDisplaySettings? usdSettings,
     String title = 'FACTURA',
     String receiptItemDisplayMode = 'grouped',
     List<({String label, double amount})> taxBreakdown = const [],
@@ -956,6 +969,11 @@ class PrintTicketService {
     gen.textRow('TOTAL:', 'RD\$ ${_formatMoney(effectiveTotal)}');
     gen.setTextSize();
     gen.setBold(false);
+
+    // PRD 6: equivalente USD debajo del TOTAL si toggle está activo.
+    // Helper resetea ya hace setTextSize default (no bold), garantizando
+    // que el USD siempre se ve más chico que el TOTAL DOP.
+    _renderUsdEquivalent(gen, effectiveTotal, usdSettings);
 
     gen.lineFeed();
     _thickSeparator(gen);
@@ -1644,6 +1662,43 @@ class PrintTicketService {
   /// Separador grueso (líneas dobles)
   static void _thickSeparator(EscPosGenerator gen) {
     gen.textCentered('=' * 48);
+  }
+
+  /// PRD 6 — Renderiza el equivalente USD debajo del TOTAL.
+  ///
+  /// Aparece SOLO si `usdSettings.isUsable` (toggle activo + tasa > 0).
+  /// Salida (ejemplo):
+  /// ```
+  /// ≈ US$ 89.26
+  /// Tasa: RD$ 60.5000
+  /// ```
+  ///
+  /// PRD §6.2/§6.3: posición debajo del total, tipografía menor, sin
+  /// negrita. El símbolo respeta `usd_symbol_position` (before/after).
+  static void _renderUsdEquivalent(
+    EscPosGenerator gen,
+    double dopTotal,
+    UsdDisplaySettings? usdSettings,
+  ) {
+    if (usdSettings == null || !usdSettings.isUsable) return;
+    final rate = usdSettings.rate;
+    if (rate == null) return;
+
+    final equivalent = calculateUsdEquivalent(
+      dopTotal: Decimal.parse(dopTotal.toStringAsFixed(2)),
+      usdRate: rate,
+    );
+    if (equivalent == null) return;
+
+    final sym = usdSettings.symbol;
+    final equivFormatted = equivalent.toStringAsFixed(2);
+    final equivLabel = usdSettings.symbolPosition == 'after'
+        ? '$equivFormatted $sym'
+        : '$sym $equivFormatted';
+
+    gen.lineFeed();
+    gen.textRow('Total USD:', '≈ $equivLabel');
+    gen.textRow('Tasa:', 'RD\$ ${rate.toStringAsFixed(4)}');
   }
 
   /// Itera la lista [blocks] en orden y renderiza solo los enabled cuyo
