@@ -1,17 +1,24 @@
-// Guard global del shell autenticado: si el comercio no tiene tarjeta
-// registrada (caso edge del registro interrumpido o piloto pre-existente),
-// reemplaza toda la pantalla con PaymentMethodRequiredOverlay. Libera el
-// bloqueo automáticamente vía Realtime cuando llega payment_method.verified.
+// Guard global del shell autenticado: bloquea el acceso al POS si la cuenta
+// no tiene tarjeta verificada (caso edge del registro interrumpido o piloto
+// pre-existente) o si está suspendida. Libera automáticamente vía Realtime
+// cuando llega payment_method.status='verified'.
 //
-// Rutas exentas (el usuario está justamente intentando resolver el bloqueo):
+// Rutas exentas (donde el usuario está justamente intentando resolver):
 //   - /register/*           — pasos del registro inicial
 //   - /onboarding/*         — landing post-Azul (payment-result)
-//   - /settings/billing/*   — pantallas de billing donde gestiona método de pago
+//   - /settings/billing/*   — pantallas de billing donde registra método de pago
+//
+// Loading strategy: durante el primer fetch del billing state mostramos un
+// loading screen branded en lugar del shell vacío. Eso elimina el flash que
+// permitía ver el dashboard por 1 seg antes de que apareciera el overlay.
+// `skipLoadingOnRefresh: true` evita que re-emisiones del stream Realtime
+// disparen un loading nuevo (usamos el valor cacheado).
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../app/theme/mango_colors.dart';
 import '../../../data/models/billing_payment_method.dart';
 import '../../../data/models/billing_state.dart';
 import '../../../services/session/session_controller.dart';
@@ -42,31 +49,109 @@ class BillingGuard extends ConsumerWidget {
     }
 
     final stateAsync = ref.watch(billingStateProvider(businessId));
-    final pmAsync = ref.watch(defaultPaymentMethodProvider(businessId));
 
-    final state = stateAsync.valueOrNull;
-    // Sin info aún (loading o sin membership anchor): no bloquear para no
-    // mostrar flashes de overlay durante la carga inicial.
-    if (state == null) return child;
+    return stateAsync.when(
+      skipLoadingOnRefresh: true,
+      // Primer fetch: mostramos loading screen branded (en vez de child) para
+      // evitar el flash de dashboard antes de que aparezca el overlay.
+      loading: () => const _BillingBootstrapLoading(),
+      // Si la query falla, no bloqueamos — mejor dejar entrar que dejar al
+      // usuario varado. El error queda en logs; el cron eventualmente
+      // detectará inconsistencia.
+      error: (_, _) => child,
+      data: (state) {
+        // Sin membership anchor: no aplicar guard (es un usuario sin business
+        // o caso edge).
+        if (state == null) return child;
 
-    // Suspendido: prioridad máxima. Reemplazamos con el bloqueo de suspended
-    // (que ya tiene su CTA correcto a Settings → Método de pago).
-    if (state.isSuspended) {
-      return Scaffold(
-        body: SafeArea(child: SuspendedOverlay(state: state)),
-      );
-    }
+        // Suspendido: prioridad máxima.
+        if (state.isSuspended) {
+          return Scaffold(
+            backgroundColor: const Color(0xFFFBFAF9),
+            body: SafeArea(child: SuspendedOverlay(state: state)),
+          );
+        }
 
-    // Trial sin tarjeta verificada → bloquear con overlay de "registra tarjeta".
-    if (state.billingStatus == BillingStatus.trial) {
-      final pm = pmAsync.valueOrNull;
-      final hasVerifiedCard = pm != null &&
-          pm.status == BillingPaymentMethodStatus.verified;
-      if (!hasVerifiedCard) {
-        return PaymentMethodRequiredOverlay(state: state);
-      }
-    }
+        // Trial sin tarjeta verificada → overlay "Registra tu tarjeta".
+        // Verificamos el PM en su propio AsyncValue para no mostrar overlay
+        // antes de saber si tiene tarjeta o no.
+        if (state.billingStatus == BillingStatus.trial) {
+          final pmAsync = ref.watch(defaultPaymentMethodProvider(businessId));
+          return pmAsync.when(
+            skipLoadingOnRefresh: true,
+            loading: () => const _BillingBootstrapLoading(),
+            error: (_, _) => child,
+            data: (pm) {
+              final hasVerifiedCard = pm != null &&
+                  pm.status == BillingPaymentMethodStatus.verified;
+              if (hasVerifiedCard) return child;
+              return PaymentMethodRequiredOverlay(state: state);
+            },
+          );
+        }
 
-    return child;
+        return child;
+      },
+    );
+  }
+}
+
+/// Splash de transición mientras cargamos el estado de billing por primera
+/// vez. Diseño consistente con el branding (color primario + spinner sutil).
+/// Duración esperada: ~300-800ms en producción.
+class _BillingBootstrapLoading extends StatelessWidget {
+  const _BillingBootstrapLoading();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFFBFAF9),
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 64,
+              height: 64,
+              decoration: BoxDecoration(
+                color: MangoColors.primaryOrange,
+                borderRadius: BorderRadius.circular(18),
+                boxShadow: [
+                  BoxShadow(
+                    color: MangoColors.primaryOrange.withValues(alpha: 0.22),
+                    blurRadius: 18,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
+              ),
+              child: const Icon(
+                Icons.point_of_sale_rounded,
+                color: MangoColors.white,
+                size: 32,
+              ),
+            ),
+            const SizedBox(height: 24),
+            const SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.5,
+                color: MangoColors.primaryOrange,
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Preparando tu cuenta…',
+              style: TextStyle(
+                fontSize: 13,
+                color: MangoColors.muted,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.3,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
