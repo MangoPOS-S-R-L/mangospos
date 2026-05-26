@@ -12,10 +12,11 @@
 //   4. Cuando llega payment_method.status='verified' → SUCCESS → ir a dashboard
 //   5. Si el usuario cierra el browser sin completar, expira a los 30 min
 //
-// Skip:
-//   - Botón "Saltar por ahora" muestra confirm dialog destacando el riesgo
-//     (suspensión al día 14 sin tarjeta). Si confirma → va al dashboard sin
-//     tarjeta. El comercio puede volver desde Settings → Suscripción.
+// Tarjeta requerida:
+//   - No hay opción de saltar. Sin tarjeta tokenizada, la cuenta queda en
+//     estado pending y un cron de cleanup la elimina pasadas 24h. El comercio
+//     puede cerrar el browser y volver, pero el dashboard no se desbloquea
+//     hasta que tenga payment_method verified.
 
 import 'dart:async';
 
@@ -138,38 +139,6 @@ class _RegisterStep4ViewState extends ConsumerState<RegisterStep4View> {
     context.go(AppRoutes.dashboard);
   }
 
-  Future<void> _onSkip() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        icon: const Icon(Icons.warning_amber_rounded,
-            color: Colors.orange, size: 40),
-        title: const Text('¿Saltar el registro de tarjeta?'),
-        content: const Text(
-          'Si no registras una tarjeta ahora, tu cuenta se suspenderá '
-          'automáticamente al terminar el período de prueba (14 días).\n\n'
-          'Podrás agregar tu tarjeta más tarde desde:\n'
-          'Configuración → Suscripción y pagos.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            style: TextButton.styleFrom(foregroundColor: Colors.orange),
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Saltar de todas formas'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-    if (!mounted) return;
-    context.go(AppRoutes.dashboard);
-  }
-
   @override
   Widget build(BuildContext context) {
     final businessId = ref.watch(sessionProvider).activeBusinessId;
@@ -275,16 +244,15 @@ class _RegisterStep4ViewState extends ConsumerState<RegisterStep4View> {
                   ),
                 ),
               ),
-              const SizedBox(height: 10),
-              TextButton(
-                onPressed: _starting || _waitingForCallback ? null : _onSkip,
-                child: Text(
-                  'Saltar por ahora',
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: MangoTokens.mutedForeground,
-                  ),
+              const SizedBox(height: 12),
+              Text(
+                'Sin tarjeta verificada no podrás acceder al panel. '
+                'Tu prueba gratis empieza apenas registres el método de pago.',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 12,
+                  color: MangoTokens.mutedForeground,
+                  height: 1.4,
                 ),
               ),
             ],
