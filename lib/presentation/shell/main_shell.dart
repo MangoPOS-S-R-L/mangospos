@@ -485,7 +485,11 @@ class _TopNavItemState extends ConsumerState<_TopNavItem> {
     final loc = GoRouterState.of(context).uri.toString();
     final active = isDestinationActive(d, loc);
 
-    final showLabel = MediaQuery.of(context).size.width >= 768;
+    // Bump threshold a 1280: en pantallas 1024×768 y similar (compact
+    // desktop) se ocultan las labels y solo se ven los iconos, así
+    // toda la barra cabe sin recortes. Tooltip cubre la accesibilidad.
+    final width = MediaQuery.of(context).size.width;
+    final showLabel = width >= 1280;
     final iconColor = hasAccess
         ? (active ? Colors.white : Colors.grey[600]!)
         : Colors.grey[500]!;
@@ -499,11 +503,20 @@ class _TopNavItemState extends ConsumerState<_TopNavItem> {
       cursor: hasAccess
           ? SystemMouseCursors.click
           : SystemMouseCursors.forbidden,
-      child: GestureDetector(
+      child: Tooltip(
+        // En modo compact (sin labels) el tooltip da accesibilidad —
+        // muestra "Dashboard", "Ventas", etc. al hover/long-press.
+        // Cuando hay label visible, el tooltip queda como reinforcement.
+        message: d.label,
+        waitDuration: const Duration(milliseconds: 400),
+        child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: hasAccess ? () => context.go(d.route) : null,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          padding: EdgeInsets.symmetric(
+            horizontal: showLabel ? 16 : 10,
+            vertical: 8,
+          ),
           decoration: BoxDecoration(
             color: hasAccess
                 ? (active
@@ -546,6 +559,7 @@ class _TopNavItemState extends ConsumerState<_TopNavItem> {
             ],
           ),
         ),
+      ),
       ),
     );
   }
