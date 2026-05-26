@@ -1639,27 +1639,48 @@ class _CartView extends ConsumerWidget {
     // puede seguir corriendo en background — el `finally` también limpia
     // (idempotente).
     final failsafe = Timer(failsafeTimeout, () {
-      final state = ref.read(_salesActionLocksProvider);
-      if (!state.containsKey(key)) return;
-      final next = {...state}..remove(key);
-      notifier.state = next;
-      debugPrint(
-        '[SalesLocks] FAILSAFE release "$key" tras '
-        '${failsafeTimeout.inSeconds}s sin completar.',
-      );
+      // Mismo blindaje que el finally: si el widget murio antes de que
+      // el timer dispare, `ref.read` truena. No propagamos — el lock se
+      // limpia solo al siguiente provider rebuild.
+      try {
+        final state = ref.read(_salesActionLocksProvider);
+        if (!state.containsKey(key)) return;
+        final next = {...state}..remove(key);
+        notifier.state = next;
+        debugPrint(
+          '[SalesLocks] FAILSAFE release "$key" tras '
+          '${failsafeTimeout.inSeconds}s sin completar.',
+        );
+      } catch (e) {
+        debugPrint(
+          '[SalesLocks] FAILSAFE "$key" SKIP — widget disposed: $e',
+        );
+      }
     });
 
     try {
       await action();
     } finally {
       failsafe.cancel();
-      final next = {...ref.read(_salesActionLocksProvider)};
-      final hadKey = next.remove(key) != null;
-      notifier.state = next;
-      debugPrint(
-        '[SalesLocks] RELEASE "$key" tras ${DateTime.now().millisecondsSinceEpoch - now}ms '
-        '(finally, ${hadKey ? "lock estaba presente" : "lock ya removido"}).',
-      );
+      // Si el widget se disposo durante `action()` (caso comun en print
+      // flows largos donde el cajero navega o el flujo popula dialogs),
+      // `ref.read` truena con StateError. Envolvemos el release del
+      // lock para no propagar la excepcion: el lock vive en provider
+      // global y se autolimpia con el failsafe; perder un release
+      // puntual no rompe nada.
+      try {
+        final next = {...ref.read(_salesActionLocksProvider)};
+        final hadKey = next.remove(key) != null;
+        notifier.state = next;
+        debugPrint(
+          '[SalesLocks] RELEASE "$key" tras ${DateTime.now().millisecondsSinceEpoch - now}ms '
+          '(finally, ${hadKey ? "lock estaba presente" : "lock ya removido"}).',
+        );
+      } catch (e) {
+        debugPrint(
+          '[SalesLocks] RELEASE "$key" SKIP — widget disposed durante action: $e',
+        );
+      }
     }
   }
 
@@ -3834,6 +3855,11 @@ class _CartView extends ConsumerWidget {
       if (businessId == null || businessId.isEmpty) {
         throw Exception('Negocio no resuelto.');
       }
+      // Capturamos repos que necesitamos despues del await — si el cajero
+      // navega fuera durante la impresion (~2-15s), el widget se dispone
+      // y `ref.read` lanza StateError. Esto pasa con la marca de
+      // precuenta-impresa que ocurre tras outcome exitoso.
+      final zonesRepo = ref.read(zonesRepoProvider);
 
       // Si el usuario ya eligió impresora en el selector v2 (Printing v2),
       // usar esa y saltar la auto-resolución legacy.
@@ -4208,6 +4234,20 @@ class _CartView extends ConsumerWidget {
             backgroundColor: const Color(0xFFF59E0B),
           ),
         );
+      }
+
+      // Marca la mesa como "precuenta impresa" → la vista de zonas la
+      // pinta azul (TableStatus.pagando). Fire-and-forget: no rompe el
+      // flujo si la DB no responde. Cubre tanto directSuccess como
+      // escalatedToCloud — en ambos casos el cajero ya pidió la cuenta.
+      // Realtime sobre table_sessions repinta sin invalidaciones extra.
+      // Usamos `zonesRepo` capturado al inicio para evitar StateError
+      // si el widget se disposo durante la impresion.
+      if (type == 'precheck') {
+        final sessionId = orderObj?.sessionId ?? '';
+        if (sessionId.isNotEmpty) {
+          unawaited(zonesRepo.markPrecheckPrinted(sessionId));
+        }
       }
 
       // Slice B — fan-out de multi-copia para recibo (paralelo). Solo

@@ -724,6 +724,67 @@ class CashierRepository {
         .toList(growable: false);
   }
 
+  /// Admin — Lista todas las razones del negocio (activas e inactivas)
+  /// para la pantalla de configuración en Ajustes.
+  Future<List<Map<String, dynamic>>> listAllCashReasons(
+    String businessId,
+  ) async {
+    final response = await _client
+        .from('cash_transaction_reasons')
+        .select('id, code, label, applies_to, requires_pin, is_active')
+        .eq('business_id', businessId)
+        .order('is_active', ascending: false)
+        .order('label', ascending: true);
+    return List<Map<String, dynamic>>.from(response);
+  }
+
+  /// Admin — Crea una razón. `appliesTo` puede ser 'deposit',
+  /// 'withdrawal', 'expense' o null (universal). El UNIQUE
+  /// (business_id, code) garantiza que no haya duplicados — si revienta,
+  /// la UI muestra el error.
+  Future<Map<String, dynamic>> createCashReason({
+    required String businessId,
+    required String code,
+    required String label,
+    String? appliesTo,
+    bool requiresPin = false,
+  }) async {
+    final inserted = await _client
+        .from('cash_transaction_reasons')
+        .insert({
+          'business_id': businessId,
+          'code': code,
+          'label': label,
+          'applies_to': appliesTo,
+          'requires_pin': requiresPin,
+          'is_active': true,
+        })
+        .select('id, code, label, applies_to, requires_pin, is_active')
+        .single();
+    return Map<String, dynamic>.from(inserted);
+  }
+
+  /// Admin — Actualiza campos de una razón. Solo enviamos los campos
+  /// presentes en `patch`. `code` no se permite cambiar para preservar
+  /// integridad referencial con `cash_transactions.reason_code`.
+  Future<void> updateCashReason(
+    String id,
+    Map<String, dynamic> patch,
+  ) async {
+    if (patch.isEmpty) return;
+    await _client
+        .from('cash_transaction_reasons')
+        .update(patch)
+        .eq('id', id);
+  }
+
+  /// Admin — Elimina una razón. Las cash_transactions que la
+  /// referencian quedan con reason_id null (ON DELETE SET NULL) pero
+  /// conservan `reason_code` denormalizado para trazabilidad histórica.
+  Future<void> deleteCashReason(String id) async {
+    await _client.from('cash_transaction_reasons').delete().eq('id', id);
+  }
+
   /// Get the receipt printer ID assigned to a cash register.
   Future<String?> getRegisterPrinterId(String cashRegisterId) async {
     final data = await _client

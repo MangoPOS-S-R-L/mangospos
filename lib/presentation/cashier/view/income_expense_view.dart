@@ -449,10 +449,32 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
           borderRadius: BorderRadius.circular(8),
           border: Border.all(color: const Color(0xFFFDE68A)),
         ),
-        child: const Text(
-          'No hay razones configuradas para este tipo de movimiento. '
-          'Pedile al admin que las configure en Ajustes.',
-          style: TextStyle(fontSize: 12, color: Color(0xFF92400E)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'No hay razones configuradas para este tipo de movimiento. '
+              'Configúralas (o pídele al admin) en '
+              'Ajustes → Razones de Ingresos y Egresos.',
+              style: TextStyle(fontSize: 12, color: Color(0xFF92400E)),
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => context.go(AppRoutes.settingsCashReasons),
+                icon: const Icon(Icons.settings, size: 16),
+                label: const Text('Ir a configurar'),
+                style: TextButton.styleFrom(
+                  foregroundColor: const Color(0xFF92400E),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+            ),
+          ],
         ),
       );
     }

@@ -600,6 +600,40 @@ class ZonesRepository {
     return row?['id']?.toString();
   }
 
+  /// Marca la sesión como "precuenta impresa" para que la mesa aparezca
+  /// azul en la vista por zonas. Best-effort: no propaga errores —
+  /// la impresión ya ocurrió, el visual es solo un nice-to-have. La
+  /// columna `precheck_printed_at` la consume `v_zone_table_status`
+  /// para devolver `status='paying'` mientras la sesión siga abierta.
+  /// Se resetea solo al cerrar la sesión (via `closed_at`).
+  Future<void> markPrecheckPrinted(String sessionId) async {
+    if (sessionId.isEmpty) {
+      // ignore: avoid_print
+      print('[ZonesRepo] markPrecheckPrinted SKIP — sessionId vacio');
+      return;
+    }
+    try {
+      // ignore: avoid_print
+      print('[ZonesRepo] markPrecheckPrinted START sessionId=$sessionId');
+      final result = await sb
+          .from('table_sessions')
+          .update({
+            'precheck_printed_at': DateTime.now().toUtc().toIso8601String(),
+          })
+          .eq('id', sessionId)
+          .select('id');
+      // ignore: avoid_print
+      print('[ZonesRepo] markPrecheckPrinted OK rows=${result.length} '
+          'sessionId=$sessionId');
+    } catch (e) {
+      // No relanzamos: la mesa simplemente seguirá en naranja, pero
+      // la precuenta ya salió en papel — el flujo principal no debe
+      // romperse por un visual.
+      // ignore: avoid_print
+      print('[ZonesRepo] markPrecheckPrinted FAIL sessionId=$sessionId: $e');
+    }
+  }
+
   /// Lista todas las mesas activas de un negocio (todas las zonas)
   /// junto con el estado actual y la zona a la que pertenecen. Usado
   /// por el dialog de transferencia para que el cajero elija destino.

@@ -315,6 +315,27 @@ deno_version = 2
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
+# ---------------------------------------------------------------------------
+# Edge Functions — Azul Subscriptions (PRD-Azul-Subscriptions.md)
+# ---------------------------------------------------------------------------
+# Las dos públicas (form + callback) NO requieren JWT porque (a) el browser
+# del cliente las abre sin sesión Supabase y (b) Azul redirige al callback sin
+# auth header. La seguridad la dan: session_id UUID v4 con entropía, expires_at
+# de 30 min, y validación de AuthHash HMAC-SHA512 en el callback.
+
+[functions.azul-create-tokenization-session]
+verify_jwt = true
+
+[functions.azul-payment-form]
+verify_jwt = false
+
+[functions.azul-callback]
+verify_jwt = false
+
+[functions.azul-void-hold]
+verify_jwt = false
+# Validación interna: la propia función chequea el bearer service_role.
+
 [analytics]
 enabled = true
 port = 54327

@@ -67,6 +67,7 @@ import '../../presentation/branches/view/branch_management_view.dart';
 import '../../presentation/settings/cash_registers/view/cash_registers_view.dart';
 import '../../presentation/settings/business_features/business_features_view.dart';
 import '../../presentation/settings/cash_close_mode/cash_close_mode_view.dart';
+import '../../presentation/settings/cash_reasons/view/cash_reasons_view.dart';
 import '../../presentation/settings/comandas_config/comandas_config_view.dart';
 import '../../presentation/settings/currencies/view/currencies_view.dart';
 import '../../presentation/settings/more settings/system settings/device/view/device_binding_view.dart';
@@ -94,6 +95,11 @@ import '../../presentation/reports/viewmodel/reports_viewmodel.dart';
 // More Settings module
 import 'package:mangopos/presentation/settings/view/settings_view.dart';
 import 'package:mangopos/presentation/settings/view/plan_management_view.dart';
+import 'package:mangopos/presentation/billing/view/my_subscription_view.dart';
+import 'package:mangopos/presentation/billing/view/plan_selection_view.dart';
+import 'package:mangopos/presentation/billing/view/payment_method_view.dart';
+import 'package:mangopos/presentation/billing/view/charge_history_view.dart';
+import 'package:mangopos/presentation/billing/view/onboarding_payment_result_view.dart';
 
 // ====== Gestión de impresión (imports) ======
 
@@ -185,6 +191,7 @@ class AppRouter {
           path == AppRoutes.registerStep2 ||
           path == AppRoutes.registerSetup ||
           path == AppRoutes.crossAuth ||
+          path == AppRoutes.onboardingPaymentResult ||
           path == '/auth';
 
       AppLogger.d(
@@ -314,6 +321,14 @@ class AppRouter {
       GoRoute(
         path: AppRoutes.registerSetup,
         builder: (context, state) => const RegisterStep3View(),
+      ),
+      // Landing público al regresar del Payment Page de Azul (browser externo).
+      GoRoute(
+        path: AppRoutes.onboardingPaymentResult,
+        builder: (context, state) => OnboardingPaymentResultView(
+          result: state.uri.queryParameters['result'],
+          reason: state.uri.queryParameters['reason'],
+        ),
       ),
 
       // ---------- Shell principal (app autenticada) ----------
@@ -533,6 +548,23 @@ class AppRouter {
             path: AppRoutes.settingsPlan,
             builder: (context, state) => const PlanManagementView(),
           ),
+          // Billing operativo (PRD Azul Subscriptions §5.2).
+          GoRoute(
+            path: AppRoutes.settingsBilling,
+            builder: (context, state) => const MySubscriptionView(),
+          ),
+          GoRoute(
+            path: AppRoutes.settingsBillingPlans,
+            builder: (context, state) => const PlanSelectionView(),
+          ),
+          GoRoute(
+            path: AppRoutes.settingsBillingPaymentMethod,
+            builder: (context, state) => const PaymentMethodView(),
+          ),
+          GoRoute(
+            path: AppRoutes.settingsBillingHistory,
+            builder: (context, state) => const ChargeHistoryView(),
+          ),
           GoRoute(
             path: AppRoutes.settingsUsers,
             builder: (context, state) =>
@@ -595,6 +627,11 @@ class AppRouter {
           GoRoute(
             path: AppRoutes.settingsCashCloseMode,
             builder: (context, state) => const CashCloseModeView(),
+          ),
+          GoRoute(
+            path: AppRoutes.settingsCashReasons,
+            builder: (context, state) =>
+                const CashReasonsView(businessId: 'auto'),
           ),
           GoRoute(
             path: AppRoutes.settingsBusinessFeatures,

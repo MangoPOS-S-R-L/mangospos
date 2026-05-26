@@ -155,8 +155,10 @@ class _TableCardState extends State<TableCard> {
           ],
         ),
 
-        // Lado derecho: Total (solo si está ocupada)
-        if (widget.table.isOccupied && widget.table.total != null)
+        // Lado derecho: Total. Se muestra siempre que la mesa tenga
+        // sesión activa (ocupado o pagando) — el cajero debe ver lo
+        // que el cliente debe aunque ya se imprimió la precuenta.
+        if (widget.table.hasActiveSession && widget.table.total != null)
           Flexible(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.end,
@@ -214,7 +216,7 @@ class _TableCardState extends State<TableCard> {
       );
     }
 
-    if (widget.table.isOccupied) {
+    if (widget.table.hasActiveSession) {
       return Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,

@@ -23,7 +23,7 @@ extension TableStatusX on TableStatus {
       case TableStatus.ocupado:
         return 'Ocupado';
       case TableStatus.pagando:
-        return 'Pagando';
+        return 'En Pre-Cuenta';
     }
   }
 
@@ -78,6 +78,13 @@ class VentasTable {
 
   /// Verifica si la mesa está en proceso de pago
   bool get isPaying => status == TableStatus.pagando;
+
+  /// True si la mesa tiene una sesión abierta (ocupada o pagando). El
+  /// estado "pagando" sigue siendo una sesión activa — el cliente puede
+  /// seguir ordenando aunque ya se imprimió la precuenta — y el card
+  /// debe seguir mostrando total/tiempo/mesero igual que en "ocupado".
+  bool get hasActiveSession =>
+      status == TableStatus.ocupado || status == TableStatus.pagando;
 
   /// Verifica si esta mesa pertenece al usuario actual
   bool isOwnTable(String currentUserId) => waiterId == currentUserId;

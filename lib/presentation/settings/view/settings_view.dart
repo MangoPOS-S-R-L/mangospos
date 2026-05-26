@@ -217,6 +217,13 @@ class SettingsView extends ConsumerWidget {
             route: AppRoutes.cashierIncomeExpense,
           ),
           _SettingsOption(
+            title: 'Razones de Ingresos y Egresos',
+            subtitle: 'Catálogo de razones para movimientos de caja',
+            icon: Icons.fact_check_rounded,
+            color: Color(0xFFE6F4FF),
+            route: AppRoutes.settingsCashReasons,
+          ),
+          _SettingsOption(
             title: 'Tipos de Pago',
             subtitle: 'Cuentas bancarias para transferencias',
             icon: Icons.account_balance_rounded,
@@ -781,6 +788,19 @@ class SettingsView extends ConsumerWidget {
             subtitle: 'Dashboard de indicadores',
             icon: Icons.analytics_rounded,
             color: Color(0xFFFFEDED),
+          ),
+        ],
+      ),
+      _SettingsSection(
+        title: 'Cuenta y Facturación',
+        items: const [
+          _SettingsOption(
+            title: 'Suscripción y pagos',
+            subtitle:
+                'Plan actual, próximo cobro, tarjeta registrada e historial',
+            icon: Icons.credit_card_rounded,
+            color: Color(0xFFFFE6D5),
+            route: AppRoutes.settingsBilling,
           ),
         ],
       ),

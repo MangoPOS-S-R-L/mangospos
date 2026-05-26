@@ -76,7 +76,15 @@ class AppRoutes {
   static const settingsBranches = '$settings/branches';
   static const settingsCashRegisters = '$settings/cash-registers';
   static const settingsCashCloseMode = '$settings/cash-close-mode';
+  static const settingsCashReasons = '$settings/cash-reasons';
   static const settingsBusinessFeatures = '$settings/business-features';
+
+  // ---- Billing (PRD Azul Subscriptions §5.2) ----
+  static const settingsBilling = '$settings/billing';
+  static const settingsBillingPlans = '$settingsBilling/plans';
+  static const settingsBillingPaymentMethod = '$settingsBilling/payment-method';
+  static const settingsBillingHistory = '$settingsBilling/history';
+  static const onboardingPaymentResult = '/onboarding/payment-result';
   static const settingsComandasConfig = '$settings/comandas-config';
   static const settingsCurrencies = '$settings/currencies';
   static const settingsRegional = '$settings/regional';
