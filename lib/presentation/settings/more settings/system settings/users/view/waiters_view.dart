@@ -520,7 +520,15 @@ class _SettingsWaitersViewState extends State<SettingsWaitersView> {
   }
 
   String _formatMoney(double value) {
-    final currency = NumberFormat.currency(locale: 'es_DO', symbol: 'RD\$ ', decimalDigits: 0);
+    // RD usa formato US (,000.00) — no español europeo (.000,00).
+    // El locale 'es_DO' en Dart intl cae al patrón español de España
+    // (separador miles `.`). Forzamos `en_US` para que los miles sean
+    // `,` que es lo correcto para Dominicana.
+    final currency = NumberFormat.currency(
+      locale: 'en_US',
+      symbol: 'RD\$ ',
+      decimalDigits: 0,
+    );
     return currency.format(value);
   }
 }
@@ -682,7 +690,12 @@ class _WaiterRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final employee = metric.employee;
-    final currency = NumberFormat.currency(locale: 'es_DO', symbol: 'RD\$ ', decimalDigits: 0);
+    // RD usa formato US (,000) — ver nota en _WaitersViewState._formatMoney
+    final currency = NumberFormat.currency(
+      locale: 'en_US',
+      symbol: 'RD\$ ',
+      decimalDigits: 0,
+    );
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),

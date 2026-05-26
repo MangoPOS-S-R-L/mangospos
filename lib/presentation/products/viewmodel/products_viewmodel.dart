@@ -100,18 +100,19 @@ class ProductsViewModel extends ChangeNotifier {
         );
       }
 
-      final results = await Future.wait([
-        _repository.getProducts(resolvedBusinessId),
-        _repository.getCategories(resolvedBusinessId),
-        _repository.getMenus(resolvedBusinessId),
-      ]);
+      // Single round-trip via RPC `get_products_catalog`. Antes eran 4
+      // round-trips (3 paralelos: products/categories/menus + uno nested
+      // para v_menu_items_stock dentro de getProducts). El RPC retorna
+      // todo embebido con CTEs en ~30ms server-side.
+      final catalog =
+          await _repository.getProductsCatalog(resolvedBusinessId);
       if (generation != _loadGeneration) return;
 
       final businessChanged = _businessId != resolvedBusinessId;
       _businessId = resolvedBusinessId;
-      _products = results[0];
-      _categories = results[1];
-      _menus = results[2];
+      _products = catalog.products;
+      _categories = catalog.categories;
+      _menus = catalog.menus;
       if (businessChanged) {
         _searchQuery = '';
         _selectedCategoryFilterId = null;

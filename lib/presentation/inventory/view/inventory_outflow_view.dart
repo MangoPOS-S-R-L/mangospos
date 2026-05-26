@@ -38,7 +38,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
     final vm = ref.watch(inventoryViewModelProvider);
     final state = vm.state;
     final currency = NumberFormat.currency(
-      locale: 'es_DO',
+      locale: 'en_US',
       symbol: 'RD\$',
       decimalDigits: 2,
     );

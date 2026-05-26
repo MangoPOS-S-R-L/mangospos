@@ -121,6 +121,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
         order: checkOrder,
         items: items,
         tableName: check.label,
+        customerName: check.customerName,
         businessName: profileRaw?['name'] ?? profileRaw?['legal_name'],
         legalName: profileRaw?['legal_name'],
         businessAddress: profileRaw?['address'],

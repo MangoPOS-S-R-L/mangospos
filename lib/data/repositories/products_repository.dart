@@ -12,6 +12,50 @@ class ProductsRepository {
     return resolveBusinessIdOrNull(_client, 'auto');
   }
 
+  /// Catálogo completo (products + categories + menus) en un solo
+  /// round-trip via RPC. Reemplaza las 3 queries que hacía la pantalla
+  /// de productos al inicializar (~4 round-trips contando el stock).
+  ///
+  /// Retorna `(products, categories, menus)` en el mismo shape que las
+  /// 3 funciones individuales — products tiene `categories`, `menu_item_links`,
+  /// `menu_item_taxes` y `stock` ya embebidos por el RPC.
+  Future<
+    ({
+      List<Map<String, dynamic>> products,
+      List<Map<String, dynamic>> categories,
+      List<Map<String, dynamic>> menus,
+    })
+  > getProductsCatalog(String businessId) async {
+    final response = await _client.rpc(
+      'get_products_catalog',
+      params: {'_business_id': businessId},
+    );
+
+    if (response == null) {
+      return (
+        products: const <Map<String, dynamic>>[],
+        categories: const <Map<String, dynamic>>[],
+        menus: const <Map<String, dynamic>>[],
+      );
+    }
+
+    final payload = Map<String, dynamic>.from(response as Map);
+
+    List<Map<String, dynamic>> toList(dynamic raw) {
+      if (raw is! List) return const [];
+      return raw
+          .whereType<Map>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList(growable: false);
+    }
+
+    return (
+      products: toList(payload['products']),
+      categories: toList(payload['categories']),
+      menus: toList(payload['menus']),
+    );
+  }
+
   Future<List<Map<String, dynamic>>> getProducts(String businessId) async {
     final response = await _client
         .from(ProductsQueries.tableMenuItems)

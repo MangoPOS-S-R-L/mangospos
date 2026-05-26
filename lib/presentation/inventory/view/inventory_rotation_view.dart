@@ -328,7 +328,7 @@ class _Header extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final currency = NumberFormat.currency(
-      locale: 'es_DO',
+      locale: 'en_US',
       symbol: 'RD\$',
       decimalDigits: 2,
     );
@@ -653,7 +653,7 @@ class _RotationCard extends StatelessWidget {
     final info = _classInfo(row.rotationClass);
     final qtyFmt = NumberFormat.decimalPattern('es_DO');
     final currency = NumberFormat.currency(
-      locale: 'es_DO',
+      locale: 'en_US',
       symbol: 'RD\$',
       decimalDigits: 2,
     );

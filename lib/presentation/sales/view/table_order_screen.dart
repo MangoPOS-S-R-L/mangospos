@@ -197,26 +197,61 @@ Future<_BusinessReceiptProfile> _loadBusinessReceiptProfile(
   );
 }
 
+/// Resuelve el nombre del mesero para mostrar en precuenta/factura.
+///
+/// Orden de prioridad:
+/// 1. **`opened_by_employee_id`** (multimesero) → empleado que metió PIN
+///    al abrir la mesa. Este es el "mesero real" cuando varios meseros
+///    comparten un mismo dispositivo (modo multimesero).
+/// 2. **`opened_by` + employees** → empleado vinculado al user_id que
+///    abrió la mesa (modo single-mesero, cada mesero loguea su propia
+///    cuenta).
+/// 3. **`opened_by` + auth.users.full_name** → si no hay registro de
+///    empleado, usar el full_name del auth user.
+/// 4. **`sessionProvider.userName`** → fallback final cuando todo lo
+///    anterior falla.
 Future<String?> _loadWaiterName(WidgetRef ref, String orderId) async {
   final fallback = ref.read(sessionProvider).userName;
+  final client = Supabase.instance.client;
 
   try {
-    final data = await Supabase.instance.client
+    final data = await client
         .from('orders')
-        .select('table_sessions(opened_by,business_id,users(full_name))')
+        .select(
+          'table_sessions(opened_by,opened_by_employee_id,'
+          'business_id,users(full_name))',
+        )
         .eq('id', orderId)
         .maybeSingle();
 
     final tableSession = data?['table_sessions'] as Map<String, dynamic>?;
+    final openedByEmployeeId =
+        tableSession?['opened_by_employee_id']?.toString().trim();
     final openedBy = tableSession?['opened_by']?.toString();
     final businessId = tableSession?['business_id']?.toString();
     final user = tableSession?['users'] as Map<String, dynamic>?;
     final fullName = user?['full_name']?.toString().trim();
+
+    // Multimesero: el empleado que metió PIN es el "mesero real",
+    // independiente de quién esté logueado en el dispositivo.
+    if (openedByEmployeeId != null && openedByEmployeeId.isNotEmpty) {
+      final emp = await client
+          .from('employees')
+          .select('first_name')
+          .eq('id', openedByEmployeeId)
+          .maybeSingle();
+      final firstName = emp?['first_name']?.toString();
+      if (firstName != null && firstName.trim().isNotEmpty) {
+        return preferredDisplayName(firstName: firstName);
+      }
+    }
+
+    // Single-mesero: el empleado vinculado al user_id de la sesión.
     if (openedBy != null &&
         openedBy.isNotEmpty &&
         businessId != null &&
         businessId.isNotEmpty) {
-      final employee = await Supabase.instance.client
+      final employee = await client
           .from('employees')
           .select('first_name')
           .eq('user_id', openedBy)
@@ -227,6 +262,7 @@ Future<String?> _loadWaiterName(WidgetRef ref, String orderId) async {
         return preferredDisplayName(firstName: firstName);
       }
     }
+
     if (fullName != null && fullName.isNotEmpty) {
       return preferredDisplayName(fullName: fullName);
     }
@@ -336,6 +372,20 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     return item.status != 'paid' && item.status != 'void';
   }
 
+  /// Construye la URL de vuelta a `/sales/by-zone` preservando la zona
+  /// donde el usuario estaba. Si no hay zoneId disponible (origen
+  /// manual/quick), regresa al path plano y la vista arranca en index 0.
+  String _salesByZoneBackUrl() {
+    final zoneId = widget.zoneId?.trim();
+    if (zoneId == null || zoneId.isEmpty) {
+      return AppRoutes.salesByZone;
+    }
+    return Uri(
+      path: AppRoutes.salesByZone,
+      queryParameters: {'zone': zoneId},
+    ).toString();
+  }
+
   Future<void> _handleBack(BuildContext context) async {
     // Capture state needed for background cleanup before navigating.
     final orderState = ref.read(currentOrderProvider);
@@ -357,7 +407,11 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
           ).toString(),
         );
       } else {
-        context.go(AppRoutes.salesByZone);
+        // Preservar la zona donde el mesero estaba antes de entrar a la
+        // mesa. Sin este `?zone=<id>` el TabController arranca en index
+        // 0 y el mesero queda en "Salón Principal" — un click extra cada
+        // vez que sale de una mesa.
+        context.go(_salesByZoneBackUrl());
       }
     }
 
@@ -393,6 +447,13 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   /// y devuelve `true` si la transferencia se completó. Cuando esto
   /// pasa, regresamos al grid de zonas — la cuenta ya no está en esta
   /// mesa.
+  ///
+  /// Enforcement de `ventas.mesas.mover_unir`: si el usuario tiene el
+  /// permiso en su rol, procede directo. Si no, pide PIN de supervisor
+  /// (mismo patrón que anular orden). Antes el dialog se abría sin
+  /// chequear permiso de rol — solo dependía del PIN final, lo que
+  /// dejaba la puerta abierta para que cualquier mesero/cajero iniciara
+  /// el flujo.
   Future<void> _handleTransferSession(BuildContext context) async {
     final orderState = ref.read(currentOrderProvider);
     final order = orderState.order;
@@ -414,6 +475,24 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         ),
       );
       return;
+    }
+
+    // Permission gate: rol con permiso → directo. Sin permiso → PIN
+    // supervisor para bypass.
+    final sessionCtrl = ref.read(sessionProvider.notifier);
+    final hasDirectPermission =
+        sessionCtrl.hasPermission('ventas.mesas.mover_unir');
+    if (!hasDirectPermission) {
+      final authorized = await showPinVerificationModal(
+        context,
+        ref,
+        level: PinAccessLevel.supervisor,
+        title: 'Autorización para transferir',
+        subtitle:
+            'Se requiere PIN de Supervisor o Administrador para transferir cuentas entre mesas.',
+      );
+      if (!authorized) return;
+      if (!context.mounted) return;
     }
 
     // Resolver businessId vía el resolver canónico (mismo patrón que
@@ -1866,6 +1945,7 @@ class _CartView extends ConsumerWidget {
               'address': businessProfile.address,
               'tableName': tableName,
               'waiterName': waiterName,
+              'customerName': finalCustomerName,
               'items': items
                   .map(
                     (i) => {
@@ -2772,7 +2852,14 @@ class _CartView extends ConsumerWidget {
               : ListView(
                   padding: EdgeInsets.all(isStacked ? 12 : 24),
                   children: [
-                    if (groupedSentItems.isNotEmpty) ...[
+                    // UX: cuando hay items en draft (POR CONFIRMAR),
+                    // ocultamos los ya enviados para reducir ruido visual
+                    // — el mesero solo ve lo que está agregando en este
+                    // momento. Al confirmar (enviar a cocina) los drafts
+                    // pasan a status 'sent' y todo se muestra junto otra
+                    // vez en la siguiente render.
+                    if (groupedSentItems.isNotEmpty &&
+                        draftItems.isEmpty) ...[
                       const _SectionLabel(
                         label: 'ENVIADOS A COCINA',
                         color: Color(0xFF22C55E),
@@ -3249,6 +3336,7 @@ class _CartView extends ConsumerWidget {
                                     'tableName':
                                         '$tableCode ${selectedCheckId != null ? "(Cuentas Separadas)" : ""}',
                                     'waiterName': waiterName,
+                                    'customerName': orderState.customerName,
                                     'items': displayedItems
                                         .map(
                                           (i) => {
@@ -3969,6 +4057,7 @@ class _CartView extends ConsumerWidget {
                 items: orderItems,
                 tableName: tableName ?? 'Mesa',
                 waiterName: waiterName,
+                customerName: data['customerName'] as String?,
                 businessName:
                     (data['businessName'] as String?) ??
                     (data['restaurantName'] as String?),
@@ -7774,7 +7863,7 @@ class _ModifiersSelectionDialogState extends State<_ModifiersSelectionDialog> {
   @override
   Widget build(BuildContext context) {
     final currency = NumberFormat.currency(
-      locale: 'es_DO',
+      locale: 'en_US',
       symbol: 'RD\$',
       decimalDigits: 2,
     );

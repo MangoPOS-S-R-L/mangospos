@@ -306,6 +306,134 @@ class SalesRepository {
     }
   }
 
+  /// Abre/reanuda una mesa y retorna el bundle COMPLETO en un solo
+  /// round-trip — combina `fn_open_table` + `fn_get_order_bundle` +
+  /// modifiers + tax_lines, todo embebido en items. Reduce la apertura
+  /// de mesa de 3-4 queries (~700ms) a 1 RPC (~21ms server, ~150ms
+  /// total con network).
+  ///
+  /// Retorna `(orderId, bundle)` donde `bundle` tiene la misma forma
+  /// que el de `getOrderBundle()` — order/items/checks/customer — pero
+  /// con `modifiers` y `tax_lines` ya pegados en cada item.
+  Future<
+    ({
+      String orderId,
+      ({
+        Order? order,
+        List<OrderItem> items,
+        List<OrderCheck> checks,
+        String? customerId,
+        String? customerName,
+        String? note,
+      }) bundle,
+    })
+  > openTableAndLoad({
+    required String tableId,
+    String? userId,
+    int peopleCount = 1,
+    String? openedByEmployeeId,
+  }) async {
+    final response = await _client.rpc(
+      'fn_open_table_and_load',
+      params: {
+        'p_table_id': tableId,
+        'p_user_id': userId,
+        'p_people_count': peopleCount,
+        'p_opened_by_employee_id': openedByEmployeeId,
+      },
+    );
+
+    if (response == null) {
+      throw Exception('No se pudo abrir la mesa');
+    }
+
+    final payload = Map<String, dynamic>.from(response as Map);
+    final orderId = payload['order_id']?.toString();
+    if (orderId == null || orderId.isEmpty) {
+      throw Exception('fn_open_table_and_load no retornó order_id');
+    }
+
+    final bundleRaw = payload['bundle'];
+    if (bundleRaw is! Map) {
+      return (
+        orderId: orderId,
+        bundle: (
+          order: null,
+          items: const <OrderItem>[],
+          checks: const <OrderCheck>[],
+          customerId: null,
+          customerName: null,
+          note: null,
+        ),
+      );
+    }
+
+    final bundleMap = Map<String, dynamic>.from(bundleRaw);
+
+    final orderMapRaw = bundleMap['order'];
+    final order = orderMapRaw is Map
+        ? Order.fromMap(Map<String, dynamic>.from(orderMapRaw))
+        : null;
+
+    // Items con modifiers + tax_lines embebidos por el RPC
+    final itemsRaw = (bundleMap['items'] as List?) ?? const [];
+    final items = <OrderItem>[];
+    for (final row in itemsRaw) {
+      if (row is! Map) continue;
+      final itemMap = Map<String, dynamic>.from(row);
+
+      final baseItem = OrderItem.fromMap(itemMap);
+
+      // Parsear modifiers embebidos en el item
+      final modsRaw = itemMap['modifiers'];
+      final modifiers = <OrderItemModifier>[];
+      if (modsRaw is List) {
+        for (final m in modsRaw) {
+          if (m is Map) {
+            modifiers.add(
+              OrderItemModifier.fromMap(Map<String, dynamic>.from(m)),
+            );
+          }
+        }
+      }
+
+      // Parsear tax_lines embebidos
+      final taxRaw = itemMap['tax_lines'];
+      final taxLines = <OrderItemTaxLine>[];
+      if (taxRaw is List) {
+        for (final t in taxRaw) {
+          if (t is Map) {
+            taxLines.add(
+              OrderItemTaxLine.fromMap(Map<String, dynamic>.from(t)),
+            );
+          }
+        }
+      }
+
+      items.add(
+        baseItem.copyWith(modifiers: modifiers, taxLines: taxLines),
+      );
+    }
+
+    final checksRaw = (bundleMap['checks'] as List?) ?? const [];
+    final checks = checksRaw
+        .whereType<Map>()
+        .map((m) => OrderCheck.fromMap(Map<String, dynamic>.from(m)))
+        .toList(growable: false);
+
+    return (
+      orderId: orderId,
+      bundle: (
+        order: order,
+        items: items,
+        checks: checks,
+        customerId: bundleMap['customer_id']?.toString(),
+        customerName: bundleMap['customer_name']?.toString(),
+        note: bundleMap['note']?.toString(),
+      ),
+    );
+  }
+
   /// Abrir venta manual o rápida
   Future<Map<String, dynamic>> openManualOrQuick({
     required String origin, // 'manual' o 'quick_sale'

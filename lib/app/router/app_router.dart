@@ -381,8 +381,14 @@ class AppRouter {
               ),
               GoRoute(
                 path: AppRoutes.salesByZone,
-                builder: (context, state) =>
-                    const SalesByZoneView(businessId: 'auto'),
+                builder: (context, state) => SalesByZoneView(
+                  businessId: 'auto',
+                  // Si viene de regreso desde una mesa, queremos
+                  // mantenernos en la misma zona en vez de saltar a la
+                  // primera. La pantalla de mesa pasa ?zone=<id> al
+                  // hacer back.
+                  initialZoneId: state.uri.queryParameters['zone'],
+                ),
               ),
               GoRoute(
                 path: AppRoutes.salesManual,

@@ -146,7 +146,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
   @override
   Widget build(BuildContext context) {
     final currency = NumberFormat.currency(
-      locale: 'es_DO',
+      locale: 'en_US',
       symbol: 'RD\$',
       decimalDigits: 2,
     );

@@ -172,7 +172,7 @@ class _PurchaseReceiveDialogState extends ConsumerState<PurchaseReceiveDialog> {
   @override
   Widget build(BuildContext context) {
     final currency = NumberFormat.currency(
-      locale: 'es_DO',
+      locale: 'en_US',
       symbol: 'RD\$',
       decimalDigits: 2,
     );

@@ -141,24 +141,34 @@ class _TransferSessionDialogState
     if (!_canSubmit) return;
     final messenger = ScaffoldMessenger.of(context);
 
-    // Pedir PIN supervisor antes de tocar nada.
-    final pinOk = await showPinVerificationModal(
-      context,
-      ref,
-      level: PinAccessLevel.supervisor,
-      title: 'Autorización de supervisor',
-      subtitle:
-          'La transferencia entre mesas requiere PIN de supervisor.',
-    );
-    if (!pinOk) {
-      if (!mounted) return;
-      messenger.showSnackBar(
-        const SnackBar(
-          content: Text('Transferencia cancelada: PIN no autorizado.'),
-          behavior: SnackBarBehavior.floating,
-        ),
+    // PIN solo si el rol del usuario NO tiene el permiso directo.
+    // Admin/owner/supervisor con `ventas.mesas.mover_unir` activado pasan
+    // directo. El caller (_handleTransferSession) ya valida lo mismo
+    // ANTES de abrir el dialog, así que cuando llegamos aquí, los usuarios
+    // sin permiso ya pasaron el PIN una vez — pedirlo otra vez es ruido.
+    final sessionCtrl = ref.read(sessionProvider.notifier);
+    final hasDirectPermission =
+        sessionCtrl.hasPermission('ventas.mesas.mover_unir');
+
+    if (!hasDirectPermission) {
+      final pinOk = await showPinVerificationModal(
+        context,
+        ref,
+        level: PinAccessLevel.supervisor,
+        title: 'Autorización de supervisor',
+        subtitle:
+            'La transferencia entre mesas requiere PIN de supervisor.',
       );
-      return;
+      if (!pinOk) {
+        if (!mounted) return;
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('Transferencia cancelada: PIN no autorizado.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
     }
 
     if (!mounted) return;

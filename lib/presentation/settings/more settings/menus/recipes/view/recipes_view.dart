@@ -29,7 +29,7 @@ class _RecipesViewState extends ConsumerState<RecipesView> {
     final vm = ref.watch(recipesViewModelProvider);
     final state = vm.state;
     final currency = NumberFormat.currency(
-      locale: 'es_DO',
+      locale: 'en_US',
       symbol: 'RD\$',
       decimalDigits: 2,
     );

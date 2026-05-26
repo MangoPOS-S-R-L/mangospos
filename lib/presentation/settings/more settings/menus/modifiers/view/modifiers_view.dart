@@ -32,7 +32,7 @@ class _ModifiersViewState extends ConsumerState<ModifiersView> {
     final groupModifiers = state.selectedGroupModifiers;
     final assignedProductIds = state.selectedGroupAssignedProductIds.toSet();
     final currency = NumberFormat.currency(
-      locale: 'es_DO',
+      locale: 'en_US',
       symbol: 'RD\$',
       decimalDigits: 2,
     );

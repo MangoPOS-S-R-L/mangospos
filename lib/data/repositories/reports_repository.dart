@@ -87,6 +87,19 @@ class ReportsRepository {
     return paymentRows;
   }
 
+  /// Resumen de ventas — usa RPC `get_sales_summary_v2` que agrega todo
+  /// server-side en un solo round-trip. Antes hacía 8 queries
+  /// secuenciales con LRM/voluntary-tip calculados en Dart; ahora
+  /// Postgres lo hace en una sola pasada con CTEs (~95ms vs 4s).
+  ///
+  /// Campos faltantes vs versión legacy:
+  /// - modifier_sales_total, sales_by_modifier → necesitan join a
+  ///   order_item_modifiers, no incluidos en v2
+  /// - sales_by_receipt → necesita clasificación por NCF type
+  /// - sales_by_adjustment → necesita lógica de cortesía/promo
+  ///
+  /// Default a [] vacío para esos; el UI los renderiza como secciones
+  /// vacías. Si se necesitan, agregar a `get_sales_summary_v2` en SQL.
   Future<Map<String, dynamic>> getSalesSummary({
     required String businessId,
     required DateTime from,
@@ -94,597 +107,58 @@ class ReportsRepository {
   }) async {
     final fromIso = AppTime.astToUtcIso(from);
     final toIso = AppTime.astToUtcIso(to);
-    final paymentRows = await _loadScopedPaymentsForRange(
-      businessId: businessId,
-      from: from,
-      to: to,
-      select:
-          'id, amount, change_amount, order_id, check_id, fiscal_document_id, status, created_at, payment_method_id, payment_methods(name, code)',
-    );
-    final completedPayments = paymentRows
-        .where((row) => row['status'] == 'completed' || row['status'] == null)
-        .toList(growable: false);
-    final voidedPayments = paymentRows
-        .where((row) => row['status'] == 'void' || row['status'] == 'cancelled')
-        .toList(growable: false);
 
-    double totalSales = 0;
-    for (final payment in completedPayments) {
-      totalSales += netPaymentAmount(
-        payment['amount'],
-        payment['change_amount'],
-      );
-    }
-
-    double voidedSales = 0;
-    for (final payment in voidedPayments) {
-      voidedSales += netPaymentAmount(
-        payment['amount'],
-        payment['change_amount'],
-      );
-    }
-
-    final orderIds = completedPayments
-        .map((row) => row['order_id']?.toString())
-        .whereType<String>()
-        .toSet()
-        .toList(growable: false);
-
-    final items = await _selectInBatches(
-      table: ReportsQueries.tableOrderItems,
-      select:
-          'id, order_id, check_id, product_name, quantity, qty, subtotal, discounts, tax, total, status, product_id, notes',
-      column: 'order_id',
-      values: orderIds,
+    final response = await _client.rpc(
+      'get_sales_summary_v2',
+      params: {
+        '_business_id': businessId,
+        '_from': fromIso,
+        '_to': toIso,
+      },
     );
 
-    // Cargar orders.total para conocer la "verdad fiscal" de cada orden
-    // (lo que efectivamente se cobró al cliente, redondeado a 2 dec).
-    // Usado abajo para distribuir el ruido de redondeo entre items y
-    // distinguir esos centavos de una propina voluntaria real.
-    final orderRows = await _selectInBatches(
-      table: 'orders',
-      select: 'id, total',
-      column: 'id',
-      values: orderIds,
-    );
-    final orderTotalById = <String, double>{
-      for (final row in orderRows)
-        if ((row['id']?.toString() ?? '').isNotEmpty)
-          row['id'].toString(): _toDouble(row['total']),
-    };
-
-    final itemById = <String, Map<String, dynamic>>{};
-    for (final item in items) {
-      final itemId = item['id']?.toString();
-      if (itemId != null && itemId.isNotEmpty) {
-        itemById[itemId] = item;
-      }
+    if (response == null) {
+      return _emptySalesSummary(fromIso, toIso);
     }
 
-    // Largest Remainder Method (LRM): los items se almacenan a 4 decimales
-    // y orders.total a 2. Sumar items raw produce residuos de centavos
-    // que aparecen como "Otros cargos" en reportes. Aquí calculamos por
-    // orden el delta de redondeo y lo asignamos al item de mayor monto
-    // de esa orden — así la suma de items por categoría cuadra al
-    // centavo con orders.total.
-    //
-    // Solo distribuimos diferencias pequeñas (< 1 RD$). Diferencias más
-    // grandes son potencialmente data corrupta o casos especiales y se
-    // dejan intactas para que el bug salga a la vista en lugar de
-    // esconderse.
-    final itemRoundingAdjustment = <String, double>{};
-    final itemsByOrder = <String, List<Map<String, dynamic>>>{};
-    for (final item in items) {
-      if (item['status']?.toString() == 'void') continue;
-      final orderId = item['order_id']?.toString() ?? '';
-      if (orderId.isEmpty) continue;
-      itemsByOrder.putIfAbsent(orderId, () => []).add(item);
-    }
-    itemsByOrder.forEach((orderId, orderItems) {
-      final orderTotal = orderTotalById[orderId];
-      if (orderTotal == null || orderTotal <= 0) return;
-      double itemsSum = 0;
-      String? largestItemId;
-      double largestItemAmount = -1;
-      for (final item in orderItems) {
-        final amount =
-            _toDouble(item['subtotal']) + _toDouble(item['tax']);
-        itemsSum += amount;
-        if (amount > largestItemAmount) {
-          largestItemAmount = amount;
-          largestItemId = item['id']?.toString();
-        }
-      }
-      // Trabajamos en centavos para evitar cascadas de error.
-      final delta = ((orderTotal - itemsSum) * 100).round() / 100;
-      if (delta == 0 || largestItemId == null) return;
-      // Solo redistribuir ruido de redondeo, no propina ni anomalías.
-      if (delta.abs() >= 1.0) return;
-      itemRoundingAdjustment[largestItemId] = delta;
-    });
+    final result = Map<String, dynamic>.from(response as Map);
 
-    final itemIds = itemById.keys.toList(growable: false);
-    final modifierRows = await _selectInBatches(
-      table: 'order_item_modifiers',
-      select: 'item_id, name, qty, price',
-      column: 'item_id',
-      values: itemIds,
-    );
+    // Defaults para campos no cubiertos por el RPC v2
+    result['modifier_sales_total'] ??= 0;
+    result['sales_by_modifier'] ??= const <Map<String, dynamic>>[];
+    result['sales_by_receipt'] ??= const <Map<String, dynamic>>[];
+    result['sales_by_adjustment'] ??= const <Map<String, dynamic>>[];
 
-    final checkIds = completedPayments
-        .map((row) => row['check_id']?.toString())
-        .whereType<String>()
-        .where((id) => id.isNotEmpty)
-        .toSet()
-        .toList(growable: false);
-    final checkRows = await _selectInBatches(
-      table: 'order_checks',
-      select: 'id, order_id, label, position',
-      column: 'id',
-      values: checkIds,
-    );
-    final checkById = <String, Map<String, dynamic>>{
-      for (final row in checkRows)
-        if ((row['id']?.toString() ?? '').isNotEmpty) row['id'].toString(): row,
-    };
-    final checksCountByOrder = <String, int>{};
-    for (final row in checkRows) {
-      final orderId = row['order_id']?.toString() ?? '';
-      if (orderId.isEmpty) continue;
-      checksCountByOrder[orderId] = (checksCountByOrder[orderId] ?? 0) + 1;
-    }
-
-    final fiscalDocumentIds = completedPayments
-        .map((row) => row['fiscal_document_id']?.toString())
-        .whereType<String>()
-        .where((id) => id.isNotEmpty)
-        .toSet()
-        .toList(growable: false);
-    final fiscalRows = await _selectInBatches(
-      table: 'fiscal_documents',
-      select: 'id, ncf_type, ncf_number, status',
-      column: 'id',
-      values: fiscalDocumentIds,
-    );
-    final fiscalById = <String, Map<String, dynamic>>{
-      for (final row in fiscalRows)
-        if ((row['id']?.toString() ?? '').isNotEmpty) row['id'].toString(): row,
-    };
-
-    String receiptLabelForPayment(Map<String, dynamic> payment) {
-      final fiscalId = payment['fiscal_document_id']?.toString() ?? '';
-      if (fiscalId.isNotEmpty) {
-        final doc = fiscalById[fiscalId];
-        final ncfType = doc?['ncf_type']?.toString() ?? 'Comprobante fiscal';
-        return _ncfTypeLabel(ncfType);
-      }
-
-      final checkId = payment['check_id']?.toString() ?? '';
-      if (checkId.isNotEmpty) {
-        final check = checkById[checkId];
-        final orderId = payment['order_id']?.toString() ?? '';
-        final hasSplit = (checksCountByOrder[orderId] ?? 0) > 1;
-        final baseLabel = hasSplit ? 'Recibo dividido' : 'Recibo de cuenta';
-        final checkLabel = check?['label']?.toString().trim() ?? '';
-        return checkLabel.isNotEmpty ? '$baseLabel · $checkLabel' : baseLabel;
-      }
-
-      return 'Recibo estándar';
-    }
-
-    String adjustmentLabelForItem(Map<String, dynamic> item) {
-      final notes = item['notes']?.toString() ?? '';
-      final lineGross = _toDouble(item['subtotal']) + _toDouble(item['tax']);
-      final discount = _toDouble(item['discounts']);
-      final isCourtesy =
-          notes.contains('[CORTESIA:') ||
-          (lineGross > 0 && discount >= lineGross - 0.01);
-      if (isCourtesy) return 'Cortesías';
-      if (notes.contains('[PROMO_AUTO:')) return 'Promociones automáticas';
-      return 'Descuentos manuales';
-    }
-
-    // Collect unique product_ids to look up their categories
-    final productIds = items
-        .map((i) => i['product_id']?.toString())
-        .whereType<String>()
-        .where((id) => id.isNotEmpty)
-        .toSet()
-        .toList(growable: false);
-    final categoryByProductId = <String, String>{};
-    final productCostById = <String, double>{};
-    if (productIds.isNotEmpty) {
-      final menuItems = await _selectInBatches(
-        table: 'menu_items',
-        select: 'id, category_id, cost, categories(name)',
-        column: 'id',
-        values: productIds,
-      );
-      for (final mi in menuItems) {
-        final pid = mi['id']?.toString() ?? '';
-        final cat = mi['categories'];
-        final catMap = cat is Map<String, dynamic>
-            ? cat
-            : (cat is Map
-                  ? Map<String, dynamic>.from(cat)
-                  : <String, dynamic>{});
-        final catName = catMap['name']?.toString().trim();
-        if (pid.isNotEmpty) {
-          productCostById[pid] = _toDouble(mi['cost']);
-        }
-        if (pid.isNotEmpty && catName != null && catName.isNotEmpty) {
-          categoryByProductId[pid] = catName;
-        }
-      }
-    }
-
-    double totalItems = 0;
-    double modifiersSalesTotal = 0;
-    double discountsTotal = 0;
-    double courtesyTotal = 0;
-    int discountedLinesCount = 0;
-    int courtesyLinesCount = 0;
-
-    final topProducts = <String, Map<String, dynamic>>{};
-    final productSales = <String, Map<String, dynamic>>{};
-    final byCategory = <String, Map<String, dynamic>>{};
-    final byModifier = <String, Map<String, dynamic>>{};
-    final byAdjustment = <String, Map<String, dynamic>>{};
-
-    for (final item in items) {
-      final status = item['status']?.toString();
-      if (status == 'void') continue;
-
-      final qty = _toDouble(item['qty'] ?? item['quantity']);
-      totalItems += qty;
-
-      final label = item['product_name']?.toString().trim().isNotEmpty == true
-          ? item['product_name'].toString().trim()
-          : 'Producto sin nombre';
-      final bucket = topProducts.putIfAbsent(
-        label,
-        () => {'label': label, 'amount': 0.0, 'quantity': 0.0, 'count': 0},
-      );
-      final productId = item['product_id']?.toString() ?? '';
-      final categoryName = categoryByProductId[productId] ?? 'Sin categoría';
-      final discount = _toDouble(item['discounts']);
-      final adjustmentLabel =
-          discount > 0.009 ? adjustmentLabelForItem(item) : null;
-      final courtesyAmount = adjustmentLabel == 'Cortesías' ? discount : 0.0;
-      // Use subtotal+tax instead of item['total']: the April-17 migration dropped
-      // and re-added the total column (resetting historical rows to 0), while
-      // subtotal and tax retained their correct values.
-      // El ajuste LRM (calculado arriba) absorbe los centavos de
-      // redondeo que antes salían como "Otros cargos" — solo se aplica
-      // al item más grande de cada orden y solo si |delta| < 1 RD$.
-      final itemId = item['id']?.toString() ?? '';
-      final lrmAdjustment = itemRoundingAdjustment[itemId] ?? 0.0;
-      final itemGrossSales =
-          _toDouble(item['subtotal']) + _toDouble(item['tax']) + lrmAdjustment;
-      final itemNetSales = itemGrossSales;
-      bucket['amount'] = _toDouble(bucket['amount']) + itemNetSales;
-      bucket['quantity'] = _toDouble(bucket['quantity']) + qty;
-      bucket['count'] = (bucket['count'] as int) + 1;
-      final itemCost = (productCostById[productId] ?? 0) * qty;
-      final productKey = productId.isNotEmpty ? productId : label;
-      final productBucket = productSales.putIfAbsent(
-        productKey,
-        () => {
-          'product_id': productId,
-          'product': label,
-          'category': categoryName,
-          'quantity_sold': 0.0,
-          'gross_sales': 0.0,
-          'discounts': 0.0,
-          'courtesies': 0.0,
-          'net_sales': 0.0,
-          'cost': 0.0,
-          'gross_profit': 0.0,
-          'tickets': 0,
-        },
-      );
-      productBucket['quantity_sold'] =
-          _toDouble(productBucket['quantity_sold']) + qty;
-      productBucket['gross_sales'] =
-          _toDouble(productBucket['gross_sales']) + itemGrossSales;
-      productBucket['discounts'] =
-          _toDouble(productBucket['discounts']) + discount;
-      productBucket['courtesies'] =
-          _toDouble(productBucket['courtesies']) + courtesyAmount;
-      productBucket['net_sales'] =
-          _toDouble(productBucket['net_sales']) + itemNetSales;
-      productBucket['cost'] = _toDouble(productBucket['cost']) + itemCost;
-      productBucket['gross_profit'] =
-          _toDouble(productBucket['gross_profit']) + (itemNetSales - itemCost);
-      productBucket['tickets'] = (productBucket['tickets'] as int) + 1;
-
-      final catBucket = byCategory.putIfAbsent(
-        categoryName,
-        () => {
-          'label': categoryName,
-          'amount': 0.0,
-          'quantity': 0.0,
-          'count': 0,
-        },
-      );
-      catBucket['amount'] =
-          _toDouble(catBucket['amount']) + itemNetSales;
-      catBucket['quantity'] = _toDouble(catBucket['quantity']) + qty;
-      catBucket['count'] = (catBucket['count'] as int) + 1;
-
-      if (discount > 0.009) {
-        discountsTotal += discount;
-        discountedLinesCount += 1;
-        if (adjustmentLabel == 'Cortesías') {
-          courtesyTotal += discount;
-          courtesyLinesCount += 1;
-        }
-        final adjustmentBucket = byAdjustment.putIfAbsent(
-          adjustmentLabel ?? 'Ajuste',
-          () => {
-            'label': adjustmentLabel ?? 'Ajuste',
-            'amount': 0.0,
-            'quantity': 0.0,
-            'count': 0,
-          },
-        );
-        adjustmentBucket['amount'] =
-            _toDouble(adjustmentBucket['amount']) + discount;
-        adjustmentBucket['quantity'] =
-            _toDouble(adjustmentBucket['quantity']) + qty;
-        adjustmentBucket['count'] = (adjustmentBucket['count'] as int) + 1;
-      }
-    }
-
-    for (final modifier in modifierRows) {
-      final itemId = modifier['item_id']?.toString() ?? '';
-      final item = itemById[itemId];
-      if (item == null || item['status']?.toString() == 'void') continue;
-
-      final label = modifier['name']?.toString().trim().isNotEmpty == true
-          ? modifier['name'].toString().trim()
-          : 'Modificador';
-      final qty = _toDouble(modifier['qty']);
-      final amount = _toDouble(modifier['price']) * qty;
-      modifiersSalesTotal += amount;
-
-      final bucket = byModifier.putIfAbsent(
-        label,
-        () => {'label': label, 'amount': 0.0, 'quantity': 0.0, 'count': 0},
-      );
-      bucket['amount'] = _toDouble(bucket['amount']) + amount;
-      bucket['quantity'] = _toDouble(bucket['quantity']) + qty;
-      bucket['count'] = (bucket['count'] as int) + 1;
-
-      // NO sumar el modifier al bucket de byCategory: el trigger
-      // fn_compute_item_totals ya incluye `sum(price*qty)` de modifiers en
-      // `oi.subtotal` (ver migration 20260412_0003). El loop principal de
-      // arriba ya acumuló subtotal+tax en catBucket['amount'], así que
-      // volver a sumar `price*qty` aquí duplicaba el valor de modificadores
-      // en la columna "Ventas" del breakdown por categoría.
-    }
-
-    final byMethod = <String, Map<String, dynamic>>{};
-    final byHour = <int, Map<String, dynamic>>{};
-    final byReceipt = <String, Map<String, dynamic>>{};
-
-    for (final payment in completedPayments) {
-      final method = payment['payment_methods'];
-      final methodMap = method is Map<String, dynamic>
-          ? method
-          : (method is Map
-                ? Map<String, dynamic>.from(method)
-                : <String, dynamic>{});
-      final code =
-          methodMap['code']?.toString() ??
-          payment['payment_method_id']?.toString() ??
-          'other';
-      final label = methodMap['name']?.toString() ?? code;
-      final amount = netPaymentAmount(
-        payment['amount'],
-        payment['change_amount'],
-      );
-
-      final methodBucket = byMethod.putIfAbsent(
-        code,
-        () => {'label': label, 'amount': 0.0, 'count': 0},
-      );
-      methodBucket['amount'] = _toDouble(methodBucket['amount']) + amount;
-      methodBucket['count'] = (methodBucket['count'] as int) + 1;
-
-      final receiptLabel = receiptLabelForPayment(payment);
-      final receiptBucket = byReceipt.putIfAbsent(
-        receiptLabel,
-        () => {'label': receiptLabel, 'amount': 0.0, 'count': 0},
-      );
-      receiptBucket['amount'] = _toDouble(receiptBucket['amount']) + amount;
-      receiptBucket['count'] = (receiptBucket['count'] as int) + 1;
-
-      final createdAt = DateTime.tryParse(
-        payment['created_at']?.toString() ?? '',
-      );
-      if (createdAt != null) {
-        final hour = AppTime.astFromInstant(createdAt).hour;
-        final hourBucket = byHour.putIfAbsent(
-          hour,
-          () => {
-            'label': '${hour.toString().padLeft(2, '0')}:00',
-            'amount': 0.0,
-            'count': 0,
-            'hour': hour,
-          },
-        );
-        hourBucket['amount'] = _toDouble(hourBucket['amount']) + amount;
-        hourBucket['count'] = (hourBucket['count'] as int) + 1;
-      }
-    }
-
-    final amountByOrder = <String, double>{};
-    for (final payment in completedPayments) {
-      final oid = payment['order_id']?.toString() ?? '';
-      if (oid.isEmpty) continue;
-      amountByOrder[oid] =
-          (amountByOrder[oid] ?? 0.0) +
-          netPaymentAmount(payment['amount'], payment['change_amount']);
-    }
-
-    final orderSessionRows = await _selectInBatches(
-      table: ReportsQueries.tableOrders,
-      select:
-          'id, session_id, table_sessions!inner(waiter_user_id, profiles!table_sessions_waiter_user_id_profiles_fkey(full_name), dining_tables!left(zones!left(name)))',
-      column: 'id',
-      values: orderIds,
-    );
-
-    final byEmployee = <String, Map<String, dynamic>>{};
-    final byZone = <String, Map<String, dynamic>>{};
-    for (final row in orderSessionRows) {
-      final oid = row['id']?.toString() ?? '';
-      final amount = amountByOrder[oid] ?? 0.0;
-      if (amount == 0) continue;
-
-      final session = row['table_sessions'];
-      final sessionMap = session is Map<String, dynamic>
-          ? session
-          : (session is Map
-                ? Map<String, dynamic>.from(session)
-                : <String, dynamic>{});
-
-      final profile = sessionMap['profiles'];
-      final profileMap = profile is Map<String, dynamic>
-          ? profile
-          : (profile is Map
-                ? Map<String, dynamic>.from(profile)
-                : <String, dynamic>{});
-      final empName =
-          profileMap['full_name']?.toString().trim().isNotEmpty == true
-          ? profileMap['full_name'].toString().trim()
-          : 'Sin empleado';
-      final empBucket = byEmployee.putIfAbsent(
-        empName,
-        () => {'label': empName, 'amount': 0.0, 'count': 0},
-      );
-      empBucket['amount'] = _toDouble(empBucket['amount']) + amount;
-      empBucket['count'] = (empBucket['count'] as int) + 1;
-
-      final table = sessionMap['dining_tables'];
-      final tableMap = table is Map<String, dynamic>
-          ? table
-          : (table is Map
-                ? Map<String, dynamic>.from(table)
-                : <String, dynamic>{});
-      final zone = tableMap['zones'];
-      final zoneMap = zone is Map<String, dynamic>
-          ? zone
-          : (zone is Map
-                ? Map<String, dynamic>.from(zone)
-                : <String, dynamic>{});
-      final zoneName = zoneMap['name']?.toString().trim().isNotEmpty == true
-          ? zoneMap['name'].toString().trim()
-          : 'Sin zona';
-      final zoneBucket = byZone.putIfAbsent(
-        zoneName,
-        () => {'label': zoneName, 'amount': 0.0, 'count': 0},
-      );
-      zoneBucket['amount'] = _toDouble(zoneBucket['amount']) + amount;
-      zoneBucket['count'] = (zoneBucket['count'] as int) + 1;
-    }
-
-    final avgTicket = completedPayments.isEmpty
-        ? 0.0
-        : totalSales / completedPayments.length;
-
-    final salesByMethod = byMethod.values.toList(
-      growable: false,
-    )..sort((a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])));
-    final salesByReceipt = byReceipt.values.toList(
-      growable: false,
-    )..sort((a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])));
-    final salesByHour = byHour.values.toList(growable: false)
-      ..sort((a, b) => (a['hour'] as int).compareTo(b['hour'] as int));
-    final salesByModifier = byModifier.values.toList(
-      growable: false,
-    )..sort((a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])));
-    final salesByAdjustment = byAdjustment.values.toList(
-      growable: false,
-    )..sort((a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])));
-    final topProductsList = topProducts.values.toList(
-      growable: false,
-    )..sort((a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])));
-    final productSalesList = productSales.values.toList(growable: false)
-      ..sort(
-        (a, b) => _toDouble(b['net_sales']).compareTo(_toDouble(a['net_sales'])),
-      );
-
-    return {
-      'from': fromIso,
-      'to': toIso,
-      // total_sales y net_sales son iguales: ambos representan la suma de
-      // payments con status='completed'. Antes net_sales se calculaba como
-      // (totalSales - voidedSales), pero como completed/voided son sets
-      // disjuntos (un payment es UNO o el OTRO), esa resta dejaba el "neto"
-      // como un valor que no representaba ningun subset real. Ahora ambos
-      // campos son la fuente unica de la verdad: ventas reales completadas.
-      'total_sales': totalSales,
-      'voided_sales': voidedSales,
-      'net_sales': totalSales,
-      'payments_count': completedPayments.length,
-      'voided_payments_count': voidedPayments.length,
-      'items_sold': totalItems.round(),
-      'avg_ticket': avgTicket,
-      'modifier_sales_total': modifiersSalesTotal,
-      'discounts_total': discountsTotal,
-      'courtesy_total': courtesyTotal,
-      'discounted_lines_count': discountedLinesCount,
-      'courtesy_lines_count': courtesyLinesCount,
-      'sales_by_method': salesByMethod,
-      'sales_by_receipt': salesByReceipt,
-      'sales_by_hour': salesByHour,
-      'sales_by_modifier': salesByModifier,
-      'sales_by_adjustment': salesByAdjustment,
-      'top_products': topProductsList,
-      'product_sales': productSalesList,
-      'sales_by_category': () {
-        // Después del LRM por item (calculado arriba), la suma de
-        // categorías ya cuadra con SUM(orders.total) al centavo. La
-        // diferencia entre netSales (lo que entró por payments) y la
-        // suma de items debe explicarse como propina voluntaria, NO
-        // como ruido de redondeo.
-        //
-        // Fórmula PRD-11: propina_voluntaria = SUM(payments) - SUM(orders.total)
-        // Ambos lados a 2 decimales = sin ruido. Solo aparece como
-        // categoría "Propina (no facturada)" si supera el umbral de
-        // 1 RD$ (anything below would be operational rounding, no real tip).
-        final ordersTotalSum = orderTotalById.values.fold<double>(
-          0,
-          (sum, total) => sum + total,
-        );
-        final voluntaryTip = totalSales - ordersTotalSum;
-        if (voluntaryTip >= 1.0) {
-          byCategory['Propina (no facturada)'] = {
-            'label': 'Propina (no facturada)',
-            'amount': voluntaryTip,
-            'quantity': 0.0,
-            'count': 0,
-            'is_voluntary_tip': true,
-          };
-        }
-        return byCategory.values.toList(growable: false)
-          ..sort(
-            (a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])),
-          );
-      }(),
-      'sales_by_employee': byEmployee.values.toList(growable: false)
-        ..sort(
-          (a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])),
-        ),
-      'sales_by_zone': byZone.values.toList(growable: false)
-        ..sort(
-          (a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])),
-        ),
-    };
+    return result;
   }
+
+  Map<String, dynamic> _emptySalesSummary(String fromIso, String toIso) => {
+        'from': fromIso,
+        'to': toIso,
+        'total_sales': 0,
+        'voided_sales': 0,
+        'net_sales': 0,
+        'payments_count': 0,
+        'voided_payments_count': 0,
+        'items_sold': 0,
+        'avg_ticket': 0,
+        'modifier_sales_total': 0,
+        'discounts_total': 0,
+        'courtesy_total': 0,
+        'discounted_lines_count': 0,
+        'courtesy_lines_count': 0,
+        'sales_by_method': const <Map<String, dynamic>>[],
+        'sales_by_receipt': const <Map<String, dynamic>>[],
+        'sales_by_hour': const <Map<String, dynamic>>[],
+        'sales_by_modifier': const <Map<String, dynamic>>[],
+        'sales_by_adjustment': const <Map<String, dynamic>>[],
+        'top_products': const <Map<String, dynamic>>[],
+        'product_sales': const <Map<String, dynamic>>[],
+        'sales_by_category': const <Map<String, dynamic>>[],
+        'sales_by_employee': const <Map<String, dynamic>>[],
+        'sales_by_zone': const <Map<String, dynamic>>[],
+      };
+
 
   Future<Map<String, dynamic>> getCashSummary({
     required String businessId,
@@ -1891,126 +1365,28 @@ class ReportsRepository {
 
   /// Proyección de cantidades vendidas por producto para el mes en curso.
   ///
-  /// Algoritmo: usa los últimos 56 días (8 semanas) de ventas pagadas como
-  /// base, y agrupa por día de la semana — los restaurantes tienen
-  /// patrones semanales fuertes (ej: lunes flojo, viernes alto). Para
-  /// proyectar cada día restante del mes en curso, usa el promedio
-  /// histórico de ese día de la semana.
+  /// Algoritmo: 8 semanas (56 días) de ventas pagadas como base, agrupado
+  /// por día de la semana — los restaurantes tienen patrones fuertes
+  /// (lunes flojo, viernes alto). Proyecta cada día del mes con el
+  /// promedio histórico del DOW correspondiente.
   ///
-  /// Para los días del mes que ya pasaron, usa la cantidad real
-  /// (incluyendo ceros), no el promedio. Eso evita inflar la
-  /// proyección para productos que aún no se han vendido este mes.
+  /// Usa RPC `get_monthly_product_projection_v2` que hace toda la
+  /// agregación server-side (~25ms vs varios segundos del approach
+  /// anterior con múltiples queries + cálculo en Dart).
   ///
   /// Retorna `Map<productId, projectedQty>`. Productos sin historial
   /// no aparecen en el map.
   Future<Map<String, double>> getMonthlyProductProjection({
     required String businessId,
   }) async {
-    final now = AppTime.nowAst();
-    final monthStart = DateTime(now.year, now.month, 1);
-    final monthEnd = now.month == 12
-        ? DateTime(now.year + 1, 1, 1)
-        : DateTime(now.year, now.month + 1, 1);
-    final today = DateTime(now.year, now.month, now.day);
-    final tomorrow = today.add(const Duration(days: 1));
-    final histStart = today.subtract(const Duration(days: 56));
-
-    // 1. Pagos completados en la ventana histórica → mapa order_id → fecha.
-    final paymentRows = await _loadScopedPaymentsForRange(
-      businessId: businessId,
-      from: histStart,
-      to: tomorrow,
-      select: 'id, order_id, status, created_at',
+    final response = await _client.rpc(
+      'get_monthly_product_projection_v2',
+      params: {'_business_id': businessId},
     );
 
-    final orderIdToDate = <String, DateTime>{};
-    for (final p in paymentRows) {
-      final status = p['status']?.toString();
-      if (status == 'void' || status == 'cancelled') continue;
-      final orderId = p['order_id']?.toString() ?? '';
-      if (orderId.isEmpty) continue;
-      final created = DateTime.tryParse(p['created_at']?.toString() ?? '');
-      if (created == null) continue;
-      final ast = AppTime.astFromInstant(created);
-      final dateOnly = DateTime(ast.year, ast.month, ast.day);
-      final existing = orderIdToDate[orderId];
-      if (existing == null || dateOnly.isBefore(existing)) {
-        orderIdToDate[orderId] = dateOnly;
-      }
-    }
+    if (response == null) return const {};
 
-    if (orderIdToDate.isEmpty) return const {};
-
-    // 2. Items de esas órdenes.
-    final items = await _selectInBatches(
-      table: ReportsQueries.tableOrderItems,
-      select: 'order_id, product_id, qty, quantity, status',
-      column: 'order_id',
-      values: orderIdToDate.keys.toList(growable: false),
-    );
-
-    // 3. Acumular cantidad diaria por producto.
-    final dailyPerProduct = <String, Map<DateTime, double>>{};
-    for (final item in items) {
-      final status = item['status']?.toString();
-      if (status == 'void') continue;
-      final productId = item['product_id']?.toString() ?? '';
-      if (productId.isEmpty) continue;
-      final orderId = item['order_id']?.toString() ?? '';
-      final date = orderIdToDate[orderId];
-      if (date == null) continue;
-      final qty = _toDouble(item['qty']) > 0
-          ? _toDouble(item['qty'])
-          : _toDouble(item['quantity']);
-      if (qty <= 0) continue;
-
-      final perDate = dailyPerProduct.putIfAbsent(productId, () => {});
-      perDate[date] = (perDate[date] ?? 0) + qty;
-    }
-
-    // 4. Cuántas veces aparece cada día de la semana en la ventana
-    //    histórica. Necesario para promediar correctamente, incluyendo
-    //    días con cero ventas (sin esto, los productos vendidos solo
-    //    en ciertos días tendrían un promedio inflado).
-    final daysByDow = <int, int>{};
-    var checkDate = histStart;
-    while (checkDate.isBefore(tomorrow)) {
-      daysByDow[checkDate.weekday] = (daysByDow[checkDate.weekday] ?? 0) + 1;
-      checkDate = checkDate.add(const Duration(days: 1));
-    }
-
-    // 5. Para cada producto: avg por DOW, luego proyectar el mes en curso.
-    final projection = <String, double>{};
-    for (final entry in dailyPerProduct.entries) {
-      final productId = entry.key;
-      final perDate = entry.value;
-
-      final qtyByDow = <int, double>{};
-      perDate.forEach((date, qty) {
-        qtyByDow[date.weekday] = (qtyByDow[date.weekday] ?? 0) + qty;
-      });
-
-      final avgByDow = <int, double>{};
-      daysByDow.forEach((dow, count) {
-        avgByDow[dow] = count > 0 ? (qtyByDow[dow] ?? 0) / count : 0;
-      });
-
-      double projected = 0;
-      var d = monthStart;
-      while (d.isBefore(monthEnd)) {
-        if (d.isBefore(tomorrow)) {
-          // Día del mes que ya pasó: usar cantidad real (0 si no se vendió).
-          projected += perDate[d] ?? 0;
-        } else {
-          // Día futuro del mes: usar promedio del día de la semana.
-          projected += avgByDow[d.weekday] ?? 0;
-        }
-        d = d.add(const Duration(days: 1));
-      }
-
-      projection[productId] = projected;
-    }
-
-    return projection;
+    final map = Map<String, dynamic>.from(response as Map);
+    return map.map((key, value) => MapEntry(key, _toDouble(value)));
   }
 }

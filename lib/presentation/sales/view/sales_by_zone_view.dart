@@ -4,11 +4,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
-import 'package:mangopos/core/multimesero/active_waiter_provider.dart';
 import 'package:mangopos/core/multimesero/multimesero_repository.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/presentation/cashier/widgets/open_cash_dialog.dart';
 import 'package:mangopos/presentation/sales/state/sales_zoom_provider.dart';
@@ -36,7 +34,18 @@ bool _isEffectivelyEmpty(TableStatus ts) {
 
 class SalesByZoneView extends ConsumerStatefulWidget {
   final String businessId;
-  const SalesByZoneView({super.key, required this.businessId});
+
+  /// Zona inicial a seleccionar al montar la vista. Usado cuando el
+  /// usuario regresa desde una mesa abierta — queremos volver a la
+  /// misma zona donde estaba (no saltar al index 0). Pasado vía
+  /// `?zone=<id>` en el route.
+  final String? initialZoneId;
+
+  const SalesByZoneView({
+    super.key,
+    required this.businessId,
+    this.initialZoneId,
+  });
 
   @override
   ConsumerState createState() => _SalesByZoneViewState();
@@ -115,11 +124,24 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
     }
 
     if (_tabController == null || _previousZoneCount != currentZoneCount) {
+      final isFirstBuild = _tabController == null;
       final previousIndex = _tabController?.index ?? 0;
       _tabController?.dispose();
-      final initialIndex = previousIndex < currentZoneCount
-          ? previousIndex
-          : currentZoneCount - 1;
+
+      int initialIndex;
+      // En el primer build, respetar `initialZoneId` (viene del route
+      // cuando el usuario regresa desde una mesa). En rebuilds, mantener
+      // el index actual para no perder selección del usuario.
+      if (isFirstBuild && widget.initialZoneId != null) {
+        final wantedId = widget.initialZoneId;
+        final foundIdx = zones.indexWhere((z) => z.id == wantedId);
+        initialIndex = foundIdx >= 0 ? foundIdx : 0;
+      } else {
+        initialIndex = previousIndex < currentZoneCount
+            ? previousIndex
+            : currentZoneCount - 1;
+      }
+
       _tabController = TabController(
         length: currentZoneCount,
         vsync: this,
@@ -358,6 +380,12 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
           ),
         );
       } else {
+        // Anti-overflow: las tabs van en un Expanded + scroll horizontal
+        // para que en pantallas chicas (1024×768) no se desborden cuando
+        // hay muchas zonas. Indicadores se quedan fijos a la derecha y
+        // tabs scrollean dentro del espacio restante.
+        final isCompactDesk = ResponsiveHelper.isCompactDesktop(context);
+        final hPadding = isCompactDesk ? 16.0 : 24.0;
         appBarWidget = AppBar(
           backgroundColor: SalesTheme.background,
           elevation: 0,
@@ -365,14 +393,19 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
           toolbarHeight: 56,
           titleSpacing: 0,
           title: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 24,
+            padding: EdgeInsets.symmetric(
+              horizontal: hPadding,
               vertical: 12,
             ),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                buildZoneTabs(),
+                Expanded(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: buildZoneTabs(),
+                  ),
+                ),
+                const SizedBox(width: 12),
                 buildIndicators(),
               ],
             ),
@@ -634,11 +667,26 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
               // densidad del grid (mas columnas con zoom out, menos con
               // zoom in). Persistente via shared_preferences.
               final zoom = ref.watch(salesZoomProvider);
-              // En móvil forzamos 2 columnas con padding reducido.
+              // Monitores cuadrados 1024×768 entran como compactDesktop:
+              // padding y gap reducidos respecto al desktop grande, sin
+              // forzar el modo mobile (que cambia el shell completo).
+              final isCompactDesk = ResponsiveHelper.isCompactDesktop(context);
+
               final padding = isCompact
                   ? const EdgeInsets.fromLTRB(12, 12, 12, 12)
-                  : const EdgeInsets.all(24);
-              final horizontalPad = isCompact ? 24.0 : 48.0;
+                  : isCompactDesk
+                      ? const EdgeInsets.all(14)
+                      : const EdgeInsets.all(24);
+              final horizontalPad = isCompact
+                  ? 24.0
+                  : isCompactDesk
+                      ? 28.0
+                      : 48.0;
+              final gap = isCompactDesk ? 12.0 : SalesTheme.gridGap;
+              final cardHeight = isCompactDesk
+                  ? 110.0
+                  : SalesTheme.tableCardHeight;
+              final baseCardWidth = isCompactDesk ? 180.0 : 220.0;
               final availableWidth = constraints.maxWidth - horizontalPad;
 
               int columns;
@@ -646,26 +694,26 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
                 columns = 2;
               } else {
                 columns =
-                    ((availableWidth + SalesTheme.gridGap) /
-                            ((220.0 * zoom) + SalesTheme.gridGap))
+                    ((availableWidth + gap) /
+                            ((baseCardWidth * zoom) + gap))
                         .floor()
                         .clamp(1, 10);
               }
 
               // Calcular el ancho REAL de cada card
-              final totalGaps = (columns - 1) * SalesTheme.gridGap;
+              final totalGaps = (columns - 1) * gap;
               final cardWidth = (availableWidth - totalGaps) / columns;
 
               // Calcular aspect ratio dinámico: cardWidth / cardHeight
-              final aspectRatio = cardWidth / SalesTheme.tableCardHeight;
+              final aspectRatio = cardWidth / cardHeight;
 
               return GridView.builder(
                 padding: padding,
                 gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: columns,
                   childAspectRatio: aspectRatio, // Dinámico
-                  crossAxisSpacing: SalesTheme.gridGap,
-                  mainAxisSpacing: SalesTheme.gridGap,
+                  crossAxisSpacing: gap,
+                  mainAxisSpacing: gap,
                 ),
                 itemCount: tables.length,
                 itemBuilder: (context, index) {
@@ -819,45 +867,32 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
     }
 
     if (multimeseroEnabled && businessIdForGate != null) {
-      String? sessionOpenerEmployeeId;
-      if (ts.sessionId != null && ts.sessionId!.isNotEmpty) {
-        try {
-          final row = await Supabase.instance.client
-              .from('table_sessions')
-              .select('opened_by_employee_id')
-              .eq('id', ts.sessionId!)
-              .maybeSingle();
-          sessionOpenerEmployeeId =
-              row?['opened_by_employee_id']?.toString();
-        } catch (_) {/* lookup best-effort */}
+      // Siempre pedir PIN cuando el rol del device es mesero y multimesero
+      // está activo. Antes había un short-circuit que comparaba el
+      // `activeWaiter` cacheado contra el `opened_by_employee_id` de la
+      // sesión y si coincidía, dejaba pasar sin PIN. Eso causaba el bug
+      // de "a veces pide, a veces no" porque el cache sobrevivía entre
+      // taps. El feature de multimesero existe para AUDITAR quién accede
+      // a cada mesa — la única forma de garantizar la auditoría es
+      // pedir PIN en cada entrada.
+      if (!context.mounted) {
+        byZone.setOpening(ts.tableId, false);
+        return;
       }
-
-      final activeWaiter = ref.read(activeWaiterProvider);
-      final isSameWaiterAsOpener = sessionOpenerEmployeeId != null &&
-          activeWaiter != null &&
-          activeWaiter.employeeId == sessionOpenerEmployeeId &&
-          activeWaiter.businessId == businessIdForGate;
-
-      if (!isSameWaiterAsOpener) {
-        if (!context.mounted) {
-          byZone.setOpening(ts.tableId, false);
-          return;
-        }
-        final waiter = await showWaiterPinModal(
-          context,
-          ref,
-          businessId: businessIdForGate,
-          title: ts.sessionId == null
-              ? 'Identifícate'
-              : 'Identifícate para entrar',
-          subtitle: ts.sessionId == null
-              ? 'Ingresa tu PIN para abrir la mesa ${ts.code}'
-              : 'Ingresa tu PIN para registrar tu actividad en la mesa ${ts.code}',
-        );
-        if (waiter == null) {
-          byZone.setOpening(ts.tableId, false);
-          return;
-        }
+      final waiter = await showWaiterPinModal(
+        context,
+        ref,
+        businessId: businessIdForGate,
+        title: ts.sessionId == null
+            ? 'Identifícate'
+            : 'Identifícate para entrar',
+        subtitle: ts.sessionId == null
+            ? 'Ingresa tu PIN para abrir la mesa ${ts.code}'
+            : 'Ingresa tu PIN para registrar tu actividad en la mesa ${ts.code}',
+      );
+      if (waiter == null) {
+        byZone.setOpening(ts.tableId, false);
+        return;
       }
     }
 

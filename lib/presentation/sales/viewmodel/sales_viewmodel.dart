@@ -572,24 +572,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }
 
   Future<void> openTable(String tableId, {int peopleCount = 1}) async {
-    // Solo los roles con permisos de caja (cajero/admin/manager) necesitan
-    // una sesión de caja abierta. Los meseros pueden abrir mesas directamente.
-    final sessionCtrl = ref.read(sessionProvider.notifier);
-    final hasCashierAccess = sessionCtrl.hasAnyPermission([
-      'caja.apertura',
-      'caja.cierre',
-      'caja.movimientos_ver',
-    ]);
-    if (hasCashierAccess) {
-      if (!await ensureCashSessionOpen()) return;
-    }
-    await _ensureBusinessTaxSettingsLoaded();
-
-    // Mostrar inmediatamente la última versión conocida si existe
+    // ⚡ Fix anti-parpadeo: reset SÍNCRONO del state ANTES de cualquier
+    // await. Antes los checks de caja + business tax se ejecutaban
+    // primero (cada uno con await) y durante esos ~200-400ms la UI
+    // seguía mostrando la orden de la mesa anterior — el usuario veía
+    // los items viejos parpadear y luego limpiarse cuando finalmente
+    // llegaba el state nuevo.
+    //
+    // Si tenemos cache de esta mesa específica, mostramos eso (para
+    // que abrir una mesa ya visitada se sienta instantáneo). Si no,
+    // limpiamos completo. La data autoritativa llega en _loadOrderDetail.
     final cached = _tableCache[tableId];
     if (cached != null) {
-      // Evita pestañeo de subcuentas cerradas por cache obsoleto.
-      // Los checks autoritativos llegan en _loadOrderDetail().
       state = _normalizeHydratedState(
         cached.copyWith(
           loading: true,
@@ -602,6 +596,19 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       _hasManualFiscalTypeSelection = false;
       state = const CurrentOrderState(loading: true, origin: 'table');
     }
+
+    // Solo los roles con permisos de caja (cajero/admin/manager) necesitan
+    // una sesión de caja abierta. Los meseros pueden abrir mesas directamente.
+    final sessionCtrl = ref.read(sessionProvider.notifier);
+    final hasCashierAccess = sessionCtrl.hasAnyPermission([
+      'caja.apertura',
+      'caja.cierre',
+      'caja.movimientos_ver',
+    ]);
+    if (hasCashierAccess) {
+      if (!await ensureCashSessionOpen()) return;
+    }
+    await _ensureBusinessTaxSettingsLoaded();
     try {
       final client = Supabase.instance.client;
       final userId = client.auth.currentUser?.id;
@@ -612,31 +619,28 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       // original (es inmutable después del primer INSERT).
       final activeWaiter = ref.read(activeWaiterProvider);
 
-      // 1) Abrir mesa en backend
-      final result = await ref
-          .read(salesRepositoryProvider)
-          .openTable(
+      // Single round-trip: abrir mesa + cargar bundle completo (order +
+      // items + checks + customer + modifiers + tax_lines). Antes eran
+      // 3-4 queries en serie (openTable + getTableLive + getOrderBundle
+      // + modifiers + tax_lines) tardando ~700-900ms. El RPC consolida
+      // todo en ~150ms.
+      final result = await ref.read(salesRepositoryProvider).openTableAndLoad(
             tableId: tableId,
-            userId: userId, // si es null, el RPC tiene fallback
+            userId: userId,
             peopleCount: peopleCount,
             openedByEmployeeId: activeWaiter?.employeeId,
           );
-      final orderId = result['order_id'] as String;
+      final orderId = result.orderId;
 
-      // 2) Traer snapshot compacto vía RPC (si existe)
-      try {
-        final payload = await ref
-            .read(salesRepositoryProvider)
-            .getTableLive(tableId, businessId: _activeBusinessId);
-        if (payload != null) {
-          _applyTableLivePayload(payload, tableId: tableId);
-        }
-      } catch (_) {
-        // Si falla RPC, continuamos con load detallado
-      }
-
-      // 3) Refresco completo (asegura consistencia)
-      await _loadOrderDetail(orderId, origin: 'table', tableId: tableId);
+      // Aplicar el bundle ya parseado — _loadOrderDetail acepta un
+      // preloaded para saltarse el fetch y solo correr el post-load
+      // (fiscal sequences, normalización de state, etc).
+      await _loadOrderDetail(
+        orderId,
+        origin: 'table',
+        tableId: tableId,
+        preloadedBundle: result.bundle,
+      );
     } catch (e) {
       final businessId = _activeBusinessId;
       if (businessId != null && businessId.isNotEmpty) {
@@ -2266,6 +2270,17 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     String orderId, {
     String? origin,
     String? tableId,
+    // Si el caller ya tiene el bundle parseado (ej: openTable usando
+    // fn_open_table_and_load), pásalo para evitar el round-trip extra
+    // a fn_get_order_bundle.
+    ({
+      Order? order,
+      List<OrderItem> items,
+      List<OrderCheck> checks,
+      String? customerId,
+      String? customerName,
+      String? note,
+    })? preloadedBundle,
   }) async {
     if (state.order?.id != orderId) {
       _hasManualFiscalTypeSelection = false;
@@ -2284,21 +2299,33 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     String? sessionNote;
 
     var loadedByBundle = false;
-    try {
-      final bundle = await repo.getOrderBundle(
-        orderId,
-        businessId: _activeBusinessId,
-      );
-      order = bundle.order;
-      items = bundle.items;
-      checks = bundle.checks;
-      customerId = bundle.customerId;
-      customerName = bundle.customerName;
-      sessionNote = bundle.note;
 
+    if (preloadedBundle != null) {
+      // Fast path: usamos el bundle que ya vino del RPC consolidado
+      order = preloadedBundle.order;
+      items = preloadedBundle.items;
+      checks = preloadedBundle.checks;
+      customerId = preloadedBundle.customerId;
+      customerName = preloadedBundle.customerName;
+      sessionNote = preloadedBundle.note;
       loadedByBundle = order != null;
-    } catch (e) {
-      loadError = e.toString();
+    } else {
+      try {
+        final bundle = await repo.getOrderBundle(
+          orderId,
+          businessId: _activeBusinessId,
+        );
+        order = bundle.order;
+        items = bundle.items;
+        checks = bundle.checks;
+        customerId = bundle.customerId;
+        customerName = bundle.customerName;
+        sessionNote = bundle.note;
+
+        loadedByBundle = order != null;
+      } catch (e) {
+        loadError = e.toString();
+      }
     }
 
     if (!loadedByBundle) {
@@ -2462,6 +2489,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       _tableCache[tableId] = state;
     }
 
+    // Fix anti-glitch: si mientras corría este load, realtime fired
+    // (típico al agregar item — el INSERT en order_items dispara
+    // refreshOrder() que encola otro load), descartamos esa cola. Ya
+    // tenemos la verdad del server; un segundo fetch idéntico solo
+    // causa re-render visible que el usuario percibe como "el item
+    // salió y volvió y entró".
+    _queuedRefreshOrderId = null;
+    _queuedClearIfPaid = false;
+    _refreshOrderDebounceTimer?.cancel();
+
     final promotionsChanged = await _applyAutomaticPromotionsIfNeeded();
     if (promotionsChanged) {
       refreshOrder();
@@ -2546,97 +2583,6 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           },
         )
         .subscribe();
-  }
-
-  void _applyTableLivePayload(
-    Map<String, dynamic> payload, {
-    required String tableId,
-  }) {
-    try {
-      final orderMap = Map<String, dynamic>.from(payload['order'] as Map);
-      final order = Order.fromMap(orderMap);
-
-      final checksRaw = (payload['checks'] as List?) ?? const [];
-      final hasCheckClosureMetadata = checksRaw.any((c) {
-        final m = Map<String, dynamic>.from(c as Map);
-        return m.containsKey('is_closed') ||
-            m.containsKey('isClosed') ||
-            m.containsKey('closed') ||
-            m.containsKey('closed_at');
-      });
-
-      final checks = hasCheckClosureMetadata
-          ? checksRaw.map((c) {
-              final m = Map<String, dynamic>.from(c as Map);
-              final rawIsClosed =
-                  m['is_closed'] ?? m['isClosed'] ?? m['closed'];
-              final isClosed = rawIsClosed != null
-                  ? _parseBool(rawIsClosed)
-                  : m['closed_at'] != null;
-              return OrderCheck(
-                id: m['id'] ?? '',
-                orderId: order.id,
-                label: m['label'] ?? 'C1',
-                position: (m['position'] ?? 1) as int,
-                isClosed: isClosed,
-                subtotal: (m['subtotal'] ?? 0).toDouble(),
-                discounts: (m['discounts'] ?? 0).toDouble(),
-                serviceFee: (m['service_fee'] ?? 0).toDouble(),
-                tax: (m['tax'] ?? 0).toDouble(),
-                total: (m['total'] ?? 0).toDouble(),
-                items: const [],
-              );
-            }).toList()
-          : const <OrderCheck>[];
-
-      final items = ((payload['items'] as List?) ?? []).map((i) {
-        final m = Map<String, dynamic>.from(i as Map);
-        return OrderItem.fromMap(m);
-      }).toList();
-
-      String? nextSelectedCheckId = state.selectedCheckId;
-      if (nextSelectedCheckId != null) {
-        final exists = checks.any(
-          (c) => c.id == nextSelectedCheckId && !c.isClosed,
-        );
-        if (!exists) {
-          nextSelectedCheckId = null;
-        }
-      }
-
-      final newState = _normalizeHydratedState(
-        state.copyWith(
-          loading: false,
-          origin: 'table',
-          order: order,
-          items: items,
-          checks: checks,
-          error: null,
-          selectedCheckId: nextSelectedCheckId,
-          clearSelectedCheck:
-              nextSelectedCheckId == null && state.selectedCheckId != null,
-        ),
-      );
-
-      state = newState;
-      _tableCache[tableId] = newState;
-    } catch (e) {
-      // Si el payload viene incompleto, ignoramos y dejamos al load completo
-    }
-  }
-
-  bool _parseBool(dynamic value) {
-    if (value is bool) return value;
-    if (value is num) return value != 0;
-    if (value is String) {
-      final normalized = value.trim().toLowerCase();
-      return normalized == 'true' ||
-          normalized == 't' ||
-          normalized == '1' ||
-          normalized == 'yes' ||
-          normalized == 'y';
-    }
-    return false;
   }
 
   String? _courtesyProductKey(OrderItem item) {

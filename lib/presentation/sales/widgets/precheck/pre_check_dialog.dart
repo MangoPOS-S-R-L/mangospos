@@ -176,6 +176,17 @@ class PreCheckDialog extends StatelessWidget {
                       ],
                     ),
 
+                    // Cliente — solo si está disponible. Ocupa una fila
+                    // propia debajo para que respire visualmente.
+                    if ((data['customerName'] as String?)?.trim().isNotEmpty ??
+                        false) ...[
+                      const SizedBox(height: 4),
+                      _InfoRow(
+                        label: 'Cliente',
+                        value: (data['customerName'] as String).trim(),
+                      ),
+                    ],
+
                     const SizedBox(height: 16),
                     const Divider(color: Color(0xFFE5E5E5)),
                     const SizedBox(height: 16),

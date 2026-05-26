@@ -666,7 +666,7 @@ class _LotDetailDialog extends StatelessWidget {
     final info = _expiryInfo(lot.expiryStatus);
     final dateFmt = DateFormat('dd/MM/yyyy');
     final currency = NumberFormat.currency(
-      locale: 'es_DO',
+      locale: 'en_US',
       symbol: 'RD\$',
       decimalDigits: 2,
     );

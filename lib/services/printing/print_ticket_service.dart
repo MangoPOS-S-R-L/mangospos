@@ -374,6 +374,7 @@ class PrintTicketService {
     required List<OrderItem> items,
     required String tableName,
     String? waiterName,
+    String? customerName,
     String? businessName,
     String? legalName,
     String? businessAddress,
@@ -453,6 +454,14 @@ class PrintTicketService {
 
     if (waiterName != null && waiterName.isNotEmpty) {
       gen.textRow('MESERO:', waiterName);
+    }
+
+    // Nombre del cliente cuando esté disponible (capturado al abrir la
+    // mesa o asignado en el modal de cobro). Va después de MESERO para
+    // mantener el orden visual de la precuenta en pantalla.
+    final trimmedCustomer = customerName?.trim();
+    if (trimmedCustomer != null && trimmedCustomer.isNotEmpty) {
+      gen.textRow('CLIENTE:', trimmedCustomer);
     }
 
     gen.lineFeed();

@@ -29,7 +29,7 @@ class _PurchasesListViewState extends ConsumerState<PurchasesListView> {
     final vm = ref.watch(purchasesViewModelProvider);
     final state = vm.state;
     final currency = NumberFormat.currency(
-      locale: 'es_DO',
+      locale: 'en_US',
       symbol: 'RD\$',
       decimalDigits: 2,
     );

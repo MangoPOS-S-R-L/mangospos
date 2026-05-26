@@ -36,7 +36,7 @@ class _DiscountsViewState extends ConsumerState<DiscountsView> {
     final vm = ref.watch(promosViewModelProvider);
     final state = vm.state;
     final currency = NumberFormat.currency(
-      locale: 'es_DO',
+      locale: 'en_US',
       symbol: 'RD\$',
       decimalDigits: 2,
     );

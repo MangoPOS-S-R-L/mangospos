@@ -55,6 +55,17 @@ class ResponsiveHelper {
     return width >= AppBreakpoints.tablet && width < AppBreakpoints.desktop;
   }
 
+  /// Monitor cuadrado / pantalla compacta (1024×768 típico). Aplica
+  /// padding y tamaños más ajustados que en desktop grande pero sin
+  /// caer en mobile (que cambia el shell entero a bottom-nav).
+  ///
+  /// Cubre el rango 1024-1279px: monitores 4:3 viejos, tablets en
+  /// landscape pequeñas, ventanas reducidas en pantallas grandes.
+  static bool isCompactDesktop(BuildContext context) {
+    final width = MediaQuery.of(context).size.width;
+    return width >= AppBreakpoints.tablet && width < AppBreakpoints.desktop;
+  }
+
   /// Check if screen is desktop XL or larger
   static bool isDesktopXL(BuildContext context) {
     return MediaQuery.of(context).size.width >= AppBreakpoints.desktop;
