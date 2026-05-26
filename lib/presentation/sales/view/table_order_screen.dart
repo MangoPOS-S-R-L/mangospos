@@ -4008,10 +4008,19 @@ class _CartView extends ConsumerWidget {
 
         // PRD 6: cargar settings de USD para el bloque "≈ US$X" debajo
         // del TOTAL. Si toggle off / tasa null, el helper salta sin
-        // imprimir nada — el ticket queda idéntico al pre-PRD-6.
-        final usdSettings = await ref
-            .read(posSettingsRepositoryProvider)
-            .getUsdDisplaySettings(businessId);
+        // imprimir nada. Wrapping en try/catch + timeout para que un
+        // fallo cargando las settings NUNCA bloquee la impresión —
+        // el ticket en el peor caso sale sin el bloque USD.
+        UsdDisplaySettings? usdSettings;
+        try {
+          usdSettings = await ref
+              .read(posSettingsRepositoryProvider)
+              .getUsdDisplaySettings(businessId)
+              .timeout(const Duration(seconds: 2));
+        } catch (e) {
+          debugPrint('PRD 6: no se cargaron settings USD para print: $e');
+          usdSettings = null;
+        }
 
         // PRD F2: si algún payment fue por transferencia con cuenta
         // bancaria asignada, cargar el mapa para que el ticket muestre

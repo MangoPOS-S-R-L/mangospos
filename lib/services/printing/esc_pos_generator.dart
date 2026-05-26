@@ -456,6 +456,10 @@ class EscPosGenerator {
         .replaceAll('–', '-') // –  en-dash
         .replaceAll('—', '-') // —  em-dash
         .replaceAll('…', '...') // …  horizontal ellipsis
+        .replaceAll('≈', '~') // ≈  approximately equal (U+2248)
+        .replaceAll('≠', '!=') // ≠  not equal (U+2260)
+        .replaceAll('≤', '<=') // ≤  less-than-or-equal (U+2264)
+        .replaceAll('≥', '>=') // ≥  greater-than-or-equal (U+2265)
         .replaceAll(' ', ' '); // nbsp → espacio normal
     // `allowInvalid: true` se setea en el codec (no en el método encode),
     // así caracteres exóticos no normalizados arriba salen como '?' en

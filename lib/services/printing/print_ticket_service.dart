@@ -971,9 +971,10 @@ class PrintTicketService {
     gen.setBold(false);
 
     // PRD 6: equivalente USD debajo del TOTAL si toggle está activo.
-    // Helper resetea ya hace setTextSize default (no bold), garantizando
-    // que el USD siempre se ve más chico que el TOTAL DOP.
-    _renderUsdEquivalent(gen, effectiveTotal, usdSettings);
+    // En la factura NO mostramos la tasa (showRate=false): el cliente
+    // pagó en DOP, basta con el equivalente USD como referencia. La
+    // tasa sí sale en pre-cuenta para transparencia previa al pago.
+    _renderUsdEquivalent(gen, effectiveTotal, usdSettings, showRate: false);
 
     gen.lineFeed();
     _thickSeparator(gen);
@@ -1678,27 +1679,49 @@ class PrintTicketService {
   static void _renderUsdEquivalent(
     EscPosGenerator gen,
     double dopTotal,
-    UsdDisplaySettings? usdSettings,
-  ) {
-    if (usdSettings == null || !usdSettings.isUsable) return;
-    final rate = usdSettings.rate;
-    if (rate == null) return;
+    UsdDisplaySettings? usdSettings, {
+    bool showRate = true,
+  }) {
+    // ⚠️ DEBUG temporal — ver si recibimos showRate=false en factura.
+    // ignore: avoid_print
+    print('[PRD6 DEBUG _renderUsdEquivalent] showRate=$showRate '
+        'dopTotal=$dopTotal enabled=${usdSettings?.enabled} '
+        'rate=${usdSettings?.rate}');
+    // Blindaje: cualquier error (formato de número, símbolo raro, etc.)
+    // se silencia. PRD 6 es DISPLAY-ONLY — nunca debe romper la
+    // impresión del ticket fiscal/precuenta.
+    try {
+      if (usdSettings == null || !usdSettings.isUsable) return;
+      final rate = usdSettings.rate;
+      if (rate == null) return;
+      if (!dopTotal.isFinite) return;
 
-    final equivalent = calculateUsdEquivalent(
-      dopTotal: Decimal.parse(dopTotal.toStringAsFixed(2)),
-      usdRate: rate,
-    );
-    if (equivalent == null) return;
+      final equivalent = calculateUsdEquivalent(
+        dopTotal: Decimal.parse(dopTotal.toStringAsFixed(2)),
+        usdRate: rate,
+      );
+      if (equivalent == null) return;
 
-    final sym = usdSettings.symbol;
-    final equivFormatted = equivalent.toStringAsFixed(2);
-    final equivLabel = usdSettings.symbolPosition == 'after'
-        ? '$equivFormatted $sym'
-        : '$sym $equivFormatted';
+      final sym = usdSettings.symbol;
+      final equivFormatted = equivalent.toStringAsFixed(2);
+      final equivLabel = usdSettings.symbolPosition == 'after'
+          ? '$equivFormatted $sym'
+          : '$sym $equivFormatted';
 
-    gen.lineFeed();
-    gen.textRow('Total USD:', '≈ $equivLabel');
-    gen.textRow('Tasa:', 'RD\$ ${rate.toStringAsFixed(4)}');
+      // Nota: usamos `~` (ASCII 0x7E) en lugar de `≈` (U+2248). El char
+      // unicode `≈` no está en Latin-1 y `Latin1Codec.encode` lanza
+      // excepción con cualquier codepoint > 0xFF (`allowInvalid: true`
+      // solo aplica al decoder), lo que tumbaba todo el bloque USD.
+      gen.lineFeed();
+      gen.setBold(true);
+      gen.textRow('Total USD:', '~ $equivLabel');
+      gen.setBold(false);
+      if (showRate) {
+        gen.textRow('Tasa:', 'RD\$ ${rate.toStringAsFixed(4)}');
+      }
+    } catch (_) {
+      // Silencioso: el ticket sigue saliendo sin el bloque USD.
+    }
   }
 
   /// Itera la lista [blocks] en orden y renderiza solo los enabled cuyo
