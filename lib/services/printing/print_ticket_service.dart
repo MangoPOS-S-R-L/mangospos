@@ -613,7 +613,10 @@ class PrintTicketService {
     gen.setBold(false);
 
     // PRD 6: equivalente USD debajo del TOTAL si está activo.
-    _renderUsdEquivalent(gen, printableGrandTotal, usdSettings);
+    // Decisión del cliente: la tasa NO sale en ningún ticket (ni
+    // pre-cuenta ni factura). El cliente ve solo el equivalente USD
+    // como referencia.
+    _renderUsdEquivalent(gen, printableGrandTotal, usdSettings, showRate: false);
 
     // ════════════════════════════════════════════
     // DATOS DE COMPROBANTE FISCAL
@@ -1682,11 +1685,6 @@ class PrintTicketService {
     UsdDisplaySettings? usdSettings, {
     bool showRate = true,
   }) {
-    // ⚠️ DEBUG temporal — ver si recibimos showRate=false en factura.
-    // ignore: avoid_print
-    print('[PRD6 DEBUG _renderUsdEquivalent] showRate=$showRate '
-        'dopTotal=$dopTotal enabled=${usdSettings?.enabled} '
-        'rate=${usdSettings?.rate}');
     // Blindaje: cualquier error (formato de número, símbolo raro, etc.)
     // se silencia. PRD 6 es DISPLAY-ONLY — nunca debe romper la
     // impresión del ticket fiscal/precuenta.
