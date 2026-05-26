@@ -1566,16 +1566,38 @@ class PrintingRepository {
             data: data,
             timeout: timeout,
           );
-        } catch (_) {
+          // Print directo OK. Si no tenemos MAC para esta impresora, intentar
+          // capturarlo en background — sirve para auto-recovery futuro si la
+          // IP cambia por DHCP.
+          _captureMacIfMissing(printer);
+        } catch (originalError) {
+          // Recovery por MAC ANTES del fallback al agente: si la impresora
+          // tiene MAC guardado y el agente está vivo, le pedimos que escanee
+          // la LAN. Si encuentra la impresora en otra IP, actualizamos
+          // Supabase y reintentamos el print directo una vez.
+          final recoveredIp = await _tryRecoverPrinterIpByMac(printer, ip);
+          if (recoveredIp != null) {
+            try {
+              await printRawDirectTcp(
+                ip: recoveredIp,
+                port: printer.port ?? 9100,
+                data: data,
+                timeout: timeout,
+              );
+              return;
+            } catch (_) {
+              // El IP nuevo tampoco respondió — caemos al fallback de agente.
+            }
+          }
           if (await isAgentUp()) {
             await printRawViaAgent(
-              ip: ip,
+              ip: recoveredIp ?? ip,
               port: printer.port ?? 9100,
               data: data,
             );
             return;
           }
-          rethrow;
+          Error.throwWithStackTrace(originalError, StackTrace.current);
         }
         return;
       case PrinterType.usb:
@@ -2574,6 +2596,83 @@ finally {
     } catch (e) {
       return null;
     }
+  }
+
+  // ===========================================================================
+  // Printer auto-recovery por MAC (DHCP rotó la IP de la impresora)
+  // ===========================================================================
+
+  /// Si el [printer] tiene MAC guardado, pedirle al agente local que escanee
+  /// el LAN y reporte la IP actual. Si la IP cambió, actualizar Supabase y
+  /// devolver la nueva IP. Si no encuentra o no aplica, devolver null.
+  ///
+  /// Diseñado para no throwear: cualquier fallo retorna null y deja al
+  /// caller seguir con su fallback (típicamente printRawViaAgent).
+  Future<String?> _tryRecoverPrinterIpByMac(
+    PrinterConfig printer,
+    String currentIp,
+  ) async {
+    // Web no puede llamar el endpoint local del agente sin agente publicado;
+    // el caller ya tiene su propio camino (printRawViaAgent) — saltar.
+    if (kIsWeb) return null;
+    final mac = printer.effectiveMac?.trim();
+    if (mac == null || mac.isEmpty) return null;
+
+    try {
+      final newIp = await _localService.resolveIpByMac(
+        mac: mac,
+        printerId: printer.id,
+      );
+      if (newIp == null) return null;
+      if (newIp == currentIp) return null; // sigue siendo la misma, no actualizar
+
+      debugPrint(
+        '[PrinterRecovery] MAC $mac: IP actualizada $currentIp → $newIp',
+      );
+      // Persistir en Supabase para que próximas impresiones empiecen por la IP correcta.
+      await updatePrinter(printerId: printer.id, ipAddress: newIp);
+      return newIp;
+    } catch (e) {
+      debugPrint('[PrinterRecovery] resolveIpByMac falló para ${printer.id}: $e');
+      return null;
+    }
+  }
+
+  /// Si la impresora aún no tiene MAC guardado, intentar capturarlo desde el
+  /// agente local. Llamar tras un print exitoso. Fire-and-forget: no
+  /// bloquea al caller ni propaga errores.
+  void _captureMacIfMissing(PrinterConfig printer) {
+    captureMacForPrinterIfMissing(
+      printerId: printer.id,
+      ipAddress: printer.ipAddress,
+      existingMac: printer.effectiveMac,
+    );
+  }
+
+  /// Versión pública/parametrizada para callers que tienen los campos sueltos
+  /// (ej. tests de Settings que trabajan con un UI model en vez de
+  /// [PrinterConfig]). Idéntica semántica: fire-and-forget, no throw.
+  void captureMacForPrinterIfMissing({
+    required String printerId,
+    String? ipAddress,
+    String? existingMac,
+  }) {
+    if (kIsWeb) return;
+    final existing = existingMac?.trim();
+    if (existing != null && existing.isNotEmpty) return;
+    final ip = ipAddress?.trim();
+    if (ip == null || ip.isEmpty) return;
+
+    Future.microtask(() async {
+      try {
+        final mac = await _localService.captureMacForIp(ip);
+        if (mac == null) return;
+        await updatePrinter(printerId: printerId, mac: mac);
+        debugPrint('[PrinterRecovery] MAC capturado para $printerId: $mac');
+      } catch (e) {
+        debugPrint('[PrinterRecovery] captureMacForIp falló para $printerId: $e');
+      }
+    });
   }
 }
 

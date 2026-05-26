@@ -3,6 +3,8 @@ const cors = require('cors');
 const { config, logger } = require('../config');
 const printerManager = require('../core/printer_manager');
 const discoveryService = require('../core/discovery');
+const { getMacForIp, normalizeMac } = require('../network/arp');
+const { resolveByMac } = require('../network/printer_resolver');
 
 const app = express();
 const PORT = config.service.port || 9100;
@@ -152,6 +154,51 @@ app.post('/api/printers/raw', authenticate, async (req, res) => {
         });
         res.json({ ok: true, success: true, jobId, status: 'queued' });
     } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ============================================================================
+// Printer auto-recovery — MAC-based IP resolution
+//
+// Flujo cliente (Flutter):
+//   1. POST /api/printers/mac-for-ip { ip } → captura MAC tras print exitoso
+//      la primera vez (cuando aún no la teníamos guardada en Supabase).
+//   2. POST /api/printers/resolve-by-mac { mac } → tras un fallo de socket,
+//      buscar la nueva IP de esa impresora en el LAN. Si la encuentra,
+//      Flutter actualiza Supabase y reintenta el print una vez.
+// ============================================================================
+
+app.post('/api/printers/mac-for-ip', authenticate, async (req, res) => {
+    const { ip } = req.body || {};
+    if (!ip || !/^\d{1,3}(\.\d{1,3}){3}$/.test(String(ip))) {
+        return res.status(400).json({ error: 'Missing or invalid ip' });
+    }
+    try {
+        const mac = await getMacForIp(String(ip));
+        if (!mac) return res.status(404).json({ error: 'mac_not_resolved', ip });
+        res.json({ ip, mac });
+    } catch (e) {
+        logger.error(`/mac-for-ip failed for ${ip}: ${e.message}`);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/printers/resolve-by-mac', authenticate, async (req, res) => {
+    const { mac, printerId } = req.body || {};
+    const normalized = normalizeMac(mac);
+    if (!normalized) {
+        return res.status(400).json({ error: 'Missing or invalid mac' });
+    }
+    const logCtx = printerId ? ` [printer=${printerId}]` : '';
+    try {
+        const result = await resolveByMac(normalized, { logCtx });
+        if (!result) {
+            return res.status(404).json({ error: 'printer_not_found', mac: normalized });
+        }
+        res.json({ mac: normalized, ip: result.ip, source: result.source });
+    } catch (e) {
+        logger.error(`/resolve-by-mac failed for ${normalized}: ${e.message}`);
         res.status(500).json({ error: e.message });
     }
 });

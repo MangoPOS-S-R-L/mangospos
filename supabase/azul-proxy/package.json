@@ -1,0 +1,13 @@
+{
+  "name": "azul-proxy",
+  "version": "1.0.0",
+  "description": "mTLS sidecar para que las edge functions de Supabase puedan llamar Azul",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "private": true
+}

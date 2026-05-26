@@ -700,4 +700,77 @@ class LocalPrintService {
       return [];
     }
   }
+
+  // ===========================================================================
+  // Printer auto-recovery via MAC (cuando la impresora cambia de IP por DHCP)
+  // ===========================================================================
+
+  /// POST /api/printers/mac-for-ip — captura el MAC de la impresora que está
+  /// en la IP dada. Llamar UNA VEZ tras un print exitoso, si todavía no
+  /// guardamos el MAC para esa impresora.
+  ///
+  /// Devuelve la MAC normalizada (lowercase, `:`) o null si el agente no
+  /// está disponible / no pudo resolver.
+  Future<String?> captureMacForIp(String ip) async {
+    final baseUrl = await _resolveBaseUrl();
+    if (baseUrl == null) return null;
+    try {
+      final res = await http
+          .post(
+            Uri.parse('$baseUrl/api/printers/mac-for-ip'),
+            headers: _headers(),
+            body: jsonEncode({'ip': ip}),
+          )
+          .timeout(const Duration(seconds: 6));
+      if (res.statusCode == 200) {
+        final body = jsonDecode(res.body);
+        if (body is Map && body['mac'] is String) {
+          return (body['mac'] as String).toLowerCase();
+        }
+      }
+      _log('captureMacForIp $ip → status=${res.statusCode} body=${res.body}');
+      return null;
+    } catch (e) {
+      _log('captureMacForIp $ip threw: $e');
+      return null;
+    }
+  }
+
+  /// POST /api/printers/resolve-by-mac — el agente escanea el LAN buscando
+  /// el MAC dado y devuelve la IP actual. Llamar cuando un print directo
+  /// falla y la impresora tiene MAC guardado.
+  ///
+  /// Devuelve la nueva IP o null si nadie respondió con ese MAC.
+  Future<String?> resolveIpByMac({
+    required String mac,
+    String? printerId,
+  }) async {
+    final baseUrl = await _resolveBaseUrl();
+    if (baseUrl == null) return null;
+    try {
+      final res = await http
+          .post(
+            Uri.parse('$baseUrl/api/printers/resolve-by-mac'),
+            headers: _headers(),
+            body: jsonEncode({
+              'mac': mac,
+              if (printerId != null) 'printerId': printerId,
+            }),
+          )
+          // El scan del /24 puede tardar ~10s en peor caso (~250 IPs × ~40ms).
+          // 18s da margen para LAN saturada sin colgar al cajero indefinido.
+          .timeout(const Duration(seconds: 18));
+      if (res.statusCode == 200) {
+        final body = jsonDecode(res.body);
+        if (body is Map && body['ip'] is String) {
+          return body['ip'] as String;
+        }
+      }
+      _log('resolveIpByMac $mac → status=${res.statusCode} body=${res.body}');
+      return null;
+    } catch (e) {
+      _log('resolveIpByMac $mac threw: $e');
+      return null;
+    }
+  }
 }
