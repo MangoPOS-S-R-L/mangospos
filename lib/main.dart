@@ -327,37 +327,22 @@ Future<void> _ensurePrinterAgentStarted() async {
 Future<void> _lockOrientationByDevice() async {
   if (kIsWeb || !(Platform.isAndroid || Platform.isIOS)) return;
 
-  // Determinamos teléfono vs tablet usando el lado más corto en dp.
-  // Teléfono (<550dp) → vertical forzado (UX administrativa).
-  // Tablet (≥550dp) → landscape forzado (UX de caja/POS).
+  // Auto-rotate global: permitimos las 4 orientaciones en cualquier device.
+  // El OS respeta el lock de rotación del usuario si lo tiene activo.
   //
-  // El umbral 550dp (antes 600) cubre tablets de 8" como Galaxy Tab A8
-  // y Lenovo M8 que reportaban ~580-598dp y caían erróneamente al
-  // bucket "teléfono". Tablets 7"+ ya son suficiente real estate para
-  // el POS en landscape; cualquier teléfono moderno está por debajo
-  // de 450dp en su lado corto.
-  final view = PlatformDispatcher.instance.views.first;
-  final shortestSideDp =
-      view.physicalSize.shortestSide / view.devicePixelRatio;
-
-  debugPrint(
-    '[orientation] shortestSide=${view.physicalSize.shortestSide}px '
-    'dpr=${view.devicePixelRatio} → ${shortestSideDp.toStringAsFixed(1)}dp',
-  );
-
-  if (shortestSideDp < 550) {
-    debugPrint('[orientation] phone → portrait');
-    await SystemChrome.setPreferredOrientations(const [
-      DeviceOrientation.portraitUp,
-      DeviceOrientation.portraitDown,
-    ]);
-  } else {
-    debugPrint('[orientation] tablet → landscape');
-    await SystemChrome.setPreferredOrientations(const [
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
-  }
+  // Antes esto bloqueaba portrait/landscape según el tamaño del device, lo
+  // que rompía tablets de 8" (Galaxy Tab A8, Lenovo M8) que algunos comercios
+  // sostienen en vertical, y teléfonos que algunos cajeros prefieren acostar.
+  //
+  // Tradeoff conocido: algunas pantallas (cashier, KDS) están diseñadas para
+  // una orientación específica y pueden verse apretadas en la otra. Esos
+  // casos los resolvemos por pantalla con LayoutBuilder, no con un lock global.
+  await SystemChrome.setPreferredOrientations(const [
+    DeviceOrientation.portraitUp,
+    DeviceOrientation.portraitDown,
+    DeviceOrientation.landscapeLeft,
+    DeviceOrientation.landscapeRight,
+  ]);
 }
 
 /// Detecta si `shared_preferences.json` está corrupto y lo elimina para que el

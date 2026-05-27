@@ -683,9 +683,12 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
                       ? 28.0
                       : 48.0;
               final gap = isCompactDesk ? 12.0 : SalesTheme.gridGap;
-              final cardHeight = isCompactDesk
-                  ? 110.0
-                  : SalesTheme.tableCardHeight;
+              // compactDesk usaba 110px, pero el TableCard internamente se
+              // dibuja a 140 (SalesTheme.tableCardHeight). El delta de 30px
+              // hacía que el nombre del mesero/cliente se desbordara por
+              // debajo del borde del card en tablets que caen en este bucket.
+              // Unificamos a 140 para que el grid y el card hablen el mismo idioma.
+              final cardHeight = SalesTheme.tableCardHeight;
               final baseCardWidth = isCompactDesk ? 180.0 : 220.0;
               final availableWidth = constraints.maxWidth - horizontalPad;
 

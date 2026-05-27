@@ -145,8 +145,17 @@ class SettingsView extends ConsumerWidget {
     return [
       _SettingsSection(
         title: 'Negocio',
-        items: const [
-          _SettingsOption(
+        items: [
+          if (ref.watch(sessionProvider).isOwner)
+            const _SettingsOption(
+              title: 'Mi cuenta',
+              subtitle:
+                  'Tu información de propietario, PIN de acceso y datos de sesión',
+              icon: Icons.account_circle_rounded,
+              color: Color(0xFFFFF7F1),
+              route: AppRoutes.settingsMyAccount,
+            ),
+          const _SettingsOption(
             title: 'Datos del Negocio',
             subtitle:
                 'Nombre, RNC, dirección, logo, eslogan y personalización del ticket',

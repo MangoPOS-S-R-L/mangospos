@@ -70,6 +70,7 @@ class AppRoutes {
   static const menuModifiers = '$menu/modifiers';
 
   static const settingsBusinessProfile = '$settings/business-profile';
+  static const settingsMyAccount = '$settings/my-account';
   static const settingsZonesTables = '$settings/zones-tables';
   static const settingsPaymentMethods = '$settings/payment-methods';
   static const settingsTaxes = '$settings/taxes';

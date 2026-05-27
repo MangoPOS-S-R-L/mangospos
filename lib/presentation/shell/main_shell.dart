@@ -490,11 +490,16 @@ class _TopNavItemState extends ConsumerState<_TopNavItem> {
     final loc = GoRouterState.of(context).uri.toString();
     final active = isDestinationActive(d, loc);
 
-    // Bump threshold a 1280: en pantallas 1024×768 y similar (compact
-    // desktop) se ocultan las labels y solo se ven los iconos, así
-    // toda la barra cabe sin recortes. Tooltip cubre la accesibilidad.
+    // Tres tiers de densidad para el top nav:
+    //   - < 900px (teléfono / tablet en portrait apretado): solo icono +
+    //     tooltip. La barra cabe sin overflow y el cajero ve todos los destinos.
+    //   - 900-1279px (tablets en landscape, monitores 1024×768): icono +
+    //     label en modo compacto (font 13, padding 12). Los 7 destinos +
+    //     logo + chip de rol caben sin recortar.
+    //   - ≥ 1280px (desktop): icono + label en modo cómodo (font 15, padding 16).
     final width = MediaQuery.of(context).size.width;
-    final showLabel = width >= 1280;
+    final showLabel = width >= 900;
+    final labelCompact = width < 1280;
     final iconColor = hasAccess
         ? (active ? Colors.white : Colors.grey[600]!)
         : Colors.grey[500]!;
@@ -519,7 +524,7 @@ class _TopNavItemState extends ConsumerState<_TopNavItem> {
         onTap: hasAccess ? () => context.go(d.route) : null,
         child: Container(
           padding: EdgeInsets.symmetric(
-            horizontal: showLabel ? 16 : 10,
+            horizontal: showLabel ? (labelCompact ? 12 : 16) : 10,
             vertical: 8,
           ),
           decoration: BoxDecoration(
@@ -545,11 +550,11 @@ class _TopNavItemState extends ConsumerState<_TopNavItem> {
               else
                 Icon(d.materialIcon, size: 22, color: iconColor),
               if (showLabel) ...[
-                const SizedBox(width: 8),
+                SizedBox(width: labelCompact ? 6 : 8),
                 Text(
                   d.label,
                   style: GoogleFonts.plusJakartaSans(
-                    fontSize: 15,
+                    fontSize: labelCompact ? 13 : 15,
                     fontWeight: active && hasAccess
                         ? FontWeight.bold
                         : FontWeight.w600,

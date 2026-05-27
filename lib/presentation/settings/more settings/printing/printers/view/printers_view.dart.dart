@@ -651,122 +651,167 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final size = media.size;
+    // En móvil: dialog ocupa casi todo el ancho. En tablet/desktop: máximo 600.
+    final isCompact = size.width < 600;
+    final maxDialogWidth = isCompact ? size.width : 600.0;
+    // viewInsets.bottom = teclado abierto. Le quitamos al alto disponible
+    // para que el footer siga visible mientras el usuario tipea.
+    final maxDialogHeight = size.height - media.viewInsets.bottom - 48;
+    final horizontalPadding = isCompact ? 20.0 : 32.0;
+    final verticalPadding = isCompact ? 20.0 : 32.0;
+    final sectionGap = isCompact ? 20.0 : 32.0;
+
     return Dialog(
       backgroundColor: MangoColors.white,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Container(
-        width: 600,
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Expanded(
-                  child: Text(
-                    'Agreguemos una impresora',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF22C55E),
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: isCompact ? 12 : 40,
+        vertical: 24,
+      ),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: maxDialogWidth,
+          maxHeight: maxDialogHeight,
+        ),
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            horizontalPadding,
+            verticalPadding,
+            horizontalPadding,
+            verticalPadding,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Agreguemos una impresora',
+                      style: TextStyle(
+                        fontSize: isCompact ? 20 : 24,
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFF22C55E),
+                      ),
                     ),
                   ),
-                ),
-                IconButton(
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close),
-                  color: MangoColors.muted,
-                  tooltip: 'Cerrar',
-                ),
-              ],
-            ),
-            const SizedBox(height: 32),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _StepIndicator(
-                  number: 1,
-                  active: _step == 1,
-                  completed: _step > 1,
-                ),
-                Container(
-                  width: 80,
-                  height: 2,
-                  color: _step > 1
-                      ? const Color(0xFF22C55E)
-                      : const Color(0xFFE5E7EB),
-                ),
-                _StepIndicator(
-                  number: 2,
-                  active: _step == 2,
-                  completed: _step > 2,
-                ),
-                Container(
-                  width: 80,
-                  height: 2,
-                  color: _step > 2
-                      ? const Color(0xFF22C55E)
-                      : const Color(0xFFE5E7EB),
-                ),
-                _StepIndicator(number: 3, active: _step == 3, completed: false),
-              ],
-            ),
-            const SizedBox(height: 32),
-            if (_step == 1) _buildStep1(),
-            if (_step == 2) _buildStep2(),
-            if (_step == 3) _buildStep3(),
-            const SizedBox(height: 32),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                if (_step > 1)
-                  TextButton(
-                    onPressed: () => setState(() => _step--),
-                    child: const Text('Atras'),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close),
+                    color: MangoColors.muted,
+                    tooltip: 'Cerrar',
                   ),
-                const SizedBox(width: 12),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF22C55E),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 32,
-                      vertical: 16,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
+                ],
+              ),
+              SizedBox(height: sectionGap),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _StepIndicator(
+                    number: 1,
+                    active: _step == 1,
+                    completed: _step > 1,
                   ),
-                  onPressed: () async {
-                    if (_step == 1 && _selectedType.isNotEmpty) {
-                      setState(() => _step = 2);
-                      if (_selectedType == 'network') {
-                        await _searchNetwork();
-                      } else if (_selectedType == 'bluetooth') {
-                        await _searchBluetooth();
+                  Container(
+                    width: isCompact ? 48 : 80,
+                    height: 2,
+                    color: _step > 1
+                        ? const Color(0xFF22C55E)
+                        : const Color(0xFFE5E7EB),
+                  ),
+                  _StepIndicator(
+                    number: 2,
+                    active: _step == 2,
+                    completed: _step > 2,
+                  ),
+                  Container(
+                    width: isCompact ? 48 : 80,
+                    height: 2,
+                    color: _step > 2
+                        ? const Color(0xFF22C55E)
+                        : const Color(0xFFE5E7EB),
+                  ),
+                  _StepIndicator(
+                    number: 3,
+                    active: _step == 3,
+                    completed: false,
+                  ),
+                ],
+              ),
+              SizedBox(height: sectionGap),
+              // Contenido scrollable: ocupa el espacio entre el header
+              // fijo y los botones fijos. En pantallas pequeñas o cuando
+              // el teclado está abierto, el usuario puede arrastrar para
+              // ver lo que no entra; los botones nunca desaparecen.
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (_step == 1) _buildStep1(),
+                      if (_step == 2) _buildStep2(),
+                      if (_step == 3) _buildStep3(),
+                    ],
+                  ),
+                ),
+              ),
+              SizedBox(height: sectionGap),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  if (_step > 1)
+                    TextButton(
+                      onPressed: () => setState(() => _step--),
+                      child: const Text('Atras'),
+                    ),
+                  const SizedBox(width: 12),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF22C55E),
+                      foregroundColor: Colors.white,
+                      padding: EdgeInsets.symmetric(
+                        horizontal: isCompact ? 24 : 32,
+                        vertical: isCompact ? 14 : 16,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    onPressed: () async {
+                      if (_step == 1 && _selectedType.isNotEmpty) {
+                        setState(() => _step = 2);
+                        if (_selectedType == 'network') {
+                          await _searchNetwork();
+                        } else if (_selectedType == 'bluetooth') {
+                          await _searchBluetooth();
+                        }
+                      } else if (_step == 2) {
+                        if (_selectedType == 'network' &&
+                            _selectedPrinter == null &&
+                            _foundPrinters.isNotEmpty) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Por favor selecciona una impresora',
+                              ),
+                            ),
+                          );
+                          return;
+                        }
+                        setState(() => _step = 3);
+                      } else if (_step == 3) {
+                        await _savePrinter();
                       }
-                    } else if (_step == 2) {
-                      if (_selectedType == 'network' &&
-                          _selectedPrinter == null &&
-                          _foundPrinters.isNotEmpty) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Por favor selecciona una impresora'),
-                          ),
-                        );
-                        return;
-                      }
-                      setState(() => _step = 3);
-                    } else if (_step == 3) {
-                      await _savePrinter();
-                    }
-                  },
-                  child: Text(_step == 3 ? 'Guardar' : 'Siguiente'),
-                ),
-              ],
-            ),
-          ],
+                    },
+                    child: Text(_step == 3 ? 'Guardar' : 'Siguiente'),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -885,28 +930,43 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
             ),
           ),
           const SizedBox(height: 16),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 300),
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: _foundPrinters.length,
-              itemBuilder: (context, index) {
-                final printer = _foundPrinters[index];
-                return _PrinterFoundCard(
-                  printer: printer,
-                  selected: _selectedPrinter == printer,
-                  onTap: () {
-                    setState(() {
-                      _selectedPrinter = printer;
-                      // Pre-completar nombre si está vacío
-                      if (_nameCtrl.text.trim().isEmpty) {
-                        _nameCtrl.text = printer['name'] ?? '';
-                      }
-                    });
-                  },
-                );
-              },
-            ),
+          // En mobile dejamos que el scroll del Dialog padre maneje la
+          // lista (NeverScrollable + shrinkWrap), si no, dos scrolls
+          // anidados confunden el gesto del usuario y la lista no se
+          // puede arrastrar. En desktop preservamos el maxHeight para que
+          // no empuje al footer fuera de vista.
+          Builder(
+            builder: (context) {
+              final isCompact = MediaQuery.of(context).size.width < 600;
+              final list = ListView.builder(
+                shrinkWrap: true,
+                physics: isCompact
+                    ? const NeverScrollableScrollPhysics()
+                    : null,
+                itemCount: _foundPrinters.length,
+                itemBuilder: (context, index) {
+                  final printer = _foundPrinters[index];
+                  return _PrinterFoundCard(
+                    printer: printer,
+                    selected: _selectedPrinter == printer,
+                    onTap: () {
+                      setState(() {
+                        _selectedPrinter = printer;
+                        // Pre-completar nombre si está vacío
+                        if (_nameCtrl.text.trim().isEmpty) {
+                          _nameCtrl.text = printer['name'] ?? '';
+                        }
+                      });
+                    },
+                  );
+                },
+              );
+              if (isCompact) return list;
+              return ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 300),
+                child: list,
+              );
+            },
           ),
           if (_selectedType != 'bluetooth') ...[
             const SizedBox(height: 12),
