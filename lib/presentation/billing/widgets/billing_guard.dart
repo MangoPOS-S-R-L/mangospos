@@ -36,8 +36,17 @@ class BillingGuard extends ConsumerWidget {
     '/settings/billing',
   ];
 
+  /// TEMPORAL — desactivado mientras Azul no whitelistee nuestra IP en
+  /// Incapsula y no podamos tokenizar tarjetas. Cuando volvamos a tener
+  /// pagos funcionando, poner en `true` y este guard vuelve a bloquear el
+  /// shell para cuentas en trial sin tarjeta + cuentas suspendidas.
+  /// Ver memory/project_azul_incapsula_blocker.md.
+  static const bool _kEnabled = false;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    if (!_kEnabled) return child;
+
     final businessId = ref.watch(sessionProvider).activeBusinessId;
     if (businessId == null) return child;
 
