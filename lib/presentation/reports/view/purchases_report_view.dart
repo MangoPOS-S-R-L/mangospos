@@ -33,12 +33,24 @@ class _PurchasesReportBody extends StatelessWidget {
     final statusRows = viewModel.getPurchaseStatusRows();
     final supplierRows = viewModel.getPurchaseSupplierRows();
 
+    final purchasesSummary = state.purchasesSummary ?? const <String, dynamic>{};
+    final ordersCount = (purchasesSummary['orders_count'] as num?)?.toInt() ?? 0;
+    final suppliersCount =
+        (purchasesSummary['suppliers_count'] as num?)?.toInt() ?? 0;
+
     return ListView(
       padding: reportBodyPadding(context),
       children: [
-        const Text(
-          'Resumen de órdenes, recepción y proveedores del período.',
-          style: TextStyle(color: AppColors.mutedForeground, fontSize: 15),
+        ReportHeroCard(
+          title: 'Reporte de Compras',
+          subtitle:
+              'Resumen de órdenes, recepción y proveedores del período.',
+          period: formatReportPeriod(state),
+          accentColor: const Color(0xFF7C3AED),
+          trailing: [
+            ReportHeroStat(label: 'Órdenes', value: '$ordersCount'),
+            ReportHeroStat(label: 'Proveedores', value: '$suppliersCount'),
+          ],
         ),
         if (state.error != null) ...[
           const SizedBox(height: AppSpacing.itemGap),

@@ -3102,19 +3102,24 @@ class _CartView extends ConsumerWidget {
                   ),
                   const SizedBox(height: 8),
                 ],
-                // Feature flag `kitchen_enabled`: si el negocio no
-                // tiene cocina (minimarket, kiosko), escondemos "Enviar
-                // a Cocina". Los items se marcan como `ready` al cobrar
-                // (vía markOrderItemsAsReady), saltándose la comanda.
-                if (draftItems.isNotEmpty &&
-                    ref.watchBusinessFeatures().kitchenEnabled) ...[
-                  // BOTON ENVIAR A COCINA (Show if there are DRAFT items in CURRENT view? Or global?
-                  // Spec says: "Enviar a Cocina: Comportamiento NO cambia. Envía productos pendientes."
-                  // So we should probably allow sending order if there are drafts, regardless of filters.
-                  // But usually we interact with what we see.
-                  // Let's stick to showing buttons if current view has drafts.
+                // Bloque para órdenes con items DRAFT (recién agregados,
+                // sin enviar). Muestra:
+                //   - Enviar Pedido (sólo si el feature `kitchen_enabled`
+                //     está prendido — para kioskos/minimarkets sin cocina
+                //     este botón no tiene sentido y los items se marcan
+                //     ready en el momento del cobro).
+                //   - Pagar (SIEMPRE, independiente de kitchen_enabled —
+                //     el cajero tiene que poder cobrar drafts en un
+                //     negocio sin cocina sin pasar por "enviar primero").
+                //
+                // Fix bug 2026-05-27: antes el check de kitchen_enabled
+                // envolvía el bloque entero, lo que escondía Pagar en
+                // negocios sin cocina y dejaba al usuario sin forma de
+                // cobrar drafts.
+                if (draftItems.isNotEmpty) ...[
+                  if (ref.watchBusinessFeatures().kitchenEnabled) ...[
                   _ActionButton(
-                    label: 'Enviar a Cocina',
+                    label: 'Enviar Pedido',
                     background: _salesKitchenButton,
                     onPressed: sendKitchenLocked
                         ? null
@@ -3224,7 +3229,7 @@ class _CartView extends ConsumerWidget {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     SnackBar(
                                       content: Text(
-                                        'Error al enviar a cocina: ${e.toString()}',
+                                        'Error al enviar el pedido: ${e.toString()}',
                                       ),
                                       backgroundColor: Colors.red,
                                     ),
@@ -3236,12 +3241,10 @@ class _CartView extends ConsumerWidget {
                     icon: Icons.soup_kitchen_outlined,
                   ),
                   const SizedBox(height: 12),
-                  // Pagar solo visible si no hay drafts? Or always?
-                  // Usually you can pay what is sent.
-                  // Existing code only showed Pay if drafts exist alongside Send?
-                  // It seems draft items replace payment flow until sent?
-                  // Let's keep existing logic: if drafts, show Pay AND Send? No, usually Send first.
-                  // Original code showed BOTH.
+                  ], // cierra `if (kitchenEnabled)`
+                  // Pagar — siempre visible cuando hay drafts, independiente
+                  // de kitchen_enabled. Si el negocio no tiene cocina, los
+                  // items se marcan ready en el flujo de _openPaymentModal.
                   if (selectedCheckId != null && hasChecks) ...[
                     Row(
                       children: [

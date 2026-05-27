@@ -309,7 +309,7 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
       ),
       _ReportHubCardData(
         title: 'Impuestos',
-        description: 'ITBIS, propina de ley y base gravable.',
+        description: 'Impuestos cobrados, cargos de servicio y base gravable.',
         icon: Icons.receipt_long_outlined,
         color: const Color(0xFFDC2626),
         quickStat: currency.format(taxTotal),

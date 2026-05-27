@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/fiscal/ncf_types.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
@@ -28,30 +29,8 @@ class _FiscalReportBody extends StatelessWidget {
   final ReportsState state;
   final ReportsViewModel viewModel;
 
-  static String _ncfTypeName(String type) {
-    switch (type) {
-      case 'B01':
-      case 'E31':
-        return 'Crédito Fiscal';
-      case 'B02':
-      case 'E32':
-        return 'Consumo';
-      case 'B03':
-      case 'E33':
-        return 'Nota de Débito';
-      case 'B04':
-      case 'E34':
-        return 'Nota de Crédito';
-      case 'B14':
-      case 'E44':
-        return 'Reg. Especiales';
-      case 'B15':
-      case 'E45':
-        return 'Gubernamental';
-      default:
-        return type;
-    }
-  }
+  // _ncfTypeName eliminado: ahora se usa `ncfTypeName(code)` de
+  // core/fiscal/ncf_types.dart (catálogo único para toda la app).
 
   @override
   Widget build(BuildContext context) {
@@ -70,6 +49,7 @@ class _FiscalReportBody extends StatelessWidget {
           title: 'Ventas por recibo / comprobante',
           subtitle:
               'Diseño listo para operar por rango de fecha y tipo de comprobante como filtros de primer nivel.',
+          period: formatReportPeriod(state),
           accentColor: MangoColors.primaryOrange,
           trailing: [
             ReportHeroStat(
@@ -80,7 +60,7 @@ class _FiscalReportBody extends StatelessWidget {
               label: 'Filtro activo',
               value: selectedType == null
                   ? 'Todos'
-                  : _ncfTypeName(selectedType),
+                  : ncfTypeName(selectedType),
             ),
           ],
         ),
@@ -115,7 +95,7 @@ class _FiscalReportBody extends StatelessWidget {
                   ),
                   ...availableTypes.map(
                     (type) => ReportDocumentTypeChip(
-                      label: _ncfTypeName(type),
+                      label: ncfTypeName(type),
                       selected: selectedType == type,
                       onTap: () => viewModel.setFiscalTypeFilter(type),
                     ),
@@ -192,6 +172,13 @@ class _FiscalReportBody extends StatelessWidget {
         FiscalDocumentsDetailCard(
           documents: documents,
           currency: currency,
+          serviceFeeLabel:
+              (state.fiscalSummary?['service_fee_label'] as String?)
+                          ?.trim()
+                          .isNotEmpty ==
+                      true
+                  ? (state.fiscalSummary!['service_fee_label'] as String).trim()
+                  : 'Cargo de servicio',
           subtitle:
               'Tabla lista para auditoría diaria y exportación; respeta el filtro de tipo seleccionado.',
           emptyMessage:

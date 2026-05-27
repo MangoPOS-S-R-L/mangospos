@@ -38,18 +38,46 @@ class KitchenViewModel extends ChangeNotifier {
   bool _refreshQueued = false;
   final Map<String, _StatusOverride> _statusOverrides = {};
 
+  /// Áreas de producción configuradas por el comercio (Cocina, Bar, etc.).
+  /// Se cargan una vez en `init()` y alimentan el dropdown de filtro.
+  List<KitchenArea> _availableAreas = const [];
+
+  /// Código del área seleccionada actualmente en el filtro. `null` = "Todos"
+  /// (no filtra, muestra items de cualquier área).
+  String? _selectedAreaCode;
+
   KitchenViewModel(this._repository, this._printingService);
 
   bool get isLoading => _isLoading;
   List<KitchenItem> get items => _items;
+  List<KitchenArea> get availableAreas => _availableAreas;
+  String? get selectedAreaCode => _selectedAreaCode;
 
-  // Derive filtered lists
+  /// Items que pasan el filtro de área seleccionada. Si no hay filtro
+  /// activo, devuelve todos. Si el filtro está en un código y el item
+  /// no tiene `areaCode` (ej. menu_item sin área asignada), lo
+  /// excluimos — el comercio así detecta visualmente qué productos
+  /// le faltan configurar.
+  List<KitchenItem> get _filteredItems {
+    final code = _selectedAreaCode;
+    if (code == null || code.isEmpty) return _items;
+    return _items.where((i) => i.areaCode == code).toList(growable: false);
+  }
+
+  // Derive filtered lists (ahora también respetan el filtro de área).
   List<KitchenItem> get pendingItems =>
-      _items.where((i) => i.status == 'pending').toList();
+      _filteredItems.where((i) => i.status == 'pending').toList();
   List<KitchenItem> get preparingItems =>
-      _items.where((i) => i.status == 'preparing').toList();
+      _filteredItems.where((i) => i.status == 'preparing').toList();
   List<KitchenItem> get readyItems =>
-      _items.where((i) => i.status == 'ready').toList();
+      _filteredItems.where((i) => i.status == 'ready').toList();
+
+  /// Cambia el área visible. Pasá `null` para "Todos".
+  void setSelectedAreaCode(String? code) {
+    if (_selectedAreaCode == code) return;
+    _selectedAreaCode = code;
+    notifyListeners();
+  }
 
   Future<void> init() async {
     _isLoading = true;
@@ -58,14 +86,31 @@ class KitchenViewModel extends ChangeNotifier {
       final client = Supabase.instance.client;
       _businessId = await resolveBusinessIdOrNull(client, 'auto');
       if (_businessId != null) {
+        // Cargar áreas en paralelo con el refresh inicial. El dropdown del
+        // filtro depende de esta lista — si la query falla, queda vacía y
+        // el UI muestra solo "Todos".
+        await Future.wait([
+          _loadAreas(),
+          refresh(),
+        ]);
         _subscribeRealtime(client, _businessId!);
-        await refresh();
       }
     } catch (e) {
       debugPrint('Error initializing kitchen: $e');
     } finally {
       _isLoading = false;
       notifyListeners();
+    }
+  }
+
+  Future<void> _loadAreas() async {
+    if (_businessId == null) return;
+    try {
+      _availableAreas =
+          await _repository.getPrintAreas(businessId: _businessId!);
+    } catch (e) {
+      debugPrint('Error loading print areas: $e');
+      _availableAreas = const [];
     }
   }
 

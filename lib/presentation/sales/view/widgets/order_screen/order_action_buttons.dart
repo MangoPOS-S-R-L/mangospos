@@ -76,10 +76,14 @@ class OrderActionButtons extends StatelessWidget {
             const SizedBox(height: 12),
           ],
 
-          // 1. Enviar a Cocina (si hay drafts)
+          // 1. Enviar Pedido (si hay drafts).
+          //
+          // Renombrado 2026-05-27: antes "Enviar a Cocina". El label nuevo
+          // funciona también para negocios sin cocina (kioskos/minimarkets)
+          // que igualmente quieran usar el flujo de "confirmar pedido".
           if (hasDrafts) ...[
             _PrimaryButton(
-              label: 'Enviar a Cocina',
+              label: 'Enviar Pedido',
               icon: Icons.soup_kitchen_outlined,
               background: const Color(0xFFF97316),
               onPressed: isLocked ? null : onSendToKitchen,

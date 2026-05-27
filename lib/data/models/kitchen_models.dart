@@ -17,6 +17,15 @@ class KitchenItem extends Equatable {
   final List<KitchenModifier> modifiers;
   final bool isTakeout;
 
+  /// Código del área de producción (`print_area_code` del order_item).
+  /// Null si el menu_item no tiene área asignada todavía. Usado por el
+  /// filtro "Todos / Cocina / Bar / ..." del KDS.
+  final String? areaCode;
+
+  /// Nombre legible del área (`print_areas.name`). Null si la área
+  /// no existe en la BD o si el item no tiene área asignada.
+  final String? areaName;
+
   const KitchenItem({
     required this.id,
     required this.orderId,
@@ -32,9 +41,16 @@ class KitchenItem extends Equatable {
     this.readyAt,
     this.modifiers = const [],
     this.isTakeout = false,
+    this.areaCode,
+    this.areaName,
   });
 
   factory KitchenItem.fromMap(Map<String, dynamic> map) {
+    String? trimOrNull(dynamic raw) {
+      final s = raw?.toString().trim();
+      return (s == null || s.isEmpty) ? null : s;
+    }
+
     return KitchenItem(
       id: map['id'] ?? '',
       orderId: map['order_id'] ?? '',
@@ -54,6 +70,8 @@ class KitchenItem extends Equatable {
           : null,
       modifiers: [],
       isTakeout: map['is_takeout'] == true,
+      areaCode: trimOrNull(map['area_code']),
+      areaName: trimOrNull(map['area_name']),
     );
   }
 
@@ -72,6 +90,8 @@ class KitchenItem extends Equatable {
     DateTime? readyAt,
     List<KitchenModifier>? modifiers,
     bool? isTakeout,
+    String? areaCode,
+    String? areaName,
   }) {
     return KitchenItem(
       id: id ?? this.id,
@@ -88,6 +108,8 @@ class KitchenItem extends Equatable {
       readyAt: readyAt ?? this.readyAt,
       modifiers: modifiers ?? this.modifiers,
       isTakeout: isTakeout ?? this.isTakeout,
+      areaCode: areaCode ?? this.areaCode,
+      areaName: areaName ?? this.areaName,
     );
   }
 
@@ -122,6 +144,8 @@ class KitchenItem extends Equatable {
     readyAt,
     modifiers,
     isTakeout,
+    areaCode,
+    areaName,
   ];
 }
 
@@ -147,6 +171,24 @@ class KitchenModifier extends Equatable {
 
   @override
   List<Object?> get props => [id, name, quantity];
+}
+
+/// 🗂️ Área de producción configurada (`print_areas` table).
+/// Usado por el dropdown de filtro del KDS. El `code` es lo que viaja
+/// como `print_area_code` en order_items; el `name` es lo legible.
+class KitchenArea extends Equatable {
+  final String id;
+  final String code;
+  final String name;
+
+  const KitchenArea({
+    required this.id,
+    required this.code,
+    required this.name,
+  });
+
+  @override
+  List<Object?> get props => [id, code, name];
 }
 
 /// 📦 Orden agrupada para KDS

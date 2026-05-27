@@ -238,13 +238,12 @@ class _KitchenViewState extends ConsumerState<KitchenView>
             visualDensity: VisualDensity.compact,
           ),
         ] else ...[
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: AppColors.card,
-              borderRadius: BorderRadius.circular(AppRadius.card),
-              border: Border.all(color: AppColors.border),
-            ),
+          // Toolbar normalizado: todos los chips/botones a 44 de alto, mismo
+          // borde y border-radius. Antes había drift visual (auto-refresh
+          // padding v:8, filtro v:4, Actualizar v:12, iconos 38) — cada
+          // elemento tenía una altura distinta. Ahora SizedBox(height:44)
+          // los alinea + padding horizontal constante 14.
+          _ToolbarChip(
             child: Row(
               children: [
                 const Text(
@@ -252,24 +251,34 @@ class _KitchenViewState extends ConsumerState<KitchenView>
                   style: TextStyle(fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(width: 10),
-                Switch(
-                  value: autoUpdate,
-                  onChanged: (val) => setState(() => autoUpdate = val),
-                  activeThumbColor: AppColors.primary,
+                Transform.scale(
+                  scale: 0.85,
+                  child: Switch(
+                    value: autoUpdate,
+                    onChanged: (val) => setState(() => autoUpdate = val),
+                    activeThumbColor: AppColors.primary,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
                 ),
               ],
             ),
           ),
           const SizedBox(width: 12),
-          OutlinedButton.icon(
-            onPressed: () => ref.read(kitchenViewModelProvider).refresh(),
-            icon: const Icon(Icons.refresh, size: 18),
-            label: const Text('Actualizar'),
-            style: OutlinedButton.styleFrom(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              foregroundColor: AppColors.foreground,
-              side: BorderSide(color: AppColors.border),
+          // Filtro por área de producción. Solo aparece si el comercio tiene
+          // áreas configuradas (Cocina, Bar, etc.). Si no, este selector no
+          // tiene sentido y queda escondido.
+          _buildAreaFilter(context),
+          _ToolbarChip(
+            onTap: () => ref.read(kitchenViewModelProvider).refresh(),
+            child: Row(
+              children: [
+                const Icon(Icons.refresh, size: 18),
+                const SizedBox(width: 8),
+                const Text(
+                  'Actualizar',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ],
             ),
           ),
           const SizedBox(width: 8),
@@ -281,16 +290,73 @@ class _KitchenViewState extends ConsumerState<KitchenView>
     );
   }
 
+  /// Botón cuadrado (44×44) para acciones secundarias del toolbar. Misma
+  /// altura que [_ToolbarChip] para que todos los elementos alineen
+  /// horizontalmente.
   Widget _iconButton(IconData icon) {
     return Container(
-      width: 38,
-      height: 38,
+      width: 44,
+      height: 44,
       decoration: BoxDecoration(
         color: AppColors.card,
-        borderRadius: BorderRadius.circular(AppRadius.md),
+        borderRadius: BorderRadius.circular(AppRadius.card),
         border: Border.all(color: AppColors.border),
       ),
       child: Icon(icon, color: AppColors.mutedForeground),
+    );
+  }
+
+  /// Dropdown "Filtrar por área" — al lado del Auto-refresh, mismo
+  /// chip que el resto del toolbar para alineación visual.
+  /// - Si el comercio no tiene `print_areas`, devuelve `SizedBox.shrink()`.
+  /// - "Todos" siempre presente como primera opción (selectedAreaCode == null).
+  /// - Cada área aparece con su `name` legible (ej. "Cocina", "Bar").
+  Widget _buildAreaFilter(BuildContext context) {
+    final vm = ref.watch(kitchenViewModelProvider);
+    final areas = vm.availableAreas;
+    if (areas.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(right: 12),
+      child: _ToolbarChip(
+        child: Row(
+          children: [
+            Icon(
+              Icons.filter_alt_outlined,
+              size: 18,
+              color: AppColors.mutedForeground,
+            ),
+            const SizedBox(width: 8),
+            const Text(
+              'Área',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(width: 10),
+            DropdownButtonHideUnderline(
+              child: DropdownButton<String?>(
+                value: vm.selectedAreaCode,
+                isDense: true,
+                borderRadius: BorderRadius.circular(AppRadius.card),
+                items: [
+                  const DropdownMenuItem<String?>(
+                    value: null,
+                    child: Text('Todos'),
+                  ),
+                  ...areas.map(
+                    (a) => DropdownMenuItem<String?>(
+                      value: a.code,
+                      child: Text(a.name),
+                    ),
+                  ),
+                ],
+                onChanged: (code) => ref
+                    .read(kitchenViewModelProvider)
+                    .setSelectedAreaCode(code),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -940,6 +1006,49 @@ class _TakeoutBadge extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Chip estándar del toolbar del KDS: altura fija 44, mismo borde y radius
+/// que el resto. Sirve como wrapper para Auto-refresh, filtro de área,
+/// botón Actualizar — alinearlos en una sola línea con look idéntico.
+///
+/// Si se pasa `onTap`, el chip se vuelve clickable con ripple (mismo
+/// border radius). Sin `onTap` es decorativo.
+class _ToolbarChip extends StatelessWidget {
+  final Widget child;
+  final VoidCallback? onTap;
+
+  const _ToolbarChip({required this.child, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final decoration = BoxDecoration(
+      color: AppColors.card,
+      borderRadius: BorderRadius.circular(AppRadius.card),
+      border: Border.all(color: AppColors.border),
+    );
+    final padded = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      child: child,
+    );
+    final inner = SizedBox(height: 44, child: Center(child: padded));
+
+    if (onTap == null) {
+      return DecoratedBox(decoration: decoration, child: inner);
+    }
+    return Material(
+      color: AppColors.card,
+      shape: RoundedRectangleBorder(
+        side: BorderSide(color: AppColors.border),
+        borderRadius: BorderRadius.circular(AppRadius.card),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        child: inner,
       ),
     );
   }

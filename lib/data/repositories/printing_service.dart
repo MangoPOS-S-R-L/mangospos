@@ -881,7 +881,7 @@ class PrintingService {
         throw Exception(
           'No hay impresora asignada para: ${stillMissing.join(", ")}. '
           'Ve a Ajustes > Impresión y asigna una mientras estás online, '
-          'luego vuelve a tocar "Enviar a cocina".',
+          'luego vuelve a tocar "Enviar Pedido".',
         );
       }
     }

@@ -25,6 +25,25 @@ EdgeInsets reportBodyPadding(BuildContext context) {
   return EdgeInsets.fromLTRB(pad, 0, pad, pad);
 }
 
+/// Formatea el período seleccionado del reporte para mostrarlo como hint
+/// dentro del [ReportHeroCard]. Convierte el `salesTo` exclusivo (00:00 del
+/// día siguiente al último día incluido) a inclusivo (último día real).
+///
+/// - Mismo día: "27 May 2026"
+/// - Rango: "26 May 2026 – 27 May 2026"
+String formatReportPeriod(ReportsState state) {
+  final fmt = DateFormat('dd MMM yyyy');
+  final from = state.salesFrom;
+  // salesTo es exclusive (start of next day). Restamos 1 día para mostrar
+  // al usuario el último día incluido (humano-legible).
+  final inclusiveTo = state.salesTo.subtract(const Duration(days: 1));
+  final sameDay = from.year == inclusiveTo.year &&
+      from.month == inclusiveTo.month &&
+      from.day == inclusiveTo.day;
+  if (sameDay) return fmt.format(from);
+  return '${fmt.format(from)} – ${fmt.format(inclusiveTo)}';
+}
+
 ButtonStyle reportOutlineButtonStyle() {
   return OutlinedButton.styleFrom(
     foregroundColor: MangoColors.primaryOrange,
@@ -594,12 +613,20 @@ class ReportHeroCard extends StatelessWidget {
     required this.subtitle,
     required this.accentColor,
     required this.trailing,
+    this.period,
   });
 
   final String title;
   final String subtitle;
   final Color accentColor;
   final List<Widget> trailing;
+
+  /// Período seleccionado para el reporte (ej. "26 May 2026 – 27 May 2026").
+  /// Si se pasa, aparece debajo del subtitle como chip con icono de calendario.
+  /// Refuerza el contexto: aunque el toolbar tiene el mismo dato, tenerlo
+  /// también dentro del body evita que el cajero al exportar/imprimir el
+  /// reporte se confunda con "qué rango estoy viendo".
+  final String? period;
 
   @override
   Widget build(BuildContext context) {
@@ -669,6 +696,36 @@ class ReportHeroCard extends StatelessWidget {
             color: AppColors.mutedForeground,
           ),
         ),
+        if (period != null) ...[
+          const SizedBox(height: AppSpacing.sm),
+          Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: accentColor.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(reportRadius),
+              border: Border.all(
+                color: accentColor.withValues(alpha: 0.25),
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.calendar_today,
+                    size: 13, color: accentColor),
+                const SizedBox(width: 6),
+                Text(
+                  period!,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: accentColor,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ],
     );
   }

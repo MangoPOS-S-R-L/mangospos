@@ -250,8 +250,12 @@ class KitchenRepository {
     required bool includeModifiers,
     int? limit,
   }) async {
+    // `area_code` y `area_name` agregados al view en migration
+    // 20260527_0002_kds_active_items_area_code.sql. Antes el view devolvía
+    // NULL hardcoded para area_code; ahora vienen del oi.print_area_code +
+    // LEFT JOIN a print_areas.name.
     const selectColumns =
-        'id,order_id,order_number,product_name,quantity,notes,status,created_at,started_at,ready_at,table_name,waiter_name,business_id,area_code';
+        'id,order_id,order_number,product_name,quantity,notes,status,created_at,started_at,ready_at,table_name,waiter_name,business_id,area_code,area_name,is_takeout';
 
     final baseQuery = _client.from('kds_active_items').select(selectColumns);
     var query = baseQuery;
@@ -410,5 +414,38 @@ class KitchenRepository {
               item.copyWith(modifiers: modifiersByItem[item.id] ?? const []),
         )
         .toList(growable: false);
+  }
+
+  // ============================================================
+  // 🗂️ ÁREAS DE PRODUCCIÓN (para filtro del KDS)
+  // ============================================================
+
+  /// Lista las áreas de producción activas del business (Cocina, Bar,
+  /// Horno, etc.) ordenadas por nombre. Las consume el dropdown
+  /// "Filtrar por área" del KDS.
+  ///
+  /// Retorna lista vacía si el business no tiene áreas configuradas
+  /// (caso edge: instalación recién migrada o negocio sin cocina). En
+  /// ese caso el UI debería esconder el dropdown.
+  Future<List<KitchenArea>> getPrintAreas({required String businessId}) async {
+    try {
+      final rows = await _client
+          .from('print_areas')
+          .select('id, code, name')
+          .eq('business_id', businessId)
+          .eq('is_active', true)
+          .order('name');
+      return List<Map<String, dynamic>>.from(rows)
+          .map((row) => KitchenArea(
+                id: row['id']?.toString() ?? '',
+                code: row['code']?.toString() ?? '',
+                name: row['name']?.toString() ?? '',
+              ))
+          .where((a) => a.code.isNotEmpty && a.name.isNotEmpty)
+          .toList(growable: false);
+    } catch (_) {
+      // RLS o error transitorio — el UI muestra solo "Todos" sin opciones.
+      return const [];
+    }
   }
 }

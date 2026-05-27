@@ -228,7 +228,7 @@ class _BusinessFeaturesViewState extends ConsumerState<BusinessFeaturesView> {
                     _Section(title: 'Operación'),
                     _FlagTile(
                       icon: Icons.restaurant_menu,
-                      label: 'Enviar a cocina',
+                      label: 'Enviar Pedido',
                       subtitle:
                           'Si está apagado, los items se marcan listos al cobrar '
                           'y no se imprime comanda. Para tiendas / barberías / '

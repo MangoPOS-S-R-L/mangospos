@@ -61,12 +61,32 @@ class _TaxReportBody extends StatelessWidget {
     final activeCount = activeTypeBucket != null
         ? (activeTypeBucket['count'] as num?)?.toInt() ?? 0
         : (fs['active_count'] as num?)?.toInt() ?? 0;
-    final voidCount =
-        activeTypeBucket != null ? 0 : (fs['void_count'] as num?)?.toInt() ?? 0;
+    // `voidCount` se mostraba en la card "Anulados" inline (ahora servida
+    // por viewModel.getTaxReportMetricCards). Sigue dentro del JSON de
+    // fiscalSummary y el método compartido lo lee.
 
     final typeRows = viewModel.getFiscalTypeRows();
+    // Label del impuesto principal — derivado de tax_breakdown si hay 1 sola
+    // tasa configurada (caso típico DR: ITBIS 18%). Si el comercio agrega
+    // múltiples impuestos, fallback genérico. Antes era "ITBIS" hardcoded
+    // en columnas/descripciones — rompía multi-país.
+    final taxBreakdownRows =
+        (fs['tax_breakdown'] as List?)?.cast<Map>() ?? const <Map>[];
+    final primaryTaxLabel = taxBreakdownRows.length == 1
+        ? ((taxBreakdownRows.first['label']?.toString().trim() ?? '').isNotEmpty
+            ? taxBreakdownRows.first['label'].toString().trim()
+            : 'Impuesto')
+        : 'Impuesto';
+    final primaryTaxRate =
+        (taxBreakdownRows.isNotEmpty ? taxBreakdownRows.first['rate'] : null);
+    final primaryTaxRateNum = (primaryTaxRate as num?)?.toDouble() ?? 0;
+    final primaryTaxRowLabel = primaryTaxRateNum > 0
+        ? '$primaryTaxLabel (${primaryTaxRateNum == primaryTaxRateNum.truncateToDouble() ? primaryTaxRateNum.toInt() : primaryTaxRateNum.toStringAsFixed(2)}%)'
+        : primaryTaxLabel;
     final serviceFeeLabel =
-        fs['service_fee_label']?.toString() ?? 'Propina de ley';
+        (fs['service_fee_label'] as String?)?.trim().isNotEmpty == true
+            ? (fs['service_fee_label'] as String).trim()
+            : 'Cargo de servicio';
     final serviceFeeRate =
         (fs['service_fee_rate'] as num?)?.toDouble() ?? 0;
     final serviceFeeRateStr = serviceFeeRate > 0
@@ -81,6 +101,7 @@ class _TaxReportBody extends StatelessWidget {
           title: 'Reporte de Impuestos',
           subtitle:
               'Basado en comprobantes fiscales emitidos. Fuente oficial para DGII.',
+          period: formatReportPeriod(state),
           accentColor: MangoColors.primaryOrange,
           trailing: [
             ReportHeroStat(
@@ -137,48 +158,13 @@ class _TaxReportBody extends StatelessWidget {
 
         const SizedBox(height: AppSpacing.itemGap),
 
-        // Summary metrics
-        Wrap(
-          spacing: AppSpacing.itemGap,
-          runSpacing: AppSpacing.itemGap,
-          children: [
-            _TaxMetricTile(
-              label: 'ITBIS cobrado',
-              value: currency.format(totalItbis),
-              subtitle: '18% sobre base gravable',
-              color: const Color(0xFF2563EB),
-              icon: Icons.account_balance_outlined,
-            ),
-            _TaxMetricTile(
-              label: 'Propina de ley',
-              value: currency.format(totalServiceFee),
-              subtitle: 'Cargo de servicio',
-              color: const Color(0xFFF97316),
-              icon: Icons.room_service_outlined,
-            ),
-            _TaxMetricTile(
-              label: 'Base gravable',
-              value: currency.format(totalSubtotal),
-              subtitle: 'Subtotal antes de impuestos',
-              color: const Color(0xFF7C3AED),
-              icon: Icons.sell_outlined,
-            ),
-            _TaxMetricTile(
-              label: 'Total facturado',
-              value: currency.format(totalAmount),
-              subtitle: 'Incluyendo impuestos',
-              color: const Color(0xFF059669),
-              icon: Icons.receipt_long_outlined,
-            ),
-            _TaxMetricTile(
-              label: 'Anulados',
-              value: '$voidCount',
-              subtitle: 'Comprobantes anulados',
-              color: const Color(0xFFDC2626),
-              icon: Icons.cancel_outlined,
-            ),
-          ],
-        ),
+        // Métricas. Single source of truth: getTaxReportMetricCards() en el
+        // viewmodel — el mismo método lo usan el PDF y CSV export. Antes acá
+        // había 5 cards inline con `'18% sobre base gravable'` hardcoded y
+        // los exports usaban OTRO cálculo (taxSummary Dart con threshold 27.9)
+        // → divergencia confirmada del 30% entre pantalla y PDF. Ahora todo
+        // sale del mismo lugar: la tabla fiscal_documents.
+        buildMetricsWrap(viewModel.getTaxReportMetricCards()),
 
         const SizedBox(height: AppSpacing.sectionGap),
 
@@ -213,19 +199,19 @@ class _TaxReportBody extends StatelessWidget {
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 8),
                   child: Row(
-                    children: const [
-                      Expanded(
+                    children: [
+                      const Expanded(
                           flex: 3,
                           child: _ColHeader('Tipo NCF')),
-                      Expanded(
+                      const Expanded(
                           flex: 2,
                           child: _ColHeader('Comprobantes',
                               align: TextAlign.center)),
                       Expanded(
                           flex: 2,
-                          child: _ColHeader('ITBIS',
+                          child: _ColHeader(primaryTaxLabel,
                               align: TextAlign.right)),
-                      Expanded(
+                      const Expanded(
                           flex: 2,
                           child: _ColHeader('Total',
                               align: TextAlign.right)),
@@ -332,10 +318,10 @@ class _TaxReportBody extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const ReportSectionLabel(
+              ReportSectionLabel(
                 title: 'Desglose por tipo de impuesto',
                 subtitle:
-                    'ITBIS y propina de ley leídos directamente de los comprobantes fiscales.',
+                    '$primaryTaxLabel y $serviceFeeLabel leídos directamente de los comprobantes fiscales.',
               ),
               const SizedBox(height: AppSpacing.lg),
               if (totalItbis == 0 && totalServiceFee == 0)
@@ -358,7 +344,7 @@ class _TaxReportBody extends StatelessWidget {
                 const Divider(height: 1),
                 if (totalItbis > 0)
                   _TaxBreakdownRow(
-                    label: 'ITBIS (18%)',
+                    label: primaryTaxRowLabel,
                     base: totalSubtotal,
                     amount: totalItbis,
                     color: const Color(0xFF2563EB),
@@ -402,75 +388,6 @@ class _TaxReportBody extends StatelessWidget {
 
         const SizedBox(height: AppSpacing.sectionGap),
       ],
-    );
-  }
-}
-
-class _TaxMetricTile extends StatelessWidget {
-  final String label;
-  final String value;
-  final String subtitle;
-  final Color color;
-  final IconData icon;
-
-  const _TaxMetricTile({
-    required this.label,
-    required this.value,
-    required this.subtitle,
-    required this.color,
-    required this.icon,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 200,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: MangoColors.cardBorder),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(icon, size: 16, color: color),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-              color: color,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-              color: AppColors.foreground,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            subtitle,
-            style: const TextStyle(fontSize: 11, color: MangoColors.muted),
-          ),
-        ],
-      ),
     );
   }
 }

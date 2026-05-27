@@ -271,11 +271,12 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         final from = todayStart.subtract(Duration(days: weekdayOffset));
         return (from: from, to: todayStart.add(const Duration(days: 1)));
       case SalesReportRangePreset.thisMonth:
+        // "Este mes" = del 1ro al CIERRE DE HOY (no al fin de mes futuro).
+        // Antes incluía días futuros que llenaban el header con "01/05 -
+        // 31/05" cuando estabas recién en el día 15, además de ser
+        // inconsistente con "Esta semana" que sí va hasta hoy.
         final from = DateTime(now.year, now.month, 1);
-        final to = now.month == 12
-            ? DateTime(now.year + 1, 1, 1)
-            : DateTime(now.year, now.month + 1, 1);
-        return (from: from, to: to);
+        return (from: from, to: todayStart.add(const Duration(days: 1)));
       case SalesReportRangePreset.custom:
         return (from: todayStart, to: todayStart.add(const Duration(days: 1)));
     }
@@ -454,12 +455,19 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
   }
 
   Future<void> setCustomSalesRange(DateTime from, DateTime to) async {
-    final start = DateTime(from.year, from.month, from.day);
-    final endExclusive = DateTime(
-      to.year,
-      to.month,
-      to.day,
-    ).add(const Duration(days: 1));
+    // Normalizamos a fecha (descartamos horas) y aplicamos exclusive-end:
+    // sumamos 1 día a `to` para que la query incluya el último día completo
+    // (00:00 del día siguiente como upper bound).
+    var start = DateTime(from.year, from.month, from.day);
+    var end = DateTime(to.year, to.month, to.day);
+    // Si llegan invertidas (defensivo — el modal lo corrige antes pero igual
+    // protegemos contra callers programáticos), swap silencioso.
+    if (end.isBefore(start)) {
+      final tmp = start;
+      start = end;
+      end = tmp;
+    }
+    final endExclusive = end.add(const Duration(days: 1));
     state = state.copyWith(
       salesRangePreset: SalesReportRangePreset.custom,
       salesFrom: start,
@@ -1186,107 +1194,144 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         .toList(growable: false);
   }
 
-  List<SalesMetricCardData> getTaxMetricCards() {
-    final summary = state.taxSummary ?? const <String, dynamic>{};
-    final totalTax = (summary['total_tax_collected'] as num?)?.toDouble() ?? 0;
-    final totalServiceFee =
-        (summary['total_service_fee'] as num?)?.toDouble() ?? 0;
-    final totalCharges =
-        (summary['total_charges_collected'] as num?)?.toDouble() ??
-        (totalTax + totalServiceFee);
-    final taxableSales = (summary['taxable_sales'] as num?)?.toDouble() ?? 0;
-    final exemptSales = (summary['exempt_sales'] as num?)?.toDouble() ?? 0;
-    final effectiveRate =
-        (summary['effective_tax_rate'] as num?)?.toDouble() ?? 0;
-    final configured =
-        (summary['configured_taxes_count'] as num?)?.toInt() ?? 0;
-    final active = (summary['active_taxes_count'] as num?)?.toInt() ?? 0;
-    final serviceFeeOrders =
-        (summary['service_fee_orders_count'] as num?)?.toInt() ?? 0;
-    final serviceFeeRate =
-        (summary['service_fee_rate'] as num?)?.toDouble() ?? 0;
+  /// Cards del Reporte de Impuestos. Fuente: `fiscalSummary` (= tabla
+  /// `fiscal_documents` = NCFs emitidos = oficial DGII).
+  ///
+  /// IMPORTANTE: este método reemplaza al legacy `getTaxMetricCards()` que
+  /// leía de `taxSummary` (reconstrucción Dart desde payments+items con
+  /// heurística `27.9`). Ese path daba números distintos a los del view —
+  /// divergencia confirmada del 30% (RD$19,956 vs RD$13,972 en el reporte
+  /// de impuestos del 26/05/2026).
+  ///
+  /// La única verdad para impuestos es lo que se emitió como NCF. Punto.
+  /// Tanto la pantalla como el PDF/CSV ahora usan este método → cero
+  /// divergencia posible.
+  List<SalesMetricCardData> getTaxReportMetricCards() {
+    final summary = state.fiscalSummary ?? const <String, dynamic>{};
+    final selectedType = state.fiscalTypeFilter;
+
+    // Si el usuario filtró por tipo de NCF, los totales se reducen al bucket
+    // de ese tipo. Sin filtro, usamos los totales globales del rango.
+    Map<String, dynamic>? activeBucket;
+    if (selectedType != null) {
+      final byType = (summary['by_type'] as List?) ?? const [];
+      for (final raw in byType) {
+        final row = Map<String, dynamic>.from(raw as Map);
+        if (row['ncf_type']?.toString() == selectedType) {
+          activeBucket = row;
+          break;
+        }
+      }
+    }
+
+    final totalItbis = activeBucket != null
+        ? (activeBucket['itbis'] as num?)?.toDouble() ?? 0
+        : (summary['total_itbis'] as num?)?.toDouble() ?? 0;
+    final totalServiceFee = activeBucket != null
+        ? (activeBucket['service_fee'] as num?)?.toDouble() ?? 0
+        : (summary['total_service_fee'] as num?)?.toDouble() ?? 0;
+    final totalSubtotal = activeBucket != null
+        ? (activeBucket['subtotal'] as num?)?.toDouble() ?? 0
+        : (summary['total_subtotal'] as num?)?.toDouble() ?? 0;
+    final totalAmount = activeBucket != null
+        ? (activeBucket['amount'] as num?)?.toDouble() ?? 0
+        : (summary['total_amount'] as num?)?.toDouble() ?? 0;
+    // Con filtro activo no contamos anulados por tipo (el bucket es solo
+    // activos). Sin filtro mostramos el contador global de anulados.
+    final voidCount = activeBucket != null
+        ? 0
+        : (summary['void_count'] as num?)?.toInt() ?? 0;
+
+    // Tasa efectiva derivada — NO hardcodeada al 18%. Si totalSubtotal=0 (sin
+    // ventas), cae a "Sin base gravable" en vez de mostrar 0% que confunde.
+    final effectiveRate = totalSubtotal > 0
+        ? (totalItbis / totalSubtotal) * 100
+        : 0;
+    final effectiveRateLabel = totalSubtotal > 0
+        ? '${effectiveRate.toStringAsFixed(2)}% sobre base gravable'
+        : 'Sin base gravable en el rango';
+
+    // Label del impuesto principal: derivado de tax_breakdown[0].label si hay
+    // una sola tasa configurada (ITBIS, IVA, IGV...). Si hay varias, fallback
+    // genérico. Antes hardcoded "ITBIS" → rompía multi-país y multi-impuesto.
+    final taxBreakdown =
+        (summary['tax_breakdown'] as List?)?.cast<Map>() ?? const <Map>[];
+    final primaryTaxName = taxBreakdown.length == 1
+        ? ((taxBreakdown.first['label']?.toString().trim() ?? '').isNotEmpty
+            ? taxBreakdown.first['label'].toString().trim()
+            : 'Impuestos')
+        : 'Impuestos';
+    final taxCardTitle = '$primaryTaxName cobrado${taxBreakdown.length > 1 ? 's' : ''}';
+
+    // Label del cargo de servicio: viene de service_fee_label configurado por
+    // el comercio. Fallback genérico "Cargo de servicio" si no hay nombre
+    // configurado — preferimos algo neutral antes que asumir "Propina de ley"
+    // (que es específico de RD).
+    final serviceFeeRaw = (summary['service_fee_label'] as String?)?.trim();
+    final serviceFeeTitle = (serviceFeeRaw?.isNotEmpty ?? false)
+        ? serviceFeeRaw!
+        : 'Cargo de servicio';
+    final serviceFeeRate = (summary['service_fee_rate'] as num?)?.toDouble() ?? 0;
+    final serviceFeeSubtitle = serviceFeeRate > 0
+        ? '${serviceFeeRate.toStringAsFixed(serviceFeeRate.truncateToDouble() == serviceFeeRate ? 0 : 2)}% sobre base'
+        : 'Cargo legal aplicado en el ticket';
 
     return [
       SalesMetricCardData(
-        title: 'Impuestos cobrados',
-        value: state.currency.formatAmount(totalTax),
-        subtitle: 'Total acumulado en el rango seleccionado',
-        icon: Icons.receipt_outlined,
+        title: taxCardTitle,
+        value: state.currency.formatAmount(totalItbis),
+        subtitle: effectiveRateLabel,
+        icon: Icons.account_balance_outlined,
         color: const Color(0xFF2563EB),
       ),
       SalesMetricCardData(
-        title: 'Propina de ley',
+        title: serviceFeeTitle,
         value: state.currency.formatAmount(totalServiceFee),
-        subtitle: serviceFeeOrders > 0
-            ? '$serviceFeeOrders cuentas con cargo legal'
-            : 'Sin cargos de ley en el rango',
+        subtitle: serviceFeeSubtitle,
         icon: Icons.room_service_outlined,
         color: const Color(0xFFF97316),
       ),
       SalesMetricCardData(
-        title: 'Total fiscal y ley',
-        value: state.currency.formatAmount(totalCharges),
-        subtitle: 'Suma de impuestos + propina de ley',
-        icon: Icons.account_balance_wallet_outlined,
-        color: const Color(0xFF059669),
-      ),
-      SalesMetricCardData(
-        title: 'Ventas gravadas',
-        value: state.currency.formatAmount(taxableSales),
-        subtitle: 'Base imponible sujeta a impuestos',
+        title: 'Base gravable',
+        value: state.currency.formatAmount(totalSubtotal),
+        subtitle: 'Subtotal antes de impuestos',
         icon: Icons.sell_outlined,
         color: const Color(0xFF7C3AED),
       ),
       SalesMetricCardData(
-        title: 'Ventas exentas',
-        value: state.currency.formatAmount(exemptSales),
-        subtitle: 'Items sin impuesto en el rango',
-        icon: Icons.remove_circle_outline,
-        color: const Color(0xFF0F766E),
+        title: 'Total facturado',
+        value: state.currency.formatAmount(totalAmount),
+        subtitle: 'Incluyendo impuestos',
+        icon: Icons.receipt_long_outlined,
+        color: const Color(0xFF059669),
       ),
       SalesMetricCardData(
-        title: 'Tasa efectiva ITBIS',
-        value: '${effectiveRate.toStringAsFixed(2)}%',
-        subtitle: serviceFeeRate > 0
-            ? 'Propina de ley configurada: ${serviceFeeRate == serviceFeeRate.truncateToDouble() ? serviceFeeRate.toInt() : serviceFeeRate.toStringAsFixed(2)}%'
-            : 'Sin propina de ley configurada',
-        icon: Icons.percent_outlined,
-        color: const Color(0xFF6D28D9),
-      ),
-      SalesMetricCardData(
-        title: 'Tipos de impuesto',
-        value: '$active/$configured',
-        subtitle: 'Activos frente a configurados',
-        icon: Icons.account_balance_outlined,
-        color: const Color(0xFFD97706),
+        title: 'Anulados',
+        value: '$voidCount',
+        subtitle: 'Comprobantes anulados',
+        icon: Icons.cancel_outlined,
+        color: const Color(0xFFDC2626),
       ),
     ];
   }
 
-  List<SalesBreakdownRow> getTaxTypeRows() {
-    final rows = (state.taxSummary?['tax_breakdown'] as List?) ?? const [];
+  /// Desglose por tipo de NCF (B01, B02, etc.) para el reporte de Impuestos.
+  /// Mismas filas que muestra el view en la sección "Desglose por tipo".
+  /// Antes salía de `taxSummary.tax_breakdown` (otro camino) — ahora de
+  /// `fiscalSummary.by_type` igual que el view.
+  List<SalesBreakdownRow> getTaxReportTypeRows() {
+    final rows = (state.fiscalSummary?['by_type'] as List?) ?? const [];
     return rows
         .map((row) => Map<String, dynamic>.from(row as Map))
         .map(
           (row) => SalesBreakdownRow(
-            label: _formatTaxRowLabel(row),
+            label: row['label']?.toString() ?? 'Tipo',
             amount: (row['amount'] as num?)?.toDouble() ?? 0,
-            quantity: (row['taxable_amount'] as num?)?.toDouble() ?? 0,
+            quantity: (row['itbis'] as num?)?.toDouble() ?? 0,
             count: (row['count'] as num?)?.toInt() ?? 0,
           ),
         )
         .toList(growable: false);
-  }
-
-  String _formatTaxRowLabel(Map<String, dynamic> row) {
-    final label = row['label']?.toString().trim();
-    final safeLabel = (label?.isNotEmpty ?? false) ? label! : 'Impuesto';
-    final rate = (row['rate'] as num?)?.toDouble() ?? 0;
-    if (rate <= 0) return safeLabel;
-    final rateStr = rate == rate.truncateToDouble()
-        ? rate.toInt().toString()
-        : rate.toStringAsFixed(2);
-    return '$safeLabel ($rateStr%)';
   }
 
   // --- Fiscal (comprobantes) helpers ---
@@ -1301,6 +1346,20 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
     final totalAmount = (summary['total_amount'] as num?)?.toDouble() ?? 0;
     final totalServiceFee =
         (summary['total_service_fee'] as num?)?.toDouble() ?? 0;
+
+    // Labels derivados del BD — ver comentario en getTaxReportMetricCards.
+    final taxBreakdown =
+        (summary['tax_breakdown'] as List?)?.cast<Map>() ?? const <Map>[];
+    final primaryTaxName = taxBreakdown.length == 1
+        ? ((taxBreakdown.first['label']?.toString().trim() ?? '').isNotEmpty
+            ? taxBreakdown.first['label'].toString().trim()
+            : 'Impuestos')
+        : 'Impuestos';
+    final taxCardTitle = '$primaryTaxName cobrado${taxBreakdown.length > 1 ? 's' : ''}';
+    final serviceFeeRaw = (summary['service_fee_label'] as String?)?.trim();
+    final serviceFeeTitle = (serviceFeeRaw?.isNotEmpty ?? false)
+        ? serviceFeeRaw!
+        : 'Cargo de servicio';
 
     return [
       SalesMetricCardData(
@@ -1318,17 +1377,17 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         color: const Color(0xFFF97316),
       ),
       SalesMetricCardData(
-        title: 'ITBIS cobrado',
+        title: taxCardTitle,
         value: state.currency.formatAmount(totalItbis),
-        subtitle: 'Total ITBIS en comprobantes activos',
+        subtitle: 'Total $primaryTaxName en comprobantes activos',
         icon: Icons.account_balance_outlined,
         color: const Color(0xFF059669),
       ),
       if (totalServiceFee > 0)
         SalesMetricCardData(
-          title: 'Propina de ley',
+          title: serviceFeeTitle,
           value: state.currency.formatAmount(totalServiceFee),
-          subtitle: 'Total propina de ley en el rango',
+          subtitle: 'Total $serviceFeeTitle en el rango',
           icon: Icons.room_service_outlined,
           color: const Color(0xFFD97706),
         ),

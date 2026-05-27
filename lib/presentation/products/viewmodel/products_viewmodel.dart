@@ -420,6 +420,9 @@ class ProductsViewModel extends ChangeNotifier {
     }
   }
 
+  /// Elimina un producto definitivamente. Los tickets históricos quedan
+  /// intactos porque `order_items` tiene `product_name` y `unit_price`
+  /// denormalizados y su FK a `menu_items` está como `ON DELETE SET NULL`.
   Future<void> deleteProduct(String id) async {
     try {
       await _repository.deleteProduct(id);

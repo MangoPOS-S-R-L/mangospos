@@ -407,6 +407,14 @@ class _SalesReportBody extends StatelessWidget {
           FiscalDocumentsDetailCard(
             documents: viewModel.getFiscalDocuments(),
             currency: currency,
+            serviceFeeLabel:
+                (state.fiscalSummary?['service_fee_label'] as String?)
+                            ?.trim()
+                            .isNotEmpty ==
+                        true
+                    ? (state.fiscalSummary!['service_fee_label'] as String)
+                        .trim()
+                    : 'Cargo de servicio',
           ),
         ];
       case SalesSubReport.byModifiers:

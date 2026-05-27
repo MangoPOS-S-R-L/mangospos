@@ -313,6 +313,26 @@ class ProductsRepository {
         .eq('id', id);
   }
 
+  /// Elimina un producto del menú definitivamente.
+  ///
+  /// Las FKs que apuntan a `menu_items` están configuradas para que el
+  /// delete sea siempre seguro:
+  ///   - `order_items.product_id`        → ON DELETE SET NULL (preserva el
+  ///                                        ticket histórico con su nombre
+  ///                                        y precio snapshotted)
+  ///   - `recipes.menu_item_id`          → ON DELETE CASCADE (la receta
+  ///                                        muere con el producto)
+  ///   - `menu_item_groups/links/taxes`  → ON DELETE CASCADE
+  ///   - `menu_item_print_areas`         → ON DELETE CASCADE
+  ///
+  /// Resultado: el catálogo queda limpio y los reportes/tickets viejos
+  /// siguen funcionando porque `order_items` ya tenía denormalizado el
+  /// `product_name`, `unit_price`, etc.
+  ///
+  /// Borramos primero `menu_item_links` y `menu_item_taxes` aunque ya
+  /// cascadeen, por una razón pragmática: algunos ambientes viejos donde
+  /// el CASCADE no estaba aún (instalaciones pre-migration) necesitan el
+  /// cleanup explícito. Es no-op cuando las FKs ya cascadan.
   Future<void> deleteProduct(String id) async {
     await _client
         .from(ProductsQueries.tableMenuItemLinks)

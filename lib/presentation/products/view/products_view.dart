@@ -455,9 +455,28 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
             child: const Text('Cancelar'),
           ),
           TextButton(
-            onPressed: () {
-              viewModel.deleteProduct(id);
+            onPressed: () async {
+              // Cerramos el diálogo ANTES del await para no quedarnos con la
+              // modal trabada si el delete tarda. Capturamos el messenger
+              // con el `context` actual del builder antes del pop.
+              final messenger = ScaffoldMessenger.of(context);
               Navigator.pop(context);
+              try {
+                await viewModel.deleteProduct(id);
+                messenger.showSnackBar(
+                  SnackBar(
+                    content: const Text('Producto eliminado.'),
+                    backgroundColor: AppColors.success,
+                  ),
+                );
+              } catch (e) {
+                messenger.showSnackBar(
+                  SnackBar(
+                    content: Text('No se pudo eliminar el producto: $e'),
+                    backgroundColor: AppColors.destructive,
+                  ),
+                );
+              }
             },
             style: TextButton.styleFrom(foregroundColor: AppColors.destructive),
             child: const Text('Eliminar'),

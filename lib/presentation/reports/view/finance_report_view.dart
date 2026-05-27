@@ -48,6 +48,7 @@ class _FinanceReportBody extends StatelessWidget {
           title: 'Cierres de caja',
           subtitle:
               'Seguimiento operativo del cuadre, diferencias y movimientos manuales en un solo lugar.',
+          period: formatReportPeriod(state),
           accentColor: MangoColors.primaryOrange,
           trailing: [
             ReportHeroStat(

@@ -185,7 +185,7 @@ class _SendToKitchenButtonState extends ConsumerState<_SendToKitchenButton> {
     switch (_state) {
       case KitchenButtonState.idle:
         return {
-          'text': 'Enviar a Cocina',
+          'text': 'Enviar Pedido',
           'icon': Icons.restaurant,
           'bgColor': const Color(0xFFF97316), // kPrimary
           'disabled': false,

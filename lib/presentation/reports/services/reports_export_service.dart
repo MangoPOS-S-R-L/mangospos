@@ -3,6 +3,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
+import '../../../core/fiscal/ncf_types.dart';
 import '../viewmodel/reports_viewmodel.dart';
 
 class ReportsExportService {
@@ -83,7 +84,10 @@ class ReportsExportService {
             pw.SizedBox(height: 16),
             // Cada comprobante listado individualmente con su estado
             // (Activo/Anulado), igual que el reporte fiscal.
-            ..._fiscalDocumentsTable(viewModel.getFiscalDocuments()),
+            ..._fiscalDocumentsTable(
+              viewModel.getFiscalDocuments(),
+              _serviceFeeLabelOf(state),
+            ),
           ];
         }
         return [
@@ -172,12 +176,16 @@ class ReportsExportService {
           ),
         ];
       case ReportCategory.taxes:
+        // FUENTE: fiscalSummary (tabla fiscal_documents = NCFs emitidos).
+        // ANTES usaba getTaxMetricCards/getTaxTypeRows (reconstrucción Dart
+        // desde payments+items) y daba números distintos a los del view
+        // (delta 30%+). Ahora ambos toman de la misma fuente.
         return [
-          _metricsTable(viewModel.getTaxMetricCards()),
+          _metricsTable(viewModel.getTaxReportMetricCards()),
           pw.SizedBox(height: 16),
           ..._breakdownTable(
-            'Impuestos por tipo',
-            viewModel.getTaxTypeRows(),
+            'Total facturado por tipo de comprobante',
+            viewModel.getTaxReportTypeRows(),
             showQuantity: true,
           ),
         ];
@@ -196,7 +204,10 @@ class ReportsExportService {
             showQuantity: true,
           ),
           pw.SizedBox(height: 16),
-          ..._fiscalDocumentsTable(viewModel.getFiscalDocuments()),
+          ..._fiscalDocumentsTable(
+              viewModel.getFiscalDocuments(),
+              _serviceFeeLabelOf(state),
+            ),
         ];
     }
   }
@@ -252,37 +263,27 @@ class ReportsExportService {
     ];
   }
 
-  static String _ncfTypeName(String type) {
-    switch (type) {
-      case 'B01':
-      case 'E31':
-        return 'Crédito Fiscal';
-      case 'B02':
-      case 'E32':
-        return 'Consumo';
-      case 'B03':
-      case 'E33':
-        return 'Nota de Débito';
-      case 'B04':
-      case 'E34':
-        return 'Nota de Crédito';
-      case 'B14':
-      case 'E44':
-        return 'Reg. Especiales';
-      case 'B15':
-      case 'E45':
-        return 'Gubernamental';
-      default:
-        return type;
-    }
-  }
+  // _ncfTypeName eliminado: ahora se usa `ncfTypeName(code)` de
+  // core/fiscal/ncf_types.dart (catálogo único para toda la app).
 
   // Skip "Impuesto X%" entries — fallback que produce el repositorio
   // cuando el tax_rate combinado (ej. 28% = ITBIS+Propina) no pudo
   // desdoblarse, y crea una columna extra que rompe el layout.
   static final RegExp _kUnmappedTaxLabelRe = RegExp(r'^Impuesto\s');
 
-  static List<String> _collectTaxLabels(List<Map<String, dynamic>> documents) {
+  /// Label del service fee derivado de la config del comercio
+  /// (`fiscalSummary.service_fee_label`). Fallback genérico — antes era
+  /// "Propina de ley" hardcoded en varios lugares.
+  static String _serviceFeeLabelOf(ReportsState state) {
+    final raw =
+        (state.fiscalSummary?['service_fee_label'] as String?)?.trim();
+    return (raw?.isNotEmpty ?? false) ? raw! : 'Cargo de servicio';
+  }
+
+  static List<String> _collectTaxLabels(
+    List<Map<String, dynamic>> documents,
+    String serviceFeeLabel,
+  ) {
     final labels = <String>{};
     for (final doc in documents) {
       final breakdown = doc['tax_breakdown'];
@@ -301,13 +302,17 @@ class ReportsExportService {
         }
       }
       final sf = (doc['service_fee'] as num?)?.toDouble() ?? 0;
-      if (sf > 0) labels.add('Propina de ley');
+      if (sf > 0) labels.add(serviceFeeLabel);
     }
     return labels.toList(growable: false);
   }
 
-  static double _taxAmountForLabel(Map<String, dynamic> doc, String label) {
-    if (label == 'Propina de ley') {
+  static double _taxAmountForLabel(
+    Map<String, dynamic> doc,
+    String label,
+    String serviceFeeLabel,
+  ) {
+    if (label == serviceFeeLabel) {
       return (doc['service_fee'] as num?)?.toDouble() ?? 0;
     }
     final breakdown = doc['tax_breakdown'];
@@ -330,6 +335,7 @@ class ReportsExportService {
 
   static List<pw.Widget> _fiscalDocumentsTable(
     List<Map<String, dynamic>> documents,
+    String serviceFeeLabel,
   ) {
     if (documents.isEmpty) {
       return [
@@ -339,7 +345,7 @@ class ReportsExportService {
 
     final dateFormat = DateFormat('dd/MM/yyyy');
     final numberFormat = NumberFormat('#,##0.00', 'en_US');
-    final taxLabels = _collectTaxLabels(documents);
+    final taxLabels = _collectTaxLabels(documents, serviceFeeLabel);
 
     return [
       pw.Text(
@@ -384,14 +390,15 @@ class ReportsExportService {
 
               return [
                 ncfNumber,
-                _ncfTypeName(ncfType),
+                ncfTypeName(ncfType),
                 customerName.length > 25
                     ? '${customerName.substring(0, 25)}...'
                     : customerName,
                 customerRnc.isEmpty ? '-' : customerRnc,
                 numberFormat.format(subtotal),
                 ...taxLabels.map((label) {
-                  final amount = _taxAmountForLabel(doc, label);
+                  final amount =
+                      _taxAmountForLabel(doc, label, serviceFeeLabel);
                   return amount > 0 ? numberFormat.format(amount) : '-';
                 }),
                 numberFormat.format(total),

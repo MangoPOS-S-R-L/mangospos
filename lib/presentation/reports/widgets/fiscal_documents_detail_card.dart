@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/fiscal/ncf_types.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
 
@@ -17,6 +18,7 @@ class FiscalDocumentsDetailCard extends StatelessWidget {
     super.key,
     required this.documents,
     required this.currency,
+    required this.serviceFeeLabel,
     this.title = 'Detalle de comprobantes',
     this.subtitle =
         'Cada comprobante por separado, con su estado (Activo o Anulado).',
@@ -27,34 +29,17 @@ class FiscalDocumentsDetailCard extends StatelessWidget {
   /// Inyectado por el caller (típico: `state.currency.formatter` desde una
   /// pantalla de reportes). Centraliza el símbolo en `business_settings`.
   final NumberFormat currency;
+  /// Label del cargo de servicio configurado por el comercio (viene de
+  /// `fiscalSummary.service_fee_label`). Se usa como header de columna y
+  /// como sentinel para mapear el monto del service_fee al label correcto.
+  /// Antes era "Propina de ley" hardcoded — rompía multi-config.
+  final String serviceFeeLabel;
   final String title;
   final String subtitle;
   final String emptyMessage;
 
-  static String ncfTypeName(String type) {
-    switch (type) {
-      case 'B01':
-      case 'E31':
-        return 'Crédito Fiscal';
-      case 'B02':
-      case 'E32':
-        return 'Consumo';
-      case 'B03':
-      case 'E33':
-        return 'Nota de Débito';
-      case 'B04':
-      case 'E34':
-        return 'Nota de Crédito';
-      case 'B14':
-      case 'E44':
-        return 'Reg. Especiales';
-      case 'B15':
-      case 'E45':
-        return 'Gubernamental';
-      default:
-        return type;
-    }
-  }
+  // ncfTypeName eliminado: ahora se usa el global de core/fiscal/ncf_types.dart
+  // (catálogo único, evita drift entre archivos).
 
   /// Filtra labels "Impuesto X%" — son el fallback que produce el
   /// repositorio cuando un order_item tiene tax_rate combinado (ej. 28%
@@ -68,7 +53,10 @@ class FiscalDocumentsDetailCard extends StatelessWidget {
     return RegExp(r'^Impuesto\s').hasMatch(label);
   }
 
-  static List<String> collectTaxLabels(List<Map<String, dynamic>> documents) {
+  static List<String> collectTaxLabels(
+    List<Map<String, dynamic>> documents,
+    String serviceFeeLabel,
+  ) {
     final labels = <String>{};
     for (final doc in documents) {
       final breakdown = doc['tax_breakdown'];
@@ -87,14 +75,18 @@ class FiscalDocumentsDetailCard extends StatelessWidget {
         }
       }
       if (((doc['service_fee'] as num?)?.toDouble() ?? 0) > 0) {
-        labels.add('Propina de ley');
+        labels.add(serviceFeeLabel);
       }
     }
     return labels.toList(growable: false);
   }
 
-  static double taxAmountForLabel(Map<String, dynamic> doc, String label) {
-    if (label == 'Propina de ley') {
+  static double taxAmountForLabel(
+    Map<String, dynamic> doc,
+    String label,
+    String serviceFeeLabel,
+  ) {
+    if (label == serviceFeeLabel) {
       return (doc['service_fee'] as num?)?.toDouble() ?? 0;
     }
     final breakdown = doc['tax_breakdown'];
@@ -118,7 +110,7 @@ class FiscalDocumentsDetailCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dateFormat = DateFormat('dd/MM/yyyy hh:mm a');
-    final taxLabels = collectTaxLabels(documents);
+    final taxLabels = collectTaxLabels(documents, serviceFeeLabel);
 
     return ReportSurfaceCard(
       child: Column(
@@ -202,15 +194,13 @@ class FiscalDocumentsDetailCard extends StatelessWidget {
                         Text(customerRnc.isEmpty ? '-' : customerRnc),
                       ),
                       DataCell(Text(currency.format(subtotal))),
-                      ...taxLabels.map(
-                        (label) => DataCell(
-                          Text(
-                            taxAmountForLabel(doc, label) > 0
-                                ? currency.format(taxAmountForLabel(doc, label))
-                                : '-',
-                          ),
-                        ),
-                      ),
+                      ...taxLabels.map((label) {
+                        final amount =
+                            taxAmountForLabel(doc, label, serviceFeeLabel);
+                        return DataCell(
+                          Text(amount > 0 ? currency.format(amount) : '-'),
+                        );
+                      }),
                       DataCell(
                         Text(
                           currency.format(total),

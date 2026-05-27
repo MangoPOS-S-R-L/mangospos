@@ -118,7 +118,12 @@ class _DateRangeModalState extends State<DateRangeModal> {
           ),
           const SizedBox(height: 14),
 
-          Row(
+          // Presets para el caso 80%. El usuario igual puede tocar fechas
+          // específicas en el calendario abajo. Wrap permite que los chips
+          // se acomoden en 2 filas si el modal es angosto.
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
             children: [
               DatePresetChip(
                 label: 'Hoy',
@@ -127,7 +132,18 @@ class _DateRangeModalState extends State<DateRangeModal> {
                   DateTime(today.year, today.month, today.day, 23, 59, 59),
                 ),
               ),
-              const SizedBox(width: 8),
+              DatePresetChip(
+                label: 'Ayer',
+                onTap: () {
+                  final yesterday =
+                      today.subtract(const Duration(days: 1));
+                  _applyPreset(
+                    DateTime(yesterday.year, yesterday.month, yesterday.day),
+                    DateTime(
+                        yesterday.year, yesterday.month, yesterday.day, 23, 59, 59),
+                  );
+                },
+              ),
               DatePresetChip(
                 label: 'Esta semana',
                 onTap: () {
@@ -139,7 +155,6 @@ class _DateRangeModalState extends State<DateRangeModal> {
                   );
                 },
               ),
-              const SizedBox(width: 8),
               DatePresetChip(
                 label: 'Este mes',
                 onTap: () => _applyPreset(

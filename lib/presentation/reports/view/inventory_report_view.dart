@@ -34,12 +34,25 @@ class _InventoryReportBody extends StatelessWidget {
     final alertRows = viewModel.getInventoryAlertRows();
     final movementRows = viewModel.getInventoryMovementRows();
 
+    final inventorySummary = state.inventorySummary ?? const <String, dynamic>{};
+    final itemsCount =
+        (inventorySummary['items_count'] as num?)?.toInt() ?? 0;
+    final lowStockCount =
+        (inventorySummary['low_stock_count'] as num?)?.toInt() ?? 0;
+
     return ListView(
       padding: reportBodyPadding(context),
       children: [
-        const Text(
-          'Visión general de existencias, alertas y movimientos recientes.',
-          style: TextStyle(color: AppColors.mutedForeground, fontSize: 15),
+        ReportHeroCard(
+          title: 'Reporte de Inventario',
+          subtitle:
+              'Visión general de existencias, alertas y movimientos recientes.',
+          period: formatReportPeriod(state),
+          accentColor: const Color(0xFF059669),
+          trailing: [
+            ReportHeroStat(label: 'Insumos', value: '$itemsCount'),
+            ReportHeroStat(label: 'Stock bajo', value: '$lowStockCount'),
+          ],
         ),
         if (state.error != null) ...[
           const SizedBox(height: AppSpacing.itemGap),

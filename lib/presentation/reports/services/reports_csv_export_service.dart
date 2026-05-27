@@ -58,9 +58,20 @@ class ReportsCsvExportService {
       rows.add([]);
     }
 
+    // Label del service fee derivado de la configuración del comercio
+    // (`service_fee_label`). Antes era "Propina de ley" hardcoded — rompía
+    // multi-país y multi-configuración.
+    final serviceFeeLabel =
+        (state.fiscalSummary?['service_fee_label'] as String?)?.trim();
+    final effectiveServiceFeeLabel =
+        (serviceFeeLabel?.isNotEmpty ?? false)
+            ? serviceFeeLabel!
+            : 'Cargo de servicio';
+
     void addFiscalDocumentsDetail(List<Map<String, dynamic>> fiscalDocs) {
       if (fiscalDocs.isEmpty) return;
-      final taxLabels = _collectTaxLabels(fiscalDocs);
+      final taxLabels =
+          _collectTaxLabels(fiscalDocs, effectiveServiceFeeLabel);
       rows.add(['Detalle de comprobantes']);
       rows.add([
         'NCF',
@@ -84,7 +95,11 @@ class ReportsCsvExportService {
           doc['customer_rnc']?.toString() ?? '-',
           ((doc['subtotal'] as num?)?.toDouble() ?? 0).toStringAsFixed(2),
           ...taxLabels.map((label) {
-            final amount = _taxAmountForLabel(doc, label);
+            final amount = _taxAmountForLabel(
+              doc,
+              label,
+              effectiveServiceFeeLabel,
+            );
             return amount > 0 ? amount.toStringAsFixed(2) : '0.00';
           }),
           ((doc['total'] as num?)?.toDouble() ?? 0).toStringAsFixed(2),
@@ -194,8 +209,14 @@ class ReportsCsvExportService {
         );
         break;
       case ReportCategory.taxes:
-        addMetricSection(viewModel.getTaxMetricCards());
-        addBreakdownSection('Impuestos por tipo', viewModel.getTaxTypeRows());
+        // Misma fuente que el view (fiscalSummary). Ver comentario en
+        // reports_export_service.dart sobre por qué cambiamos de
+        // getTaxMetricCards a getTaxReportMetricCards.
+        addMetricSection(viewModel.getTaxReportMetricCards());
+        addBreakdownSection(
+          'Total facturado por tipo de comprobante',
+          viewModel.getTaxReportTypeRows(),
+        );
         break;
       case ReportCategory.fiscal:
         addMetricSection(viewModel.getFiscalMetricCards());
@@ -222,7 +243,10 @@ class ReportsCsvExportService {
   // pudo desdoblarse contra impuestos configurados (ej. 28% = ITBIS+Ley).
   static final RegExp _kUnmappedTaxLabelRe = RegExp(r'^Impuesto\s');
 
-  static List<String> _collectTaxLabels(List<Map<String, dynamic>> documents) {
+  static List<String> _collectTaxLabels(
+    List<Map<String, dynamic>> documents,
+    String serviceFeeLabel,
+  ) {
     final labels = <String>{};
     for (final doc in documents) {
       final breakdown = doc['tax_breakdown'];
@@ -241,13 +265,17 @@ class ReportsCsvExportService {
         }
       }
       final sf = (doc['service_fee'] as num?)?.toDouble() ?? 0;
-      if (sf > 0) labels.add('Propina de ley');
+      if (sf > 0) labels.add(serviceFeeLabel);
     }
     return labels.toList(growable: false);
   }
 
-  static double _taxAmountForLabel(Map<String, dynamic> doc, String label) {
-    if (label == 'Propina de ley') {
+  static double _taxAmountForLabel(
+    Map<String, dynamic> doc,
+    String label,
+    String serviceFeeLabel,
+  ) {
+    if (label == serviceFeeLabel) {
       return (doc['service_fee'] as num?)?.toDouble() ?? 0;
     }
     final breakdown = doc['tax_breakdown'];

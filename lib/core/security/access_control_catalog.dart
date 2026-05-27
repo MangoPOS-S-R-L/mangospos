@@ -128,10 +128,11 @@ const accessPermissions = <AccessPermission>[
   ),
   AccessPermission(
     code: 'ventas.orden.enviar_cocina',
-    label: 'Enviar a cocina',
+    label: 'Enviar Pedido',
     categoryId: 'kds',
     categoryLabel: 'Cocina',
-    description: 'Confirma items pendientes y los envia a cocina/KDS.',
+    description:
+        'Confirma items pendientes y los envia a cocina/KDS (cuando el negocio tiene cocina habilitada).',
   ),
   AccessPermission(
     code: 'ventas.orden.descuento_aplicar',

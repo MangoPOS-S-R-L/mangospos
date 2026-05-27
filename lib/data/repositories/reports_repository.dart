@@ -1,5 +1,6 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/fiscal/ncf_types.dart';
 import '../../core/utils/app_time.dart';
 import '../datasources/queries/reports_queries.dart';
 import '../utils/payment_amount_utils.dart';
@@ -486,6 +487,17 @@ class ReportsRepository {
     final serviceFeeRate = _toDouble(
       businessSettings?['service_fee_rate'],
     ).clamp(0, 100);
+    // Nombre del cargo de servicio configurado por el comercio (taxes table
+    // con is_service_fee=true). Fallback genérico — antes era 'Propina de
+    // ley' hardcoded en la fila del breakdown, rompía multi-config.
+    final serviceFeeTaxRow = taxes.firstWhere(
+      (t) => t['is_service_fee'] == true,
+      orElse: () => const <String, dynamic>{},
+    );
+    final serviceFeeName =
+        (serviceFeeTaxRow['name']?.toString().trim().isNotEmpty == true)
+            ? serviceFeeTaxRow['name'].toString().trim()
+            : 'Cargo de servicio';
 
     final payments = await _loadScopedPaymentsForRange(
       businessId: businessId,
@@ -633,9 +645,12 @@ class ReportsRepository {
       final rateDisplay = effectiveItbisRate == effectiveItbisRate.truncateToDouble()
           ? effectiveItbisRate.toInt().toString()
           : effectiveItbisRate.toStringAsFixed(2);
+      // Fallback genérico cuando el comercio no tiene el impuesto a esa tasa
+      // nombrado en su config (raro pero pasa). Antes era 'ITBIS' siempre —
+      // rompía si el comercio configuró IVA/IGV/otro nombre.
       final label = taxConfig?['name']?.toString().trim().isNotEmpty == true
           ? taxConfig!['name'].toString().trim()
-          : 'ITBIS ($rateDisplay%)';
+          : 'Impuesto ($rateDisplay%)';
 
       final bucket = breakdown.putIfAbsent(
         effectiveRateKey,
@@ -666,8 +681,12 @@ class ReportsRepository {
 
     if (totalServiceFee > 0) {
       breakdown['__service_fee__'] = {
-        'label': 'Propina de ley',
-        'rate': 10.0,
+        // Antes el label era 'Propina de ley' hardcoded. Ahora respeta el
+        // nombre configurado por el comercio (`serviceFeeName` derivado de
+        // taxes.is_service_fee), con fallback neutral si la config está
+        // vacía. La tasa viene de business_settings.service_fee_rate.
+        'label': serviceFeeName,
+        'rate': serviceFeeRate > 0 ? serviceFeeRate : 10.0,
         'amount': totalServiceFee,
         'taxable_amount': serviceFeeBaseTotal,
         'gross_amount': serviceFeeBaseTotal + totalServiceFee,
@@ -877,7 +896,10 @@ class ReportsRepository {
     final taxNameByRate = <String, String>{};
     double configuredServiceFeeRate = 0;
     double configuredTaxOnlyRate = 0;
-    String configuredServiceFeeName = 'Propina de ley';
+    // Default neutral. Si el comercio tiene un tax con is_service_fee=true,
+    // sobreescribimos abajo con su nombre real. Antes default era 'Propina
+    // de ley' que es DR-específico.
+    String configuredServiceFeeName = 'Cargo de servicio';
     for (final t in taxConfigs) {
       final rate = _toDouble(t['rate']);
       final name = t['name']?.toString().trim() ?? '';
@@ -1158,39 +1180,9 @@ class ReportsRepository {
     };
   }
 
-  String _ncfTypeLabel(String type) {
-    switch (type) {
-      case 'B01':
-      case 'E31':
-        return 'Crédito Fiscal';
-      case 'B02':
-      case 'E32':
-        return 'Consumo';
-      case 'B03':
-      case 'E33':
-        return 'Nota de Débito';
-      case 'B04':
-      case 'E34':
-        return 'Nota de Crédito';
-      case 'B11':
-      case 'E41':
-        return 'Compras';
-      case 'B13':
-      case 'E43':
-        return 'Gastos Menores';
-      case 'B14':
-      case 'E44':
-        return 'Regímenes Especiales';
-      case 'B15':
-      case 'E45':
-        return 'Gubernamental';
-      case 'B16':
-      case 'E46':
-        return 'Exportaciones';
-      default:
-        return type;
-    }
-  }
+  // NCF label centralizado en core/fiscal/ncf_types.dart. Antes este método
+  // era un switch de 30 líneas duplicado en 4 archivos.
+  String _ncfTypeLabel(String type) => ncfTypeName(type);
 
   String _purchaseStatusLabel(String status) {
     switch (status) {
