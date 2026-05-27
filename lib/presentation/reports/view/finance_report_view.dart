@@ -31,7 +31,7 @@ class _FinanceReportBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
+    final currency = state.currency.formatter;
     final metrics = viewModel.getFinanceMetricCards();
     final typeRows = viewModel.getFinanceTypeRows();
     final sessionRows = viewModel.getFinanceSessionRows();

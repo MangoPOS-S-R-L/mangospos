@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:mangopos/core/currency/business_currency_provider.dart';
 
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
@@ -77,11 +78,7 @@ class _SalesByWaiterViewState extends ConsumerState<SalesByWaiterView> {
 
   @override
   Widget build(BuildContext context) {
-    final currency = NumberFormat.currency(
-      symbol: 'RD\$',
-      decimalDigits: 2,
-      locale: 'en_US',
-    );
+    final currency = currentBusinessCurrencyOrFallback(ref).formatter;
     final numberFormat = NumberFormat('#,##0', 'en_US');
     final dateFormat = DateFormat('dd MMM yyyy');
 

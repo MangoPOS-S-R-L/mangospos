@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
@@ -56,7 +55,7 @@ class _FiscalReportBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
+    final currency = state.currency.formatter;
     final metrics = viewModel.getFiscalMetricCards();
     final typeRows = viewModel.getFiscalTypeRows();
     final taxBreakdownRows = viewModel.getFiscalTaxBreakdownRows();
@@ -192,6 +191,7 @@ class _FiscalReportBody extends StatelessWidget {
         const SizedBox(height: AppSpacing.sectionGap),
         FiscalDocumentsDetailCard(
           documents: documents,
+          currency: currency,
           subtitle:
               'Tabla lista para auditoría diaria y exportación; respeta el filtro de tipo seleccionado.',
           emptyMessage:

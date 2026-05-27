@@ -1913,11 +1913,27 @@ class PrintingRepository {
   }
 
   Future<List<Map<String, dynamic>>> _discoverLocalUsbPrintersWindows() async {
+    // El filtro original (`PortName -match '^USB'`) descartaba impresoras
+    // térmicas chinas (POS80, ZJiang, Goojprt, 2connect, etc.) cuyo driver
+    // crea puertos custom tipo CP001, POS001, GP001 en vez del USB001
+    // estándar. Físicamente son USB, pero Windows muestra otro PortName.
+    //
+    // Solución: aceptar todas las impresoras locales (Local=true) EXCEPTO
+    // las que tienen puertos/drivers que sabemos que NO son USB:
+    //   - PORTPROMPT, FILE, XPSPort:   PDF / XPS / Print to File
+    //   - SHRFAX, FaxPort:             Fax modems
+    //   - nul:                         OneNote / send-to-OneNote
+    //   - IP_, WSD-, http:, lpr:       impresoras de red
+    //   - drivers Microsoft genéricos: XPS, PDF, OneNote, Fax
     final result = await _runPowerShell(r'''
 $ErrorActionPreference = 'Stop'
 $items = @(
   Get-CimInstance Win32_Printer |
-    Where-Object { $_.Local -eq $true -and $_.PortName -match '^USB' } |
+    Where-Object {
+      $_.Local -eq $true -and
+      $_.PortName -notmatch '^(PORTPROMPT|FILE|XPSPort|SHRFAX|FaxPort|nul|IP_|WSD-|http|lpr)' -and
+      $_.DriverName -notmatch '(XPS|PDF|OneNote|Fax|Send To OneNote|Microsoft Print)'
+    } |
     Sort-Object Name |
     ForEach-Object {
       [pscustomobject]@{

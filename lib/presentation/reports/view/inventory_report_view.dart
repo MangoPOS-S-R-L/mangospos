@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
@@ -29,7 +28,7 @@ class _InventoryReportBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
+    final currency = state.currency.formatter;
     final metrics = viewModel.getInventoryMetricCards();
     final topRows = viewModel.getInventoryTopStockRows();
     final alertRows = viewModel.getInventoryAlertRows();

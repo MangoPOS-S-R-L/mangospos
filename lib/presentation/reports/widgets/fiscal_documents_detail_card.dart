@@ -16,6 +16,7 @@ class FiscalDocumentsDetailCard extends StatelessWidget {
   const FiscalDocumentsDetailCard({
     super.key,
     required this.documents,
+    required this.currency,
     this.title = 'Detalle de comprobantes',
     this.subtitle =
         'Cada comprobante por separado, con su estado (Activo o Anulado).',
@@ -23,6 +24,9 @@ class FiscalDocumentsDetailCard extends StatelessWidget {
   });
 
   final List<Map<String, dynamic>> documents;
+  /// Inyectado por el caller (típico: `state.currency.formatter` desde una
+  /// pantalla de reportes). Centraliza el símbolo en `business_settings`.
+  final NumberFormat currency;
   final String title;
   final String subtitle;
   final String emptyMessage;
@@ -113,7 +117,6 @@ class FiscalDocumentsDetailCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
     final dateFormat = DateFormat('dd/MM/yyyy hh:mm a');
     final taxLabels = collectTaxLabels(documents);
 

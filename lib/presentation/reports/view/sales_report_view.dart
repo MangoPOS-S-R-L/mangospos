@@ -34,8 +34,7 @@ class _SalesReportBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2, locale: 'en_US');
-    final numberFormat = NumberFormat('#,##0', 'en_US');
+    final currency = state.currency.formatter;
     final summary = state.salesSummary ?? const <String, dynamic>{};
     final metrics = viewModel.getSalesMetricCards();
     final selectedSub = state.salesSubReport;
@@ -289,6 +288,7 @@ class _SalesReportBody extends StatelessWidget {
           const Divider(color: AppColors.border),
           const SizedBox(height: AppSpacing.sectionGap),
           _SalesCommercialReportCard(
+            currency: currency,
             title: 'Ventas por categoría',
             subtitle: 'Qué familias del menú están empujando la facturación.',
             icon: Icons.category_outlined,
@@ -304,6 +304,7 @@ class _SalesReportBody extends StatelessWidget {
           const Divider(color: AppColors.border),
           const SizedBox(height: AppSpacing.sectionGap),
           _SalesCommercialReportCard(
+            currency: currency,
             title: 'Ventas por empleado',
             subtitle: 'Rendimiento comercial por colaborador asignado.',
             icon: Icons.person_outline,
@@ -318,6 +319,7 @@ class _SalesReportBody extends StatelessWidget {
           const Divider(color: AppColors.border),
           const SizedBox(height: AppSpacing.sectionGap),
           _SalesCommercialReportCard(
+            currency: currency,
             title: 'Ventas por tipo de pago',
             subtitle: 'Composición de ingresos por método de cobro.',
             icon: Icons.payments_outlined,
@@ -332,6 +334,7 @@ class _SalesReportBody extends StatelessWidget {
       case SalesSubReport.byCategory:
         return [
           _SalesCommercialReportCard(
+            currency: currency,
             title: 'Ventas por categoría',
             subtitle:
                 'Qué familias del menú están empujando la facturación.',
@@ -348,6 +351,7 @@ class _SalesReportBody extends StatelessWidget {
       case SalesSubReport.byEmployee:
         return [
           _SalesCommercialReportCard(
+            currency: currency,
             title: 'Ventas por empleado',
             subtitle: 'Rendimiento comercial por colaborador asignado.',
             icon: Icons.person_outline,
@@ -369,6 +373,7 @@ class _SalesReportBody extends StatelessWidget {
           const Divider(color: AppColors.border),
           const SizedBox(height: AppSpacing.sectionGap),
           _SalesCommercialReportCard(
+            currency: currency,
             title: 'Ventas por tipo de pago',
             subtitle: 'Composición de ingresos por método de cobro.',
             icon: Icons.payments_outlined,
@@ -383,6 +388,7 @@ class _SalesReportBody extends StatelessWidget {
       case SalesSubReport.byReceipt:
         return [
           _SalesCommercialReportCard(
+            currency: currency,
             title: 'Ventas por recibo / comprobante',
             subtitle:
                 'Balance entre recibos estándar, divididos y comprobantes fiscales.',
@@ -400,11 +406,13 @@ class _SalesReportBody extends StatelessWidget {
           // Mismo widget que usa el reporte de Comprobantes Fiscales.
           FiscalDocumentsDetailCard(
             documents: viewModel.getFiscalDocuments(),
+            currency: currency,
           ),
         ];
       case SalesSubReport.byModifiers:
         return [
           _SalesCommercialReportCard(
+            currency: currency,
             title: 'Ventas por modificadores',
             subtitle: 'Adicionales que empujan el ticket promedio.',
             icon: Icons.tune_outlined,
@@ -420,6 +428,7 @@ class _SalesReportBody extends StatelessWidget {
       case SalesSubReport.byDiscounts:
         return [
           _SalesCommercialReportCard(
+            currency: currency,
             title: 'Descuentos y cortesías',
             subtitle:
                 'Controla el impacto comercial de descuentos y concesiones.',
@@ -480,6 +489,7 @@ class _SalesReportBody extends StatelessWidget {
       case SalesSubReport.byZone:
         return [
           _SalesCommercialReportCard(
+            currency: currency,
             title: 'Ventas por zona',
             subtitle: 'Distribución de ingresos por zona del local.',
             icon: Icons.place_outlined,
@@ -501,6 +511,7 @@ class _SalesReportBody extends StatelessWidget {
           const Divider(color: AppColors.border),
           const SizedBox(height: AppSpacing.sectionGap),
           _SalesCommercialReportCard(
+            currency: currency,
             title: 'Ventas por hora',
             subtitle: 'Actividad de ventas por franja horaria.',
             icon: Icons.schedule_outlined,
@@ -530,6 +541,7 @@ class _SalesCommercialReportCard extends StatelessWidget {
     required this.emptyText,
     required this.amountLabel,
     required this.countLabel,
+    required this.currency,
     this.showQuantity = false,
     this.onViewAll,
     this.isFullReport = false,
@@ -543,13 +555,13 @@ class _SalesCommercialReportCard extends StatelessWidget {
   final String emptyText;
   final String amountLabel;
   final String countLabel;
+  final NumberFormat currency;
   final bool showQuantity;
   final VoidCallback? onViewAll;
   final bool isFullReport;
 
   @override
   Widget build(BuildContext context) {
-    final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2, locale: 'en_US');
     final numberFormat = NumberFormat('#,##0', 'en_US');
     final totalAmount = rows.fold<double>(0, (sum, row) => sum + row.amount);
     final totalCount = rows.fold<int>(0, (sum, row) => sum + row.count);
@@ -658,6 +670,7 @@ class _SalesCommercialReportCard extends StatelessWidget {
               showQuantity: showQuantity,
               amountLabel: amountLabel,
               countLabel: countLabel,
+              currency: currency,
             ),
         ],
       ),
@@ -671,16 +684,17 @@ class _SalesCommercialTable extends StatelessWidget {
     required this.showQuantity,
     required this.amountLabel,
     required this.countLabel,
+    required this.currency,
   });
 
   final List<SalesBreakdownRow> rows;
   final bool showQuantity;
   final String amountLabel;
   final String countLabel;
+  final NumberFormat currency;
 
   @override
   Widget build(BuildContext context) {
-    final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2, locale: 'en_US');
     final numberFormat = NumberFormat('#,##0', 'en_US');
     final totalAmount = rows.fold<double>(0, (sum, row) => sum + row.amount);
     final totalCount = rows.fold<int>(0, (sum, row) => sum + row.count);

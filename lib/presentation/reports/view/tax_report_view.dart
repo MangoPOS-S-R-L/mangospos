@@ -29,7 +29,7 @@ class _TaxReportBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
+    final currency = state.currency.formatter;
 
     // All data comes from fiscal_documents
     final fs = state.fiscalSummary ?? const <String, dynamic>{};

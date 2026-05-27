@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../core/currency/business_currency.dart';
+import '../../../core/currency/business_currency_provider.dart';
 import '../../../core/utils/app_time.dart';
 import '../../../data/repositories/reports_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
@@ -125,6 +127,11 @@ class ReportsState {
   final String productSalesQuery;
   final String? productSalesCategoryFilter;
 
+  /// Moneda del negocio activo. Single source of truth para formateo de
+  /// montos en todos los reportes — elimina el hardcoded `RD$` que vivía
+  /// repartido en 10 archivos. Default DOP mientras carga.
+  final BusinessCurrency currency;
+
   const ReportsState({
     this.selectedCategory,
     this.loading = false,
@@ -144,6 +151,7 @@ class ReportsState {
     this.fiscalTypeFilter,
     this.productSalesQuery = '',
     this.productSalesCategoryFilter,
+    this.currency = BusinessCurrency.fallbackDop,
   });
 
   factory ReportsState.initial() {
@@ -177,6 +185,7 @@ class ReportsState {
     String? fiscalTypeFilter,
     String? productSalesQuery,
     String? productSalesCategoryFilter,
+    BusinessCurrency? currency,
     bool clearFiscalTypeFilter = false,
     bool clearProductSalesCategoryFilter = false,
     bool clearError = false,
@@ -207,6 +216,7 @@ class ReportsState {
       productSalesCategoryFilter: clearProductSalesCategoryFilter
           ? null
           : (productSalesCategoryFilter ?? this.productSalesCategoryFilter),
+      currency: currency ?? this.currency,
     );
   }
 }
@@ -218,11 +228,12 @@ final reportsRepositoryProvider = Provider<ReportsRepository>((ref) {
 final reportsViewModelProvider =
     StateNotifierProvider<ReportsViewModel, ReportsState>((ref) {
       final reportsRepository = ref.watch(reportsRepositoryProvider);
-      return ReportsViewModel(reportsRepository);
+      return ReportsViewModel(reportsRepository, ref);
     });
 
 class ReportsViewModel extends StateNotifier<ReportsState> {
   final ReportsRepository _repository;
+  final Ref _ref;
 
   // Cada loadCategory/loadHubSummary incrementa este token. Si un load
   // viejo termina después de uno nuevo (race), su token ya no coincide
@@ -230,7 +241,18 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
   // siempre, incluso si la app entró con un load en vuelo.
   int _loadToken = 0;
 
-  ReportsViewModel(this._repository) : super(ReportsState.initial());
+  ReportsViewModel(this._repository, this._ref) : super(ReportsState.initial());
+
+  /// Refresca [ReportsState.currency] desde el provider global. Se llama
+  /// dentro de cada load para que si el owner cambió de moneda en Settings,
+  /// el próximo render del reporte ya muestre el símbolo correcto. Es
+  /// barato: el provider tiene cache por business_id.
+  void _syncCurrency() {
+    final fresh = currentBusinessCurrencyOrFallbackRef(_ref);
+    if (fresh != state.currency) {
+      state = state.copyWith(currency: fresh);
+    }
+  }
 
   static ({DateTime from, DateTime to}) resolveRange(
     SalesReportRangePreset preset,
@@ -287,6 +309,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
   Future<void> loadCategory(ReportCategory category) async {
     final myToken = ++_loadToken;
     _refreshRangeIfRelative();
+    _syncCurrency();
     state = state.copyWith(
       loading: true,
       clearError: true,
@@ -355,6 +378,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
   Future<void> loadHubSummary() async {
     final myToken = ++_loadToken;
     _refreshRangeIfRelative();
+    _syncCurrency();
     state = state.copyWith(loading: true, clearError: true);
 
     try {
@@ -517,7 +541,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
             (state.salesSummary?['total_sales'] as num?)?.toDouble() ?? 0;
         final txCount = state.salesSummary?['payments_count'] ?? 0;
         final itemsSold = state.salesSummary?['items_sold'] ?? 0;
-        final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2, locale: 'en_US');
+        final currency = state.currency.formatter;
         final numberFormat = NumberFormat('#,##0', 'en_US');
         return [
           ReportItem(
@@ -541,7 +565,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         final receivedCount = state.purchasesSummary?['received_count'] ?? 0;
         final partialCount = state.purchasesSummary?['partial_count'] ?? 0;
         final draftCount = state.purchasesSummary?['draft_count'] ?? 0;
-        final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2, locale: 'en_US');
+        final currency = state.currency.formatter;
         final numberFormat = NumberFormat('#,##0', 'en_US');
         return [
           ReportItem(
@@ -563,7 +587,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
             (state.cashSummary?['manual_in_total'] as num?)?.toDouble() ?? 0;
         final outTotal =
             (state.cashSummary?['manual_out_total'] as num?)?.toDouble() ?? 0;
-        final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2, locale: 'en_US');
+        final currency = state.currency.formatter;
         final numberFormat = NumberFormat('#,##0', 'en_US');
         return [
           ReportItem(
@@ -610,7 +634,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
             (state.taxSummary?['taxable_sales'] as num?)?.toDouble() ?? 0;
         final configured = state.taxSummary?['configured_taxes_count'] ?? 0;
         final active = state.taxSummary?['active_taxes_count'] ?? 0;
-        final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2, locale: 'en_US');
+        final currency = state.currency.formatter;
         final numberFormat = NumberFormat('#,##0', 'en_US');
         return [
           ReportItem(
@@ -632,7 +656,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
             (state.fiscalSummary?['total_amount'] as num?)?.toDouble() ?? 0;
         final totalItbis =
             (state.fiscalSummary?['total_itbis'] as num?)?.toDouble() ?? 0;
-        final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2, locale: 'en_US');
+        final currency = state.currency.formatter;
         final numberFormat = NumberFormat('#,##0', 'en_US');
         return [
           ReportItem(
@@ -658,7 +682,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
     final itemsSold = (summary['items_sold'] as num?)?.toInt() ?? 0;
     final avgTicket = (summary['avg_ticket'] as num?)?.toDouble() ?? 0;
 
-    final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2, locale: 'en_US');
+    final currency = state.currency.formatter;
     final numberFormat = NumberFormat('#,##0', 'en_US');
 
     return [
@@ -912,37 +936,37 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
     return [
       SalesMetricCardData(
         title: 'Flujo neto de caja',
-        value: 'RD\$${netCashFlow.toStringAsFixed(2)}',
+        value: state.currency.formatAmount(netCashFlow),
         subtitle: 'Ventas + entradas manuales - salidas manuales',
         icon: Icons.account_balance_wallet_outlined,
         color: const Color(0xFF2563EB),
       ),
       SalesMetricCardData(
         title: 'Ventas en caja',
-        value: 'RD\$${salesTotal.toStringAsFixed(2)}',
+        value: state.currency.formatAmount(salesTotal),
         subtitle: '$sessions sesiones en el rango',
         icon: Icons.point_of_sale_outlined,
         color: const Color(0xFFF97316),
       ),
       SalesMetricCardData(
         title: 'Entradas manuales',
-        value: 'RD\$${manualIn.toStringAsFixed(2)}',
+        value: state.currency.formatAmount(manualIn),
         subtitle: 'Depósitos e ingresos de caja',
         icon: Icons.south_west_outlined,
         color: const Color(0xFF059669),
       ),
       SalesMetricCardData(
         title: 'Salidas manuales',
-        value: 'RD\$${manualOut.toStringAsFixed(2)}',
+        value: state.currency.formatAmount(manualOut),
         subtitle: 'Retiros y gastos registrados',
         icon: Icons.north_east_outlined,
         color: const Color(0xFFDC2626),
       ),
       SalesMetricCardData(
         title: 'Diferencia acumulada',
-        value: 'RD\$${differences.toStringAsFixed(2)}',
+        value: state.currency.formatAmount(differences),
         subtitle:
-            'Promedio por sesión: RD\$${avgDifference.toStringAsFixed(2)}',
+            'Promedio por sesión: ${state.currency.formatAmount(avgDifference)}',
         icon: Icons.balance_outlined,
         color: const Color(0xFF7C3AED),
       ),
@@ -1014,7 +1038,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
       ),
       SalesMetricCardData(
         title: 'Valor del stock',
-        value: 'RD\$${stockValue.toStringAsFixed(2)}',
+        value: state.currency.formatAmount(stockValue),
         subtitle: 'Calculado por costo registrado',
         icon: Icons.paid_outlined,
         color: const Color(0xFF059669),
@@ -1103,21 +1127,21 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
       ),
       SalesMetricCardData(
         title: 'Monto ordenado',
-        value: 'RD\$${totalOrdered.toStringAsFixed(2)}',
+        value: state.currency.formatAmount(totalOrdered),
         subtitle: 'Total emitido en el rango',
         icon: Icons.request_quote_outlined,
         color: const Color(0xFFF97316),
       ),
       SalesMetricCardData(
         title: 'Monto recibido',
-        value: 'RD\$${totalReceived.toStringAsFixed(2)}',
+        value: state.currency.formatAmount(totalReceived),
         subtitle: 'Órdenes completamente recibidas',
         icon: Icons.inventory_outlined,
         color: const Color(0xFF059669),
       ),
       SalesMetricCardData(
         title: 'Promedio por orden',
-        value: 'RD\$${avgOrder.toStringAsFixed(2)}',
+        value: state.currency.formatAmount(avgOrder),
         subtitle: '$suppliersCount proveedores activos',
         icon: Icons.receipt_long_outlined,
         color: const Color(0xFF7C3AED),
@@ -1185,14 +1209,14 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
     return [
       SalesMetricCardData(
         title: 'Impuestos cobrados',
-        value: 'RD\$${totalTax.toStringAsFixed(2)}',
+        value: state.currency.formatAmount(totalTax),
         subtitle: 'Total acumulado en el rango seleccionado',
         icon: Icons.receipt_outlined,
         color: const Color(0xFF2563EB),
       ),
       SalesMetricCardData(
         title: 'Propina de ley',
-        value: 'RD\$${totalServiceFee.toStringAsFixed(2)}',
+        value: state.currency.formatAmount(totalServiceFee),
         subtitle: serviceFeeOrders > 0
             ? '$serviceFeeOrders cuentas con cargo legal'
             : 'Sin cargos de ley en el rango',
@@ -1201,21 +1225,21 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
       ),
       SalesMetricCardData(
         title: 'Total fiscal y ley',
-        value: 'RD\$${totalCharges.toStringAsFixed(2)}',
+        value: state.currency.formatAmount(totalCharges),
         subtitle: 'Suma de impuestos + propina de ley',
         icon: Icons.account_balance_wallet_outlined,
         color: const Color(0xFF059669),
       ),
       SalesMetricCardData(
         title: 'Ventas gravadas',
-        value: 'RD\$${taxableSales.toStringAsFixed(2)}',
+        value: state.currency.formatAmount(taxableSales),
         subtitle: 'Base imponible sujeta a impuestos',
         icon: Icons.sell_outlined,
         color: const Color(0xFF7C3AED),
       ),
       SalesMetricCardData(
         title: 'Ventas exentas',
-        value: 'RD\$${exemptSales.toStringAsFixed(2)}',
+        value: state.currency.formatAmount(exemptSales),
         subtitle: 'Items sin impuesto en el rango',
         icon: Icons.remove_circle_outline,
         color: const Color(0xFF0F766E),
@@ -1281,21 +1305,21 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
     return [
       SalesMetricCardData(
         title: 'Total facturado',
-        value: 'RD\$${totalAmount.toStringAsFixed(2)}',
+        value: state.currency.formatAmount(totalAmount),
         subtitle: '$docsCount comprobantes emitidos',
         icon: Icons.receipt_long_outlined,
         color: const Color(0xFF2563EB),
       ),
       SalesMetricCardData(
         title: 'Subtotal',
-        value: 'RD\$${totalSubtotal.toStringAsFixed(2)}',
+        value: state.currency.formatAmount(totalSubtotal),
         subtitle: 'Monto antes de impuestos',
         icon: Icons.attach_money_outlined,
         color: const Color(0xFFF97316),
       ),
       SalesMetricCardData(
         title: 'ITBIS cobrado',
-        value: 'RD\$${totalItbis.toStringAsFixed(2)}',
+        value: state.currency.formatAmount(totalItbis),
         subtitle: 'Total ITBIS en comprobantes activos',
         icon: Icons.account_balance_outlined,
         color: const Color(0xFF059669),
@@ -1303,7 +1327,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
       if (totalServiceFee > 0)
         SalesMetricCardData(
           title: 'Propina de ley',
-          value: 'RD\$${totalServiceFee.toStringAsFixed(2)}',
+          value: state.currency.formatAmount(totalServiceFee),
           subtitle: 'Total propina de ley en el rango',
           icon: Icons.room_service_outlined,
           color: const Color(0xFFD97706),

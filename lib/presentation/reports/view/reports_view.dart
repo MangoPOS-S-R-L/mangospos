@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
@@ -239,7 +238,7 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
     ReportsState state,
     ReportsViewModel viewModel,
   ) {
-    final currency = NumberFormat.currency(symbol: 'RD\$', decimalDigits: 2);
+    final currency = state.currency.formatter;
 
     // Build quick-stat summaries from loaded data
     final salesNet =

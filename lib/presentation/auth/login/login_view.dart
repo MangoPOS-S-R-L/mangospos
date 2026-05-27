@@ -60,6 +60,12 @@ class _LoginViewState extends ConsumerState<LoginView> {
     final isLoading = state.isLoading;
     final isWide = MediaQuery.of(context).size.width >= 980;
 
+    // Submit handler único — Enter desde cualquier campo lo dispara igual que
+    // el botón. Si está cargando o sin email confirmado se decide acá.
+    final Future<void> Function()? onSubmit = isLoading
+        ? null
+        : (state.needsEmailConfirmation ? vm.verifyOTP : vm.submit);
+
     final formCard = Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 480),
@@ -87,8 +93,10 @@ class _LoginViewState extends ConsumerState<LoginView> {
                 const SizedBox(height: 8),
                 TextField(
                   keyboardType: TextInputType.emailAddress,
+                  textInputAction: TextInputAction.next,
                   enabled: !isLoading && !state.needsEmailConfirmation,
                   onChanged: vm.setEmail,
+                  onSubmitted: onSubmit == null ? null : (_) => onSubmit(),
                   decoration: _inputDecoration('tucorreo@ejemplo.com'),
                   style: const TextStyle(
                     color: _dark,
@@ -102,8 +110,10 @@ class _LoginViewState extends ConsumerState<LoginView> {
                   const SizedBox(height: 8),
                   TextField(
                     keyboardType: TextInputType.number,
+                    textInputAction: TextInputAction.done,
                     enabled: !isLoading,
                     onChanged: vm.setConfirmationCode,
+                    onSubmitted: onSubmit == null ? null : (_) => onSubmit(),
                     maxLength: 6,
                     decoration: _inputDecoration('000000').copyWith(counterText: ''),
                     style: const TextStyle(
@@ -120,6 +130,7 @@ class _LoginViewState extends ConsumerState<LoginView> {
                     initial: state.password,
                     enabled: !isLoading,
                     onChanged: vm.setPassword,
+                    onSubmitted: onSubmit,
                   ),
                   const SizedBox(height: 24),
                 ],
@@ -134,9 +145,7 @@ class _LoginViewState extends ConsumerState<LoginView> {
                       ),
                       elevation: 0,
                     ),
-                    onPressed: isLoading
-                        ? null
-                        : (state.needsEmailConfirmation ? vm.verifyOTP : vm.submit),
+                    onPressed: onSubmit,
                     child: isLoading
                         ? const CircularProgressIndicator.adaptive(
                             valueColor: AlwaysStoppedAnimation<Color>(_white),
@@ -298,10 +307,15 @@ class _PasswordField extends StatefulWidget {
   final bool enabled;
   final ValueChanged<String> onChanged;
 
+  /// Callback opcional para soportar Enter como submit. Si es null, el campo
+  /// no hace nada al recibir Enter (comportamiento default de TextFormField).
+  final Future<void> Function()? onSubmitted;
+
   const _PasswordField({
     required this.initial,
     required this.enabled,
     required this.onChanged,
+    this.onSubmitted,
   });
 
   @override
@@ -313,12 +327,16 @@ class _PasswordFieldState extends State<_PasswordField> {
 
   @override
   Widget build(BuildContext context) {
+    final onSubmitted = widget.onSubmitted;
     return TextFormField(
       initialValue: widget.initial,
       enabled: widget.enabled,
       style: const TextStyle(color: _dark),
       obscureText: _obscure,
+      textInputAction: TextInputAction.done,
       onChanged: widget.onChanged,
+      onFieldSubmitted:
+          onSubmitted == null ? null : (_) => onSubmitted(),
       validator: (v) =>
           (v == null || v.length < 6) ? 'Minimo 6 caracteres' : null,
       decoration: InputDecoration(
