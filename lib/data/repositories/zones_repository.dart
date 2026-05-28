@@ -434,12 +434,55 @@ class ZonesRepository {
         }
       }
 
+      final taxDefsByName = <String, bool>{};
+      if (scopedBusinessId != null && scopedBusinessId.isNotEmpty) {
+        try {
+          final taxRows = await sb
+              .from('taxes')
+              .select('name, apply_on_takeout')
+              .eq('business_id', scopedBusinessId)
+              .eq('is_active', true);
+          for (final row in taxRows) {
+            final name = row['name']?.toString().toLowerCase().trim();
+            final applyOnTakeout = row['apply_on_takeout'] == true;
+            if (name != null) {
+              taxDefsByName[name] = applyOnTakeout;
+            }
+          }
+        } catch (_) {
+          // ignore
+        }
+      }
+
       for (final row in itemsRows) {
         final orderId = row['order_id'] as String;
         final itemId = row['id'] as String;
+        var taxLines = taxLinesMap[itemId] ?? const <OrderItemTaxLine>[];
+        final isTakeout = row['is_takeout'] == true;
+
+        if (isTakeout && taxDefsByName.isNotEmpty && taxLines.isNotEmpty) {
+          final filtered = taxLines.where((line) {
+            final applies = taxDefsByName[line.taxName.toLowerCase().trim()] ?? true;
+            return applies;
+          }).toList();
+
+          if (filtered.length != taxLines.length) {
+            final newRate = filtered.fold<double>(0, (sum, l) => sum + l.taxRate);
+            final newTaxAmount = filtered.fold<double>(0, (sum, l) => sum + l.amount);
+            final item = OrderItem.fromMap(row).copyWith(
+              modifiers: modifiersMap[itemId] ?? [],
+              taxLines: filtered,
+              taxRate: newRate,
+              tax: newTaxAmount,
+            );
+            itemsMap[orderId] = [...(itemsMap[orderId] ?? []), item];
+            continue;
+          }
+        }
+
         final item = OrderItem.fromMap(row).copyWith(
           modifiers: modifiersMap[itemId] ?? [],
-          taxLines: taxLinesMap[itemId] ?? const <OrderItemTaxLine>[],
+          taxLines: taxLines,
         );
         itemsMap[orderId] = [...(itemsMap[orderId] ?? []), item];
       }

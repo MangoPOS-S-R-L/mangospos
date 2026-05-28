@@ -191,19 +191,17 @@ void main() {
     });
 
     // ─────────────────────────────────────────────────────────────────
-    // C5: agrupamiento por tax_id, no por tax_name.
-    // Si un mismo tax_id viene con dos snapshots de nombre distinto
-    // (caso edge: rename entre items, prácticamente imposible dentro
-    // de UNA orden, pero útil para validar el contrato).
+    // C5: agrupamiento por nombre normalizado y rate (para fusionar
+    // items optimistas con items confirmados por backend).
     // ─────────────────────────────────────────────────────────────────
-    test('C5: agrupa por tax_id aunque tax_name difiera entre snapshots', () {
+    test('C5: agrupa por nombre normalizado y rate', () {
       final items = [
         _item(
           id: 'i1',
           taxLines: [
             _line(
               orderItemId: 'i1',
-              taxId: 'tx-itbis',
+              taxId: 'tmp_tax_ITBIS',
               taxName: 'ITBIS',
               taxRate: 18,
               amount: 50,
@@ -215,8 +213,8 @@ void main() {
           taxLines: [
             _line(
               orderItemId: 'i2',
-              taxId: 'tx-itbis',
-              taxName: 'I.T.B.I.S.', // mismo tax_id, nombre con puntos
+              taxId: 'real-uuid-itbis',
+              taxName: 'itbis', // minúsculas se normalizan
               taxRate: 18,
               amount: 30,
             ),
@@ -227,9 +225,8 @@ void main() {
       final result = buildBreakdownFromTaxLines(items);
 
       expect(result, isNotNull);
-      expect(result!.length, 1, reason: 'mismo tax_id → 1 sola línea');
+      expect(result!.length, 1, reason: 'mismo nombre y rate → 1 sola línea');
       expect(result[0].amount, closeTo(80, 0.01));
-      // Label: usa el tax_name del primer snapshot.
       expect(result[0].label, 'ITBIS (18%)');
     });
 

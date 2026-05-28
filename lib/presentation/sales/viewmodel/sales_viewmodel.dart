@@ -321,7 +321,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         final taxRows = await Supabase.instance.client
             .from('taxes')
             .select(
-              'name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery',
+              'name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery,apply_on_takeout,include_in_ecf',
             )
             .eq('business_id', businessId)
             .eq('is_active', true);
@@ -577,6 +577,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     return source.copyWith(
       order: normalizedOrder,
       checks: normalizedChecks,
+      items: normalizedItems,
       takeout: derivedTakeout,
     );
   }
