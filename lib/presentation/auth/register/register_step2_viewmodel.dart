@@ -315,7 +315,14 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
               'address': step2.address,
               'phone': phone,
               'domain': domain,
-              'status': 'active',
+              // Cuentas NUEVAS nacen pendientes — el equipo interno las
+              // aprueba desde Mango Administrador (cambio política
+              // 2026-05-27). PendingApprovalGuard bloquea la app hasta
+              // que el status pase a 'active'. Las cuentas LEGACY ya
+              // creadas antes de esta migration siguen como 'active' —
+              // no se las toca; el admin puede pasarlas a inactive si
+              // hace falta. Ver migration 20260527_0005_businesses_status_pending.sql.
+              'status': 'pending',
               'created_at': now,
               'updated_at': now,
             })

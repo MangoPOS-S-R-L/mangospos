@@ -33,6 +33,18 @@ String _formatQty(double qty) {
   return qty.toStringAsFixed(2);
 }
 
+/// Extrae el porcentaje numérico de una label tipo "ITBIS (18%)" /
+/// "Propina Ley (10%)". Devuelve null si la label no encaja con el patrón
+/// — el caller debe caer al path heurístico de absorción de gap.
+final RegExp _rateInLabelRegex = RegExp(r'\((\d+(?:[.,]\d+)?)\s*%\)');
+
+double? _parseRatePercent(({String label, double amount}) line) {
+  final match = _rateInLabelRegex.firstMatch(line.label);
+  if (match == null) return null;
+  final raw = match.group(1)?.replaceAll(',', '.') ?? '';
+  return double.tryParse(raw);
+}
+
 class SalesHistoryView extends ConsumerStatefulWidget {
   const SalesHistoryView({super.key});
 
@@ -912,6 +924,9 @@ mixin _PaymentActionsMixin {
       final receiptItemDisplayMode = await ref
           .read(posSettingsRepositoryProvider)
           .getReceiptItemDisplayMode(businessId);
+      final discountDisplayMode = await ref
+          .read(posSettingsRepositoryProvider)
+          .getDiscountDisplayMode(businessId);
 
       // Build per-tax breakdown for the reprint receipt
       final reprintTaxBreakdown = <({String label, double amount})>[];
@@ -1063,6 +1078,7 @@ mixin _PaymentActionsMixin {
         isElectronicCf: isElectronicCf,
         ecfSecurityCode: ecfSecurityCode,
         ecfSignedAt: ecfSignedAt,
+        discountDisplayMode: discountDisplayMode,
       );
 
       await printRepo.printEscPos(
@@ -1395,6 +1411,62 @@ mixin _PaymentActionsMixin {
     final serviceFee = (payment['service_fee'] as num?)?.toDouble() ?? 0;
     final total = (payment['total'] as num?)?.toDouble() ?? 0;
 
+    // Future compartido: carga items + filtra por scope del fd + computa
+    // summary, tax breakdown y modo de presentación del descuento una sola
+    // vez. Tanto el render de items como el bloque de totales lo consumen
+    // para que no haya double-fetch ni riesgo de que muestren conjuntos
+    // distintos.
+    final businessIdLocal = ref.read(sessionProvider).activeBusinessId;
+    final posSettingsRepo = ref.read(posSettingsRepositoryProvider);
+    final orderItemsFuture =
+        () async {
+          final itemsFuture = ref
+              .read(salesRepositoryProvider)
+              .getOrderItems(orderId, businessId: businessIdLocal);
+          final otherFdsFuture = Supabase.instance.client
+              .from('fiscal_documents')
+              .select('check_id, status')
+              .eq('order_id', orderId);
+          final discountModeFuture =
+              (businessIdLocal != null && businessIdLocal.isNotEmpty)
+              ? posSettingsRepo.getDiscountDisplayMode(businessIdLocal)
+              : Future.value(PosSettingsRepository.discountPreDiscount);
+          final results = await Future.wait<dynamic>([
+            itemsFuture,
+            otherFdsFuture,
+            discountModeFuture,
+          ]);
+          final loadedItems = results[0] as List<OrderItem>;
+          final fds = List<Map<String, dynamic>>.from(results[1] as List);
+          final discountMode = results[2] as String;
+          final otherFdCheckIds = fds
+              .where(
+                (f) => f['check_id'] != null && f['status'] == 'active',
+              )
+              .map((f) => f['check_id'].toString())
+              .toSet();
+          // Filtro por scope del fd:
+          //   - fd.check_id != NULL → solo items del check.
+          //   - fd.check_id == NULL (full-order o remainder): items con
+          //     check_id NULL O items en sub-cuentas SIN fd propio.
+          final filteredItems = loadedItems.where((i) {
+            if (i.status == 'void') return false;
+            if (fdCheckId != null && fdCheckId.isNotEmpty) {
+              return i.checkId == fdCheckId;
+            }
+            if (i.checkId == null) return true;
+            return !otherFdCheckIds.contains(i.checkId);
+          }).toList(growable: false);
+          final summary = summarizeOrderPricing(null, filteredItems);
+          final taxBreakdown = buildOrderTaxBreakdown(null, filteredItems);
+          return (
+            items: filteredItems,
+            summary: summary,
+            taxBreakdown: taxBreakdown,
+            discountMode: discountMode,
+          );
+        }();
+
     showDialog(
       context: context,
       builder: (context) => Dialog(
@@ -1517,7 +1589,7 @@ mixin _PaymentActionsMixin {
                     SizedBox(
                       width: 90,
                       child: Text(
-                        'Total',
+                        'Subtotal',
                         textAlign: TextAlign.right,
                         style: TextStyle(
                           fontSize: 12,
@@ -1531,43 +1603,13 @@ mixin _PaymentActionsMixin {
                 const SizedBox(height: 6),
                 Flexible(
                   child: FutureBuilder<
-                      ({List<OrderItem> items, Set<String> otherFdCheckIds})>(
-                    future: () async {
-                      final businessIdLocal =
-                          ref.read(sessionProvider).activeBusinessId;
-                      final itemsFuture = ref
-                          .read(salesRepositoryProvider)
-                          .getOrderItems(
-                            orderId,
-                            businessId: businessIdLocal,
-                          );
-                      // Cargar los OTROS fds de la orden para saber qué
-                      // checks ya tienen su propio fd. Esto es clave para
-                      // que el fd full-order remainder muestre los items
-                      // que NO están en sub-cuentas con fd propio.
-                      final otherFdsFuture = Supabase.instance.client
-                          .from('fiscal_documents')
-                          .select('check_id, status')
-                          .eq('order_id', orderId);
-                      final results = await Future.wait<dynamic>([
-                        itemsFuture,
-                        otherFdsFuture,
-                      ]);
-                      final loadedItems = results[0] as List<OrderItem>;
-                      final fds = List<Map<String, dynamic>>.from(
-                        results[1] as List,
-                      );
-                      final otherFdCheckIds = fds
-                          .where((f) =>
-                              f['check_id'] != null &&
-                              f['status'] == 'active')
-                          .map((f) => f['check_id'].toString())
-                          .toSet();
-                      return (
-                        items: loadedItems,
-                        otherFdCheckIds: otherFdCheckIds,
-                      );
-                    }(),
+                      ({
+                        List<OrderItem> items,
+                        OrderPricingSummary summary,
+                        List<({String label, double amount})> taxBreakdown,
+                        String discountMode,
+                      })>(
+                    future: orderItemsFuture,
                     builder: (context, snapshot) {
                       if (snapshot.connectionState ==
                           ConnectionState.waiting) {
@@ -1588,25 +1630,7 @@ mixin _PaymentActionsMixin {
                         );
                       }
                       final data = snapshot.data;
-                      final all = data?.items ?? const <OrderItem>[];
-                      final otherFdCheckIds =
-                          data?.otherFdCheckIds ?? const <String>{};
-                      // Filtro por scope del fd:
-                      //   - fd.check_id != NULL → solo items del check.
-                      //   - fd.check_id == NULL (full-order o remainder):
-                      //     items con check_id NULL (cobro directo al
-                      //     principal) O items en sub-cuentas que NO
-                      //     tienen su propio fd (caso: sub-cuenta cerrada
-                      //     por auto-close cuando sus items pasaron a paid
-                      //     vía cobro full-order).
-                      final items = all.where((i) {
-                        if (i.status == 'void') return false;
-                        if (fdCheckId != null && fdCheckId.isNotEmpty) {
-                          return i.checkId == fdCheckId;
-                        }
-                        if (i.checkId == null) return true;
-                        return !otherFdCheckIds.contains(i.checkId);
-                      }).toList();
+                      final items = data?.items ?? const <OrderItem>[];
 
                       if (items.isEmpty) {
                         return const Padding(
@@ -1618,23 +1642,110 @@ mixin _PaymentActionsMixin {
                         );
                       }
 
+                      // Factor de escala para que la suma de líneas
+                      // (subtotal ex-tax por ítem) coincida con el
+                      // `Subtotal` del breakdown abajo en CUALQUIER modo.
+                      //   Modo A: subtotalBase = (total + descuento) /
+                      //           (1 + tasa). Igual o ≈ summary.subtotal
+                      //           → factor ≈ 1.
+                      //   Modo B: subtotalBase = total / (1 + tasa).
+                      //           Más chico que summary.subtotal por el
+                      //           descuento → factor < 1 escala cada
+                      //           línea proporcionalmente.
+                      // Si no podemos parsear las tasas, factor = 1
+                      // (mostramos los valores nativos del summary).
+                      double lineScale = 1.0;
+                      if (data != null) {
+                        final summary = data.summary;
+                        final taxBreakdown = data.taxBreakdown;
+                        final rates = taxBreakdown
+                            .map(_parseRatePercent)
+                            .toList(growable: false);
+                        final allRatesKnown =
+                            taxBreakdown.isNotEmpty && !rates.contains(null);
+                        final effectiveRate = allRatesKnown
+                            ? rates.fold<double>(
+                                    0, (s, r) => s + (r ?? 0)) /
+                                100.0
+                            : 0.0;
+                        final canRecompute =
+                            allRatesKnown && effectiveRate > 0;
+                        if (canRecompute && summary.subtotal > 0.005) {
+                          final isPostMode = data.discountMode ==
+                              PosSettingsRepository.discountPostDiscount;
+                          final discountForBase =
+                              isPostMode ? 0.0 : summary.discounts;
+                          final subtotalBase =
+                              (total + discountForBase) / (1 + effectiveRate);
+                          lineScale = subtotalBase / summary.subtotal;
+                        }
+                      }
+
                       return ListView.separated(
                         shrinkWrap: true,
                         itemCount: items.length,
                         separatorBuilder: (_, _) => const Divider(height: 12),
                         itemBuilder: (context, i) {
                           final item = items[i];
+                          final itemQty = item.quantity <= 0
+                              ? 1.0
+                              : item.quantity;
+                          final note = item.notes?.trim() ?? '';
                           return Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Expanded(
                                 flex: 5,
-                                child: Text(
-                                  item.productName,
-                                  style: const TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                  ),
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      item.productName,
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    ...item.modifiers.map((m) {
+                                      // Costo del modifier alineado al
+                                      // backend (catalogGrossAmount):
+                                      // qty_item × qty_modifier × precio.
+                                      // `currency` ya incluye símbolo
+                                      // "RD$" — no anteponerlo aquí o
+                                      // sale duplicado.
+                                      final modTotal =
+                                          m.price * itemQty * m.qty;
+                                      return Padding(
+                                        padding: const EdgeInsets.only(
+                                          top: 2,
+                                        ),
+                                        child: Text(
+                                          modTotal > 0
+                                              ? '+ ${m.name} (+${currency.format(modTotal)})'
+                                              : '+ ${m.name}',
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            color: MangoColors.muted,
+                                          ),
+                                        ),
+                                      );
+                                    }),
+                                    if (note.isNotEmpty)
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          top: 2,
+                                        ),
+                                        child: Text(
+                                          'Nota: $note',
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            fontStyle: FontStyle.italic,
+                                            color: MangoColors.muted,
+                                          ),
+                                        ),
+                                      ),
+                                  ],
                                 ),
                               ),
                               SizedBox(
@@ -1648,15 +1759,24 @@ mixin _PaymentActionsMixin {
                               SizedBox(
                                 width: 90,
                                 child: Text(
-                                  // Cortesías históricas pueden tener
-                                  // discount > subtotal+tax (bug previo
-                                  // de doble-cuenta de ITBIS en
-                                  // _courtesyLineAmount). Capamos a 0
-                                  // para no mostrar "-RD$767" en
-                                  // facturas donde el cliente no pagó
-                                  // nada por la línea.
+                                  // `itemDisplayBaseTotal` da el subtotal
+                                  // ex-tax por línea con modifiers
+                                  // incluidos. Lo escalamos por
+                                  // `lineScale` para que la suma de
+                                  // líneas coincida exactamente con el
+                                  // `Subtotal` del breakdown abajo en
+                                  // cualquier modo (A o B). Capamos a 0
+                                  // para cortesías históricas con
+                                  // discount > subtotal (bug previo).
                                   currency.format(
-                                    item.total < 0 ? 0 : item.total,
+                                    () {
+                                      final base = itemDisplayBaseTotal(
+                                        null,
+                                        item,
+                                      );
+                                      final scaled = base * lineScale;
+                                      return scaled < 0 ? 0.0 : scaled;
+                                    }(),
                                   ),
                                   textAlign: TextAlign.right,
                                   style: const TextStyle(
@@ -1675,13 +1795,250 @@ mixin _PaymentActionsMixin {
                 const SizedBox(height: 12),
                 const Divider(),
                 // --- TOTALES ---
-                _invoiceTotalRow('Subtotal', subtotal, currency),
-                if (itbis > 0)
-                  _invoiceTotalRow('ITBIS', itbis, currency),
-                if (serviceFee > 0)
-                  _invoiceTotalRow('Servicio (10%)', serviceFee, currency),
-                const SizedBox(height: 4),
-                _invoiceTotalRow('TOTAL', total, currency, isTotal: true),
+                // Derivamos el bloque de totales desde los items (igual que
+                // el ticket impreso vía summarizeOrderPricing), de forma
+                // que modal y papel coincidan 1:1 y el descuento muestre
+                // el RD$ real, no uno calculado por aritmética inversa.
+                //
+                // Fallback de seguridad: si la suma de items no cuadra con
+                // el total guardado en fiscal_documents (>RD$1 de diff,
+                // típico de órdenes editadas tras emitir el fd), volvemos
+                // a los valores del fd y avisamos al cajero. El fd es la
+                // fuente oficial de lo que se cobró.
+                FutureBuilder<
+                  ({
+                    List<OrderItem> items,
+                    OrderPricingSummary summary,
+                    List<({String label, double amount})> taxBreakdown,
+                    String discountMode,
+                  })
+                >(
+                  future: orderItemsFuture,
+                  builder: (context, snapshot) {
+                    final data = snapshot.data;
+                    final hasData =
+                        snapshot.connectionState == ConnectionState.done &&
+                        data != null &&
+                        data.items.isNotEmpty;
+                    // Si los items aún no cargan o vienen vacíos, mostramos
+                    // los valores del fd con el descuento derivado por
+                    // aritmética inversa (subtotal + tax + servicio − total).
+                    if (!hasData) {
+                      final discount = subtotal + itbis + serviceFee - total;
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _invoiceTotalRow('Subtotal', subtotal, currency),
+                          if (itbis > 0)
+                            _invoiceTotalRow('ITBIS', itbis, currency),
+                          if (serviceFee > 0)
+                            _invoiceTotalRow(
+                              'Servicio (10%)',
+                              serviceFee,
+                              currency,
+                            ),
+                          if (discount > 0.005)
+                            _invoiceTotalRow(
+                              'Descuento',
+                              -discount,
+                              currency,
+                            ),
+                          const SizedBox(height: 4),
+                          _invoiceTotalRow(
+                            'TOTAL',
+                            total,
+                            currency,
+                            isTotal: true,
+                          ),
+                        ],
+                      );
+                    }
+
+                    final summary = data.summary;
+                    final taxBreakdown = data.taxBreakdown;
+                    final mismatch = (summary.total - total).abs() > 1.0;
+
+                    if (mismatch) {
+                      // Items editados después de emitir el fd: la fuente
+                      // oficial es el fd. Usamos sus valores y el descuento
+                      // derivado, igual que el path anterior.
+                      final discount = subtotal + itbis + serviceFee - total;
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _invoiceTotalRow('Subtotal', subtotal, currency),
+                          if (itbis > 0)
+                            _invoiceTotalRow('ITBIS', itbis, currency),
+                          if (serviceFee > 0)
+                            _invoiceTotalRow(
+                              'Servicio (10%)',
+                              serviceFee,
+                              currency,
+                            ),
+                          if (discount > 0.005)
+                            _invoiceTotalRow(
+                              'Descuento',
+                              -discount,
+                              currency,
+                            ),
+                          const SizedBox(height: 4),
+                          _invoiceTotalRow(
+                            'TOTAL',
+                            total,
+                            currency,
+                            isTotal: true,
+                          ),
+                          const SizedBox(height: 6),
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              'Los productos cargados difieren del total '
+                              'registrado en el comprobante; se muestran '
+                              'los valores oficiales del fiscal document.',
+                              style: const TextStyle(
+                                fontSize: 10,
+                                color: MangoColors.muted,
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    }
+
+                    // Path nominal: recomputamos subtotal/impuestos según
+                    // el modo elegido por el negocio para que la math
+                    // siempre cuadre visualmente. Tasa efectiva = suma de
+                    // tasas únicas extraídas de las labels de
+                    // `taxBreakdown` (que ya vienen como "ITBIS (18%)",
+                    // "Propina Ley (10%)", etc.).
+                    //
+                    //   Modo A (pre_discount, default):
+                    //     subtotalBase = (total + descuento) / (1 + tasa)
+                    //     Subtotal + ITBIS − Descuento = Total
+                    //
+                    //   Modo B (post_discount):
+                    //     subtotalBase = total / (1 + tasa)
+                    //     Subtotal + ITBIS = Total; descuento es nota.
+                    //
+                    // Si no podemos extraer la tasa de las labels (caso
+                    // raro de comprobantes sin impuestos), caemos al
+                    // path histórico de "absorber el gap en subtotal".
+                    final rates = taxBreakdown
+                        .map(_parseRatePercent)
+                        .toList(growable: false);
+                    final allRatesKnown =
+                        taxBreakdown.isNotEmpty && !rates.contains(null);
+                    final effectiveRate = allRatesKnown
+                        ? rates.fold<double>(0, (s, r) => s + (r ?? 0)) / 100.0
+                        : 0.0;
+
+                    final isPostMode = data.discountMode ==
+                        PosSettingsRepository.discountPostDiscount;
+
+                    if (allRatesKnown && effectiveRate > 0) {
+                      final discountForBase = isPostMode
+                          ? 0.0
+                          : summary.discounts;
+                      final subtotalBase =
+                          (total + discountForBase) / (1 + effectiveRate);
+                      final recomputedLines = <({
+                        String label,
+                        double amount,
+                      })>[];
+                      for (var i = 0; i < taxBreakdown.length; i++) {
+                        final rate = rates[i] ?? 0;
+                        recomputedLines.add((
+                          label: taxBreakdown[i].label,
+                          amount: subtotalBase * (rate / 100),
+                        ));
+                      }
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _invoiceTotalRow(
+                            'Subtotal',
+                            subtotalBase,
+                            currency,
+                          ),
+                          ...recomputedLines.map(
+                            (line) => _invoiceTotalRow(
+                              line.label,
+                              line.amount,
+                              currency,
+                            ),
+                          ),
+                          if (!isPostMode && summary.discounts > 0.005)
+                            _invoiceTotalRow(
+                              'Descuento',
+                              -summary.discounts,
+                              currency,
+                            ),
+                          const SizedBox(height: 4),
+                          _invoiceTotalRow(
+                            'TOTAL',
+                            total,
+                            currency,
+                            isTotal: true,
+                          ),
+                          if (isPostMode && summary.discounts > 0.005)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 8),
+                              child: Text(
+                                // `currency` ya incluye símbolo RD$.
+                                'Esta venta incluye un descuento aplicado '
+                                'de ${currency.format(summary.discounts)}.',
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: MangoColors.muted,
+                                  fontStyle: FontStyle.italic,
+                                ),
+                              ),
+                            ),
+                        ],
+                      );
+                    }
+
+                    // Fallback (sin tasa parseable): comportamiento
+                    // anterior — absorbemos el gap en el subtotal para
+                    // que el sum visual cierre.
+                    final taxSum = taxBreakdown.fold<double>(
+                      0,
+                      (s, e) => s + e.amount,
+                    );
+                    final accounted =
+                        summary.subtotal + taxSum - summary.discounts;
+                    final extras = summary.total - accounted;
+                    final displaySubtotal = summary.subtotal + extras;
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _invoiceTotalRow(
+                          'Subtotal',
+                          displaySubtotal,
+                          currency,
+                        ),
+                        ...taxBreakdown.map(
+                          (line) =>
+                              _invoiceTotalRow(line.label, line.amount, currency),
+                        ),
+                        if (summary.discounts > 0.005)
+                          _invoiceTotalRow(
+                            'Descuento',
+                            -summary.discounts,
+                            currency,
+                          ),
+                        const SizedBox(height: 4),
+                        _invoiceTotalRow(
+                          'TOTAL',
+                          summary.total,
+                          currency,
+                          isTotal: true,
+                        ),
+                      ],
+                    );
+                  },
+                ),
                 const SizedBox(height: 16),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,

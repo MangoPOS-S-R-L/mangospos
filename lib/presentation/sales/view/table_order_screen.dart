@@ -197,6 +197,21 @@ Future<_BusinessReceiptProfile> _loadBusinessReceiptProfile(
   );
 }
 
+/// Extrae el porcentaje numérico de una label de impuesto tipo
+/// "ITBIS (18%)" / "Propina Ley (10%)" / "ITBIS (16.5%)". Devuelve null
+/// si la label no encaja con el patrón — el caller cae al fallback de
+/// usar `summary.subtotal` / `summary.tax` directos del backend.
+final RegExp _cartRateInLabelRegex = RegExp(
+  r'\((\d+(?:[.,]\d+)?)\s*%\)',
+);
+
+double? _parseCartRatePercent(String label) {
+  final match = _cartRateInLabelRegex.firstMatch(label);
+  if (match == null) return null;
+  final raw = match.group(1)?.replaceAll(',', '.') ?? '';
+  return double.tryParse(raw);
+}
+
 /// Resuelve el nombre del mesero para mostrar en precuenta/factura.
 ///
 /// Orden de prioridad:
@@ -2406,17 +2421,72 @@ class _CartView extends ConsumerWidget {
       forcedOrigin: orderState.origin,
     );
     final displayTotal = pricingSummary.total;
-    final displaySubtotal = pricingSummary.subtotal;
-    final displayDiscounts = pricingSummary.discounts;
 
     final vm = ref.read(currentOrderProvider.notifier);
-    final taxBreakdown = vm.getTaxBreakdown(displaySubtotal);
-    final reconciledBreakdown = buildOrderTaxBreakdown(
+    final taxBreakdown = vm.getTaxBreakdown(pricingSummary.subtotal);
+    final rawBreakdown = buildOrderTaxBreakdown(
       orderState.order,
       displayedItems,
       forcedOrigin: orderState.origin,
       configuredBreakdown: taxBreakdown,
     );
+
+    // Aplicamos el modo de presentación del descuento elegido por el
+    // negocio (business_settings.discount_display_mode). Ver
+    // `discountDisplayModeProvider` y print_ticket_service.generateInvoice
+    // para la fuente única de la lógica. Hasta que el provider resuelva
+    // la primera lectura usamos el default 'pre_discount' (= modo A,
+    // comportamiento histórico).
+    final activeBusinessId =
+        ref.watch(sessionProvider).activeBusinessId ?? '';
+    final discountModeAsync = ref.watch(
+      discountDisplayModeProvider(activeBusinessId),
+    );
+    final discountMode =
+        discountModeAsync.valueOrNull ??
+        PosSettingsRepository.discountPreDiscount;
+    final isPostDiscountMode =
+        discountMode == PosSettingsRepository.discountPostDiscount;
+
+    final lineRates = <double?>[];
+    for (final entry in rawBreakdown) {
+      lineRates.add(_parseCartRatePercent(entry.label));
+    }
+    final allRatesKnown =
+        rawBreakdown.isNotEmpty && !lineRates.contains(null);
+    final effectiveRate = allRatesKnown
+        ? lineRates.fold<double>(0, (s, r) => s + (r ?? 0)) / 100.0
+        : 0.0;
+    final canRecompute = allRatesKnown && effectiveRate > 0;
+
+    final double displaySubtotal;
+    final List<({String label, double amount})> reconciledBreakdown;
+    final double displayDiscounts;
+    if (canRecompute) {
+      final discountForBase =
+          isPostDiscountMode ? 0.0 : pricingSummary.discounts;
+      final subtotalBase =
+          (displayTotal + discountForBase) / (1 + effectiveRate);
+      displaySubtotal = subtotalBase;
+      reconciledBreakdown = [
+        for (var i = 0; i < rawBreakdown.length; i++)
+          (
+            label: rawBreakdown[i].label,
+            amount: subtotalBase * ((lineRates[i] ?? 0) / 100),
+          ),
+      ];
+      // En modo B el descuento sale como nota informativa fuera del
+      // sum aditivo: ocultamos la línea sustractiva pasando 0 y
+      // dejamos que el subtotal/ITBIS deriven del total post-descuento.
+      displayDiscounts = isPostDiscountMode ? 0.0 : pricingSummary.discounts;
+    } else {
+      // Fallback: sin tasa parseable (ej. comprobante sin tax_lines)
+      // usamos los valores nativos del summary.
+      displaySubtotal = pricingSummary.subtotal;
+      reconciledBreakdown = rawBreakdown;
+      displayDiscounts = pricingSummary.discounts;
+    }
+
     final displayTaxTotal = reconciledBreakdown.fold<double>(
       0,
       (sum, e) => sum + e.amount,
@@ -3081,6 +3151,25 @@ class _CartView extends ConsumerWidget {
                 valueColor: _salesTotalColor,
                 valueWeight: FontWeight.w700,
               ),
+              // Modo post_discount: el descuento no está en el sum
+              // aditivo (subtotal+ITBIS = total). Lo mostramos como nota
+              // informativa debajo del Total para que el cajero sepa
+              // que se aplicó un ahorro al cliente.
+              if (isPostDiscountMode && pricingSummary.discounts > 0) ...[
+                const SizedBox(height: 6),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    'Incluye descuento aplicado de '
+                    'RD\$ ${currency.format(pricingSummary.discounts)}',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF6B7280),
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ),
+              ],
 
               // REMOVED OLD SPLIT PREVIEW PANEL
               if (allItems.isNotEmpty) ...[
@@ -3913,6 +4002,9 @@ class _CartView extends ConsumerWidget {
       final receiptItemDisplayModeFuture = ref
           .read(posSettingsRepositoryProvider)
           .getReceiptItemDisplayMode(businessId);
+      final discountDisplayModeFuture = ref
+          .read(posSettingsRepositoryProvider)
+          .getDiscountDisplayMode(businessId);
 
       if (assignedPrinter == null) {
         throw Exception('Impresora no configurada para esta caja.');
@@ -3920,6 +4012,7 @@ class _CartView extends ConsumerWidget {
       final printer = assignedPrinter;
 
       final receiptItemDisplayMode = await receiptItemDisplayModeFuture;
+      final discountDisplayMode = await discountDisplayModeFuture;
 
       // Preparación de datos (fuera del timeout para no penalizar generación)
       dynamic ticket;
@@ -4097,6 +4190,7 @@ class _CartView extends ConsumerWidget {
                 headerBlocks: profileForPrint.profile?.effectiveHeaderBlocks,
                 footerBlocks: profileForPrint.profile?.effectiveFooterBlocks,
                 bankAccountsByPaymentId: bankAccountsByPaymentId,
+                discountDisplayMode: discountDisplayMode,
               )
             : PrintTicketService.generatePrecheck(
                 order: orderObj,
@@ -4115,6 +4209,7 @@ class _CartView extends ConsumerWidget {
                 title: title,
                 receiptItemDisplayMode: receiptItemDisplayMode,
                 taxBreakdown: printTaxBreakdown,
+                discountDisplayMode: discountDisplayMode,
               );
       }
 

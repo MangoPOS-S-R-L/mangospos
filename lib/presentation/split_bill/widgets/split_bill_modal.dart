@@ -116,6 +116,9 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
       final receiptMode = await ref
           .read(posSettingsRepositoryProvider)
           .getReceiptItemDisplayMode(businessId);
+      final discountDisplayMode = await ref
+          .read(posSettingsRepositoryProvider)
+          .getDiscountDisplayMode(businessId);
 
       final ticket = PrintTicketService.generatePrecheck(
         order: checkOrder,
@@ -130,6 +133,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
         title: 'PRECUENTA - ${check.label}',
         receiptItemDisplayMode: receiptMode,
         taxBreakdown: taxBreakdown,
+        discountDisplayMode: discountDisplayMode,
       );
 
       await printRepo.printEscPos(

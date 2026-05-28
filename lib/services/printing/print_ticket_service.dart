@@ -398,6 +398,10 @@ class PrintTicketService {
     String? footerMessage,
     List<TicketBlock>? headerBlocks,
     List<TicketBlock>? footerBlocks,
+    /// Modo de presentación del descuento. Ver `generateInvoice` para
+    /// la semántica completa de `'pre_discount'` vs `'post_discount'`.
+    /// Default `'pre_discount'` (comportamiento histórico).
+    String discountDisplayMode = 'pre_discount',
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
     final consolidatedItems = _buildPrintableItems(
@@ -554,50 +558,79 @@ class PrintTicketService {
     // para el render de las lineas del ticket.
     final printableSummary = summarizeOrderPricing(order, items);
     final printableDiscounts = printableSummary.discounts;
+    final double printableGrandTotal = printableSummary.total;
 
-    // SUBTOTAL/TOTAL: usamos los valores del summary directo, igual que la UI.
-    // El trigger backend guarda `oi.subtotal` pre-descuento; sumar discounts
-    // de vuelta sobre-infla. `summary.total` ya aplica el override correcto
-    // (inclusiveGrossNet para órdenes 100% inclusive) y la fórmula
-    // base+tax-disc para mixed/exclusive.
-    final double printableSubtotal = printableSummary.subtotal;
+    // Recomputamos subtotal/impuestos según el modo elegido por el negocio
+    // para que la math del precheck siempre cierre visualmente (misma
+    // lógica que generateInvoice). Default `pre_discount`.
+    final isPostDiscountMode = discountDisplayMode == 'post_discount';
+    final lineRates = <double?>[];
+    for (final entry in taxBreakdown) {
+      lineRates.add(_parseInvoiceRatePercent(entry.label));
+    }
+    final allRatesKnown =
+        taxBreakdown.isNotEmpty && !lineRates.contains(null);
+    final effectiveRate = allRatesKnown
+        ? lineRates.fold<double>(0, (s, r) => s + (r ?? 0)) / 100.0
+        : 0.0;
+    final canRecompute = allRatesKnown && effectiveRate > 0;
 
-    // Estructura del bloque de totales (matchea la UI):
-    //   SUBTOTAL → impuestos → DESCUENTO → TOTAL
-    gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(printableSubtotal)}');
-
-    // Tax breakdown — labels normales.
-    if (taxBreakdown.isNotEmpty) {
-      for (final entry in taxBreakdown) {
-        if (entry.amount.abs() < 0.005) continue;
-        gen.textRow('${entry.label}:', 'RD\$ ${_formatMoney(entry.amount)}');
-      }
-    } else {
-      // Fallback: derivar desde printableSummary.
-      final printableTax = printableSummary.tax;
-      final printableServiceFee = printableSummary.serviceFee;
-      if (printableServiceFee > 0) {
-        final servicePct = printableSubtotal > 0
-            ? ((printableServiceFee / printableSubtotal) * 100).toStringAsFixed(
-                0,
-              )
-            : '0';
+    if (canRecompute) {
+      final discountForBase = isPostDiscountMode ? 0.0 : printableDiscounts;
+      final subtotalBase =
+          (printableGrandTotal + discountForBase) / (1 + effectiveRate);
+      gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(subtotalBase)}');
+      for (var i = 0; i < taxBreakdown.length; i++) {
+        final rate = lineRates[i] ?? 0;
+        final amount = subtotalBase * (rate / 100);
+        if (amount.abs() < 0.005) continue;
         gen.textRow(
-          'SERVICIO ($servicePct%):',
-          'RD\$ ${_formatMoney(printableServiceFee)}',
+          '${taxBreakdown[i].label}:',
+          'RD\$ ${_formatMoney(amount)}',
         );
       }
-      if (printableTax > 0.005) {
-        gen.textRow('ITBIS:', 'RD\$ ${_formatMoney(printableTax)}');
+      if (!isPostDiscountMode && printableDiscounts > 0) {
+        gen.textRow(
+          'DESCUENTO:',
+          '-RD\$ ${_formatMoney(printableDiscounts)}',
+        );
+      }
+    } else {
+      // Fallback legacy (sin tasa parseable o sin tax breakdown).
+      final double printableSubtotal = printableSummary.subtotal;
+      gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(printableSubtotal)}');
+      if (taxBreakdown.isNotEmpty) {
+        for (final entry in taxBreakdown) {
+          if (entry.amount.abs() < 0.005) continue;
+          gen.textRow(
+            '${entry.label}:',
+            'RD\$ ${_formatMoney(entry.amount)}',
+          );
+        }
+      } else {
+        final printableTax = printableSummary.tax;
+        final printableServiceFee = printableSummary.serviceFee;
+        if (printableServiceFee > 0) {
+          final servicePct = printableSubtotal > 0
+              ? ((printableServiceFee / printableSubtotal) * 100)
+                    .toStringAsFixed(0)
+              : '0';
+          gen.textRow(
+            'SERVICIO ($servicePct%):',
+            'RD\$ ${_formatMoney(printableServiceFee)}',
+          );
+        }
+        if (printableTax > 0.005) {
+          gen.textRow('ITBIS:', 'RD\$ ${_formatMoney(printableTax)}');
+        }
+      }
+      if (printableDiscounts > 0) {
+        gen.textRow(
+          'DESCUENTO:',
+          '-RD\$ ${_formatMoney(printableDiscounts)}',
+        );
       }
     }
-
-    // Descuento (después de los impuestos, como en la UI).
-    if (printableDiscounts > 0) {
-      gen.textRow('DESCUENTO:', '-RD\$ ${_formatMoney(printableDiscounts)}');
-    }
-
-    final double printableGrandTotal = printableSummary.total;
 
     gen.lineFeed();
     _thickSeparator(gen);
@@ -611,6 +644,16 @@ class PrintTicketService {
     gen.textRow('TOTAL:', 'RD\$ ${_formatMoney(printableGrandTotal)}');
     gen.setTextSize();
     gen.setBold(false);
+
+    // Post-discount mode: descuento como nota informativa debajo del
+    // total grande, no como línea sustractiva.
+    if (canRecompute && isPostDiscountMode && printableDiscounts > 0) {
+      gen.lineFeed();
+      gen.textCentered(
+        'Incluye descuento aplicado de '
+        'RD\$ ${_formatMoney(printableDiscounts)}',
+      );
+    }
 
     // PRD 6: equivalente USD debajo del TOTAL si está activo.
     // Decisión del cliente: la tasa NO sale en ningún ticket (ni
@@ -731,6 +774,14 @@ class PrintTicketService {
     /// no contiene el id, simplemente se omite la línea — el ticket
     /// sigue funcionando como antes (graceful degradation).
     Map<String, BankAccount>? bankAccountsByPaymentId,
+    /// Modo de presentación del descuento en el bloque de totales del
+    /// ticket. `'pre_discount'` (default, comportamiento histórico):
+    /// subtotal pre-descuento, ITBIS al % real, descuento como línea
+    /// sustractiva. `'post_discount'`: subtotal y ITBIS derivados del
+    /// total post-descuento, descuento se imprime como nota informativa
+    /// debajo del TOTAL. Match exacto con el modal del historial cuando
+    /// ambos leen el mismo `business_settings.discount_display_mode`.
+    String discountDisplayMode = 'pre_discount',
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
 
@@ -906,62 +957,106 @@ class PrintTicketService {
       preferStoredOrderTotals: preferStoredOrderTotals,
     );
     final effectiveDiscounts = effectiveTotals.discounts;
+    final double effectiveTotal = effectiveTotals.total;
 
-    // SUBTOTAL/TOTAL: usamos el summary directo, igual que la UI.
-    // Ver comentario en generatePrecheck.
-    final double effectiveSubtotal = effectiveTotals.subtotal;
+    // Recomputamos subtotal/impuestos según el modo elegido por el negocio
+    // para que la math del ticket siempre cierre visualmente. Tasa efectiva
+    // = suma de tasas únicas de los `tax_lines` parseadas desde las labels
+    // del breakdown. Si no hay tasa parseable, caemos al path legacy.
+    //
+    //   pre_discount (default):
+    //     subtotalBase = (total + descuento) / (1 + tasa)
+    //     SUBTOTAL + impuestos − DESCUENTO = TOTAL
+    //
+    //   post_discount:
+    //     subtotalBase = total / (1 + tasa)
+    //     SUBTOTAL + impuestos = TOTAL; descuento como nota informativa.
+    final isPostDiscountMode = discountDisplayMode == 'post_discount';
+    final lineRates = <double?>[];
+    for (final entry in taxBreakdown) {
+      lineRates.add(_parseInvoiceRatePercent(entry.label));
+    }
+    final allRatesKnown =
+        taxBreakdown.isNotEmpty && !lineRates.contains(null);
+    final effectiveRate = allRatesKnown
+        ? lineRates.fold<double>(0, (s, r) => s + (r ?? 0)) / 100.0
+        : 0.0;
+    final canRecompute = allRatesKnown && effectiveRate > 0;
 
     // Etiquetas DGII para e-CF (Norma General 01-2020):
     // - "Subtotal Gravado" en lugar de "SUBTOTAL"
     // - "Total ITBIS" en lugar de "ITBIS (18%)"
     final subtotalLabel = isElectronicCf ? 'Subtotal Gravado:' : 'SUBTOTAL:';
-    gen.textRow(subtotalLabel, 'RD\$ ${_formatMoney(effectiveSubtotal)}');
 
-    // Tax breakdown — para e-CF normaliza el label del ITBIS a "Total ITBIS".
-    if (taxBreakdown.isNotEmpty) {
-      for (final entry in taxBreakdown) {
-        if (entry.amount.abs() < 0.005) continue;
-        var label = entry.label;
+    if (canRecompute) {
+      final discountForBase = isPostDiscountMode ? 0.0 : effectiveDiscounts;
+      final subtotalBase =
+          (effectiveTotal + discountForBase) / (1 + effectiveRate);
+      gen.textRow(subtotalLabel, 'RD\$ ${_formatMoney(subtotalBase)}');
+      for (var i = 0; i < taxBreakdown.length; i++) {
+        final rate = lineRates[i] ?? 0;
+        final amount = subtotalBase * (rate / 100);
+        if (amount.abs() < 0.005) continue;
+        var label = taxBreakdown[i].label;
         if (isElectronicCf && label.toLowerCase().contains('itbis')) {
           label = 'Total ITBIS';
         }
-        gen.textRow('$label:', 'RD\$ ${_formatMoney(entry.amount)}');
+        gen.textRow('$label:', 'RD\$ ${_formatMoney(amount)}');
       }
-    } else {
-      // Fallback: derive from resolved printable totals
-      final effectiveTax = effectiveTotals.tax;
-      final effectiveServiceFee = effectiveTotals.serviceFee;
-      if (effectiveServiceFee > 0) {
-        final servicePct = effectiveSubtotal > 0
-            ? ((effectiveServiceFee / effectiveSubtotal) * 100).toStringAsFixed(
-                0,
-              )
-            : '0';
+      if (!isPostDiscountMode && effectiveDiscounts > 0) {
         gen.textRow(
-          'SERVICIO ($servicePct%):',
-          'RD\$ ${_formatMoney(effectiveServiceFee)}',
+          'DESCUENTO:',
+          '-RD\$ ${_formatMoney(effectiveDiscounts)}',
         );
       }
-      if (effectiveTax > 0.005) {
-        if (isElectronicCf) {
-          gen.textRow('Total ITBIS:', 'RD\$ ${_formatMoney(effectiveTax)}');
-        } else {
-          final taxPct = effectiveSubtotal > 0
-              ? ((effectiveTax / effectiveSubtotal) * 100).toStringAsFixed(0)
-              : '18';
+    } else {
+      // Fallback legacy: imprimimos los valores del summary directo,
+      // como antes. Aplica cuando no hay tax_lines parseables.
+      final double effectiveSubtotal = effectiveTotals.subtotal;
+      gen.textRow(subtotalLabel, 'RD\$ ${_formatMoney(effectiveSubtotal)}');
+      if (taxBreakdown.isNotEmpty) {
+        for (final entry in taxBreakdown) {
+          if (entry.amount.abs() < 0.005) continue;
+          var label = entry.label;
+          if (isElectronicCf && label.toLowerCase().contains('itbis')) {
+            label = 'Total ITBIS';
+          }
+          gen.textRow('$label:', 'RD\$ ${_formatMoney(entry.amount)}');
+        }
+      } else {
+        final effectiveTax = effectiveTotals.tax;
+        final effectiveServiceFee = effectiveTotals.serviceFee;
+        if (effectiveServiceFee > 0) {
+          final servicePct = effectiveSubtotal > 0
+              ? ((effectiveServiceFee / effectiveSubtotal) * 100)
+                    .toStringAsFixed(0)
+              : '0';
           gen.textRow(
-            'ITBIS ($taxPct%):',
-            'RD\$ ${_formatMoney(effectiveTax)}',
+            'SERVICIO ($servicePct%):',
+            'RD\$ ${_formatMoney(effectiveServiceFee)}',
           );
         }
+        if (effectiveTax > 0.005) {
+          if (isElectronicCf) {
+            gen.textRow('Total ITBIS:', 'RD\$ ${_formatMoney(effectiveTax)}');
+          } else {
+            final taxPct = effectiveSubtotal > 0
+                ? ((effectiveTax / effectiveSubtotal) * 100).toStringAsFixed(0)
+                : '18';
+            gen.textRow(
+              'ITBIS ($taxPct%):',
+              'RD\$ ${_formatMoney(effectiveTax)}',
+            );
+          }
+        }
+      }
+      if (effectiveDiscounts > 0) {
+        gen.textRow(
+          'DESCUENTO:',
+          '-RD\$ ${_formatMoney(effectiveDiscounts)}',
+        );
       }
     }
-
-    if (effectiveDiscounts > 0) {
-      gen.textRow('DESCUENTO:', '-RD\$ ${_formatMoney(effectiveDiscounts)}');
-    }
-
-    final double effectiveTotal = effectiveTotals.total;
 
     gen.lineFeed();
     _thickSeparator(gen);
@@ -972,6 +1067,16 @@ class PrintTicketService {
     gen.textRow('TOTAL:', 'RD\$ ${_formatMoney(effectiveTotal)}');
     gen.setTextSize();
     gen.setBold(false);
+
+    // Post-discount mode: el descuento sale como nota informativa
+    // debajo del total grande, no como línea sustractiva en el sum.
+    if (canRecompute && isPostDiscountMode && effectiveDiscounts > 0) {
+      gen.lineFeed();
+      gen.textCentered(
+        'Incluye descuento aplicado de '
+        'RD\$ ${_formatMoney(effectiveDiscounts)}',
+      );
+    }
 
     // PRD 6: equivalente USD debajo del TOTAL si toggle está activo.
     // En la factura NO mostramos la tasa (showRate=false): el cliente
@@ -1635,6 +1740,20 @@ class PrintTicketService {
   static String _formatDateTime(DateTime dt) {
     final ast = AppTime.astFromInstant(dt);
     return '${_formatDate(ast)} ${ast.hour.toString().padLeft(2, '0')}:${ast.minute.toString().padLeft(2, '0')}';
+  }
+
+  /// Regex compartido para extraer el porcentaje de una label tipo
+  /// "ITBIS (18%)" / "Propina Ley (10%)" / "ITBIS (16.5%)". Si la label
+  /// no encaja, el caller cae al path heurístico legacy.
+  static final RegExp _invoiceRateRegex = RegExp(
+    r'\((\d+(?:[.,]\d+)?)\s*%\)',
+  );
+
+  static double? _parseInvoiceRatePercent(String label) {
+    final match = _invoiceRateRegex.firstMatch(label);
+    if (match == null) return null;
+    final raw = match.group(1)?.replaceAll(',', '.') ?? '';
+    return double.tryParse(raw);
   }
 
   /// Formatear dinero con comas como separador de miles y punto para decimales

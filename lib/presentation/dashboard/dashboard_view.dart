@@ -14,6 +14,10 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'widgets/hoverable_card.dart';
+import 'widgets/inventory_alert_card.dart';
+import 'widgets/order_summary_strip.dart';
+import 'widgets/recent_orders_card.dart';
+import 'widgets/top_selling_items_card.dart';
 
 class DashboardView extends ConsumerStatefulWidget {
   const DashboardView({super.key});
@@ -102,6 +106,12 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
                 ),
                 SizedBox(height: gap),
 
+                // ORDER SUMMARY (KPI strip): hoy vs ayer. Ancho completo en
+                // los dos layouts — los 5 KPIs son el pulso del día y queremos
+                // verlos primero al entrar al dashboard.
+                const OrderSummaryStrip(),
+                SizedBox(height: gap),
+
                 // MAIN LAYOUT
                 if (isSplitView)
                   Row(
@@ -140,6 +150,31 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
                       _ActiveTablesWidget(viewModel: vm, isWide: isDesktopXL),
                     ],
                   ),
+
+                // ───────────────────────────────────────────────────────────
+                // Dashboard Fase A — widgets agregados sobre los originales.
+                //   - Recent Orders: ancho completo (tabla con varias columnas
+                //     no se ve bien en split).
+                //   - Top Selling Items + Inventory Alert: side-by-side en
+                //     desktop, stacked en mobile.
+                // ───────────────────────────────────────────────────────────
+                SizedBox(height: gap),
+                const RecentOrdersCard(),
+                SizedBox(height: gap),
+                if (isSplitView)
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Expanded(child: TopSellingItemsCard()),
+                      SizedBox(width: gap),
+                      const Expanded(child: InventoryAlertCard()),
+                    ],
+                  )
+                else ...[
+                  const TopSellingItemsCard(),
+                  SizedBox(height: gap),
+                  const InventoryAlertCard(),
+                ],
               ],
             ),
           );

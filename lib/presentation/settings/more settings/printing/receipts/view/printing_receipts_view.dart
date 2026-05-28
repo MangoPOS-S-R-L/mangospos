@@ -32,6 +32,7 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
   List<String> _receiptPrinterIds = const [];
   List<String> _closurePrinterIds = const [];
   String _receiptItemDisplayMode = PosSettingsRepository.receiptItemsGrouped;
+  String _discountDisplayMode = PosSettingsRepository.discountPreDiscount;
   // Slice B: multi-copia automática (sin picker) por tipo de comprobante.
   bool _precheckMultiCopy = false;
   bool _receiptMultiCopy = false;
@@ -62,6 +63,9 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
     final receiptItemDisplayMode = businessId.isEmpty
         ? PosSettingsRepository.receiptItemsGrouped
         : await settingsRepo.getReceiptItemDisplayMode(businessId);
+    final discountDisplayMode = businessId.isEmpty
+        ? PosSettingsRepository.discountPreDiscount
+        : await settingsRepo.getDiscountDisplayMode(businessId);
     // Slice B: leer flags multi-copia.
     final multiCopy = businessId.isEmpty
         ? (precheck: false, receipt: false)
@@ -75,6 +79,7 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
       _receiptPrinterIds = bootstrap.receiptPrinterIds;
       _closurePrinterIds = bootstrap.closurePrinterIds;
       _receiptItemDisplayMode = receiptItemDisplayMode;
+      _discountDisplayMode = discountDisplayMode;
       _precheckMultiCopy = multiCopy.precheck;
       _receiptMultiCopy = multiCopy.receipt;
     });
@@ -228,6 +233,42 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
     }
   }
 
+  Future<void> _updateDiscountDisplayMode(String mode) async {
+    final businessId = _resolvedBusinessId;
+    if (businessId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo resolver el negocio activo.')),
+      );
+      return;
+    }
+
+    setState(() => _busy = true);
+    try {
+      await ref
+          .read(posSettingsRepositoryProvider)
+          .setDiscountDisplayMode(businessId: businessId, mode: mode);
+      // Invalida el provider para que los consumers (cart, modal, etc.)
+      // re-fetcheen al próximo build. El cache in-memory del repo ya
+      // tiene el valor nuevo desde el `set`, así que la siguiente
+      // lectura es sincrónica y la UI cambia de inmediato.
+      ref.invalidate(discountDisplayModeProvider(businessId));
+      if (!mounted) return;
+      setState(() => _discountDisplayMode = mode);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Formato de descuento guardado.'),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo guardar el formato.')),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   /// Abre el picker de impresoras y AGREGA la elegida a la asignación
   /// (no la reemplaza). Excluye del picker las que ya están asignadas.
   Future<void> _addPrinter({
@@ -338,6 +379,14 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
                         value: _receiptItemDisplayMode,
                         busy: _busy,
                         onChanged: _updateReceiptItemDisplayMode,
+                      ),
+                    ),
+                    SizedBox(
+                      width: cardWidth,
+                      child: _DiscountDisplayModeCard(
+                        value: _discountDisplayMode,
+                        busy: _busy,
+                        onChanged: _updateDiscountDisplayMode,
                       ),
                     ),
                     SizedBox(
@@ -484,6 +533,79 @@ class _ReceiptItemModeCard extends StatelessWidget {
             value == PosSettingsRepository.receiptItemsGrouped
                 ? 'Ej: 3 Coca-Cola en una sola línea.'
                 : 'Ej: Coca-Cola repetida en varias líneas.',
+            style: const TextStyle(fontSize: 13, color: MangoColors.muted),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Selector de cómo se presenta el descuento en facturas (modal historial
+/// + ticket impreso). Modo A (pre-descuento) mantiene la lectura "precio
+/// de lista − ahorro = pagado"; modo B (post-descuento) muestra el
+/// desglose fiscal limpio sobre el monto realmente cobrado.
+class _DiscountDisplayModeCard extends StatelessWidget {
+  const _DiscountDisplayModeCard({
+    required this.value,
+    required this.busy,
+    required this.onChanged,
+  });
+
+  final String value;
+  final bool busy;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final isPost = value == PosSettingsRepository.discountPostDiscount;
+    return PrintingCardFrame(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const PrintingSoftHeader(
+            leading: Icon(
+              Icons.percent_outlined,
+              color: MangoColors.darkGray,
+            ),
+            title: 'Formato del descuento',
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Elige cómo se presenta el descuento en el modal del historial '
+            'de ventas y en el ticket impreso.',
+            style: TextStyle(fontSize: 13, color: MangoColors.muted),
+          ),
+          const SizedBox(height: 16),
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment<String>(
+                value: PosSettingsRepository.discountPreDiscount,
+                label: Text('Pre-descuento'),
+                icon: Icon(Icons.label_off_outlined),
+              ),
+              ButtonSegment<String>(
+                value: PosSettingsRepository.discountPostDiscount,
+                label: Text('Post-descuento'),
+                icon: Icon(Icons.label_important_outline),
+              ),
+            ],
+            selected: {value},
+            onSelectionChanged: busy
+                ? null
+                : (selection) {
+                    if (selection.isNotEmpty) {
+                      onChanged(selection.first);
+                    }
+                  },
+          ),
+          const SizedBox(height: 14),
+          Text(
+            isPost
+                ? 'Subtotal y ITBIS derivados del total pagado; el descuento '
+                      'aparece como nota informativa.'
+                : 'Subtotal pre-descuento, ITBIS al % real, descuento como '
+                      'línea sustractiva (matches el ticket histórico).',
             style: const TextStyle(fontSize: 13, color: MangoColors.muted),
           ),
         ],

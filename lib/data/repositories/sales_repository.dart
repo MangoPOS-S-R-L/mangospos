@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/utils/app_time.dart';
 import '../datasources/queries/sales_queries.dart';
 import '../models/order_item_tax_line.dart';
 import '../models/sales_models.dart';
@@ -2230,5 +2231,84 @@ class SalesRepository {
       SalesQueries.rpcCloseDeliveryOrder,
       params: {'p_order_id': orderId, 'p_status': status},
     );
+  }
+
+  // ===========================================================================
+  // Dashboard — widgets agregados (Top productos, recientes)
+  // ===========================================================================
+
+  /// Top N productos más vendidos por cantidad, en el período dado.
+  /// Suma `order_items.quantity` por `product_id`, ordena descendente.
+  ///
+  /// Devuelve filas con: `product_id`, `product_name`, `image_url`,
+  /// `total_quantity`, `total_amount`. NULL `product_id` (= productos
+  /// borrados) se filtran fuera porque ya no se pueden mostrar como item.
+  ///
+  /// Scope: respeta business_id vía join orders → table_sessions → zones.
+  /// Status filter: solo cuenta items de órdenes 'paid'/'sent'/'served'
+  /// — excluye drafts y canceladas.
+  Future<List<Map<String, dynamic>>> getTopSellingProducts({
+    required String businessId,
+    required DateTime from,
+    required DateTime to,
+    int limit = 3,
+  }) async {
+    final fromIso = AppTime.astToUtcIso(from);
+    final toIso = AppTime.astToUtcIso(to);
+    final response = await _client.rpc(
+      'fn_dashboard_top_selling_products',
+      params: {
+        '_business_id': businessId,
+        '_from': fromIso,
+        '_to': toIso,
+        '_limit': limit,
+      },
+    );
+    if (response == null) return const [];
+    return List<Map<String, dynamic>>.from(response as List);
+  }
+
+  /// Últimas N órdenes del business para el panel "Recent Orders" del
+  /// dashboard. Devuelve resumen ligero: id, número visible, customer_name,
+  /// total, status, created_at, items_summary (string corto con 1-2 items).
+  ///
+  /// Ordenado por `created_at` DESC. Por default trae las últimas 10.
+  Future<List<Map<String, dynamic>>> getRecentOrders({
+    required String businessId,
+    int limit = 10,
+  }) async {
+    final response = await _client.rpc(
+      'fn_dashboard_recent_orders',
+      params: {
+        '_business_id': businessId,
+        '_limit': limit,
+      },
+    );
+    if (response == null) return const [];
+    return List<Map<String, dynamic>>.from(response as List);
+  }
+
+  /// KPIs del "Order Summary" del dashboard: HOY vs AYER (mismo tramo
+  /// del día). Devuelve hasta 2 filas — el caller las arma con
+  /// [DashboardKpis.fromRpcRows].
+  Future<List<Map<String, dynamic>>> getDashboardKpis({
+    required String businessId,
+    required DateTime todayFrom,
+    required DateTime todayTo,
+    required DateTime yesterdayFrom,
+    required DateTime yesterdayTo,
+  }) async {
+    final response = await _client.rpc(
+      'fn_dashboard_kpis',
+      params: {
+        '_business_id': businessId,
+        '_today_from': AppTime.astToUtcIso(todayFrom),
+        '_today_to': AppTime.astToUtcIso(todayTo),
+        '_yesterday_from': AppTime.astToUtcIso(yesterdayFrom),
+        '_yesterday_to': AppTime.astToUtcIso(yesterdayTo),
+      },
+    );
+    if (response == null) return const [];
+    return List<Map<String, dynamic>>.from(response as List);
   }
 }

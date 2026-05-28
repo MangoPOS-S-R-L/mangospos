@@ -11,6 +11,20 @@ final posSettingsRepositoryProvider = Provider<PosSettingsRepository>(
   (ref) => PosSettingsRepository(Supabase.instance.client),
 );
 
+/// Provider del modo de presentación del descuento por negocio. Wrap del
+/// getter cacheado del repo en un `FutureProvider.family` para que la UI
+/// del cart pueda `ref.watch` sin acoplarse a FutureBuilder. La primera
+/// invocación pega Supabase; las siguientes (dentro de 5 min) caen al
+/// cache in-memory del repo.
+final discountDisplayModeProvider =
+    FutureProvider.family<String, String>((ref, businessId) async {
+  if (businessId.isEmpty) {
+    return PosSettingsRepository.discountPreDiscount;
+  }
+  final repo = ref.read(posSettingsRepositoryProvider);
+  return repo.getDiscountDisplayMode(businessId);
+});
+
 /// Niveles de inventario que el admin puede elegir.
 ///   - [none]: módulo oculto, sin tracking de stock. Default histórico.
 ///   - [basic]: 1:1 menu_item → inventory_item con stock por unidad.
@@ -173,6 +187,16 @@ class PosSettingsRepository {
   static const String receiptItemsSeparate = 'separate';
   static const Duration _receiptModeCacheTtl = Duration(minutes: 5);
   static final Map<String, _CachedReceiptMode> _receiptModeCache = {};
+
+  /// Modo A: subtotal pre-descuento, ITBIS al % real del subtotal, descuento
+  /// como línea sustractiva. Match con el ticket impreso histórico. Default.
+  static const String discountPreDiscount = 'pre_discount';
+
+  /// Modo B: subtotal derivado del total post-descuento (total / (1+tasa)),
+  /// ITBIS recomputado, descuento como nota informativa fuera del sum.
+  static const String discountPostDiscount = 'post_discount';
+  static const Duration _discountModeCacheTtl = Duration(minutes: 5);
+  static final Map<String, _CachedDiscountMode> _discountModeCache = {};
 
   /// Modo compacto: un solo modal con efectivo + tarjeta + transferencia.
   /// Comportamiento actual del POS.
@@ -358,6 +382,56 @@ class PosSettingsRepository {
     );
   }
 
+  /// Modo de presentación del descuento en facturas (modal historial +
+  /// ticket impreso). Default `discountPreDiscount` cuando la columna aún
+  /// no existe (pre-migración) o la query falla — preserva el render
+  /// histórico para clientes que no toquen el toggle.
+  Future<String> getDiscountDisplayMode(String businessId) async {
+    final cached = _discountModeCache[businessId];
+    if (cached != null &&
+        DateTime.now().difference(cached.cachedAt) < _discountModeCacheTtl) {
+      return cached.mode;
+    }
+
+    try {
+      final row = await _client
+          .from('business_settings')
+          .select('discount_display_mode')
+          .eq('business_id', businessId)
+          .maybeSingle();
+
+      final mode = row?['discount_display_mode']?.toString();
+      final normalized = mode == discountPostDiscount
+          ? discountPostDiscount
+          : discountPreDiscount;
+      _discountModeCache[businessId] = _CachedDiscountMode(
+        normalized,
+        DateTime.now(),
+      );
+      return normalized;
+    } catch (_) {
+      return discountPreDiscount;
+    }
+  }
+
+  Future<void> setDiscountDisplayMode({
+    required String businessId,
+    required String mode,
+  }) async {
+    final normalized = mode == discountPostDiscount
+        ? discountPostDiscount
+        : discountPreDiscount;
+
+    await _client.from('business_settings').upsert({
+      'business_id': businessId,
+      'discount_display_mode': normalized,
+    }, onConflict: 'business_id');
+    _discountModeCache[businessId] = _CachedDiscountMode(
+      normalized,
+      DateTime.now(),
+    );
+  }
+
   /// Printing v2 — Slice B: lee los flags de multi-copia automática para
   /// pre-cuenta y recibo. Default false si la fila no existe o falla.
   /// Cuando true, el orchestrator imprime en TODAS las impresoras del
@@ -506,6 +580,13 @@ class PosSettingsRepository {
 
 class _CachedReceiptMode {
   const _CachedReceiptMode(this.mode, this.cachedAt);
+
+  final String mode;
+  final DateTime cachedAt;
+}
+
+class _CachedDiscountMode {
+  const _CachedDiscountMode(this.mode, this.cachedAt);
 
   final String mode;
   final DateTime cachedAt;
