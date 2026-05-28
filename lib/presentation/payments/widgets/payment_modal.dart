@@ -15,6 +15,7 @@ import '../../../data/models/bank_account.dart';
 import '../../../data/models/payment_models.dart';
 import '../../../data/models/sales_models.dart';
 import '../../../services/session/session_controller.dart';
+import '../../settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
 import '../state/payment_state.dart';
 import '../viewmodel/payment_viewmodel.dart';
 import '../../cashier/viewmodel/cashier_viewmodel.dart';
@@ -47,6 +48,14 @@ class PaymentModal extends ConsumerStatefulWidget {
 class _PaymentModalState extends ConsumerState<PaymentModal> {
   bool _handledPayment = false;
 
+  /// Estado de la sonda TCP a la impresora fiscal/cashier:
+  ///   - `null`     → sondeo aún en curso o no aplicable (web).
+  ///   - `true`     → impresora respondió OK, no mostramos banner.
+  ///   - `false`    → no responde — mostramos banner amarillo para
+  ///     que el cajero decida informado antes de cobrar.
+  bool? _printerOnline;
+  String? _probedPrinterName;
+
   bool _needsCashSession(PaymentState state) {
     final message = state.error?.toLowerCase();
     if (message == null) return false;
@@ -74,7 +83,39 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
             .read(paymentViewModelProvider.notifier)
             .initializeForOrder(widget.order);
       }
+      // Pre-validación: sondea la impresora fiscal/cashier asignada
+      // mientras el cajero ve el modal. Si está caída, mostramos un
+      // banner para que pueda decidir antes de cobrar (típicamente
+      // "cobrá igual, ya reimprimo después" o "esperá que la
+      // enciendo"). Fire-and-forget: cualquier fallo de la sonda no
+      // afecta el flow del modal.
+      unawaited(_probeReceiptPrinter());
     });
+  }
+
+  Future<void> _probeReceiptPrinter() async {
+    try {
+      final businessId = ref.read(sessionProvider).activeBusinessId;
+      if (businessId == null || businessId.isEmpty) return;
+      final printRepo = ref.read(printingPrintersRepositoryProvider);
+      final printer = await printRepo.getAssignedPrinterForType(
+        businessId: businessId,
+        preferredAreaCodes: const ['fiscal', 'cashier'],
+        printsReceipts: true,
+      );
+      if (printer == null) return;
+      final ok = await printRepo.probePrinter(
+        ip: printer.ipAddress,
+        port: printer.port ?? 9100,
+      );
+      if (!mounted) return;
+      setState(() {
+        _printerOnline = ok;
+        _probedPrinterName = printer.name;
+      });
+    } catch (_) {
+      // Sonda fallida no debe afectar el modal — silencio.
+    }
   }
 
   @override
@@ -136,6 +177,15 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
                 children: [
                   _buildHeader(context, totalToPay),
                   const Divider(height: 32),
+                  // Banner de pre-validación: si la sonda devolvió que
+                  // la impresora fiscal está caída, avisamos al cajero
+                  // ANTES de cobrar. El pago sí procede normal — el
+                  // ticket se podrá reimprimir desde el historial
+                  // cuando la impresora vuelva.
+                  if (_printerOnline == false) ...[
+                    _PrinterOfflineBanner(printerName: _probedPrinterName),
+                    const SizedBox(height: AppSpacing.sm),
+                  ],
                   const SizedBox(height: AppSpacing.sm),
 
                   // Tabs de Divisi\u00f3n
@@ -1432,6 +1482,69 @@ class _BankAccountCard extends StatelessWidget {
               ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Banner amarillo informativo cuando la pre-validación detecta que la
+/// impresora fiscal no responde al momento de abrir el modal de cobro.
+/// El cajero sigue pudiendo cobrar — el banner solo avisa para que
+/// decida informado (esperar a encender la impresora vs cobrar y
+/// reimprimir después desde el historial).
+class _PrinterOfflineBanner extends StatelessWidget {
+  const _PrinterOfflineBanner({this.printerName});
+
+  final String? printerName;
+
+  @override
+  Widget build(BuildContext context) {
+    final name = printerName?.trim();
+    final namePart = (name == null || name.isEmpty) ? 'fiscal' : '«$name»';
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.lg,
+        vertical: AppSpacing.md,
+      ),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7ED),
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        border: Border.all(color: const Color(0xFFFFD7B0)),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.warning_amber_rounded,
+            color: Color(0xFFB45309),
+            size: 22,
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Impresora $namePart sin conexión',
+                  style: const TextStyle(
+                    color: Color(0xFF7C2D12),
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                const Text(
+                  'Puedes cobrar igual — el ticket quedará disponible '
+                  'para reimprimir desde el historial cuando la '
+                  'impresora se recupere.',
+                  style: TextStyle(
+                    color: Color(0xFF7C2D12),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

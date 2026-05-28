@@ -7,7 +7,9 @@ import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/app/widgets/date_range_modal.dart';
+import 'package:mangopos/core/printing/print_error_humanizer.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
+import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
@@ -794,6 +796,9 @@ mixin _PaymentActionsMixin {
     final fdCheckId = payment['check_id']?.toString();
     final fdId = payment['fiscal_document_id']?.toString();
 
+    // Pre-declarada para que el catch pueda mencionar la impresora
+    // específica en el mensaje de error humano (humanizePrintError).
+    PrinterConfig? assignedPrinter;
     try {
       final scaffold = ScaffoldMessenger.of(context);
       scaffold.showSnackBar(
@@ -911,7 +916,9 @@ mixin _PaymentActionsMixin {
       final waiterName = _waiterNameFromPayment ?? 'Servicio';
 
       final printRepo = ref.read(printingPrintersRepositoryProvider);
-      final assignedPrinter = await printRepo.getAssignedPrinterForType(
+      // Asigna la variable outer (declarada antes del try) para que el
+      // catch pueda referenciarla en el mensaje de error humano.
+      assignedPrinter = await printRepo.getAssignedPrinterForType(
         businessId: businessId,
         preferredAreaCodes: const ['fiscal', 'cashier'],
         printsReceipts: true,
@@ -1093,15 +1100,56 @@ mixin _PaymentActionsMixin {
       }
     } catch (e) {
       if (context.mounted) {
+        final friendly = humanizePrintError(
+          e,
+          printerName: assignedPrinter?.name,
+        );
         showDialog(
           context: context,
           builder: (context) => AlertDialog(
-            title: const Text('Error de Impresión'),
-            content: Text(e.toString()),
+            title: Text(friendly.title),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(friendly.message),
+                if (friendly.hint != null) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF7ED),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFFFFD7B0)),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(
+                          Icons.lightbulb_outline,
+                          size: 16,
+                          color: Color(0xFFB45309),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            friendly.hint!,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: Color(0xFF7C2D12),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context),
-                child: const Text('OK'),
+                child: const Text('Entendido'),
               ),
             ],
           ),

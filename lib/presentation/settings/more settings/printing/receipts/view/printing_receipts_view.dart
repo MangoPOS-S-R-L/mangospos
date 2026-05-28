@@ -36,6 +36,7 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
   // Slice B: multi-copia automática (sin picker) por tipo de comprobante.
   bool _precheckMultiCopy = false;
   bool _receiptMultiCopy = false;
+  bool _openDrawerOnCash = false;
   bool _busy = false;
 
   @override
@@ -70,6 +71,9 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
     final multiCopy = businessId.isEmpty
         ? (precheck: false, receipt: false)
         : await settingsRepo.getPrintMultiCopyModes(businessId);
+    final openDrawerOnCash = businessId.isEmpty
+        ? false
+        : await settingsRepo.getOpenDrawerOnCash(businessId);
     if (!mounted) return;
     setState(() {
       _cashierArea = bootstrap.cashierArea;
@@ -82,7 +86,50 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
       _discountDisplayMode = discountDisplayMode;
       _precheckMultiCopy = multiCopy.precheck;
       _receiptMultiCopy = multiCopy.receipt;
+      _openDrawerOnCash = openDrawerOnCash;
     });
+  }
+
+  Future<void> _toggleOpenDrawerOnCash(bool enabled) async {
+    final businessId = _resolvedBusinessId;
+    if (businessId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo resolver el negocio activo.')),
+      );
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _openDrawerOnCash = enabled;
+    });
+    try {
+      await ref
+          .read(posSettingsRepositoryProvider)
+          .setOpenDrawerOnCash(businessId: businessId, enabled: enabled);
+      // Invalida el provider para que el flow de cobro lea el valor nuevo
+      // de inmediato sin esperar el TTL del cache.
+      ref.invalidate(openDrawerOnCashProvider(businessId));
+      if (!mounted) return;
+      setState(() => _busy = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            enabled
+                ? 'Se abrirá la gaveta automáticamente en pagos en efectivo.'
+                : 'La gaveta ya no se abrirá automáticamente.',
+          ),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _openDrawerOnCash = !enabled;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo guardar el cambio.')),
+      );
+    }
   }
 
   /// Slice B: toggle del flag multi-copia para precheck o receipt.
@@ -391,6 +438,14 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
                     ),
                     SizedBox(
                       width: cardWidth,
+                      child: _OpenDrawerOnCashCard(
+                        value: _openDrawerOnCash,
+                        busy: _busy,
+                        onChanged: _toggleOpenDrawerOnCash,
+                      ),
+                    ),
+                    SizedBox(
+                      width: cardWidth,
                       child: _DocumentAssignmentCard(
                         title: 'C.Final',
                         trailingLabel: 'Area fiscal',
@@ -607,6 +662,64 @@ class _DiscountDisplayModeCard extends StatelessWidget {
                 : 'Subtotal pre-descuento, ITBIS al % real, descuento como '
                       'línea sustractiva (matches el ticket histórico).',
             style: const TextStyle(fontSize: 13, color: MangoColors.muted),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Toggle de "abrir gaveta al cobrar en efectivo". Cuando ON, el flow
+/// de pago dispara el comando ESC/POS `ESC p` a la impresora asignada al
+/// área fiscal/cashier junto con la impresión del recibo. Si la impresora
+/// no tiene gaveta conectada, el comando se ignora silenciosamente (es
+/// el comportamiento estándar del hardware).
+class _OpenDrawerOnCashCard extends StatelessWidget {
+  const _OpenDrawerOnCashCard({
+    required this.value,
+    required this.busy,
+    required this.onChanged,
+  });
+
+  final bool value;
+  final bool busy;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return PrintingCardFrame(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const PrintingSoftHeader(
+            leading: Icon(
+              Icons.point_of_sale_outlined,
+              color: MangoColors.darkGray,
+            ),
+            title: 'Apertura de gaveta',
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Cuando está activado, los pagos en efectivo abren la gaveta '
+            'de dinero automáticamente al imprimir el recibo. Requiere '
+            'una gaveta RJ-11 conectada a la impresora fiscal.',
+            style: TextStyle(fontSize: 13, color: MangoColors.muted),
+          ),
+          const SizedBox(height: 12),
+          SwitchListTile.adaptive(
+            value: value,
+            onChanged: busy ? null : onChanged,
+            contentPadding: EdgeInsets.zero,
+            activeThumbColor: MangoColors.primaryOrange,
+            title: Text(
+              value
+                  ? 'Activada — abre en pagos en efectivo'
+                  : 'Desactivada — no se abre automáticamente',
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ),
         ],
       ),

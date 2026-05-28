@@ -782,6 +782,12 @@ class PrintTicketService {
     /// debajo del TOTAL. Match exacto con el modal del historial cuando
     /// ambos leen el mismo `business_settings.discount_display_mode`.
     String discountDisplayMode = 'pre_discount',
+    /// Si `true`, después del corte de papel se apenda el comando
+    /// ESC/POS de apertura de gaveta (`ESC p 0 25 250`). El caller debe
+    /// pasar `true` solo cuando el método de pago fue efectivo Y el
+    /// business tiene `open_drawer_on_cash = true`. Si la impresora no
+    /// tiene gaveta RJ-11 conectada, el comando se ignora silenciosamente.
+    bool openCashDrawer = false,
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
 
@@ -1183,6 +1189,12 @@ class PrintTicketService {
     );
     gen.lineFeed(4);
     gen.cut();
+    // Drawer kick va DESPUÉS del corte para que el cajero saque el
+    // recibo y la gaveta se abra simultáneamente. Si la impresora no
+    // tiene gaveta, el comando se ignora a nivel hardware.
+    if (openCashDrawer) {
+      gen.openCashDrawer();
+    }
 
     return PrintTicket(type: 'invoice', escPosCommands: gen.getCommands());
   }

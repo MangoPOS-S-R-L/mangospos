@@ -1560,7 +1560,14 @@ class PrintingRepository {
           return;
         }
         try {
-          await printRawDirectTcp(
+          // Retry silencioso con backoff exponencial antes de escalar a
+          // recovery por MAC. Cubre fallos transitorios típicos: blip de
+          // WiFi, impresora despertándose, ARP stale, contención de red
+          // cuando varios cobros caen al mismo tiempo. Si tras 3 intentos
+          // sigue fallando, asumimos que el problema NO es transitorio
+          // (impresora cambió de IP, está apagada, etc.) y caemos al
+          // path de recovery / agent fallback / cloud queue.
+          await _printTcpWithRetries(
             ip: ip,
             port: printer.port ?? 9100,
             data: data,
@@ -2624,6 +2631,122 @@ finally {
   ///
   /// Diseñado para no throwear: cualquier fallo retorna null y deja al
   /// caller seguir con su fallback (típicamente printRawViaAgent).
+  /// Sonda rápida de conectividad TCP a una impresora — connect + close
+  /// con timeout corto (default 1.2s). No envía datos, no requiere
+  /// permisos del impresora, no afecta su buffer interno. Pensada para:
+  ///   - pre-validación al abrir el modal de cobro (evitar cobrar y
+  ///     descubrir después que la impresora está caída),
+  ///   - heartbeat periódico que actualiza un badge en la UI.
+  ///
+  /// Devuelve `true` si el TCP handshake completa exitosamente.
+  /// Devuelve `false` ante cualquier error (timeout, refused,
+  /// unreachable, host not found).
+  Future<bool> probePrinter({
+    String? ip,
+    int port = 9100,
+    Duration timeout = const Duration(milliseconds: 1200),
+  }) async {
+    final trimmedIp = ip?.trim();
+    if (trimmedIp == null || trimmedIp.isEmpty) return false;
+    if (kIsWeb) {
+      // En web no podemos hacer TCP directo — el caller deberá usar el
+      // agent. Devolvemos `true` (optimista) para no bloquear el flow;
+      // el path real de impresión ya tiene su propio error handling.
+      return true;
+    }
+    try {
+      final socket = await Socket.connect(trimmedIp, port, timeout: timeout);
+      socket.destroy();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Reintenta `printRawDirectTcp` hasta 3 veces con backoff exponencial
+  /// (1s, 2s) entre intentos. Solo reintenta en errores que parecen
+  /// transitorios (timeout, connection refused, network blip). Si el
+  /// primer intento tira un error claramente no-transitorio (ej. host
+  /// not found, permission denied), rinde de inmediato para no demorar
+  /// la escalada al path de recovery.
+  ///
+  /// Total worst-case latency antes de escalar: ~3-4s (intento1 timeout
+  /// + 1s + intento2 timeout + 2s + intento3 timeout). Con timeouts
+  /// típicos de 2s eso es ~10s en el peor caso, pero la mayoría de los
+  /// "fallos transitorios" reales resuelven en el segundo intento — el
+  /// cajero ve <2s extra en lugar de la escalada completa que toma
+  /// 5-30s.
+  Future<void> _printTcpWithRetries({
+    required String ip,
+    required int port,
+    required List<int> data,
+    required Duration timeout,
+    int maxAttempts = 3,
+  }) async {
+    Object? lastError;
+    StackTrace? lastStack;
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await printRawDirectTcp(
+          ip: ip,
+          port: port,
+          data: data,
+          timeout: timeout,
+        );
+        if (attempt > 1) {
+          debugPrint(
+            '[PrintRetry] $ip:$port OK al intento $attempt/$maxAttempts',
+          );
+        }
+        return;
+      } catch (e, st) {
+        lastError = e;
+        lastStack = st;
+        final transient = _isTransientPrintError(e);
+        if (!transient || attempt == maxAttempts) {
+          break;
+        }
+        // Backoff: 1s, 2s, 4s... entre intentos.
+        final waitMs = 500 * (1 << attempt); // 1000, 2000, 4000
+        debugPrint(
+          '[PrintRetry] $ip:$port intento $attempt fallo: $e — '
+          'reintentando en ${waitMs}ms',
+        );
+        await Future.delayed(Duration(milliseconds: waitMs));
+      }
+    }
+    Error.throwWithStackTrace(
+      lastError ?? Exception('Print failed'),
+      lastStack ?? StackTrace.current,
+    );
+  }
+
+  /// Heurística: ¿el error parece un blip transitorio que vale la pena
+  /// reintentar, o algo que NO va a resolverse con otro intento?
+  ///
+  /// Transitorios: timeout, connection refused, network unreachable
+  /// momentáneo, host is down (a veces la impresora tarda en responder
+  /// ARP tras un sleep).
+  ///
+  /// No transitorios: host not found, permission denied, malformed
+  /// payload. Esos van directo al path de recovery.
+  bool _isTransientPrintError(Object error) {
+    final lower = error.toString().toLowerCase();
+    return lower.contains('timeout') ||
+        lower.contains('timed out') ||
+        lower.contains('etimedout') ||
+        lower.contains('connection refused') ||
+        lower.contains('econnrefused') ||
+        lower.contains('errno = 61') ||
+        lower.contains('errno = 111') ||
+        lower.contains('network is unreachable') ||
+        lower.contains('host is down') ||
+        lower.contains('connection reset') ||
+        lower.contains('econnreset') ||
+        lower.contains('broken pipe') ||
+        lower.contains('socketexception');
+  }
+
   Future<String?> _tryRecoverPrinterIpByMac(
     PrinterConfig printer,
     String currentIp,
@@ -2635,9 +2758,15 @@ finally {
     if (mac == null || mac.isEmpty) return null;
 
     try {
+      // skipCache: true — venimos de un fallo de TCP a `currentIp`. Si
+      // la cache del agente todavía tiene esa misma IP almacenada de
+      // un resolve anterior, sin skip nos devolvería de nuevo lo mismo
+      // y caeríamos en loop. Forzar re-resolución fresca evita el loop
+      // y triggera el scan del /24 para encontrar la IP actual real.
       final newIp = await _localService.resolveIpByMac(
         mac: mac,
         printerId: printer.id,
+        skipCache: true,
       );
       if (newIp == null) return null;
       if (newIp == currentIp) return null; // sigue siendo la misma, no actualizar
@@ -2647,6 +2776,11 @@ finally {
       );
       // Persistir en Supabase para que próximas impresiones empiecen por la IP correcta.
       await updatePrinter(printerId: printer.id, ipAddress: newIp);
+      // Invalidar caches in-memory de lookup de impresoras — si no
+      // hacemos esto, la próxima impresión dentro del TTL (5 min) sigue
+      // recibiendo la PrinterConfig vieja con la IP antigua y volvería
+      // a pasar por todo el flow de recovery innecesariamente.
+      _clearLookupCaches();
       return newIp;
     } catch (e) {
       debugPrint('[PrinterRecovery] resolveIpByMac falló para ${printer.id}: $e');

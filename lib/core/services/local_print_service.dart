@@ -744,6 +744,11 @@ class LocalPrintService {
   Future<String?> resolveIpByMac({
     required String mac,
     String? printerId,
+    // Si el caller acaba de fallar imprimiendo a la IP que el resolver
+    // devolvió antes, debe pasar `skipCache: true` para forzar
+    // re-resolución fresca (ARP + scan) en vez de recibir el mismo
+    // valor stale del cache in-memory del agente.
+    bool skipCache = false,
   }) async {
     final baseUrl = await _resolveBaseUrl();
     if (baseUrl == null) return null;
@@ -755,6 +760,7 @@ class LocalPrintService {
             body: jsonEncode({
               'mac': mac,
               if (printerId != null) 'printerId': printerId,
+              if (skipCache) 'skipCache': true,
             }),
           )
           // El scan del /24 puede tardar ~10s en peor caso (~250 IPs × ~40ms).
@@ -771,6 +777,29 @@ class LocalPrintService {
     } catch (e) {
       _log('resolveIpByMac $mac threw: $e');
       return null;
+    }
+  }
+
+  /// POST /api/printers/invalidate-mac-cache — fuerza al agente a olvidar
+  /// la entrada cacheada para este MAC. El caller invoca esto cuando un
+  /// print directo falla y planea recuperar IP por MAC, para que el
+  /// próximo `resolveIpByMac` no devuelva la IP stale que acabamos de
+  /// confirmar que no responde.
+  ///
+  /// Fire-and-forget — no bloquea el flow, errores se loggean nada más.
+  Future<void> invalidateMacCache({required String mac}) async {
+    final baseUrl = await _resolveBaseUrl();
+    if (baseUrl == null) return;
+    try {
+      await http
+          .post(
+            Uri.parse('$baseUrl/api/printers/invalidate-mac-cache'),
+            headers: _headers(),
+            body: jsonEncode({'mac': mac}),
+          )
+          .timeout(const Duration(seconds: 3));
+    } catch (e) {
+      _log('invalidateMacCache $mac threw: $e');
     }
   }
 }

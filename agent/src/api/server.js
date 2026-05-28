@@ -4,7 +4,7 @@ const { config, logger } = require('../config');
 const printerManager = require('../core/printer_manager');
 const discoveryService = require('../core/discovery');
 const { getMacForIp, normalizeMac } = require('../network/arp');
-const { resolveByMac } = require('../network/printer_resolver');
+const { resolveByMac, invalidateCache } = require('../network/printer_resolver');
 
 const app = express();
 const PORT = config.service.port || 9100;
@@ -185,14 +185,20 @@ app.post('/api/printers/mac-for-ip', authenticate, async (req, res) => {
 });
 
 app.post('/api/printers/resolve-by-mac', authenticate, async (req, res) => {
-    const { mac, printerId } = req.body || {};
+    const { mac, printerId, skipCache } = req.body || {};
     const normalized = normalizeMac(mac);
     if (!normalized) {
         return res.status(400).json({ error: 'Missing or invalid mac' });
     }
     const logCtx = printerId ? ` [printer=${printerId}]` : '';
     try {
-        const result = await resolveByMac(normalized, { logCtx });
+        const result = await resolveByMac(normalized, {
+            logCtx,
+            // El cliente puede pedir explícitamente saltar la cache
+            // (útil cuando ya supo que la IP cacheada está stale por
+            // un fallo de impresión que acaba de ocurrir).
+            skipMemoryCache: skipCache === true,
+        });
         if (!result) {
             return res.status(404).json({ error: 'printer_not_found', mac: normalized });
         }
@@ -201,6 +207,24 @@ app.post('/api/printers/resolve-by-mac', authenticate, async (req, res) => {
         logger.error(`/resolve-by-mac failed for ${normalized}: ${e.message}`);
         res.status(500).json({ error: e.message });
     }
+});
+
+/**
+ * Invalida la entrada de cache MAC→IP para forzar re-resolución
+ * fresca en el próximo lookup. El cliente Flutter llama aquí cuando
+ * un print con la IP devuelta por el resolver falla — así evitamos
+ * que el resolver siga sirviendo la misma IP stale durante todo el
+ * TTL (5 min).
+ */
+app.post('/api/printers/invalidate-mac-cache', authenticate, async (req, res) => {
+    const { mac } = req.body || {};
+    const normalized = normalizeMac(mac);
+    if (!normalized) {
+        return res.status(400).json({ error: 'Missing or invalid mac' });
+    }
+    invalidateCache(normalized);
+    logger.info(`/invalidate-mac-cache: ${normalized}`);
+    res.json({ ok: true, mac: normalized });
 });
 
 app.use(express.static(require('path').join(__dirname, '../../public')));

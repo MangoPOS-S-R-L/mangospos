@@ -35,6 +35,16 @@ final headerDestinationsDisabledProvider =
   return repo.getHeaderDestinationsDisabled(businessId);
 });
 
+/// Provider del flag "abrir gaveta en efectivo". El flow de pago lo
+/// consulta cada vez que cobra cash para decidir si dispara la kick.
+/// Default `false` si la columna aún no existe.
+final openDrawerOnCashProvider =
+    FutureProvider.family<bool, String>((ref, businessId) async {
+  if (businessId.isEmpty) return false;
+  final repo = ref.read(posSettingsRepositoryProvider);
+  return repo.getOpenDrawerOnCash(businessId);
+});
+
 /// Niveles de inventario que el admin puede elegir.
 ///   - [none]: módulo oculto, sin tracking de stock. Default histórico.
 ///   - [basic]: 1:1 menu_item → inventory_item con stock por unidad.
@@ -213,6 +223,10 @@ class PosSettingsRepository {
   /// rápido sin pegar Supabase en cada render del shell.
   static const Duration _headerDisabledCacheTtl = Duration(minutes: 5);
   static final Map<String, _CachedStringList> _headerDisabledCache = {};
+
+  /// Cache del flag "abrir gaveta en efectivo".
+  static const Duration _openDrawerCacheTtl = Duration(minutes: 5);
+  static final Map<String, _CachedBool> _openDrawerCache = {};
 
   /// Modo compacto: un solo modal con efectivo + tarjeta + transferencia.
   /// Comportamiento actual del POS.
@@ -504,6 +518,41 @@ class PosSettingsRepository {
     );
   }
 
+  /// Flag "abrir gaveta en efectivo". Default `false` si la columna aún
+  /// no existe (pre-migración) o la query falla — preserva el
+  /// comportamiento de negocios sin gaveta física.
+  Future<bool> getOpenDrawerOnCash(String businessId) async {
+    final cached = _openDrawerCache[businessId];
+    if (cached != null &&
+        DateTime.now().difference(cached.cachedAt) < _openDrawerCacheTtl) {
+      return cached.value;
+    }
+
+    try {
+      final row = await _client
+          .from('business_settings')
+          .select('open_drawer_on_cash')
+          .eq('business_id', businessId)
+          .maybeSingle();
+      final value = row?['open_drawer_on_cash'] == true;
+      _openDrawerCache[businessId] = _CachedBool(value, DateTime.now());
+      return value;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> setOpenDrawerOnCash({
+    required String businessId,
+    required bool enabled,
+  }) async {
+    await _client.from('business_settings').upsert({
+      'business_id': businessId,
+      'open_drawer_on_cash': enabled,
+    }, onConflict: 'business_id');
+    _openDrawerCache[businessId] = _CachedBool(enabled, DateTime.now());
+  }
+
   /// Printing v2 — Slice B: lee los flags de multi-copia automática para
   /// pre-cuenta y recibo. Default false si la fila no existe o falla.
   /// Cuando true, el orchestrator imprime en TODAS las impresoras del
@@ -668,5 +717,12 @@ class _CachedStringList {
   const _CachedStringList(this.value, this.cachedAt);
 
   final List<String> value;
+  final DateTime cachedAt;
+}
+
+class _CachedBool {
+  const _CachedBool(this.value, this.cachedAt);
+
+  final bool value;
   final DateTime cachedAt;
 }

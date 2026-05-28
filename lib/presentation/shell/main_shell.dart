@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/core/offline/offline_queue_status_provider.dart';
+import 'package:mangopos/core/printing/printer_heartbeat_provider.dart';
 import 'package:mangopos/core/services/fullscreen/fullscreen_service.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
@@ -166,6 +167,13 @@ class _MainShellState extends ConsumerState<MainShell> {
 
                       // Badge de operaciones offline pendientes
                       const _OfflineQueueBadge(),
+
+                      const SizedBox(width: 8),
+
+                      // Badge de estado de impresoras (heartbeat 30s).
+                      // Verde = todas OK, amarillo = ≥1 offline, gris
+                      // = aún sondeando o sin impresoras configuradas.
+                      const _PrinterHeartbeatBadge(),
 
                       const SizedBox(width: 8),
 
@@ -1398,6 +1406,158 @@ class _ExpiringLotsBadgeButton extends ConsumerWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Badge de salud de impresoras en tiempo real. Se actualiza cada 30s
+/// vía `printerHeartbeatProvider`. Estados visuales:
+///   - 🟢 verde:    todas las impresoras de red OK.
+///   - 🟡 amarillo: al menos una offline (click muestra cuáles).
+///   - ⚪ gris:     aún sondeando o ninguna impresora configurada.
+///
+/// El badge solo cuenta impresoras de red. USB/Bluetooth viven en el
+/// agent local y tienen su propio path de error visible al imprimir.
+class _PrinterHeartbeatBadge extends ConsumerWidget {
+  const _PrinterHeartbeatBadge();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final session = ref.watch(sessionProvider);
+    final businessId = session.activeBusinessId ?? '';
+    if (businessId.isEmpty) return const SizedBox.shrink();
+
+    final heartbeatAsync = ref.watch(printerHeartbeatProvider(businessId));
+    final snapshot = heartbeatAsync.valueOrNull;
+
+    final Color bg;
+    final Color fg;
+    final IconData icon;
+    String tooltip;
+    int offlineCount = 0;
+
+    if (snapshot == null || !snapshot.hasPrinters) {
+      bg = const Color(0xFFF1F5F9);
+      fg = const Color(0xFF6B7280);
+      icon = Icons.print_outlined;
+      tooltip = snapshot == null
+          ? 'Sondeando impresoras...'
+          : 'No hay impresoras de red configuradas';
+    } else if (snapshot.allOnline) {
+      bg = const Color(0xFFD1FAE5);
+      fg = const Color(0xFF065F46);
+      icon = Icons.print_outlined;
+      tooltip = 'Todas las impresoras responden '
+          '(${snapshot.statuses.length})';
+    } else {
+      offlineCount = snapshot.offline.length;
+      bg = const Color(0xFFFEF3C7);
+      fg = const Color(0xFFB45309);
+      icon = Icons.print_disabled_outlined;
+      final names = snapshot.offline
+          .map((s) => s.name)
+          .where((n) => n.trim().isNotEmpty)
+          .join(', ');
+      tooltip = '$offlineCount impresora(s) sin conexión'
+          '${names.isEmpty ? '' : ': $names'}';
+    }
+
+    return Tooltip(
+      message: tooltip,
+      waitDuration: const Duration(milliseconds: 400),
+      child: InkWell(
+        onTap: snapshot != null && snapshot.hasPrinters
+            ? () => _showDetail(context, snapshot)
+            : null,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 18, color: fg),
+              if (offlineCount > 0) ...[
+                const SizedBox(width: 6),
+                Text(
+                  '$offlineCount',
+                  style: TextStyle(
+                    color: fg,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showDetail(BuildContext context, PrinterHeartbeatSnapshot snap) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        final ordered = snap.statuses.values.toList()
+          ..sort((a, b) {
+            if (a.online == b.online) return a.name.compareTo(b.name);
+            return a.online ? 1 : -1; // offline arriba
+          });
+        return AlertDialog(
+          title: const Text('Estado de impresoras'),
+          content: SizedBox(
+            width: 360,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final s in ordered) ...[
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(
+                      s.online ? Icons.check_circle : Icons.error_outline,
+                      color: s.online
+                          ? const Color(0xFF10B981)
+                          : const Color(0xFFEF4444),
+                    ),
+                    title: Text(
+                      s.name,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: Text(
+                      s.online
+                          ? 'Conectada · ${s.ipAddress ?? '-'}'
+                          : 'Sin respuesta · ${s.ipAddress ?? '-'}',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Última revisión: '
+                    '${snap.lastUpdated.toLocal().toString().substring(11, 19)}',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF6B7280),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cerrar'),
+            ),
+          ],
+        );
+      },
     );
   }
 }

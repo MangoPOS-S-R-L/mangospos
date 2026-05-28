@@ -34,6 +34,58 @@ const ARP_CACHE_CMD = {
     linux: 'ip neigh show || arp -n',
 };
 
+// ── Cache MAC→IP en memoria ────────────────────────────────────────────────
+//
+// Sin esta cache, cada fallo de impresión dispara el flujo completo
+// (ARP scan → port scan del /24). Cuando varias tablets fallan al mismo
+// tiempo (típico cuando una impresora reinicia y todos los cajeros
+// reciben ECONNREFUSED a la vez), todos arrancan scans paralelos
+// saturando la red.
+//
+// Con la cache:
+//   1. Resolución exitosa por ARP/scan ⇒ guardamos {ip, cachedAt}.
+//   2. Siguiente request ⇒ si la entry está dentro del TTL (5 min),
+//      devolvemos inmediatamente sin escanear.
+//   3. Cuando una impresión falla, el caller invoca invalidateCache(mac)
+//      para forzar re-resolución en el próximo intento.
+//
+// Es un Map en memoria del proceso del agente — no persiste reinicios,
+// pero el cliente Flutter ya tiene la última IP buena en Supabase, así
+// que el agente vuelve a llenar la cache rápido al primer request.
+const RESOLVE_CACHE_TTL_MS = 5 * 60 * 1000;
+const _resolveCache = new Map(); // mac → { ip, cachedAt, source }
+
+function readResolveCache(mac) {
+    const entry = _resolveCache.get(mac);
+    if (!entry) return null;
+    if (Date.now() - entry.cachedAt > RESOLVE_CACHE_TTL_MS) {
+        _resolveCache.delete(mac);
+        return null;
+    }
+    return entry;
+}
+
+function writeResolveCache(mac, ip, source) {
+    _resolveCache.set(mac, { ip, cachedAt: Date.now(), source });
+}
+
+/**
+ * Invalida la entrada de cache para un MAC específico. El caller debe
+ * llamar esto cuando un print a la IP cacheada falla — fuerza re-scan
+ * en el próximo lookup. Sin esta llamada, una IP stale sigue
+ * devolviéndose hasta vencer el TTL.
+ */
+function invalidateCache(macRaw) {
+    const mac = normalizeMac(macRaw);
+    if (!mac) return;
+    _resolveCache.delete(mac);
+}
+
+/** Solo para tests / debugging. */
+function _resetCache() {
+    _resolveCache.clear();
+}
+
 function execAll(cmd) {
     return new Promise((resolve) => {
         exec(cmd, { timeout: 2000, windowsHide: true }, (_e, stdout) => {
@@ -117,18 +169,34 @@ function candidateIps() {
  *
  * Retorna `{ ip, source: 'arp_cache'|'scan' }` o null si no encuentra.
  */
-async function resolveByMac(targetMacRaw, { logCtx = '' } = {}) {
+async function resolveByMac(targetMacRaw, { logCtx = '', skipMemoryCache = false } = {}) {
     const target = normalizeMac(targetMacRaw);
     if (!target) {
         logger?.warn?.(`[resolver]${logCtx} MAC inválida: ${targetMacRaw}`);
         return null;
     }
 
+    // Fast-fast path: cache en memoria del proceso. Evita pegar al SO
+    // (ARP read) y ahorra latencia bajo carga. El caller puede saltar
+    // la cache pasando `skipMemoryCache: true` cuando ya sabe que la
+    // IP cacheada está stale (típico después de un fallo de impresión
+    // que el caller acaba de invalidar).
+    if (!skipMemoryCache) {
+        const cached = readResolveCache(target);
+        if (cached) {
+            logger?.info?.(
+                `[resolver]${logCtx} hit memory cache: ${target} → ${cached.ip} (orig: ${cached.source})`,
+            );
+            return { ip: cached.ip, source: 'memory_cache' };
+        }
+    }
+
     // Fast path
-    const cached = await findIpInArpCache(target);
-    if (cached) {
-        logger?.info?.(`[resolver]${logCtx} hit ARP cache: ${target} → ${cached}`);
-        return { ip: cached, source: 'arp_cache' };
+    const arpHit = await findIpInArpCache(target);
+    if (arpHit) {
+        logger?.info?.(`[resolver]${logCtx} hit ARP cache: ${target} → ${arpHit}`);
+        writeResolveCache(target, arpHit, 'arp_cache');
+        return { ip: arpHit, source: 'arp_cache' };
     }
 
     // Slow path: scan LAN
@@ -153,6 +221,7 @@ async function resolveByMac(targetMacRaw, { logCtx = '' } = {}) {
     for (const r of macResults) {
         if (r.status === 'fulfilled' && r.value.mac === target) {
             logger?.info?.(`[resolver]${logCtx} match scan: ${target} → ${r.value.ip}`);
+            writeResolveCache(target, r.value.ip, 'scan');
             return { ip: r.value.ip, source: 'scan' };
         }
     }
@@ -167,4 +236,6 @@ module.exports = {
     resolveByMac,
     findIpInArpCache,
     candidateIps,
+    invalidateCache,
+    _resetCache,
 };

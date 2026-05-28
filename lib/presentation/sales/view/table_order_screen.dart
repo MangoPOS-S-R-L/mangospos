@@ -4005,6 +4005,9 @@ class _CartView extends ConsumerWidget {
       final discountDisplayModeFuture = ref
           .read(posSettingsRepositoryProvider)
           .getDiscountDisplayMode(businessId);
+      final openDrawerOnCashFuture = ref
+          .read(posSettingsRepositoryProvider)
+          .getOpenDrawerOnCash(businessId);
 
       if (assignedPrinter == null) {
         throw Exception('Impresora no configurada para esta caja.');
@@ -4013,6 +4016,24 @@ class _CartView extends ConsumerWidget {
 
       final receiptItemDisplayMode = await receiptItemDisplayModeFuture;
       final discountDisplayMode = await discountDisplayModeFuture;
+      final openDrawerOnCashEnabled = await openDrawerOnCashFuture;
+
+      // Detectar si el pago incluyó efectivo. La gaveta se abre solo si:
+      //   - el setting del business está ON,
+      //   - es una factura (no precheck — precuentas no son cobro),
+      //   - al menos un payment fue por método 'cash' (codes contienen
+      //     "cash" o "efectivo").
+      bool isCashPayment(Payment p) {
+        final code = p.paymentMethodCode?.toLowerCase().trim() ??
+            p.paymentMethodId.toLowerCase().trim();
+        final name = p.paymentMethodName?.toLowerCase().trim() ?? '';
+        return code.contains('cash') ||
+            code.contains('efectivo') ||
+            name.contains('efectivo');
+      }
+      final shouldOpenDrawer = openDrawerOnCashEnabled &&
+          type == 'invoice' &&
+          (payments?.any(isCashPayment) ?? false);
 
       // Preparación de datos (fuera del timeout para no penalizar generación)
       dynamic ticket;
@@ -4191,6 +4212,7 @@ class _CartView extends ConsumerWidget {
                 footerBlocks: profileForPrint.profile?.effectiveFooterBlocks,
                 bankAccountsByPaymentId: bankAccountsByPaymentId,
                 discountDisplayMode: discountDisplayMode,
+                openCashDrawer: shouldOpenDrawer,
               )
             : PrintTicketService.generatePrecheck(
                 order: orderObj,
