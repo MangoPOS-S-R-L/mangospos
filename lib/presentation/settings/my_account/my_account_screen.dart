@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../app/theme/mango_colors.dart';
 import '../../../data/models/owner_profile.dart';
@@ -104,6 +105,10 @@ class _MyAccountScreenState extends ConsumerState<MyAccountScreen> {
                   onChangePin: () => _openChangePinDialog(profile),
                 ),
                 const SizedBox(height: 16),
+                _PasswordCard(
+                  onChangePassword: _openChangePasswordDialog,
+                ),
+                const SizedBox(height: 16),
                 _BusinessCard(profile: profile),
                 const SizedBox(height: 16),
                 _MetadataCard(profile: profile),
@@ -131,6 +136,85 @@ class _MyAccountScreenState extends ConsumerState<MyAccountScreen> {
         const SnackBar(content: Text('PIN actualizado correctamente.')),
       );
       _reload();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo actualizar: $e')),
+      );
+    }
+  }
+
+  /// Flow seguro de cambio de contraseña:
+  ///   1. Pedimos password actual + nueva + confirmación.
+  ///   2. Re-autenticamos con `signInWithPassword(email, currentPass)` antes
+  ///      de actualizar — esto verifica que quien está sentado al device
+  ///      realmente es el dueño de la cuenta. Sin este paso, alguien que
+  ///      encuentre la sesión abierta podría cambiarle la pass al dueño
+  ///      y bloquearlo (Supabase.auth.updateUser no exige current password).
+  ///   3. Si el re-auth pasa, llamamos `auth.updateUser(password: newPass)`.
+  Future<void> _openChangePasswordDialog() async {
+    final result = await showDialog<({String current, String next})>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const _ChangePasswordDialog(),
+    );
+    if (result == null || !mounted) return;
+
+    final client = Supabase.instance.client;
+    final email = client.auth.currentUser?.email?.trim();
+    if (email == null || email.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No se pudo verificar tu sesión actual. Vuelve a iniciar '
+            'sesión e inténtalo de nuevo.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    try {
+      // Step 1: re-auth con password actual. Si la pass es incorrecta,
+      // Supabase tira AuthException — capturamos y mostramos error
+      // específico.
+      await client.auth.signInWithPassword(
+        email: email,
+        password: result.current,
+      );
+    } on AuthException catch (e) {
+      if (!mounted) return;
+      final lower = e.message.toLowerCase();
+      final msg = (lower.contains('invalid') ||
+              lower.contains('credentials') ||
+              lower.contains('password'))
+          ? 'La contraseña actual es incorrecta.'
+          : 'No se pudo verificar la contraseña actual: ${e.message}';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      return;
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error de red al verificar: $e')),
+      );
+      return;
+    }
+
+    try {
+      // Step 2: actualizar a la nueva password.
+      await client.auth.updateUser(UserAttributes(password: result.next));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Contraseña actualizada correctamente.')),
+      );
+    } on AuthException catch (e) {
+      if (!mounted) return;
+      final lower = e.message.toLowerCase();
+      final msg = lower.contains('weak') || lower.contains('short')
+          ? 'La contraseña nueva es demasiado débil.'
+          : 'No se pudo actualizar la contraseña: ${e.message}';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -401,6 +485,209 @@ class _PinCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Tarjeta de cambio de contraseña. A diferencia del PIN, la pass NO se
+/// muestra (Supabase guarda solo el hash bcrypt — no se puede recuperar).
+/// Solo expone un botón que abre el dialog con re-auth + nueva pass.
+class _PasswordCard extends StatelessWidget {
+  final Future<void> Function() onChangePassword;
+  const _PasswordCard({required this.onChangePassword});
+
+  @override
+  Widget build(BuildContext context) {
+    return _CardFrame(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: const [
+              Icon(
+                Icons.shield_outlined,
+                size: 20,
+                color: MangoColors.darkGray,
+              ),
+              SizedBox(width: 8),
+              Text(
+                'Contraseña de acceso',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
+                  color: MangoColors.darkGray,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'La usas para iniciar sesión en la app. Por seguridad no '
+            'se puede ver — solo cambiarla. Te pediremos la actual '
+            'antes de guardar la nueva.',
+            style: TextStyle(
+              fontSize: 12,
+              color: MangoColors.muted,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: onChangePassword,
+              style: FilledButton.styleFrom(
+                backgroundColor: MangoColors.primaryOrange,
+                foregroundColor: MangoColors.white,
+                minimumSize: const Size.fromHeight(46),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              icon: const Icon(Icons.lock_reset_rounded, size: 18),
+              label: const Text(
+                'Cambiar contraseña',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Dialog de cambio de contraseña. Devuelve un record `({current, next})`
+/// con ambos valores ya validados (min 8 chars, confirmación coincide,
+/// nueva != actual). El caller hace re-auth + updateUser.
+class _ChangePasswordDialog extends StatefulWidget {
+  const _ChangePasswordDialog();
+
+  @override
+  State<_ChangePasswordDialog> createState() => _ChangePasswordDialogState();
+}
+
+class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _currentCtrl = TextEditingController();
+  final _nextCtrl = TextEditingController();
+  final _confirmCtrl = TextEditingController();
+  bool _obscureCurrent = true;
+  bool _obscureNext = true;
+  bool _submitting = false;
+
+  @override
+  void dispose() {
+    _currentCtrl.dispose();
+    _nextCtrl.dispose();
+    _confirmCtrl.dispose();
+    super.dispose();
+  }
+
+  String? _validateNew(String? v) {
+    final s = v ?? '';
+    // Mínimo 8: estándar razonable. Supabase rechaza <6 nativamente
+    // pero subimos a 8 para forzar mejor higiene de password de owner.
+    if (s.length < 8) return 'Mínimo 8 caracteres';
+    if (s == _currentCtrl.text) {
+      return 'La nueva no puede ser igual a la actual';
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Cambiar contraseña'),
+      content: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Primero confirma tu contraseña actual, luego elige una nueva.',
+              style: TextStyle(
+                fontSize: 12,
+                color: MangoColors.muted,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _currentCtrl,
+              autofocus: true,
+              obscureText: _obscureCurrent,
+              decoration: InputDecoration(
+                labelText: 'Contraseña actual',
+                border: const OutlineInputBorder(),
+                suffixIcon: IconButton(
+                  icon: Icon(_obscureCurrent
+                      ? Icons.visibility_rounded
+                      : Icons.visibility_off_rounded),
+                  onPressed: () =>
+                      setState(() => _obscureCurrent = !_obscureCurrent),
+                ),
+              ),
+              validator: (v) =>
+                  (v ?? '').isEmpty ? 'Requerida' : null,
+            ),
+            const SizedBox(height: 10),
+            TextFormField(
+              controller: _nextCtrl,
+              obscureText: _obscureNext,
+              decoration: InputDecoration(
+                labelText: 'Nueva contraseña',
+                helperText: 'Mínimo 8 caracteres',
+                border: const OutlineInputBorder(),
+                suffixIcon: IconButton(
+                  icon: Icon(_obscureNext
+                      ? Icons.visibility_rounded
+                      : Icons.visibility_off_rounded),
+                  onPressed: () =>
+                      setState(() => _obscureNext = !_obscureNext),
+                ),
+              ),
+              validator: _validateNew,
+            ),
+            const SizedBox(height: 10),
+            TextFormField(
+              controller: _confirmCtrl,
+              obscureText: _obscureNext,
+              decoration: const InputDecoration(
+                labelText: 'Confirmar nueva contraseña',
+                border: OutlineInputBorder(),
+              ),
+              validator: (v) {
+                if ((v ?? '') != _nextCtrl.text) {
+                  return 'Las contraseñas no coinciden';
+                }
+                return null;
+              },
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _submitting ? null : () => Navigator.of(context).pop(),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: _submitting
+              ? null
+              : () {
+                  if (_formKey.currentState?.validate() != true) return;
+                  setState(() => _submitting = true);
+                  Navigator.of(context).pop(
+                    (current: _currentCtrl.text, next: _nextCtrl.text),
+                  );
+                },
+          style: FilledButton.styleFrom(
+            backgroundColor: MangoColors.primaryOrange,
+          ),
+          child: const Text('Guardar'),
+        ),
+      ],
     );
   }
 }
