@@ -868,6 +868,26 @@ class SalesRepository {
           throw Exception('ITEM_NOT_FOUND');
         }
         // Fallback solo si el RPC fallo por otro motivo (ej. RPC no migrado).
+        // IMPORTANTE: el UPDATE directo NO dispara el recompute de tax_rate
+        // ni repuebla tax_lines (lo hace fn_update_item_details). Si
+        // is_takeout cambió y este fallback se ejecuta, el order.service_fee
+        // queda stale — el cliente seguiría viendo el 10% de propina aunque
+        // ya marcó takeout. Para mitigar, leemos el is_takeout previo y
+        // si cambió, después del UPDATE invocamos manualmente
+        // fn_toggle_item_takeout, que sí re-resuelve tax_rate + repuebla
+        // tax_lines + recalcula totals (existe desde 20260502_0002).
+        bool? previousIsTakeout;
+        try {
+          final prev = await _client
+              .from('order_items')
+              .select('is_takeout')
+              .eq('id', itemId)
+              .maybeSingle();
+          previousIsTakeout = prev?['is_takeout'] as bool?;
+        } catch (_) {
+          // No bloqueamos el fallback si la lectura previa falla — el
+          // problema mínimo es que NO disparamos la recompute auxiliar.
+        }
         final updated = await _client
             .from('order_items')
             .update({
@@ -881,6 +901,21 @@ class SalesRepository {
             .maybeSingle();
         if (updated == null) {
           throw Exception('ITEM_NOT_FOUND');
+        }
+        // Si is_takeout cambió, disparar el toggle dedicado para
+        // re-resolver tax_rate y repoblar tax_lines + recalc totals.
+        // Es idempotente — flipea al mismo valor.
+        if (previousIsTakeout != null && previousIsTakeout != isTakeout) {
+          try {
+            await toggleItemTakeout(itemId: itemId, isTakeout: isTakeout);
+          } catch (e) {
+            // Última línea de defensa: si toggle también falla, registramos
+            // pero no rompemos el flow — el UPDATE básico ya se hizo.
+            // ignore: avoid_print
+            print(
+              '[updateItemDetails fallback] toggleItemTakeout failed: $e',
+            );
+          }
         }
         await updateItemDiscountAndNotes(
           itemId: itemId,

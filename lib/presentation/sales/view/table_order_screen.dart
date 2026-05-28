@@ -736,6 +736,13 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       selectedModifiers = [...selectedModifiers, ...result];
     }
 
+    // Propagar el flag takeout actual de la orden. Sin esto, items
+    // nuevos se agregaban siempre con is_takeout=false aunque la orden
+    // estuviera marcada "para llevar" — el tax_rate se resolvía
+    // incluyendo la propina y `calculate_order_totals` sumaba el 10%
+    // de servicio sobre ellos. El cajero tenía que volver a tocar
+    // "Marcar todo para llevar" después de CADA item nuevo.
+    final orderTakeout = ref.read(currentOrderProvider).takeout;
     await vm.addItem(
       menuItemId: product.id,
       productName: product.name,
@@ -746,6 +753,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       ),
       productFullTaxRate: product.calculateFullTaxRate(),
       selectedModifiers: selectedModifiers,
+      takeout: orderTakeout,
     );
   }
 
@@ -2448,16 +2456,34 @@ class _CartView extends ConsumerWidget {
     final isPostDiscountMode =
         discountMode == PosSettingsRepository.discountPostDiscount;
 
+    // Detección de tasas uniformes: si TODAS las líneas de tax tienen
+    // la misma tasa Y la tasa efectiva de la orden coincide con la
+    // suma de las tasas declaradas, podemos aplicar el recompute del
+    // modo de descuento (subtotal = (total + descuento) / (1 + tasa)).
+    //
+    // Caso típico donde NO aplica:
+    //   - Mezcla takeout + dine-in: items takeout tienen tax_rate=0 y
+    //     dine-in tienen tax_rate=10. La tasa efectiva real
+    //     (summary.tax / summary.subtotal) es menor que la tasa
+    //     declarada en taxBreakdown (10%). Recompute daría números
+    //     incorrectos. En ese caso usamos los valores nativos del
+    //     summary, que son correctos por item.
     final lineRates = <double?>[];
     for (final entry in rawBreakdown) {
       lineRates.add(_parseCartRatePercent(entry.label));
     }
     final allRatesKnown =
         rawBreakdown.isNotEmpty && !lineRates.contains(null);
-    final effectiveRate = allRatesKnown
+    final declaredRate = allRatesKnown
         ? lineRates.fold<double>(0, (s, r) => s + (r ?? 0)) / 100.0
         : 0.0;
-    final canRecompute = allRatesKnown && effectiveRate > 0;
+    final actualRate = pricingSummary.subtotal > 0.005
+        ? (pricingSummary.tax + pricingSummary.serviceFee) /
+            pricingSummary.subtotal
+        : 0.0;
+    final ratesAreUniform = (actualRate - declaredRate).abs() < 0.001;
+    final canRecompute =
+        allRatesKnown && declaredRate > 0 && ratesAreUniform;
 
     final double displaySubtotal;
     final List<({String label, double amount})> reconciledBreakdown;
@@ -2466,7 +2492,7 @@ class _CartView extends ConsumerWidget {
       final discountForBase =
           isPostDiscountMode ? 0.0 : pricingSummary.discounts;
       final subtotalBase =
-          (displayTotal + discountForBase) / (1 + effectiveRate);
+          (displayTotal + discountForBase) / (1 + declaredRate);
       displaySubtotal = subtotalBase;
       reconciledBreakdown = [
         for (var i = 0; i < rawBreakdown.length; i++)
@@ -2480,8 +2506,9 @@ class _CartView extends ConsumerWidget {
       // dejamos que el subtotal/ITBIS deriven del total post-descuento.
       displayDiscounts = isPostDiscountMode ? 0.0 : pricingSummary.discounts;
     } else {
-      // Fallback: sin tasa parseable (ej. comprobante sin tax_lines)
-      // usamos los valores nativos del summary.
+      // Fallback: tasas mixtas (ej. takeout + dine-in juntos), sin
+      // tasa parseable, o no aplicable. Usamos los valores nativos
+      // del summary — son correctos porque se computan item por item.
       displaySubtotal = pricingSummary.subtotal;
       reconciledBreakdown = rawBreakdown;
       displayDiscounts = pricingSummary.discounts;

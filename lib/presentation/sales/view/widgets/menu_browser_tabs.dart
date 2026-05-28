@@ -395,10 +395,13 @@ class _ProductCard extends ConsumerWidget {
       borderRadius: BorderRadius.circular(16),
       onTap: () async {
         try {
+          // Propaga el takeout actual de la orden (ver comentario en
+          // table_order_screen.dart:_handleAddProduct).
+          final orderTakeout = ref.read(currentOrderProvider).takeout;
           await ref.read(currentOrderProvider.notifier).addItem(
                 menuItemId: item.id,
                 qty: 1,
-                takeout: false,
+                takeout: orderTakeout,
                 productName: item.name,
                 productPrice: item.price,
                 productTaxMode: item.taxMode,

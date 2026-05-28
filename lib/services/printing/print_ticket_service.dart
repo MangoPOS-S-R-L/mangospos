@@ -563,6 +563,13 @@ class PrintTicketService {
     // Recomputamos subtotal/impuestos según el modo elegido por el negocio
     // para que la math del precheck siempre cierre visualmente (misma
     // lógica que generateInvoice). Default `pre_discount`.
+    //
+    // Detección de tasas uniformes: el recompute asume que la tasa
+    // aplica al subtotal completo. Si los items mezclan tasas (ej.
+    // takeout sin LEY + dine-in con LEY), la tasa efectiva real
+    // (`printableSummary.tax / .subtotal`) difiere de la declarada
+    // y el recompute genera números incorrectos. En ese caso caemos
+    // al path legacy (que usa valores nativos del summary).
     final isPostDiscountMode = discountDisplayMode == 'post_discount';
     final lineRates = <double?>[];
     for (final entry in taxBreakdown) {
@@ -570,15 +577,21 @@ class PrintTicketService {
     }
     final allRatesKnown =
         taxBreakdown.isNotEmpty && !lineRates.contains(null);
-    final effectiveRate = allRatesKnown
+    final declaredRate = allRatesKnown
         ? lineRates.fold<double>(0, (s, r) => s + (r ?? 0)) / 100.0
         : 0.0;
-    final canRecompute = allRatesKnown && effectiveRate > 0;
+    final actualRate = printableSummary.subtotal > 0.005
+        ? (printableSummary.tax + printableSummary.serviceFee) /
+            printableSummary.subtotal
+        : 0.0;
+    final ratesAreUniform = (actualRate - declaredRate).abs() < 0.001;
+    final canRecompute =
+        allRatesKnown && declaredRate > 0 && ratesAreUniform;
 
     if (canRecompute) {
       final discountForBase = isPostDiscountMode ? 0.0 : printableDiscounts;
       final subtotalBase =
-          (printableGrandTotal + discountForBase) / (1 + effectiveRate);
+          (printableGrandTotal + discountForBase) / (1 + declaredRate);
       gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(subtotalBase)}');
       for (var i = 0; i < taxBreakdown.length; i++) {
         final rate = lineRates[i] ?? 0;
@@ -968,7 +981,8 @@ class PrintTicketService {
     // Recomputamos subtotal/impuestos según el modo elegido por el negocio
     // para que la math del ticket siempre cierre visualmente. Tasa efectiva
     // = suma de tasas únicas de los `tax_lines` parseadas desde las labels
-    // del breakdown. Si no hay tasa parseable, caemos al path legacy.
+    // del breakdown. Si no hay tasa parseable o las tasas son mixtas,
+    // caemos al path legacy (valores nativos del summary).
     //
     //   pre_discount (default):
     //     subtotalBase = (total + descuento) / (1 + tasa)
@@ -977,6 +991,11 @@ class PrintTicketService {
     //   post_discount:
     //     subtotalBase = total / (1 + tasa)
     //     SUBTOTAL + impuestos = TOTAL; descuento como nota informativa.
+    //
+    // Detección de tasas uniformes: si los items mezclan tasas (ej.
+    // takeout sin LEY + dine-in con LEY), `effectiveTotals.tax /
+    // .subtotal` es menor que la suma declarada → recompute genera
+    // subtotal/ITBIS incorrectos. En ese caso usamos el fallback.
     final isPostDiscountMode = discountDisplayMode == 'post_discount';
     final lineRates = <double?>[];
     for (final entry in taxBreakdown) {
@@ -984,10 +1003,16 @@ class PrintTicketService {
     }
     final allRatesKnown =
         taxBreakdown.isNotEmpty && !lineRates.contains(null);
-    final effectiveRate = allRatesKnown
+    final declaredRate = allRatesKnown
         ? lineRates.fold<double>(0, (s, r) => s + (r ?? 0)) / 100.0
         : 0.0;
-    final canRecompute = allRatesKnown && effectiveRate > 0;
+    final actualRate = effectiveTotals.subtotal > 0.005
+        ? (effectiveTotals.tax + effectiveTotals.serviceFee) /
+            effectiveTotals.subtotal
+        : 0.0;
+    final ratesAreUniform = (actualRate - declaredRate).abs() < 0.001;
+    final canRecompute =
+        allRatesKnown && declaredRate > 0 && ratesAreUniform;
 
     // Etiquetas DGII para e-CF (Norma General 01-2020):
     // - "Subtotal Gravado" en lugar de "SUBTOTAL"
@@ -997,7 +1022,7 @@ class PrintTicketService {
     if (canRecompute) {
       final discountForBase = isPostDiscountMode ? 0.0 : effectiveDiscounts;
       final subtotalBase =
-          (effectiveTotal + discountForBase) / (1 + effectiveRate);
+          (effectiveTotal + discountForBase) / (1 + declaredRate);
       gen.textRow(subtotalLabel, 'RD\$ ${_formatMoney(subtotalBase)}');
       for (var i = 0; i < taxBreakdown.length; i++) {
         final rate = lineRates[i] ?? 0;

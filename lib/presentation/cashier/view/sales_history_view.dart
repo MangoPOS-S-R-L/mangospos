@@ -1711,20 +1711,34 @@ mixin _PaymentActionsMixin {
                             .toList(growable: false);
                         final allRatesKnown =
                             taxBreakdown.isNotEmpty && !rates.contains(null);
-                        final effectiveRate = allRatesKnown
+                        final declaredRate = allRatesKnown
                             ? rates.fold<double>(
                                     0, (s, r) => s + (r ?? 0)) /
                                 100.0
                             : 0.0;
-                        final canRecompute =
-                            allRatesKnown && effectiveRate > 0;
+                        // Check de tasas uniformes: si los items mezclan
+                        // taxes (ej. takeout + dine-in), la tasa
+                        // efectiva real difiere de la declarada y el
+                        // recompute con `(total)/(1+tasa)` daría
+                        // números incorrectos. En ese caso, lineScale=1
+                        // (usar valores nativos del summary, que son
+                        // correctos item por item).
+                        final actualRate = summary.subtotal > 0.005
+                            ? (summary.tax + summary.serviceFee) /
+                                summary.subtotal
+                            : 0.0;
+                        final ratesAreUniform =
+                            (actualRate - declaredRate).abs() < 0.001;
+                        final canRecompute = allRatesKnown &&
+                            declaredRate > 0 &&
+                            ratesAreUniform;
                         if (canRecompute && summary.subtotal > 0.005) {
                           final isPostMode = data.discountMode ==
                               PosSettingsRepository.discountPostDiscount;
                           final discountForBase =
                               isPostMode ? 0.0 : summary.discounts;
                           final subtotalBase =
-                              (total + discountForBase) / (1 + effectiveRate);
+                              (total + discountForBase) / (1 + declaredRate);
                           lineScale = subtotalBase / summary.subtotal;
                         }
                       }
@@ -1977,19 +1991,36 @@ mixin _PaymentActionsMixin {
                         .toList(growable: false);
                     final allRatesKnown =
                         taxBreakdown.isNotEmpty && !rates.contains(null);
-                    final effectiveRate = allRatesKnown
+                    final declaredRate = allRatesKnown
                         ? rates.fold<double>(0, (s, r) => s + (r ?? 0)) / 100.0
                         : 0.0;
 
                     final isPostMode = data.discountMode ==
                         PosSettingsRepository.discountPostDiscount;
 
-                    if (allRatesKnown && effectiveRate > 0) {
+                    // Detección de tasas uniformes: el recompute
+                    // `(total)/(1+tasa)` asume que la tasa aplica a
+                    // todo el subtotal. Si los items mezclan tasas
+                    // (ej. takeout + dine-in), `summary.tax /
+                    // summary.subtotal` da un ratio menor que la
+                    // tasa declarada, y el recompute sale incorrecto.
+                    // Cuando sucede caemos al path de absorción de
+                    // gap (que usa los valores nativos del summary).
+                    final actualRate = summary.subtotal > 0.005
+                        ? (summary.tax + summary.serviceFee) /
+                            summary.subtotal
+                        : 0.0;
+                    final ratesAreUniform =
+                        (actualRate - declaredRate).abs() < 0.001;
+
+                    if (allRatesKnown &&
+                        declaredRate > 0 &&
+                        ratesAreUniform) {
                       final discountForBase = isPostMode
                           ? 0.0
                           : summary.discounts;
                       final subtotalBase =
-                          (total + discountForBase) / (1 + effectiveRate);
+                          (total + discountForBase) / (1 + declaredRate);
                       final recomputedLines = <({
                         String label,
                         double amount,

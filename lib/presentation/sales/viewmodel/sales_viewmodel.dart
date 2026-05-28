@@ -472,7 +472,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   CurrentOrderState _normalizeHydratedState(CurrentOrderState source) {
     final order = source.order;
     if (order == null || source.items.isEmpty) {
-      return source;
+      // Sin items, el flag takeout del state queda en false (default).
+      // No persistimos el toggle del usuario sin items que reflejarlo.
+      return source.copyWith(takeout: false);
     }
 
     final activeItems = source.items
@@ -480,6 +482,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         .toList(growable: false);
     if (activeItems.isEmpty) {
       return source.copyWith(
+        takeout: false,
         order: order.copyWith(
           subtotal: 0,
           discounts: 0,
@@ -489,6 +492,19 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         ),
       );
     }
+
+    // Hidratar state.takeout DESDE los items. Si TODOS los items abiertos
+    // (no paid/void) están marcados is_takeout=true, el toggle del state
+    // queda true para que items nuevos hereden el flag automáticamente
+    // (ver fix en table_order_screen.dart:_handleAddProduct). Sin esta
+    // hidratación, salir de la mesa y volver reseteaba state.takeout al
+    // default false aunque la orden completa fuera takeout en BD —
+    // próximo item agregado caía en is_takeout=false y disparaba el 10%.
+    final openItems = activeItems
+        .where((i) => i.status != 'paid')
+        .toList(growable: false);
+    final derivedTakeout =
+        openItems.isNotEmpty && openItems.every((i) => i.isTakeout);
 
     // 3. Respetar el snapshot fiscal persistido en cada item al rehidratar.
     // Antes se reescribian taxRate/originalTaxRate con la configuracion actual
@@ -558,7 +574,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         })
         .toList(growable: false);
 
-    return source.copyWith(order: normalizedOrder, checks: normalizedChecks);
+    return source.copyWith(
+      order: normalizedOrder,
+      checks: normalizedChecks,
+      takeout: derivedTakeout,
+    );
   }
 
   Future<void> _persistCurrentState({

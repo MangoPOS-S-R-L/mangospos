@@ -518,7 +518,10 @@ class _ProductCard extends ConsumerWidget {
     return InkWell(
       borderRadius: BorderRadius.circular(16),
       onTap: () async {
-        // Al tocar, agrega 1 unidad al pedido actual
+        // Al tocar, agrega 1 unidad al pedido actual. Propaga el flag
+        // takeout actual de la orden (ver comentario en
+        // table_order_screen.dart:_handleAddProduct).
+        final orderTakeout = ref.read(currentOrderProvider).takeout;
         await ref
             .read(currentOrderProvider.notifier)
             .addItem(
@@ -529,6 +532,7 @@ class _ProductCard extends ConsumerWidget {
               productTaxMode: item.taxMode,
               productTaxRate: item.calculateTaxRate(ref.read(currentOrderProvider).origin ?? 'table'),
               productFullTaxRate: item.calculateFullTaxRate(),
+              takeout: orderTakeout,
             );
 
 
