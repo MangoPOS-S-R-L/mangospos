@@ -71,6 +71,7 @@ import '../../presentation/settings/business_features/business_features_view.dar
 import '../../presentation/settings/cash_close_mode/cash_close_mode_view.dart';
 import '../../presentation/settings/cash_reasons/view/cash_reasons_view.dart';
 import '../../presentation/settings/comandas_config/comandas_config_view.dart';
+import '../../presentation/settings/header_personalize/view/header_personalize_view.dart';
 import '../../presentation/settings/currencies/view/currencies_view.dart';
 import '../../presentation/settings/more settings/system settings/device/view/device_binding_view.dart';
 import '../../presentation/settings/regional/view/regional_view.dart';
@@ -651,6 +652,10 @@ class AppRouter {
           GoRoute(
             path: AppRoutes.settingsComandasConfig,
             builder: (context, state) => const ComandasConfigView(),
+          ),
+          GoRoute(
+            path: AppRoutes.settingsHeaderPersonalize,
+            builder: (context, state) => const HeaderPersonalizeView(),
           ),
           GoRoute(
             path: AppRoutes.settingsCurrencies,

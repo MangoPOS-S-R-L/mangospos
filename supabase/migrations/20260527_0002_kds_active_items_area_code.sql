@@ -11,6 +11,17 @@
 --
 -- Filtros client-side ("ver solo cocina", "ver solo bar") se hacen ahora
 -- en Dart con el campo `area_code`/`area_name`.
+--
+-- ORDEN DE COLUMNAS — IMPORTANTE:
+-- `CREATE OR REPLACE VIEW` en PostgreSQL solo permite APPEND de columnas
+-- al final; no permite renombrar/reordenar existentes (error 42P16).
+-- El view anterior (ver rollback file) tenía 15 columnas terminando en
+-- `area_code` (NULL::text) en posición 14 y `modifiers` en 15.
+-- Preservamos ese orden:
+--   1..13   = mismas columnas (id … business_id)
+--   14      = area_code  (ahora con valor real, mismo tipo `text`)
+--   15      = modifiers
+--   16..17  = is_takeout, area_name  ← columnas NUEVAS al final
 -- =============================================================================
 
 CREATE OR REPLACE VIEW public.kds_active_items WITH (security_invoker = on) AS
@@ -33,13 +44,18 @@ SELECT
   END AS table_name,
   p.full_name AS waiter_name,
   z.business_id,
-  oi.is_takeout,
-  -- Antes: NULL::text. Ahora: el código real del area asignada al item.
+  -- Posición 14 (preserva ubicación del view anterior). Antes: NULL::text.
+  -- Ahora: el código real del area asignada al item. Mismo tipo `text`,
+  -- así que CREATE OR REPLACE acepta el cambio de expresión.
   oi.print_area_code AS area_code,
+  -- Posición 15 (preservada).
+  COALESCE(mods.modifiers, '[]'::json) AS modifiers,
+  -- Columnas NUEVAS — agregadas al final para que CREATE OR REPLACE VIEW
+  -- funcione sin tener que dropear el view existente.
+  oi.is_takeout,
   -- Nombre legible del área para mostrarlo en el dropdown de filtro y en
   -- la card del KDS. NULL si el item no tiene área asignada todavía.
-  pa.name AS area_name,
-  COALESCE(mods.modifiers, '[]'::json) AS modifiers
+  pa.name AS area_name
 FROM public.order_items oi
 JOIN public.orders o          ON o.id = oi.order_id
 JOIN public.table_sessions ts ON ts.id = o.session_id

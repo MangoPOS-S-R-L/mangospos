@@ -10,6 +10,7 @@ import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/core/offline/offline_queue_status_provider.dart';
 import 'package:mangopos/core/services/fullscreen/fullscreen_service.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
+import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/utils/responsive_utils.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 
@@ -106,24 +107,47 @@ class _MainShellState extends ConsumerState<MainShell> {
                   const _Logo(),
                   const SizedBox(width: 32),
 
-                  // Menú principal (Centro) - scroll horizontal cuando no cabe
+                  // Menú principal (Centro) - scroll horizontal cuando no cabe.
+                  // Filtramos destinos por:
+                  //   1) Permiso del rol (oculta lo bloqueado en vez de
+                  //      mostrar el candado gris).
+                  //   2) Config del business (`header_destinations_disabled`)
+                  //      — el owner puede ocultar destinos a todos los
+                  //      empleados sin tocar permisos por rol.
                   Expanded(
                     child: SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
                       physics: const BouncingScrollPhysics(),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          for (var i = 0;
-                              i < kPrimaryDestinations.length;
-                              i++) ...[
-                            if (i > 0) const SizedBox(width: navGap),
-                            _TopNavItem(
-                              destination: kPrimaryDestinations[i],
-                            ),
+                      child: Builder(builder: (context) {
+                        final session = ref.watch(sessionProvider);
+                        final sessionCtrl =
+                            ref.read(sessionProvider.notifier);
+                        final businessId = session.activeBusinessId ?? '';
+                        final disabledAsync = ref.watch(
+                          headerDestinationsDisabledProvider(businessId),
+                        );
+                        // Mientras carga la config, usamos `[]` —
+                        // muestra todos los destinos permitidos por rol,
+                        // que es el comportamiento histórico.
+                        final disabledRoutes = disabledAsync.valueOrNull ??
+                            const <String>[];
+                        final visible = kPrimaryDestinations.where((d) {
+                          final code = d.permissionCode;
+                          final hasPerm =
+                              code == null || sessionCtrl.hasPermission(code);
+                          final hidden = disabledRoutes.contains(d.route);
+                          return hasPerm && !hidden;
+                        }).toList(growable: false);
+                        return Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            for (var i = 0; i < visible.length; i++) ...[
+                              if (i > 0) const SizedBox(width: navGap),
+                              _TopNavItem(destination: visible[i]),
+                            ],
                           ],
-                        ],
-                      ),
+                        );
+                      }),
                     ),
                   ),
 

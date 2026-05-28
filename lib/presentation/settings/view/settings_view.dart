@@ -405,6 +405,13 @@ class SettingsView extends ConsumerWidget {
             color: Color(0xFFF1F1F1),
             route: AppRoutes.settingsRegional,
           ),
+          const _SettingsOption(
+            title: 'Personalizar Header',
+            subtitle: 'Elige qué módulos aparecen en la barra superior',
+            icon: Icons.view_quilt_rounded,
+            color: Color(0xFFFFE6D5),
+            route: AppRoutes.settingsHeaderPersonalize,
+          ),
           if (ref.watch(sessionProvider).isOwner)
             const _SettingsOption(
               title: 'Sucursales',

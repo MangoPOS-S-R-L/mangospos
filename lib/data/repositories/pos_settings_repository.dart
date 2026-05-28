@@ -25,6 +25,16 @@ final discountDisplayModeProvider =
   return repo.getDiscountDisplayMode(businessId);
 });
 
+/// Provider de la lista de routes ocultos del header por business. El
+/// shell hace `ref.watch` para refiltrar destinos cuando el owner cambia
+/// la config en ajustes. Default `[]` si la columna aún no existe.
+final headerDestinationsDisabledProvider =
+    FutureProvider.family<List<String>, String>((ref, businessId) async {
+  if (businessId.isEmpty) return const <String>[];
+  final repo = ref.read(posSettingsRepositoryProvider);
+  return repo.getHeaderDestinationsDisabled(businessId);
+});
+
 /// Niveles de inventario que el admin puede elegir.
 ///   - [none]: módulo oculto, sin tracking de stock. Default histórico.
 ///   - [basic]: 1:1 menu_item → inventory_item con stock por unidad.
@@ -197,6 +207,12 @@ class PosSettingsRepository {
   static const String discountPostDiscount = 'post_discount';
   static const Duration _discountModeCacheTtl = Duration(minutes: 5);
   static final Map<String, _CachedDiscountMode> _discountModeCache = {};
+
+  /// Cache de la lista de routes ocultos del header. Misma estrategia
+  /// que las demás settings — TTL corto para que el cambio se vea
+  /// rápido sin pegar Supabase en cada render del shell.
+  static const Duration _headerDisabledCacheTtl = Duration(minutes: 5);
+  static final Map<String, _CachedStringList> _headerDisabledCache = {};
 
   /// Modo compacto: un solo modal con efectivo + tarjeta + transferencia.
   /// Comportamiento actual del POS.
@@ -432,6 +448,62 @@ class PosSettingsRepository {
     );
   }
 
+  /// Routes de destinos del header ocultados por el owner/admin. Default
+  /// `[]` si la columna aún no existe (pre-migración) o si la query
+  /// falla — preserva el comportamiento histórico (nada oculto).
+  Future<List<String>> getHeaderDestinationsDisabled(String businessId) async {
+    final cached = _headerDisabledCache[businessId];
+    if (cached != null &&
+        DateTime.now().difference(cached.cachedAt) <
+            _headerDisabledCacheTtl) {
+      return cached.value;
+    }
+
+    try {
+      final row = await _client
+          .from('business_settings')
+          .select('header_destinations_disabled')
+          .eq('business_id', businessId)
+          .maybeSingle();
+
+      final raw = row?['header_destinations_disabled'];
+      final list = raw is List
+          ? raw.map((e) => e.toString()).toList(growable: false)
+          : const <String>[];
+      _headerDisabledCache[businessId] = _CachedStringList(
+        list,
+        DateTime.now(),
+      );
+      return list;
+    } catch (_) {
+      return const <String>[];
+    }
+  }
+
+  Future<void> setHeaderDestinationsDisabled({
+    required String businessId,
+    required List<String> routes,
+  }) async {
+    // Dedup + normalización (trim) para evitar duplicados accidentales
+    // si la UI guarda dos veces. Mantenemos el orden de inserción.
+    final seen = <String>{};
+    final normalized = <String>[];
+    for (final r in routes) {
+      final trimmed = r.trim();
+      if (trimmed.isEmpty) continue;
+      if (seen.add(trimmed)) normalized.add(trimmed);
+    }
+
+    await _client.from('business_settings').upsert({
+      'business_id': businessId,
+      'header_destinations_disabled': normalized,
+    }, onConflict: 'business_id');
+    _headerDisabledCache[businessId] = _CachedStringList(
+      normalized,
+      DateTime.now(),
+    );
+  }
+
   /// Printing v2 — Slice B: lee los flags de multi-copia automática para
   /// pre-cuenta y recibo. Default false si la fila no existe o falla.
   /// Cuando true, el orchestrator imprime en TODAS las impresoras del
@@ -589,5 +661,12 @@ class _CachedDiscountMode {
   const _CachedDiscountMode(this.mode, this.cachedAt);
 
   final String mode;
+  final DateTime cachedAt;
+}
+
+class _CachedStringList {
+  const _CachedStringList(this.value, this.cachedAt);
+
+  final List<String> value;
   final DateTime cachedAt;
 }

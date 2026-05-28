@@ -12,6 +12,7 @@ import 'package:go_router/go_router.dart';
 import '../../app/router/routes.dart';
 import '../../app/theme/mango_colors.dart';
 import '../../core/offline/offline_queue_status_provider.dart';
+import '../../data/repositories/pos_settings_repository.dart';
 import '../../services/session/session_controller.dart';
 import '../inventory/viewmodel/expiring_lots_badge_provider.dart';
 import '../inventory/viewmodel/low_stock_badge_provider.dart';
@@ -209,17 +210,38 @@ class _MobileDrawer extends ConsumerWidget {
                 padding: EdgeInsets.zero,
                 children: [
                   const _DrawerSectionTitle('Módulos'),
-                  for (final d in kPrimaryDestinations)
-                    _DrawerNavTile(
-                      destination: d,
-                      currentLocation: currentLocation,
-                      onTap: () {
-                        Navigator.of(context).pop();
-                        if (currentLocation != d.route) {
-                          context.go(d.route);
-                        }
-                      },
-                    ),
+                  // Filtramos por:
+                  //   1) Permiso del rol del empleado.
+                  //   2) Config del business (`header_destinations_disabled`)
+                  //      — el owner puede ocultar destinos a todos los
+                  //      empleados sin tocar permisos por rol.
+                  ...() {
+                    final disabledAsync = ref.watch(
+                      headerDestinationsDisabledProvider(
+                        session.activeBusinessId ?? '',
+                      ),
+                    );
+                    final disabledRoutes =
+                        disabledAsync.valueOrNull ?? const <String>[];
+                    return kPrimaryDestinations.where((d) {
+                      final code = d.permissionCode;
+                      final hasPerm =
+                          code == null || ctrl.hasPermission(code);
+                      final hidden = disabledRoutes.contains(d.route);
+                      return hasPerm && !hidden;
+                    }).map(
+                      (d) => _DrawerNavTile(
+                        destination: d,
+                        currentLocation: currentLocation,
+                        onTap: () {
+                          Navigator.of(context).pop();
+                          if (currentLocation != d.route) {
+                            context.go(d.route);
+                          }
+                        },
+                      ),
+                    );
+                  }(),
                   const Divider(height: 24),
                   const _DrawerSectionTitle('Cuenta'),
                   if (canSwitchBranch)
