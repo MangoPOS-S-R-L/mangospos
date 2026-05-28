@@ -23,8 +23,24 @@ class AppBreakpoints {
   static const double maxContentWidth = 1440;
 }
 
-/// Device type enum for responsive layouts
+/// Device type enum for responsive layouts.
+///
+/// Estos valores se derivan del ANCHO actual de la pantalla (incluyendo
+/// rotación), no del tamaño físico del dispositivo. Para clasificar el
+/// hardware en sí (phone vs tablet 8" vs tablet 10"+) usa
+/// [DeviceClass] / [ResponsiveHelper.getDeviceClass], que usa
+/// `shortestSide` y no cambia al rotar.
 enum DeviceType { mobile, tablet, desktop, ultrawide }
+
+/// Clase física del dispositivo basada en `MediaQuery.shortestSide`
+/// (Material Design standard). A diferencia de [DeviceType], esta
+/// clasificación no cambia con la rotación — un iPad Mini sigue
+/// siendo [smallTablet] en portrait y landscape.
+///
+///   - [phone]: shortestSide < 600 (todos los teléfonos).
+///   - [smallTablet]: 600 ≤ shortestSide < 840 (iPad mini, tablets 7-8").
+///   - [largeTablet]: shortestSide ≥ 840 (iPad Air/Pro, tablets 10"+).
+enum DeviceClass { phone, smallTablet, largeTablet }
 
 /// Helper class for responsive utilities
 class ResponsiveHelper {
@@ -91,4 +107,41 @@ class ResponsiveHelper {
   static bool useCompactShell(BuildContext context) {
     return MediaQuery.of(context).size.width < AppBreakpoints.mobile;
   }
+
+  // ============================================================================
+  // CLASIFICACIÓN POR DISPOSITIVO FÍSICO (shortestSide)
+  // ============================================================================
+  //
+  // Estos helpers identifican el TIPO DE DEVICE en sí — un iPad Mini sigue
+  // siendo `smallTablet` ya esté en portrait o landscape, porque
+  // `shortestSide` toma la dimensión menor y eso es invariante a la
+  // rotación. Útiles para tomar decisiones de UX (densidad, tamaño de hit
+  // targets, layout adaptativo) sin depender de cómo está girado.
+  //
+  // Breakpoints según Material Design 3:
+  //   < 600   phone (cualquier teléfono)
+  //   < 840   small tablet (7-8" — iPad mini, Galaxy Tab A8, etc.)
+  //   ≥ 840   large tablet (10"+ — iPad Air, iPad Pro 11/12, etc.)
+
+  /// Clasifica el device por `shortestSide`. No cambia con rotación.
+  static DeviceClass getDeviceClass(BuildContext context) {
+    final shortest = MediaQuery.sizeOf(context).shortestSide;
+    if (shortest < AppBreakpoints.mobile) return DeviceClass.phone;
+    if (shortest < 840) return DeviceClass.smallTablet;
+    return DeviceClass.largeTablet;
+  }
+
+  /// `true` si el dispositivo es un teléfono (cualquier orientación).
+  static bool isPhone(BuildContext context) =>
+      MediaQuery.sizeOf(context).shortestSide < AppBreakpoints.mobile;
+
+  /// `true` si es una tablet de 7-8" (cualquier orientación).
+  static bool isSmallTablet(BuildContext context) {
+    final s = MediaQuery.sizeOf(context).shortestSide;
+    return s >= AppBreakpoints.mobile && s < 840;
+  }
+
+  /// `true` si es una tablet de 10"+ (cualquier orientación).
+  static bool isLargeTablet(BuildContext context) =>
+      MediaQuery.sizeOf(context).shortestSide >= 840;
 }

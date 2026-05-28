@@ -5,6 +5,7 @@ import 'package:mangopos/presentation/settings/more%20settings/printing/printers
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -172,8 +173,21 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
   Widget build(BuildContext context) {
     final state = ref.watch(splitBillViewModelProvider);
     final viewModel = ref.read(splitBillViewModelProvider.notifier);
-    final size = MediaQuery.of(context).size;
-    final isMobile = size.width < 900;
+    // Clasificación por device físico (shortestSide). No depende de la
+    // orientación actual — un iPad Mini sigue siendo smallTablet
+    // portrait o landscape.
+    final deviceClass = ResponsiveHelper.getDeviceClass(context);
+    final isPortrait =
+        MediaQuery.orientationOf(context) == Orientation.portrait;
+    // Layout stacked (productos arriba / subcuentas abajo) cuando:
+    //   - es un teléfono (cualquier orientación), o
+    //   - es una tablet 7-8" en portrait (poco ancho útil).
+    // Tablets 8" en landscape y todas las tablet 10"+ usan layout 2-col.
+    final isMobile = deviceClass == DeviceClass.phone ||
+        (deviceClass == DeviceClass.smallTablet && isPortrait);
+    // Header/banner compactos también para tablets 8" en landscape
+    // (siguen siendo dispositivos chicos en términos de UX táctil).
+    final compactChrome = deviceClass != DeviceClass.largeTablet;
 
     // Listener para cierre exitoso
     ref.listen(splitBillViewModelProvider.select((s) => s.splitApplied), (
@@ -219,8 +233,10 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
             borderRadius: BorderRadius.circular(16),
             child: Column(
               children: [
-                // Header
-                _buildModalHeader(context),
+                // Header — compact para phones y todas las tablets de
+                // 7-8" (cualquier orientación). Solo tablets 10"+ ven
+                // el header completo con subtítulo.
+                _buildModalHeader(context, compact: compactChrome),
                 const Divider(height: 1, color: _border),
                 if (state.error != null && state.error!.trim().isNotEmpty)
                   Container(
@@ -300,50 +316,76 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
   }
 
   // --- HEADER ---
-  Widget _buildModalHeader(BuildContext context) {
+  /// Header del modal. En `compact = true` (phones / 8" portrait) se vuelve
+  /// 1 línea: ícono pequeño + título + cerrar — sin subtítulo, padding
+  /// reducido. Esto le devuelve ~40px de alto vertical al área del cart.
+  Widget _buildModalHeader(BuildContext context, {required bool compact}) {
+    final iconSize = compact ? 18.0 : 24.0;
+    final titleSize = compact ? 16.0 : 20.0;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 14 : 24,
+        vertical: compact ? 10 : 20,
+      ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: _primary.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
+          Expanded(
+            child: Row(
+              children: [
+                Container(
+                  padding: EdgeInsets.all(compact ? 6 : 10),
+                  decoration: BoxDecoration(
+                    color: _primary.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(compact ? 8 : 12),
+                  ),
+                  child: Icon(
+                    Icons.call_split,
+                    color: _primary,
+                    size: iconSize,
+                  ),
                 ),
-                child: const Icon(Icons.call_split, color: _primary, size: 24),
-              ),
-              const SizedBox(width: 16),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'División de cuentas',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: _textPrimary,
-                    ),
+                SizedBox(width: compact ? 10 : 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'División de cuentas',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: titleSize,
+                          fontWeight: FontWeight.bold,
+                          color: _textPrimary,
+                        ),
+                      ),
+                      if (!compact) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          'Organiza los items en diferentes subcuentas',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: _textSecondary,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Organiza los items en diferentes subcuentas',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: _textSecondary,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ],
+                ),
+              ],
+            ),
           ),
           IconButton(
             onPressed: () => Navigator.of(context).pop(),
-            icon: const Icon(Icons.close, color: _textSecondary),
+            icon: Icon(
+              Icons.close,
+              color: _textSecondary,
+              size: compact ? 18 : 24,
+            ),
+            visualDensity: compact ? VisualDensity.compact : null,
             style: IconButton.styleFrom(
               backgroundColor: Colors.grey[100],
               highlightColor: Colors.grey[200],
@@ -389,11 +431,55 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
       itemsCountByCheckId[checkId] = (itemsCountByCheckId[checkId] ?? 0) + 1;
     }
 
-    return Column(
+    return LayoutBuilder(builder: (context, panelConstraints) {
+      // Compactación basada en el ANCHO REAL del panel, no en el ancho
+      // total de la pantalla — así un 8" landscape con 2-cols también
+      // se compacta correctamente si cada panel queda muy angosto.
+      final panelCompact = panelConstraints.maxWidth < 520;
+      return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // 1. Blue Info Banner
-        Container(
+        // 1. Blue Info Banner — compactado a 1 línea con tooltip en
+        // anchos pequeños. Antes ocupaba 2 líneas + 'Por posición' que
+        // no entraba en tablets de 8".
+        if (panelCompact)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            color: const Color(0xFFEBF8FF),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.info_outline,
+                  color: Color(0xFF3182CE),
+                  size: 16,
+                ),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'Selecciona subcuentas a pagar',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Color(0xFF2C5282),
+                      fontWeight: FontWeight.w600,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+                Tooltip(
+                  message: 'Los descuentos ahora son independientes.\n'
+                      'Por posición disponible.',
+                  child: const Icon(
+                    Icons.help_outline,
+                    color: Color(0xFF3182CE),
+                    size: 16,
+                  ),
+                ),
+              ],
+            ),
+          )
+        else
+          Container(
           padding: const EdgeInsets.all(12),
           color: const Color(0xFFEBF8FF), // Light blue
           child: Row(
@@ -652,6 +738,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
         ),
       ],
     );
+    });
   }
 
   /// Formatea la etiqueta para mostrar C1, C2, etc. o iniciales
@@ -768,8 +855,85 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
             ? constraints.maxHeight
             : MediaQuery.sizeOf(context).height * 0.65;
         final maxToolsHeight = availableHeight * 0.42;
+        // Tier de compactación basado en el ancho real del panel.
+        //   < 420px → ultra compact: botones icon-only con tooltip.
+        //   < 640px → compact: padding reducido, textos cortos.
+        //   else    → normal.
+        final panelWidth = constraints.maxWidth;
+        final ultraCompact = panelWidth < 420;
+        final compact = panelWidth < 640;
+        final btnPad = EdgeInsets.symmetric(
+          horizontal: ultraCompact ? 10 : (compact ? 14 : 20),
+          vertical: ultraCompact ? 10 : (compact ? 12 : 14),
+        );
+        Widget buildActionBtn({
+          required IconData icon,
+          required String label,
+          required String shortLabel,
+          required String tooltip,
+          required VoidCallback? onPressed,
+          required bool primary,
+          Color? color,
+        }) {
+          final effectiveColor = color ?? _primary;
+          final iconWidget = Icon(icon, size: ultraCompact ? 20 : 18);
+          if (ultraCompact) {
+            return Tooltip(
+              message: tooltip.isEmpty ? label : tooltip,
+              child: primary
+                  ? ElevatedButton(
+                      onPressed: onPressed,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: effectiveColor,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        padding: btnPad,
+                        minimumSize: const Size(44, 44),
+                      ),
+                      child: iconWidget,
+                    )
+                  : OutlinedButton(
+                      onPressed: onPressed,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: effectiveColor,
+                        side: BorderSide(color: effectiveColor),
+                        padding: btnPad,
+                        minimumSize: const Size(44, 44),
+                      ),
+                      child: iconWidget,
+                    ),
+            );
+          }
+          final btnLabel = Text(
+            compact ? shortLabel : label,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          );
+          final btn = primary
+              ? ElevatedButton.icon(
+                  onPressed: onPressed,
+                  icon: iconWidget,
+                  label: btnLabel,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: effectiveColor,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    padding: btnPad,
+                  ),
+                )
+              : OutlinedButton.icon(
+                  onPressed: onPressed,
+                  icon: iconWidget,
+                  label: btnLabel,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: effectiveColor,
+                    side: BorderSide(color: effectiveColor),
+                    padding: btnPad,
+                  ),
+                );
+          return tooltip.isEmpty ? btn : Tooltip(message: tooltip, child: btn);
+        }
         return Padding(
-          padding: const EdgeInsets.all(24.0),
+          padding: EdgeInsets.all(compact ? 14.0 : 24.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -779,60 +943,53 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      // Top Actions
-                      Text(
-                        'Crea varias subcuentas, une cuentas o divide en partes iguales.',
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: _textSecondary,
-                          fontSize: 14,
-                          height: 1.4,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 12,
-                        children: [
-                          ElevatedButton.icon(
-                            onPressed: viewModel.createNewCheck,
-                            icon: const Icon(Icons.add, size: 18),
-                            label: const Text('Nueva subcuenta'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: _primary,
-                              foregroundColor: Colors.white,
-                              elevation: 0,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 20,
-                                vertical: 14,
-                              ),
-                            ),
+                      // Top descriptive line — solo en anchos cómodos.
+                      // En compact ocupa una línea entera por nada.
+                      if (!compact) ...[
+                        Text(
+                          'Crea varias subcuentas, une cuentas o divide en partes iguales.',
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: _textSecondary,
+                            fontSize: 14,
+                            height: 1.4,
                           ),
-                          Tooltip(
-                            message: state.hasActiveDivision
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+                      Wrap(
+                        spacing: compact ? 8 : 12,
+                        runSpacing: compact ? 8 : 12,
+                        children: [
+                          buildActionBtn(
+                            icon: Icons.add,
+                            label: 'Nueva subcuenta',
+                            shortLabel: 'Nueva',
+                            tooltip: 'Crear nueva subcuenta',
+                            onPressed: viewModel.createNewCheck,
+                            primary: true,
+                          ),
+                          buildActionBtn(
+                            icon: Icons.safety_divider,
+                            label: 'Dividir en partes iguales',
+                            shortLabel: 'Dividir',
+                            tooltip: state.hasActiveDivision
                                 ? 'Ya hay una división activa. Deshaz '
                                     'primero con "Unir todo" para volver '
                                     'a dividir desde cero.'
                                 : 'Reparte automáticamente los productos '
                                     'entre N sub-cuentas.',
-                            child: OutlinedButton.icon(
-                              onPressed: state.hasActiveDivision
-                                  ? null
-                                  : viewModel.toggleEqualSplit,
-                              icon: const Icon(Icons.safety_divider, size: 18),
-                              label: const Text('Dividir en partes iguales'),
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: _primary,
-                                side: const BorderSide(color: _primary),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 20,
-                                  vertical: 14,
-                                ),
-                              ),
-                            ),
+                            onPressed: state.hasActiveDivision
+                                ? null
+                                : viewModel.toggleEqualSplit,
+                            primary: false,
                           ),
-                          OutlinedButton.icon(
+                          buildActionBtn(
+                            icon: Icons.merge_type,
+                            label: 'Unir cuentas',
+                            shortLabel: 'Unir',
+                            tooltip: 'Unir 2+ subcuentas en una sola',
                             onPressed: state.checks.length < 2
                                 ? null
                                 : () {
@@ -840,18 +997,13 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                                       _showMergeTools = !_showMergeTools;
                                     });
                                   },
-                            icon: const Icon(Icons.merge_type, size: 18),
-                            label: const Text('Unir cuentas'),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: _primary,
-                              side: const BorderSide(color: _primary),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 20,
-                                vertical: 14,
-                              ),
-                            ),
+                            primary: false,
                           ),
-                          OutlinedButton.icon(
+                          buildActionBtn(
+                            icon: Icons.delete_outline,
+                            label: 'Eliminar subcuenta',
+                            shortLabel: 'Eliminar',
+                            tooltip: 'Eliminar una subcuenta',
                             onPressed: state.checks.isEmpty
                                 ? null
                                 : () {
@@ -859,16 +1011,8 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                                       _showDeleteTools = !_showDeleteTools;
                                     });
                                   },
-                            icon: const Icon(Icons.delete_outline, size: 18),
-                            label: const Text('Eliminar subcuenta'),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: Colors.red,
-                              side: const BorderSide(color: Colors.red),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 20,
-                                vertical: 14,
-                              ),
-                            ),
+                            primary: false,
+                            color: Colors.red,
                           ),
                         ],
                       ),
@@ -1267,22 +1411,39 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
   ) {
     return LayoutBuilder(
       builder: (context, constraints) {
+        // Tres tiers:
+        //   < 420px → ultra: cancelar = icon-only, apply = "Aplicar" corto.
+        //   < 680px → compact: stack vertical con labels cortos.
+        //   else    → labels completos en fila.
+        final ultra = constraints.maxWidth < 420;
         final isCompact = constraints.maxWidth < 680;
-        final cancelButton = TextButton.icon(
-          onPressed: () => Navigator.of(context).pop(),
-          icon: const Icon(Icons.close, size: 18),
-          label: const Text('Cancelar división'),
-          style: TextButton.styleFrom(foregroundColor: _textSecondary),
-        );
+        final cancelLabel = ultra ? 'X' : (isCompact ? 'Cancelar' : 'Cancelar división');
+        final applyLabel = ultra ? 'Aplicar' : (isCompact ? 'Aplicar' : 'Aplicar división');
+        final cancelButton = ultra
+            ? IconButton(
+                onPressed: () => Navigator.of(context).pop(),
+                icon: const Icon(Icons.close, size: 20),
+                tooltip: 'Cancelar división',
+                color: _textSecondary,
+              )
+            : TextButton.icon(
+                onPressed: () => Navigator.of(context).pop(),
+                icon: const Icon(Icons.close, size: 18),
+                label: Text(cancelLabel),
+                style: TextButton.styleFrom(foregroundColor: _textSecondary),
+              );
         final applyButton = ElevatedButton.icon(
           onPressed: state.canApplySplit ? () => viewModel.applySplit() : null,
-          icon: const Icon(Icons.check),
-          label: const Text('Aplicar división'),
+          icon: const Icon(Icons.check, size: 18),
+          label: Text(applyLabel),
           style: ElevatedButton.styleFrom(
             backgroundColor: _primary,
             disabledBackgroundColor: Colors.grey[300],
             foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+            padding: EdgeInsets.symmetric(
+              horizontal: ultra ? 16 : (isCompact ? 22 : 32),
+              vertical: ultra ? 12 : 16,
+            ),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(8),
             ),
@@ -1291,15 +1452,11 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
         );
 
         return Padding(
-          padding: const EdgeInsets.all(16),
+          padding: EdgeInsets.all(ultra ? 10 : 16),
           child: isCompact
-              ? Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Align(alignment: Alignment.centerLeft, child: cancelButton),
-                    const SizedBox(height: 10),
-                    Align(alignment: Alignment.centerRight, child: applyButton),
-                  ],
+              ? Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [cancelButton, applyButton],
                 )
               : Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
