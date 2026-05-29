@@ -73,6 +73,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   DateTime? _lastTaxLoad;
   String? _fiscalSettingsBusinessId;
   DateTime? _lastFiscalSettingsLoad;
+  // Cache del employee_id derivado del usuario autenticado de Supabase.
+  // Usado como fallback de `created_by_employee_id` cuando el cajero/admin
+  // agrega items sin pasar por el PIN multimesero. Una sola query por
+  // sesión gracias al cache.
+  String? _cachedAuthEmployeeId;
   // PRD 2 §G2/G6: la única fuente de verdad para impuestos es la tabla
   // `taxes` (cargada en `_cachedBusinessTaxes`). El motor backend ya
   // consolida todos los impuestos (incluida la propina) en `oi.tax`, así
@@ -98,6 +103,52 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }
 
   double _roundMoney(double value) => double.parse(value.toStringAsFixed(2));
+
+  /// Devuelve el `employee_id` que se debe asignar a un item recién creado
+  /// como autor (`order_items.created_by_employee_id`).
+  ///
+  /// Prioridad:
+  ///   1. `activeWaiterProvider` — el mesero que metió PIN al entrar a la
+  ///      mesa (modo multimesero, PRD 0001).
+  ///   2. Fallback: el usuario autenticado en Supabase mapeado a su fila
+  ///      en `employees` para el business activo. Cubre el caso del
+  ///      cajero/admin que agrega items sin pasar por el PIN.
+  ///   3. `null` — usuario invitado / sin employees row. El item queda
+  ///      sin atribución y el tooltip muestra "Sin asignar".
+  ///
+  /// El resultado del fallback se cachea en `_cachedAuthEmployeeId` para
+  /// no hacer round-trip por cada item agregado en la sesión.
+  ///
+  /// Llamamos a la RPC `fn_current_employee_id` (SECURITY DEFINER) en vez
+  /// de un SELECT directo a `employees` porque ese SELECT es bloqueado
+  /// por RLS para usuarios non-admin — y silenciosamente retornaba sin
+  /// datos, dejando todos los items como "Sin asignar".
+  Future<String?> _resolveItemEmployeeId() async {
+    final activeWaiter = ref.read(activeWaiterProvider);
+    if (activeWaiter != null) return activeWaiter.employeeId;
+
+    if (_cachedAuthEmployeeId != null) return _cachedAuthEmployeeId;
+
+    final authUser = Supabase.instance.client.auth.currentUser;
+    if (authUser == null) return null;
+
+    final activeBusinessId = _activeBusinessId;
+    if (activeBusinessId == null || activeBusinessId.isEmpty) return null;
+
+    try {
+      final result = await Supabase.instance.client.rpc(
+        'fn_current_employee_id',
+        params: {'p_business_id': activeBusinessId},
+      );
+      final resolved = result?.toString();
+      if (resolved == null || resolved.isEmpty) return null;
+      _cachedAuthEmployeeId = resolved;
+      return resolved;
+    } catch (e) {
+      debugPrint('[audit] fn_current_employee_id falló: $e');
+      return null;
+    }
+  }
 
   Future<void> refreshOfflineMonitor() => _refreshOfflineMonitor();
 
@@ -1154,19 +1205,26 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             notes: notes,
           );
 
-      // Modo multimesero: marcar el item con el empleado activo en el
-      // dispositivo (el que metió PIN al entrar a la mesa). Esto permite
-      // reportes de "qué mesero vendió qué". Si no hay activeWaiter, skip.
-      final activeWaiter = ref.read(activeWaiterProvider);
-      if (activeWaiter != null && itemId.isNotEmpty) {
-        try {
-          await Supabase.instance.client
-              .from('order_items')
-              .update({'created_by_employee_id': activeWaiter.employeeId})
-              .eq('id', itemId);
-        } catch (e) {
-          debugPrint('[multimesero] no se pudo set created_by_employee_id: $e');
-          // No abortamos el flujo — el item igual quedó creado.
+      // Audit trail del item: ver `_resolveItemEmployeeId` arriba.
+      //
+      // 1) Modo multimesero: si hay `activeWaiter` (el mesero metió PIN al
+      //    entrar a la mesa), usamos su employeeId.
+      // 2) Fallback: cuando un admin/cajero agrega items sin pasar por el
+      //    flow de PIN (`activeWaiter == null`), resolvemos su employee_id
+      //    desde el usuario autenticado de Supabase. Sin esto, todos los
+      //    items que mete el cajero quedaban como "Sin asignar".
+      if (itemId.isNotEmpty) {
+        final employeeId = await _resolveItemEmployeeId();
+        if (employeeId != null) {
+          try {
+            await Supabase.instance.client
+                .from('order_items')
+                .update({'created_by_employee_id': employeeId})
+                .eq('id', itemId);
+          } catch (e) {
+            debugPrint('[audit] no se pudo set created_by_employee_id: $e');
+            // No abortamos el flujo — el item igual quedó creado.
+          }
         }
       }
 

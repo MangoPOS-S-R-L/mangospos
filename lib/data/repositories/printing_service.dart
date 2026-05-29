@@ -615,18 +615,39 @@ class PrintingService {
         resolvedTableName = tableLabel;
       }
 
-      // Resolver mesero (asignado -> abridor)
+      // Resolver mesero. Llamamos la RPC `fn_order_opener_name` que
+      // prioriza `table_sessions.opened_by_employee_id` (PIN multimesero)
+      // sobre `opened_by` (auth user) y bypassa RLS — los SELECTs
+      // embebidos arriba pueden fallar en lecturas de `profiles` para
+      // cajeros con permisos restringidos. Si la RPC devuelve null,
+      // caemos a los datos embebidos como segundo nivel y al fallback
+      // del caller como tercero.
+      //
+      // Importante para multimesero: la regla del producto es "el ticket
+      // siempre dice quién ABRIÓ la mesa, no quién está agregando items
+      // ahora", para que precuenta/factura/comanda sean consistentes.
       String? resolvedWaiterName;
-      final waiterUser = tableSession?['waiter'] as Map<String, dynamic>?;
-      final openerUser = tableSession?['opener'] as Map<String, dynamic>?;
+      try {
+        final rpcResult = await _client
+            .rpc('fn_order_opener_name', params: {'p_order_id': orderId});
+        final rpcName = rpcResult?.toString().trim();
+        if (rpcName != null && rpcName.isNotEmpty) {
+          resolvedWaiterName = rpcName;
+        }
+      } catch (e) {
+        debugPrint('[audit] fn_order_opener_name falló en printing: $e');
+      }
 
-      final waiterFullName = waiterUser?['full_name']?.toString().trim();
-      final openerFullName = openerUser?['full_name']?.toString().trim();
-
-      if (waiterFullName != null && waiterFullName.isNotEmpty) {
-        resolvedWaiterName = waiterFullName;
-      } else if (openerFullName != null && openerFullName.isNotEmpty) {
-        resolvedWaiterName = openerFullName;
+      if (resolvedWaiterName == null) {
+        final waiterUser = tableSession?['waiter'] as Map<String, dynamic>?;
+        final openerUser = tableSession?['opener'] as Map<String, dynamic>?;
+        final waiterFullName = waiterUser?['full_name']?.toString().trim();
+        final openerFullName = openerUser?['full_name']?.toString().trim();
+        if (openerFullName != null && openerFullName.isNotEmpty) {
+          resolvedWaiterName = openerFullName;
+        } else if (waiterFullName != null && waiterFullName.isNotEmpty) {
+          resolvedWaiterName = waiterFullName;
+        }
       }
 
       return {

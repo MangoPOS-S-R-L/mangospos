@@ -149,11 +149,27 @@ class _ItemRow extends StatelessWidget {
         : item.quantity.toStringAsFixed(1);
     final lineTotal = itemDisplayTotal(order, item);
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        hoverColor: Colors.black.withValues(alpha: 0.04),
+    return Tooltip(
+      // Tooltip de auditoría: solo dispara con hover de mouse (~1s).
+      // `triggerMode: manual` desactiva el long-press default — el long-press
+      // en una caja registradora se confunde con intención de seleccionar
+      // o arrastrar. Hover sigue funcionando porque Flutter lo maneja por
+      // separado del triggerMode (MouseRegion siempre presente).
+      waitDuration: const Duration(seconds: 1),
+      triggerMode: TooltipTriggerMode.manual,
+      richMessage: _buildAuditTooltipSpan(context),
+      preferBelow: false,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2C2C2C).withValues(alpha: 0.95),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      textStyle: const TextStyle(color: Colors.white, fontSize: 12, height: 1.45),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          hoverColor: Colors.black.withValues(alpha: 0.04),
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
           child: Row(
@@ -267,8 +283,54 @@ class _ItemRow extends StatelessWidget {
               ),
             ],
           ),
+          ),
         ),
       ),
+    );
+  }
+
+  /// Construye el rich message del Tooltip de auditoría:
+  /// - Nombre del producto en bold
+  /// - Fecha/hora exacta en que se agregó el item
+  /// - Empleado/mozo que lo agregó (`null` si fue antes de multimesero
+  ///   o el empleado fue borrado)
+  /// - Notas del item, si las hay
+  /// - Origen de la orden (dine_in, manual, etc.) + estado de impresión
+  ///   ("IMPR. SI" si ya pasó de draft, "IMPR. NO" si todavía no se
+  ///   envió a cocina)
+  InlineSpan _buildAuditTooltipSpan(BuildContext context) {
+    final dateFmt = DateFormat('dd-MM-yyyy HH:mm');
+    final fechaHora = dateFmt.format(item.createdAt.toLocal());
+    final mozo = item.createdByEmployeeName ?? 'Sin asignar';
+    final notes = item.notes?.trim() ?? '';
+    final origen = order.origin.isEmpty ? '—' : order.origin;
+    final impreso = item.status == 'draft' ? 'NO' : 'SI';
+
+    const labelStyle = TextStyle(color: Color(0xFFCBD5E1), fontSize: 12);
+    const valueStyle = TextStyle(color: Colors.white, fontSize: 12);
+
+    return TextSpan(
+      style: const TextStyle(color: Colors.white, fontSize: 12, height: 1.5),
+      children: [
+        TextSpan(
+          text: '${item.productName}\n',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const TextSpan(text: 'Agregado: ', style: labelStyle),
+        TextSpan(text: '$fechaHora\n', style: valueStyle),
+        const TextSpan(text: 'Mozo: ', style: labelStyle),
+        TextSpan(text: '$mozo\n', style: valueStyle),
+        if (notes.isNotEmpty) ...[
+          const TextSpan(text: 'Notas: ', style: labelStyle),
+          TextSpan(text: '$notes\n', style: valueStyle),
+        ],
+        const TextSpan(text: 'Origen: ', style: labelStyle),
+        TextSpan(text: '$origen · IMPR. $impreso', style: valueStyle),
+      ],
     );
   }
 }

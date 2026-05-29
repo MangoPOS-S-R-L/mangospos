@@ -210,6 +210,12 @@ class OrderItem extends Equatable {
   final double? originalTaxRate;
   final String? printAreaCode;
   final DateTime createdAt;
+  final String? createdByEmployeeId;
+  // Nombre legible derivado del JOIN a `employees` en el SELECT del
+  // repository. Nullable porque (1) órdenes legacy pre-multimesero no
+  // tienen `created_by_employee_id`, (2) el empleado pudo ser eliminado
+  // (FK queda NULL por ON DELETE SET NULL).
+  final String? createdByEmployeeName;
   final List<OrderItemModifier> modifiers;
 
   /// Snapshot de impuestos cobrados a este item (PRD 2 §6.1).
@@ -238,6 +244,8 @@ class OrderItem extends Equatable {
     this.originalTaxRate,
     this.printAreaCode,
     required this.createdAt,
+    this.createdByEmployeeId,
+    this.createdByEmployeeName,
     this.modifiers = const [],
     this.taxLines = const [],
   });
@@ -276,6 +284,19 @@ class OrderItem extends Equatable {
         (taxMode == 'inclusive' || !hasBreakdown || derivedTotal <= 0);
     final effectiveTotal = shouldPreserveRawTotal ? rawTotal : derivedTotal;
 
+    // El SELECT del repository hace JOIN con `employees(first_name,last_name)`
+    // vía la FK `created_by_employee_id`. PostgREST embebe la fila como
+    // `map['employees']`. Si el item no tiene empleado asociado (legacy o
+    // empleado borrado), `employees` viene como null o ausente.
+    String? employeeName;
+    final empRaw = map['employees'];
+    if (empRaw is Map) {
+      final first = empRaw['first_name']?.toString().trim() ?? '';
+      final last = empRaw['last_name']?.toString().trim() ?? '';
+      final composed = '$first $last'.trim();
+      if (composed.isNotEmpty) employeeName = composed;
+    }
+
     return OrderItem(
       id: map['id'] ?? '',
       orderId: map['order_id'] ?? '',
@@ -297,6 +318,8 @@ class OrderItem extends Equatable {
       originalTaxRate: (map['original_tax_rate'] ?? map['tax_rate'] ?? 0).toDouble(),
       printAreaCode: map['print_area_code'] as String?,
       createdAt: DateTime.tryParse(map['created_at'] ?? '') ?? DateTime.now(),
+      createdByEmployeeId: map['created_by_employee_id']?.toString(),
+      createdByEmployeeName: employeeName,
       modifiers: [], // Se cargan aparte
     );
   }
@@ -323,6 +346,8 @@ class OrderItem extends Equatable {
     double? originalTaxRate,
     String? printAreaCode,
     DateTime? createdAt,
+    String? createdByEmployeeId,
+    String? createdByEmployeeName,
     List<OrderItemModifier>? modifiers,
     List<OrderItemTaxLine>? taxLines,
   }) {
@@ -348,6 +373,8 @@ class OrderItem extends Equatable {
       originalTaxRate: originalTaxRate ?? this.originalTaxRate,
       printAreaCode: printAreaCode ?? this.printAreaCode,
       createdAt: createdAt ?? this.createdAt,
+      createdByEmployeeId: createdByEmployeeId ?? this.createdByEmployeeId,
+      createdByEmployeeName: createdByEmployeeName ?? this.createdByEmployeeName,
       modifiers: modifiers ?? this.modifiers,
       taxLines: taxLines ?? this.taxLines,
     );
@@ -375,6 +402,8 @@ class OrderItem extends Equatable {
     originalTaxRate,
     printAreaCode,
     createdAt,
+    createdByEmployeeId,
+    createdByEmployeeName,
     modifiers,
     taxLines,
   ];

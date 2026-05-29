@@ -165,6 +165,12 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
       value: viewModel.selectedMenuFilterId,
       onChanged: viewModel.setMenuFilter,
     );
+    final printAreaDropdown = _buildDropdownButton(
+      label: 'Todas',
+      items: viewModel.availablePrintAreas,
+      value: viewModel.selectedPrintAreaFilterId,
+      onChanged: viewModel.setPrintAreaFilter,
+    );
     final clearButton = TextButton.icon(
       onPressed: () => _clearFilters(viewModel),
       icon: const Icon(Icons.filter_alt_off_outlined, size: 18),
@@ -175,7 +181,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
     );
 
     if (compact) {
-      // Móvil: apilamos vertical. Búsqueda full-width arriba; los dos
+      // Móvil: apilamos vertical. Búsqueda full-width arriba; los tres
       // dropdowns expandidos en una segunda fila para que cada uno tenga
       // espacio suficiente y no se trunque el texto.
       return Column(
@@ -188,6 +194,8 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
               Expanded(child: categoryDropdown),
               const SizedBox(width: AppSpacing.md),
               Expanded(child: menuDropdown),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(child: printAreaDropdown),
             ],
           ),
           if (viewModel.hasActiveFilters) ...[
@@ -210,6 +218,8 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
         categoryDropdown,
         const SizedBox(width: AppSpacing.lg),
         menuDropdown,
+        const SizedBox(width: AppSpacing.lg),
+        printAreaDropdown,
         if (viewModel.hasActiveFilters) ...[
           const SizedBox(width: AppSpacing.lg),
           clearButton,
@@ -663,6 +673,7 @@ class _ProductsTable extends StatelessWidget {
                 Expanded(flex: 1, child: _TableHeaderCell('PRECIO')),
                 Expanded(flex: 1, child: _TableHeaderCell('CATEGORIA')),
                 Expanded(flex: 1, child: _TableHeaderCell('MENU')),
+                Expanded(flex: 1, child: _TableHeaderCell('AREA PROD.')),
                 Expanded(
                   flex: 1,
                   child: Center(child: _TableHeaderCell('DISPONIBLE')),
@@ -718,6 +729,10 @@ class _ProductsTable extends StatelessWidget {
                     .toSet()
                     .toList(growable: false);
                 final menuName = menuNames.isEmpty ? '-' : menuNames.join(', ');
+                final productionAreaName = _resolveProductionAreaName(
+                  product: product,
+                  printAreasByProduct: viewModel.printAreasByProduct,
+                );
                 final isActive = product['is_active'] == true;
                 final taxMode = product['tax_mode']?.toString() == 'inclusive'
                     ? 'Incluido'
@@ -851,6 +866,14 @@ class _ProductsTable extends StatelessWidget {
                       ),
                       Expanded(
                         flex: 1,
+                        child: Text(
+                          productionAreaName,
+                          style: TextStyle(color: AppColors.mutedForeground),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      Expanded(
+                        flex: 1,
                         child: Center(
                           child: _AvailabilityIndicator(
                             state: _extractAvailability(product),
@@ -915,6 +938,30 @@ class _ProductsTable extends StatelessWidget {
     if (value is num) return value.toDouble();
     return double.tryParse(value?.toString() ?? '') ?? 0;
   }
+}
+
+/// Resuelve el label de "Área de producción" para un producto. Prefiere las
+/// asignaciones N:M de `menu_item_print_areas` (cargadas en el viewmodel);
+/// si no hay, cae al legacy `print_area_code` del menu_item. Si tampoco,
+/// devuelve "-".
+String _resolveProductionAreaName({
+  required Map<String, dynamic> product,
+  required Map<String, List<Map<String, dynamic>>> printAreasByProduct,
+}) {
+  final productId = product['id']?.toString() ?? '';
+  if (productId.isNotEmpty) {
+    final areas = printAreasByProduct[productId];
+    if (areas != null && areas.isNotEmpty) {
+      final names = areas
+          .map((a) => a['name']?.toString() ?? '')
+          .where((s) => s.isNotEmpty)
+          .toList(growable: false);
+      if (names.isNotEmpty) return names.join(', ');
+    }
+  }
+  final legacyCode = product['print_area_code']?.toString();
+  if (legacyCode != null && legacyCode.isNotEmpty) return legacyCode;
+  return '-';
 }
 
 /// Resumen de stock disponible para mostrar en la lista de productos.
@@ -1166,6 +1213,10 @@ class _ProductCardMobile extends StatelessWidget {
         .toSet()
         .toList(growable: false);
     final menuName = menuNames.isEmpty ? '-' : menuNames.join(', ');
+    final productionAreaName = _resolveProductionAreaName(
+      product: product,
+      printAreasByProduct: viewModel.printAreasByProduct,
+    );
     final isActive = product['is_active'] == true;
     final inclusive = product['tax_mode']?.toString() == 'inclusive';
     final taxLabel = inclusive ? 'Imp. Incluido' : 'Imp. Excluido';
@@ -1341,6 +1392,12 @@ class _ProductCardMobile extends StatelessWidget {
                     child: _MobileMetaCol(
                       label: 'Menú',
                       value: menuName,
+                    ),
+                  ),
+                  Expanded(
+                    child: _MobileMetaCol(
+                      label: 'Área prod.',
+                      value: productionAreaName,
                     ),
                   ),
                   PopupMenuButton<String>(

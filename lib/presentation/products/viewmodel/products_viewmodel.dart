@@ -34,12 +34,14 @@ class ProductsViewModel extends ChangeNotifier {
   List<Map<String, dynamic>> _products = [];
   List<Map<String, dynamic>> _categories = [];
   List<Map<String, dynamic>> _menus = [];
+  Map<String, List<Map<String, dynamic>>> _printAreasByProduct = {};
   bool _isLoading = false;
   String? _businessId;
   String? _error;
   String _searchQuery = '';
   String? _selectedCategoryFilterId;
   String? _selectedMenuFilterId;
+  String? _selectedPrintAreaFilterId;
   int _loadGeneration = 0;
 
   List<Map<String, dynamic>> get products => _products;
@@ -70,19 +72,69 @@ class ProductsViewModel extends ChangeNotifier {
           final matchesMenu =
               _selectedMenuFilterId == null ||
               menuIds.contains(_selectedMenuFilterId);
+          final matchesPrintArea = _selectedPrintAreaFilterId == null ||
+              _productMatchesPrintArea(product, _selectedPrintAreaFilterId!);
 
-          return matchesSearch && matchesCategory && matchesMenu;
+          return matchesSearch &&
+              matchesCategory &&
+              matchesMenu &&
+              matchesPrintArea;
         })
         .toList(growable: false);
   }
 
+  /// True si el producto está asignado al área dada (N:M en menu_item_print_areas
+  /// o fallback por `print_area_code` legacy comparando contra el `code` del
+  /// área en la lista cargada).
+  bool _productMatchesPrintArea(
+    Map<String, dynamic> product,
+    String areaId,
+  ) {
+    final productId = product['id']?.toString() ?? '';
+    final modern = _printAreasByProduct[productId];
+    if (modern != null && modern.isNotEmpty) {
+      return modern.any((a) => a['id']?.toString() == areaId);
+    }
+    final legacyCode = product['print_area_code']?.toString();
+    if (legacyCode == null || legacyCode.isEmpty) return false;
+    for (final areas in _printAreasByProduct.values) {
+      for (final a in areas) {
+        if (a['id']?.toString() == areaId &&
+            a['code']?.toString() == legacyCode) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /// Lista única de áreas de producción derivada de las asignaciones cargadas.
+  /// Sirve para poblar el dropdown del filtro sin un round-trip aparte.
+  List<Map<String, dynamic>> get availablePrintAreas {
+    final seen = <String>{};
+    final result = <Map<String, dynamic>>[];
+    for (final areas in _printAreasByProduct.values) {
+      for (final a in areas) {
+        final id = a['id']?.toString();
+        if (id == null || id.isEmpty) continue;
+        if (seen.add(id)) result.add(a);
+      }
+    }
+    result.sort((a, b) =>
+        (a['name']?.toString() ?? '').compareTo(b['name']?.toString() ?? ''));
+    return result;
+  }
+
   List<Map<String, dynamic>> get categories => _categories;
   List<Map<String, dynamic>> get menus => _menus;
+  Map<String, List<Map<String, dynamic>>> get printAreasByProduct =>
+      _printAreasByProduct;
   bool get isLoading => _isLoading;
   String? get error => _error;
   String get searchQuery => _searchQuery;
   String? get selectedCategoryFilterId => _selectedCategoryFilterId;
   String? get selectedMenuFilterId => _selectedMenuFilterId;
+  String? get selectedPrintAreaFilterId => _selectedPrintAreaFilterId;
 
   Future<void> init({String? businessId}) async {
     final generation = ++_loadGeneration;
@@ -104,19 +156,37 @@ class ProductsViewModel extends ChangeNotifier {
       // round-trips (3 paralelos: products/categories/menus + uno nested
       // para v_menu_items_stock dentro de getProducts). El RPC retorna
       // todo embebido con CTEs en ~30ms server-side.
-      final catalog =
-          await _repository.getProductsCatalog(resolvedBusinessId);
+      //
+      // En paralelo cargamos el mapa N:M de áreas de producción
+      // (menu_item_print_areas), que el RPC no embebe. Es una sola query
+      // a una tabla pequeña, no impacta perf percibida.
+      final catalogFuture =
+          _repository.getProductsCatalog(resolvedBusinessId);
+      final areasFuture =
+          _repository.getPrintAreasByProduct(resolvedBusinessId);
+      final results = await Future.wait<dynamic>([catalogFuture, areasFuture]);
       if (generation != _loadGeneration) return;
+
+      final catalog = results[0]
+          as ({
+            List<Map<String, dynamic>> products,
+            List<Map<String, dynamic>> categories,
+            List<Map<String, dynamic>> menus,
+          });
+      final areasByProduct =
+          results[1] as Map<String, List<Map<String, dynamic>>>;
 
       final businessChanged = _businessId != resolvedBusinessId;
       _businessId = resolvedBusinessId;
       _products = catalog.products;
       _categories = catalog.categories;
       _menus = catalog.menus;
+      _printAreasByProduct = areasByProduct;
       if (businessChanged) {
         _searchQuery = '';
         _selectedCategoryFilterId = null;
         _selectedMenuFilterId = null;
+        _selectedPrintAreaFilterId = null;
       }
       _sanitizeFilters();
     } catch (e) {
@@ -148,20 +218,28 @@ class ProductsViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Resetea búsqueda y filtros de categoría/menú en una sola pasada.
+  void setPrintAreaFilter(String? areaId) {
+    _selectedPrintAreaFilterId =
+        areaId == null || areaId.isEmpty ? null : areaId;
+    notifyListeners();
+  }
+
+  /// Resetea búsqueda y filtros de categoría/menú/área en una sola pasada.
   /// Útil para el botón "Limpiar filtros" cuando el cajero ya no recuerda
   /// qué filtros tiene puestos.
   void clearAllFilters() {
     _searchQuery = '';
     _selectedCategoryFilterId = null;
     _selectedMenuFilterId = null;
+    _selectedPrintAreaFilterId = null;
     notifyListeners();
   }
 
   bool get hasActiveFilters =>
       _searchQuery.isNotEmpty ||
       _selectedCategoryFilterId != null ||
-      _selectedMenuFilterId != null;
+      _selectedMenuFilterId != null ||
+      _selectedPrintAreaFilterId != null;
 
   Future<void> _fetchProducts() async {
     if (_businessId == null) return;
@@ -182,6 +260,10 @@ class ProductsViewModel extends ChangeNotifier {
         .map((menu) => menu['id']?.toString())
         .whereType<String>()
         .toSet();
+    final printAreaIds = availablePrintAreas
+        .map((area) => area['id']?.toString())
+        .whereType<String>()
+        .toSet();
 
     if (_selectedCategoryFilterId != null &&
         !categoryIds.contains(_selectedCategoryFilterId)) {
@@ -190,6 +272,10 @@ class ProductsViewModel extends ChangeNotifier {
     if (_selectedMenuFilterId != null &&
         !menuIds.contains(_selectedMenuFilterId)) {
       _selectedMenuFilterId = null;
+    }
+    if (_selectedPrintAreaFilterId != null &&
+        !printAreaIds.contains(_selectedPrintAreaFilterId)) {
+      _selectedPrintAreaFilterId = null;
     }
   }
 

@@ -229,59 +229,29 @@ Future<String?> _loadWaiterName(WidgetRef ref, String orderId) async {
   final fallback = ref.read(sessionProvider).userName;
   final client = Supabase.instance.client;
 
+  // Resolvemos el nombre del mesero que ABRIÓ la mesa (no quien agregó
+  // cada item). Esa identidad se preserva en `table_sessions.opened_by`
+  // y `opened_by_employee_id` y NO cambia cuando otro mesero agrega
+  // productos — exactamente lo que necesitamos para "MESERO:" en
+  // comanda / precuenta / factura.
+  //
+  // Llamamos a la RPC `fn_order_opener_name` en vez de hacer SELECTs
+  // directos a `employees` porque RLS bloqueaba esos SELECTs para
+  // cajeros sin permisos especiales — el helper silenciosamente caía
+  // al `fallback = sessionProvider.userName` y el ticket terminaba
+  // imprimiendo el nombre del cajero logueado, no del opener real.
   try {
-    final data = await client
-        .from('orders')
-        .select(
-          'table_sessions(opened_by,opened_by_employee_id,'
-          'business_id,users(full_name))',
-        )
-        .eq('id', orderId)
-        .maybeSingle();
-
-    final tableSession = data?['table_sessions'] as Map<String, dynamic>?;
-    final openedByEmployeeId =
-        tableSession?['opened_by_employee_id']?.toString().trim();
-    final openedBy = tableSession?['opened_by']?.toString();
-    final businessId = tableSession?['business_id']?.toString();
-    final user = tableSession?['users'] as Map<String, dynamic>?;
-    final fullName = user?['full_name']?.toString().trim();
-
-    // Multimesero: el empleado que metió PIN es el "mesero real",
-    // independiente de quién esté logueado en el dispositivo.
-    if (openedByEmployeeId != null && openedByEmployeeId.isNotEmpty) {
-      final emp = await client
-          .from('employees')
-          .select('first_name')
-          .eq('id', openedByEmployeeId)
-          .maybeSingle();
-      final firstName = emp?['first_name']?.toString();
-      if (firstName != null && firstName.trim().isNotEmpty) {
-        return preferredDisplayName(firstName: firstName);
-      }
+    final result = await client.rpc(
+      'fn_order_opener_name',
+      params: {'p_order_id': orderId},
+    );
+    final name = result?.toString().trim();
+    if (name != null && name.isNotEmpty) {
+      return preferredDisplayName(fullName: name);
     }
-
-    // Single-mesero: el empleado vinculado al user_id de la sesión.
-    if (openedBy != null &&
-        openedBy.isNotEmpty &&
-        businessId != null &&
-        businessId.isNotEmpty) {
-      final employee = await client
-          .from('employees')
-          .select('first_name')
-          .eq('user_id', openedBy)
-          .eq('business_id', businessId)
-          .maybeSingle();
-      final firstName = employee?['first_name']?.toString();
-      if (firstName != null && firstName.trim().isNotEmpty) {
-        return preferredDisplayName(firstName: firstName);
-      }
-    }
-
-    if (fullName != null && fullName.isNotEmpty) {
-      return preferredDisplayName(fullName: fullName);
-    }
-  } catch (_) {}
+  } catch (e) {
+    debugPrint('[audit] fn_order_opener_name falló: $e');
+  }
 
   return fallback;
 }
@@ -3041,6 +3011,9 @@ class _CartView extends ConsumerWidget {
                               qty: groupedSentItems[i].qty,
                               total: groupedSentItems[i].total,
                               isTakeout: groupedSentItems[i].isTakeout,
+                              auditItem: groupedSentItems[i].items.first,
+                              orderOrigin: orderState.order?.origin,
+                              groupSize: groupedSentItems[i].items.length,
                               onTap: () => _openProductDetailModal(
                                 context,
                                 ref,
@@ -5106,11 +5079,24 @@ class _CartLineItem extends ConsumerWidget {
     ).toStringAsFixed(2);
     final modifiers = item.modifiers;
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        hoverColor: Colors.black.withValues(alpha: 0.04),
+    return Tooltip(
+      // Tooltip de auditoría: solo hover de mouse (~1s). triggerMode manual
+      // desactiva long-press default; el hover lo maneja MouseRegion aparte.
+      waitDuration: const Duration(seconds: 1),
+      triggerMode: TooltipTriggerMode.manual,
+      richMessage: _buildAuditTooltipSpan(currentOrder?.origin),
+      preferBelow: false,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2C2C2C).withValues(alpha: 0.95),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      textStyle: const TextStyle(color: Colors.white, fontSize: 12, height: 1.45),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          hoverColor: Colors.black.withValues(alpha: 0.04),
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 6),
           child: Row(
@@ -5278,8 +5264,50 @@ class _CartLineItem extends ConsumerWidget {
               ),
             ],
           ),
+          ),
         ),
       ),
+    );
+  }
+
+  /// Tooltip de auditoría que aparece al pasar el mouse sobre el item:
+  /// nombre del producto, fecha/hora exacta de cuando se agregó, mozo
+  /// que lo metió, notas si hay, y origen de la orden + estado de
+  /// impresión ("IMPR. SI" si pasó de draft a sent, "IMPR. NO" si sigue
+  /// en draft).
+  InlineSpan _buildAuditTooltipSpan(String? orderOrigin) {
+    final dateFmt = DateFormat('dd-MM-yyyy HH:mm');
+    final fechaHora = dateFmt.format(item.createdAt.toLocal());
+    final mozo = item.createdByEmployeeName ?? 'Sin asignar';
+    final notes = item.notes?.trim() ?? '';
+    final origen = (orderOrigin == null || orderOrigin.isEmpty) ? '—' : orderOrigin;
+    final impreso = item.status == 'draft' ? 'NO' : 'SI';
+
+    const labelStyle = TextStyle(color: Color(0xFFCBD5E1), fontSize: 12);
+    const valueStyle = TextStyle(color: Colors.white, fontSize: 12);
+
+    return TextSpan(
+      style: const TextStyle(color: Colors.white, fontSize: 12, height: 1.5),
+      children: [
+        TextSpan(
+          text: '${item.productName}\n',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const TextSpan(text: 'Agregado: ', style: labelStyle),
+        TextSpan(text: '$fechaHora\n', style: valueStyle),
+        const TextSpan(text: 'Mozo: ', style: labelStyle),
+        TextSpan(text: '$mozo\n', style: valueStyle),
+        if (notes.isNotEmpty) ...[
+          const TextSpan(text: 'Notas: ', style: labelStyle),
+          TextSpan(text: '$notes\n', style: valueStyle),
+        ],
+        const TextSpan(text: 'Origen: ', style: labelStyle),
+        TextSpan(text: '$origen · IMPR. $impreso', style: valueStyle),
+      ],
     );
   }
 }
@@ -5433,6 +5461,13 @@ class _SentLineItem extends StatelessWidget {
   final double total;
   final bool isTakeout;
   final VoidCallback? onTap;
+  /// Item de referencia para el tooltip de auditoría. Como un grupo
+  /// puede tener varios items con distintos meseros/timestamps, usamos
+  /// el primero del grupo y la etiqueta del tooltip aclara "Primero
+  /// agregado" si hay más de uno.
+  final OrderItem? auditItem;
+  final String? orderOrigin;
+  final int groupSize;
 
   const _SentLineItem({
     required this.name,
@@ -5440,11 +5475,14 @@ class _SentLineItem extends StatelessWidget {
     required this.total,
     required this.isTakeout,
     this.onTap,
+    this.auditItem,
+    this.orderOrigin,
+    this.groupSize = 1,
   });
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
+    final inkWell = InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
       child: Padding(
@@ -5542,6 +5580,72 @@ class _SentLineItem extends StatelessWidget {
           ],
         ),
       ),
+    );
+
+    final audit = auditItem;
+    if (audit == null) return inkWell;
+
+    return Tooltip(
+      // Mismo patrón que `_CartLineItem`: solo hover (~1s), sin long-press.
+      waitDuration: const Duration(seconds: 1),
+      triggerMode: TooltipTriggerMode.manual,
+      richMessage: _buildAuditTooltipSpan(audit, orderOrigin, groupSize),
+      preferBelow: false,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2C2C2C).withValues(alpha: 0.95),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      textStyle: const TextStyle(color: Colors.white, fontSize: 12, height: 1.45),
+      child: inkWell,
+    );
+  }
+
+  /// Tooltip de auditoría para items YA enviados a cocina.
+  /// Diferencia con `_CartLineItem`:
+  ///   - Si el grupo agrupa varios `order_items` con el mismo producto
+  ///     (`groupSize > 1`), aclara "Primero agregado" en vez de
+  ///     "Agregado" — porque los timestamps/mozos del resto del grupo
+  ///     no se muestran.
+  ///   - "IMPR." siempre es "SI" — por definición los items en este
+  ///     widget ya salieron de draft.
+  InlineSpan _buildAuditTooltipSpan(
+    OrderItem item,
+    String? orderOrigin,
+    int groupSize,
+  ) {
+    final dateFmt = DateFormat('dd-MM-yyyy HH:mm');
+    final fechaHora = dateFmt.format(item.createdAt.toLocal());
+    final mozo = item.createdByEmployeeName ?? 'Sin asignar';
+    final notes = item.notes?.trim() ?? '';
+    final origen = (orderOrigin == null || orderOrigin.isEmpty) ? '—' : orderOrigin;
+    final fechaLabel = groupSize > 1 ? 'Primero agregado: ' : 'Agregado: ';
+
+    const labelStyle = TextStyle(color: Color(0xFFCBD5E1), fontSize: 12);
+    const valueStyle = TextStyle(color: Colors.white, fontSize: 12);
+
+    return TextSpan(
+      style: const TextStyle(color: Colors.white, fontSize: 12, height: 1.5),
+      children: [
+        TextSpan(
+          text: '${item.productName}\n',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        TextSpan(text: fechaLabel, style: labelStyle),
+        TextSpan(text: '$fechaHora\n', style: valueStyle),
+        const TextSpan(text: 'Mozo: ', style: labelStyle),
+        TextSpan(text: '$mozo\n', style: valueStyle),
+        if (notes.isNotEmpty) ...[
+          const TextSpan(text: 'Notas: ', style: labelStyle),
+          TextSpan(text: '$notes\n', style: valueStyle),
+        ],
+        const TextSpan(text: 'Origen: ', style: labelStyle),
+        TextSpan(text: '$origen · IMPR. SI', style: valueStyle),
+      ],
     );
   }
 }

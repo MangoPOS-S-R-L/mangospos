@@ -112,6 +112,37 @@ class ProductsRepository {
     return List<Map<String, dynamic>>.from(response);
   }
 
+  /// Carga en una sola query todas las asignaciones N:M de áreas de
+  /// producción (`menu_item_print_areas`) para el negocio, con el nombre
+  /// del área embebido. Devuelve un mapa `menu_item_id → [áreas]` listo
+  /// para mostrar en la lista de productos (columna "Área de producción").
+  ///
+  /// El RPC `get_products_catalog` no incluye este join — agregarlo allá
+  /// requeriría una migración. Mientras tanto este round-trip extra es
+  /// barato (una tabla N:M con join interno por business_id).
+  Future<Map<String, List<Map<String, dynamic>>>> getPrintAreasByProduct(
+    String businessId,
+  ) async {
+    final rows = await _client
+        .from('menu_item_print_areas')
+        .select(
+          'menu_item_id, print_areas!inner(id, name, code, business_id)',
+        )
+        .eq('print_areas.business_id', businessId);
+
+    final result = <String, List<Map<String, dynamic>>>{};
+    for (final row in (rows as List)) {
+      final map = Map<String, dynamic>.from(row as Map);
+      final itemId = map['menu_item_id']?.toString();
+      final areaRaw = map['print_areas'];
+      if (itemId == null || itemId.isEmpty || areaRaw is! Map) continue;
+      result
+          .putIfAbsent(itemId, () => <Map<String, dynamic>>[])
+          .add(Map<String, dynamic>.from(areaRaw));
+    }
+    return result;
+  }
+
   Future<Map<String, dynamic>> createProduct({
     required String businessId,
     required String name,

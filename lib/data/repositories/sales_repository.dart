@@ -24,8 +24,13 @@ class SalesRepository {
   final SupabaseClient _client;
   SalesRepository(this._client);
 
+  // PRD multimesero: incluir `created_by_employee_id` + embed del nombre
+  // del empleado para que la UI pueda mostrar "quién agregó" cada item
+  // sin necesidad de un round-trip extra ni un provider de empleados en
+  // memoria. Postgrest resuelve el JOIN vía la FK
+  // `order_items_created_by_employee_fk`.
   static const _itemFields =
-      'id,order_id,product_id,product_name,sku,quantity,qty,unit_price,subtotal,discounts,tax,total,check_id,is_takeout,status,notes,tax_mode,tax_rate,original_tax_rate,print_area_code,created_at';
+      'id,order_id,product_id,product_name,sku,quantity,qty,unit_price,subtotal,discounts,tax,total,check_id,is_takeout,status,notes,tax_mode,tax_rate,original_tax_rate,print_area_code,created_at,created_by_employee_id,employees(first_name,last_name)';
 
   /// Carga las `order_item_tax_lines` de una lista de items en una sola query
   /// y las devuelve agrupadas por `order_item_id`. Producto del PRD 2: la
@@ -1706,18 +1711,19 @@ class SalesRepository {
             ? sumQty.roundToDouble()
             : sumQty;
 
-        await _client
-            .from('order_items')
-            .update({
-              'qty': normalizedQty,
-              'quantity': normalizedQty.round(),
-              'discounts': sumDiscounts,
-            })
-            .eq('id', keeperId);
-
-        if (removeIds.isNotEmpty) {
-          await _client.from('order_items').delete().inFilter('id', removeIds);
-        }
+        // RPC atómica: UPDATE keeper + DELETE duplicados + refresh tax_lines
+        // en una sola transacción Postgres. Reemplaza el patrón previo de
+        // dos llamadas separadas que podía perder items si el UPDATE fallaba
+        // silenciosamente y el DELETE corría igual.
+        await _client.rpc(
+          'fn_consolidate_keeper_atomic',
+          params: {
+            'p_keeper_id': keeperId,
+            'p_remove_ids': removeIds,
+            'p_sum_qty': normalizedQty,
+            'p_sum_discounts': sumDiscounts,
+          },
+        );
       }
     } catch (e) {
       throw Exception('Error al consolidar items de subcuenta: $e');
