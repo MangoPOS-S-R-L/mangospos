@@ -123,7 +123,14 @@ OrderItemPricingSummary summarizeItemPricing(Order? order, OrderItem item, {Stri
   // (la columna se recomputa por trigger pero las fórmulas históricas no
   // siempre cubren todos los casos). Preferimos siempre la suma de
   // tax_lines cuando existen.
-  final taxLinesSum = item.taxLines.isEmpty
+  //
+  // Excepcion: items con tax_rate=0 son "no paga impuesto" por diseño.
+  // Algunos items legacy quedaron con tax_rate=0 pero tax_lines poblados
+  // por `fn_populate_item_tax_lines` (que mira menu_item_taxes del producto
+  // ignorando oi.tax_rate). Sumar esos tax_lines inflaba el total cobrado
+  // al cliente vs lo que muestra el backend. Cuando tax_rate=0 confiamos
+  // en oi.tax=0 y dejamos los tax_lines como metadata informativa.
+  final taxLinesSum = (item.taxLines.isEmpty || item.taxRate == 0)
       ? null
       : _r(item.taxLines.fold<double>(0, (s, line) => s + line.amount));
 
