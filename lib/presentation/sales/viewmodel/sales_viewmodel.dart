@@ -107,23 +107,49 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   /// Devuelve el `employee_id` que se debe asignar a un item recién creado
   /// como autor (`order_items.created_by_employee_id`).
   ///
+  /// Política del negocio: todos los items de una mesa pertenecen al
+  /// mesero que ABRIÓ esa mesa, no a quien clickeó "agregar producto".
+  /// Esto mantiene una sola identidad responsable a lo largo de toda la
+  /// cadena (comanda → precuenta → factura → tooltip de auditoría), aún
+  /// cuando un cajero o un mesero secundario agrega items a una mesa
+  /// abierta por otro mesero.
+  ///
   /// Prioridad:
-  ///   1. `activeWaiterProvider` — el mesero que metió PIN al entrar a la
-  ///      mesa (modo multimesero, PRD 0001).
-  ///   2. Fallback: el usuario autenticado en Supabase mapeado a su fila
-  ///      en `employees` para el business activo. Cubre el caso del
-  ///      cajero/admin que agrega items sin pasar por el PIN.
-  ///   3. `null` — usuario invitado / sin employees row. El item queda
-  ///      sin atribución y el tooltip muestra "Sin asignar".
+  ///   1. Opener de la mesa actual vía `fn_order_opener_employee_id`.
+  ///      Esta es la fuente de verdad por la regla "siempre el que abrió".
+  ///   2. `activeWaiterProvider` — fallback si la orden todavía no existe
+  ///      (mesa nueva) o el opener no se pudo resolver. Mantiene la
+  ///      identidad del mesero con PIN activo en el device.
+  ///   3. Usuario autenticado en Supabase → su fila en `employees` para
+  ///      el business activo, vía `fn_current_employee_id`. Cubre el
+  ///      caso del cajero/admin sin PIN.
+  ///   4. `null` — el item queda sin atribución y el tooltip muestra
+  ///      "Sin asignar".
   ///
-  /// El resultado del fallback se cachea en `_cachedAuthEmployeeId` para
-  /// no hacer round-trip por cada item agregado en la sesión.
-  ///
-  /// Llamamos a la RPC `fn_current_employee_id` (SECURITY DEFINER) en vez
-  /// de un SELECT directo a `employees` porque ese SELECT es bloqueado
-  /// por RLS para usuarios non-admin — y silenciosamente retornaba sin
-  /// datos, dejando todos los items como "Sin asignar".
+  /// Las dos RPCs usan SECURITY DEFINER porque RLS sobre `employees`
+  /// bloquea SELECT directo desde Flutter para cajeros sin permisos
+  /// especiales. Los resultados se cachean cuando aplica:
+  /// - `_cachedAuthEmployeeId`: el employee del auth user (1 query por
+  ///   sesión).
+  /// - El opener se resuelve cada vez porque puede cambiar entre mesas;
+  ///   si esto se vuelve hot path, agregar cache por orderId.
   Future<String?> _resolveItemEmployeeId() async {
+    final orderId = state.order?.id;
+    if (orderId != null && orderId.isNotEmpty) {
+      try {
+        final result = await Supabase.instance.client.rpc(
+          'fn_order_opener_employee_id',
+          params: {'p_order_id': orderId},
+        );
+        final openerId = result?.toString();
+        if (openerId != null && openerId.isNotEmpty) {
+          return openerId;
+        }
+      } catch (e) {
+        debugPrint('[audit] fn_order_opener_employee_id falló: $e');
+      }
+    }
+
     final activeWaiter = ref.read(activeWaiterProvider);
     if (activeWaiter != null) return activeWaiter.employeeId;
 
