@@ -234,8 +234,15 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
           color: SalesTheme.secondary,
           borderRadius: BorderRadius.circular(12),
         ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
+        // Wrap (no Row) para que cuando las zonas no quepan en una línea
+        // pasen automáticamente a una segunda fila en vez de hacer
+        // scroll horizontal. `runSpacing` deja un respiro entre filas
+        // cuando hay wrap; `spacing: 0` mantiene el look pegado de los
+        // tabs cuando caben en una sola línea (el padding interno de
+        // cada chip ya genera el separador visual).
+        child: Wrap(
+          spacing: 0,
+          runSpacing: 4,
           children: zones.asMap().entries.map((entry) {
             final index = entry.key;
             final zone = entry.value;
@@ -352,12 +359,12 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
     if (hasZones && _tabController != null) {
       if (isCompact) {
         appBarWidget = PreferredSize(
-          preferredSize: const Size.fromHeight(104),
+          preferredSize: const Size.fromHeight(152),
           child: AppBar(
             backgroundColor: SalesTheme.background,
             elevation: 0,
             automaticallyImplyLeading: false,
-            toolbarHeight: 104,
+            toolbarHeight: 152,
             titleSpacing: 0,
             title: Padding(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
@@ -365,10 +372,11 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: buildZoneTabs(),
-                  ),
+                  // Tabs de zonas: ya no scrollean horizontal, hacen wrap
+                  // a una segunda fila cuando no caben. La altura del
+                  // AppBar (152) cubre hasta 2 filas de tabs + 1 fila de
+                  // indicadores en mobile.
+                  buildZoneTabs(),
                   const SizedBox(height: 8),
                   SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
@@ -380,17 +388,19 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
           ),
         );
       } else {
-        // Anti-overflow: las tabs van en un Expanded + scroll horizontal
-        // para que en pantallas chicas (1024×768) no se desborden cuando
-        // hay muchas zonas. Indicadores se quedan fijos a la derecha y
-        // tabs scrollean dentro del espacio restante.
+        // Anti-overflow: las tabs hacen Wrap automático a una 2da fila
+        // cuando no caben (pantallas chicas tipo 1024×768 con muchas
+        // zonas). Indicadores se quedan fijos a la derecha. Subimos
+        // `toolbarHeight` para que cuando se dispare el wrap haya
+        // espacio para la 2da fila — si solo hay una fila, queda un
+        // poco de aire arriba/abajo, prefiero eso a recortar texto.
         final isCompactDesk = ResponsiveHelper.isCompactDesktop(context);
         final hPadding = isCompactDesk ? 16.0 : 24.0;
         appBarWidget = AppBar(
           backgroundColor: SalesTheme.background,
           elevation: 0,
           automaticallyImplyLeading: false,
-          toolbarHeight: 56,
+          toolbarHeight: 96,
           titleSpacing: 0,
           title: Padding(
             padding: EdgeInsets.symmetric(
@@ -398,13 +408,9 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
               vertical: 12,
             ),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Expanded(
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: buildZoneTabs(),
-                  ),
-                ),
+                Expanded(child: buildZoneTabs()),
                 const SizedBox(width: 12),
                 buildIndicators(),
               ],
