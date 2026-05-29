@@ -684,6 +684,16 @@ class SessionController extends Notifier<SessionState> {
   }) async {
     final businessId = state.activeBusinessId;
 
+    // Normaliza el PIN tipeado: trim previene falsos negativos cuando el
+    // cajero pega un PIN con espacios o cuando el `pin` quedó guardado en
+    // employees con padding accidental (caso típico con teclados numéricos
+    // de tablet). El server (fn_verify_employee_pin / trigger
+    // fn_employees_hash_pin) también trimea, pero hacerlo aquí garantiza
+    // que los 3 caminos (offline bcrypt, RPC, SELECT directo) reciben el
+    // mismo input limpio.
+    final normalizedPin = pin.trim();
+    if (normalizedPin.isEmpty) return false;
+
     // 1) Offline-first: roster cacheado con pin_hash.
     //
     //    Validar contra el cache local antes de pegarle al server tiene dos
@@ -695,7 +705,7 @@ class SessionController extends Notifier<SessionState> {
       try {
         final matched = await OfflineAuthService().verifyPin(
           businessId: businessId,
-          pin: pin,
+          pin: normalizedPin,
         );
         if (matched != null) {
           if (level == PinAccessLevel.any) return true;
@@ -709,47 +719,88 @@ class SessionController extends Notifier<SessionState> {
       }
     }
 
-    // 2) Online fallback (path histórico). Mientras `pin` plaintext exista
-    //    en employees, esto sigue funcionando para apps que aún no hicieron
-    //    bindDevice/syncRoster.
+    // 2) Online: RPC fn_verify_employee_pin (trimea internamente, corre
+    //    SECURITY DEFINER → bypassea RLS, valida que el caller pertenezca
+    //    al business, y devuelve también el `role` del empleado en
+    //    user_businesses).
+    //
+    //    El `role` viene del server porque el RLS user_businesses_select_own
+    //    impide que el cliente lo lea directamente para users distintos
+    //    al logueado (un cajero no puede ver la fila de Ricardo en
+    //    user_businesses). Sin esto, el role lookup separado devolvía
+    //    null silenciosamente → "PIN inválido" aunque el PIN fuera
+    //    correcto. Ver migración 20260528_0006.
     if (businessId != null && businessId.isNotEmpty) {
       final client = Supabase.instance.client;
       try {
-        final rows = await client
-            .from('employees')
-            .select('user_id')
-            .eq('business_id', businessId)
-            .eq('status', 'active')
-            .eq('pin', pin)
-            .limit(10);
+        final result = await client.rpc(
+          'fn_verify_employee_pin',
+          params: <String, dynamic>{
+            'p_business_id': businessId,
+            'p_pin': normalizedPin,
+          },
+        );
 
-        final candidates = List<Map<String, dynamic>>.from(rows as List);
-        if (candidates.isNotEmpty) {
-          if (level == PinAccessLevel.any) {
+        if (result != null) {
+          if (level == PinAccessLevel.any) return true;
+
+          final resultMap = result is Map
+              ? Map<String, dynamic>.from(result)
+              : null;
+          final candidateRole = _mapRole(resultMap?['role']?.toString());
+          if (candidateRole != null && _meetsPinAccess(candidateRole, level)) {
             return true;
           }
+        }
+      } catch (e) {
+        // Antes: catch silencioso → cajero veía "PIN inválido" sin pista de
+        // por qué. Ahora logueamos y caemos al SELECT directo como
+        // compatibilidad para self-hosted que aún no tengan la RPC
+        // (migración 20260516_0001_multimesero_setup.sql).
+        debugPrint('verifyPin: RPC fn_verify_employee_pin falló: $e');
 
-          for (final candidate in candidates) {
-            final candidateUserId = candidate['user_id']?.toString();
-            if (candidateUserId == null || candidateUserId.isEmpty) {
-              continue;
-            }
+        try {
+          final rows = await client
+              .from('employees')
+              .select('user_id')
+              .eq('business_id', businessId)
+              .eq('status', 'active')
+              .eq('pin', normalizedPin)
+              .limit(10);
 
-            final membership = await client
-                .from('user_businesses')
-                .select('role')
-                .eq('user_id', candidateUserId)
-                .eq('business_id', businessId)
-                .maybeSingle();
-
-            final candidateRole = _mapRole(membership?['role']?.toString());
-            if (candidateRole != null &&
-                _meetsPinAccess(candidateRole, level)) {
+          final candidates = List<Map<String, dynamic>>.from(rows as List);
+          if (candidates.isNotEmpty) {
+            if (level == PinAccessLevel.any) {
               return true;
             }
+
+            for (final candidate in candidates) {
+              final candidateUserId = candidate['user_id']?.toString();
+              if (candidateUserId == null || candidateUserId.isEmpty) {
+                continue;
+              }
+
+              // NOTA: este lookup falla por RLS si el caller no es el
+              // mismo user_id; queda como mejor esfuerzo para servers
+              // viejos sin la migración 20260528_0006.
+              final membership = await client
+                  .from('user_businesses')
+                  .select('role')
+                  .eq('user_id', candidateUserId)
+                  .eq('business_id', businessId)
+                  .maybeSingle();
+
+              final candidateRole = _mapRole(membership?['role']?.toString());
+              if (candidateRole != null &&
+                  _meetsPinAccess(candidateRole, level)) {
+                return true;
+              }
+            }
           }
+        } catch (e2) {
+          debugPrint('verifyPin: SELECT directo fallback también falló: $e2');
         }
-      } catch (_) {}
+      }
     }
 
     // 3) DEBUG ONLY: PINs hardcodeados de demo (1111/2222/...). Antes
@@ -758,7 +809,7 @@ class SessionController extends Notifier<SessionState> {
     //    de debug para preservar el flujo de desarrollo local.
     if (kDebugMode) {
       for (final user in pinLoginUsers) {
-        if (user.pin != pin) continue;
+        if (user.pin != normalizedPin) continue;
         for (final role in user.roles) {
           if (_meetsPinAccess(role, level)) return true;
         }
@@ -771,6 +822,13 @@ class SessionController extends Notifier<SessionState> {
     final businessId = state.activeBusinessId;
     final userId = state.userId;
 
+    // Mismo trim defensivo que verifyPin: el trigger fn_employees_hash_pin
+    // trimea el PIN antes de hashear, así que el bcrypt offline contra
+    // pin_hash espera input trimeado. Y el SELECT directo `.eq('pin', ...)`
+    // es exacto, falla con padding.
+    final normalizedPin = pin.trim();
+    if (normalizedPin.isEmpty) return false;
+
     // 1) Offline-first: validar contra el roster cacheado, restringido al
     //    usuario actualmente logueado. Si el PIN matchea pero pertenece a
     //    OTRO usuario, NO devolvemos true — esa es la diferencia clave con
@@ -782,7 +840,7 @@ class SessionController extends Notifier<SessionState> {
       try {
         final matched = await OfflineAuthService().verifyPin(
           businessId: businessId,
-          pin: pin,
+          pin: normalizedPin,
         );
         if (matched != null && matched.userId == userId) {
           return true;
@@ -794,7 +852,10 @@ class SessionController extends Notifier<SessionState> {
       }
     }
 
-    // 2) Online fallback (path histórico).
+    // 2) Online fallback (path histórico). Acá no hay problema de RLS
+    //    porque la query es sobre el employee del propio user logueado
+    //    (employees by business → el caller siempre puede ver su propia
+    //    fila como mínimo).
     if (businessId != null &&
         businessId.isNotEmpty &&
         userId != null &&
@@ -806,13 +867,15 @@ class SessionController extends Notifier<SessionState> {
             .eq('business_id', businessId)
             .eq('user_id', userId)
             .eq('status', 'active')
-            .eq('pin', pin)
+            .eq('pin', normalizedPin)
             .maybeSingle();
 
         if (row != null) {
           return true;
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('verifyCurrentUserPin: online check falló: $e');
+      }
     }
 
     // 3) DEBUG ONLY: PINs demo hardcodeados. Antes era el fallback en
@@ -822,7 +885,7 @@ class SessionController extends Notifier<SessionState> {
       final currentUserId = state.userId;
       if (currentUserId != null && currentUserId.isNotEmpty) {
         for (final user in pinLoginUsers) {
-          if (user.id == currentUserId && user.pin == pin) {
+          if (user.id == currentUserId && user.pin == normalizedPin) {
             return true;
           }
         }

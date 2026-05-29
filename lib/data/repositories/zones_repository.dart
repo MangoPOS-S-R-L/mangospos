@@ -342,16 +342,29 @@ class ZonesRepository {
     }
 
     if (sessionIds.isNotEmpty) {
-      var orderTotalsQuery = sb
-          .from('orders')
-          .select(
-            'id,session_id,status_ext,subtotal,tax,service_fee,discounts,total,created_at,closed_at',
-          )
-          .inFilter('session_id', sessionIds)
-          .isFilter('closed_at', null)
-          .not('status_ext', 'in', '(paid,void)');
+      // Chunking de inFilter para evitar HTTP 414 URI Too Long. Zonas tipo
+      // CREDITOS acumulan items por dias en sesiones abiertas; con cientos
+      // de UUIDs (36 chars + coma c/u), la URL pasa los ~8KB que PostgREST
+      // acepta por default. Cada chunk genera una request independiente y
+      // mergeamos en memoria. 100 ids por lote deja margen comodo.
+      const inChunkSize = 100;
 
-      final orderRows = List<Map<String, dynamic>>.from(await orderTotalsQuery);
+      final orderRows = <Map<String, dynamic>>[];
+      for (var i = 0; i < sessionIds.length; i += inChunkSize) {
+        final end = (i + inChunkSize > sessionIds.length)
+            ? sessionIds.length
+            : i + inChunkSize;
+        final chunk = sessionIds.sublist(i, end);
+        final rows = await sb
+            .from('orders')
+            .select(
+              'id,session_id,status_ext,subtotal,tax,service_fee,discounts,total,created_at,closed_at',
+            )
+            .inFilter('session_id', chunk)
+            .isFilter('closed_at', null)
+            .not('status_ext', 'in', '(paid,void)');
+        orderRows.addAll(List<Map<String, dynamic>>.from(rows));
+      }
       final orderIds = orderRows
           .map((order) => order['id']?.toString().trim())
           .whereType<String>()
@@ -391,11 +404,19 @@ class ZonesRepository {
       // mesa, creando la ilusión de un "lag" (en realidad era data stale).
       final itemsMap = <String, List<OrderItem>>{};
 
-      final itemsRows = await sb
-          .from('order_items')
-          .select()
-          .inFilter('order_id', orderIds)
-          .not('status', 'in', '(paid,void)') as List;
+      final itemsRows = <Map<String, dynamic>>[];
+      for (var i = 0; i < orderIds.length; i += inChunkSize) {
+        final end = (i + inChunkSize > orderIds.length)
+            ? orderIds.length
+            : i + inChunkSize;
+        final chunk = orderIds.sublist(i, end);
+        final rows = await sb
+            .from('order_items')
+            .select()
+            .inFilter('order_id', chunk)
+            .not('status', 'in', '(paid,void)');
+        itemsRows.addAll(List<Map<String, dynamic>>.from(rows));
+      }
 
       final itemIds = itemsRows.map((r) => r['id'] as String).toList();
       final modifiersMap = <String, List<OrderItemModifier>>{};
@@ -407,30 +428,34 @@ class ZonesRepository {
       final taxLinesMap = <String, List<OrderItemTaxLine>>{};
 
       if (itemIds.isNotEmpty) {
-        final modsRows = await sb
-            .from('order_item_modifiers')
-            .select()
-            .inFilter('item_id', itemIds) as List;
+        for (var i = 0; i < itemIds.length; i += inChunkSize) {
+          final end = (i + inChunkSize > itemIds.length)
+              ? itemIds.length
+              : i + inChunkSize;
+          final chunk = itemIds.sublist(i, end);
+          final modsRows = await sb
+              .from('order_item_modifiers')
+              .select()
+              .inFilter('item_id', chunk);
 
-        for (final row in modsRows) {
-          final itemId = row['item_id'] as String;
-          final mod = OrderItemModifier.fromMap(row);
-          modifiersMap[itemId] = [...(modifiersMap[itemId] ?? []), mod];
-        }
+          for (final row in List<Map<String, dynamic>>.from(modsRows)) {
+            final itemId = row['item_id'] as String;
+            final mod = OrderItemModifier.fromMap(row);
+            modifiersMap[itemId] = [...(modifiersMap[itemId] ?? []), mod];
+          }
 
-        final taxLinesRows = await sb
-            .from('order_item_tax_lines')
-            .select(
-              'id, order_item_id, tax_id, tax_name, tax_rate, amount, created_at',
-            )
-            .inFilter('order_item_id', itemIds) as List;
-        for (final row in taxLinesRows) {
-          final line = OrderItemTaxLine.fromMap(
-            Map<String, dynamic>.from(row as Map),
-          );
-          taxLinesMap
-              .putIfAbsent(line.orderItemId, () => <OrderItemTaxLine>[])
-              .add(line);
+          final taxLinesRows = await sb
+              .from('order_item_tax_lines')
+              .select(
+                'id, order_item_id, tax_id, tax_name, tax_rate, amount, created_at',
+              )
+              .inFilter('order_item_id', chunk);
+          for (final row in List<Map<String, dynamic>>.from(taxLinesRows)) {
+            final line = OrderItemTaxLine.fromMap(row);
+            taxLinesMap
+                .putIfAbsent(line.orderItemId, () => <OrderItemTaxLine>[])
+                .add(line);
+          }
         }
       }
 

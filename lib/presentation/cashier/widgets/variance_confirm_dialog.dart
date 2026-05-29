@@ -10,12 +10,40 @@
 // marcado con bandera `variance_flagged=true` (vía la migración 0016).
 
 import 'dart:async';
+import 'dart:io' show SocketException;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' show ClientException;
 
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
+
+/// Marker que `closeSessionWithVarianceCheck` retorna cuando el cierre
+/// no pudo completarse online (timeout/socket caído) y se encoló en
+/// `OfflinePosService` para sincronizarse después. El caller debe
+/// reconocer este flag y mostrar UX de "pendiente de sincronizar"
+/// en vez de navegar al resumen de cierre (que necesita el response
+/// real del RPC).
+const String kCloseCashSessionEnqueuedKey = 'enqueued_offline';
+
+bool _isConnectivityError(Object error) {
+  if (error is SocketException ||
+      error is TimeoutException ||
+      error is ClientException) {
+    return true;
+  }
+  final msg = error.toString().toLowerCase();
+  return msg.contains('socketexception') ||
+      msg.contains('clientexception') ||
+      msg.contains('timeoutexception') ||
+      msg.contains('failed host lookup') ||
+      msg.contains('connection refused') ||
+      msg.contains('connection closed') ||
+      msg.contains('connection reset') ||
+      msg.contains('network is unreachable');
+}
 
 class VarianceConfirmResult {
   final bool confirmed;
@@ -196,12 +224,47 @@ Future<Map<String, dynamic>?> closeSessionWithVarianceCheck({
         : '$finalNotes | $varianceTag';
   }
 
-  final response = await repo.closeSession(
-    sessionId: sessionId,
-    endAmount: endAmount,
-    notes: finalNotes,
-    forceWithOpenTables: forceWithOpenTables,
-  );
+  Map<String, dynamic> response;
+  try {
+    response = await repo.closeSession(
+      sessionId: sessionId,
+      endAmount: endAmount,
+      notes: finalNotes,
+      forceWithOpenTables: forceWithOpenTables,
+    );
+  } catch (e) {
+    // Errores de red/timeout durante el cierre: en vez de explotar al
+    // cajero y dejar la caja en limbo (la UI cree cerrada, server cree
+    // abierta), encolamos la acción para que se replaye al reconectar
+    // y retornamos un sentinel que el caller convierte en UX de
+    // "pendiente de sincronizar". Las excepciones de negocio
+    // (CashRegisterException con OPEN_TABLES_EXIST, SESSION_NOT_FOUND,
+    // etc) propagan como antes — esas requieren intervención del
+    // cajero, no se resuelven con un retry.
+    if (!_isConnectivityError(e)) rethrow;
+
+    debugPrint(
+      'closeSessionWithVarianceCheck: cierre online falló por red, '
+      'encolando para sync posterior. Error: $e',
+    );
+
+    await OfflinePosService().enqueueAction(
+      businessId: businessId,
+      action: <String, dynamic>{
+        'type': 'close_cash_session',
+        'session_id': sessionId,
+        'end_amount': endAmount,
+        'notes': finalNotes,
+        'force_with_open_tables': forceWithOpenTables,
+      },
+    );
+
+    return <String, dynamic>{
+      kCloseCashSessionEnqueuedKey: true,
+      'session_id': sessionId,
+      'end_amount': endAmount,
+    };
+  }
 
   // Flag de varianza en la sesión (post-close, fire-and-forget).
   if (threshold > 0 && difference.abs() > threshold) {

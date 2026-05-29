@@ -36,22 +36,35 @@ class SalesRepository {
   ) async {
     if (itemIds.isEmpty) return const {};
 
-    final raw = await _client
-        .from('order_item_tax_lines')
-        .select(
-          'id, order_item_id, tax_id, tax_name, tax_rate, amount, created_at',
-        )
-        .inFilter('order_item_id', itemIds)
-        .order('created_at', ascending: true);
-
+    // Chunking de inFilter para evitar HTTP 414 URI Too Long cuando una
+    // mesa acumula cientos de items (ej. cuentas a credito que arrastran
+    // dias). 100 UUIDs por lote deja la URL bajo los ~8KB que PostgREST
+    // acepta por default.
+    const inChunkSize = 100;
     final grouped = <String, List<OrderItemTaxLine>>{};
-    for (final row in (raw as List)) {
-      final line = OrderItemTaxLine.fromMap(
-        Map<String, dynamic>.from(row as Map),
-      );
-      grouped
-          .putIfAbsent(line.orderItemId, () => <OrderItemTaxLine>[])
-          .add(line);
+
+    for (var i = 0; i < itemIds.length; i += inChunkSize) {
+      final end = (i + inChunkSize > itemIds.length)
+          ? itemIds.length
+          : i + inChunkSize;
+      final chunk = itemIds.sublist(i, end);
+
+      final raw = await _client
+          .from('order_item_tax_lines')
+          .select(
+            'id, order_item_id, tax_id, tax_name, tax_rate, amount, created_at',
+          )
+          .inFilter('order_item_id', chunk)
+          .order('created_at', ascending: true);
+
+      for (final row in (raw as List)) {
+        final line = OrderItemTaxLine.fromMap(
+          Map<String, dynamic>.from(row as Map),
+        );
+        grouped
+            .putIfAbsent(line.orderItemId, () => <OrderItemTaxLine>[])
+            .add(line);
+      }
     }
     return grouped;
   }
@@ -1139,20 +1152,30 @@ class SalesRepository {
       Map<String, List<OrderItemModifier>> modifiersByItem = const {};
       Map<String, List<OrderItemTaxLine>> taxLinesByItem = const {};
       if (itemIds.isNotEmpty) {
-        final rawModifiers = await _client
-            .from('order_item_modifiers')
-            .select('id, item_id, name, qty, price')
-            .inFilter('item_id', itemIds)
-            .order('id', ascending: true);
-
+        // Chunking inFilter (ver _loadTaxLinesByItem) — protege contra 414.
+        const inChunkSize = 100;
         final grouped = <String, List<OrderItemModifier>>{};
-        for (final row in (rawModifiers as List)) {
-          final modifier = OrderItemModifier.fromMap(
-            Map<String, dynamic>.from(row as Map),
-          );
-          grouped
-              .putIfAbsent(modifier.itemId, () => <OrderItemModifier>[])
-              .add(modifier);
+
+        for (var i = 0; i < itemIds.length; i += inChunkSize) {
+          final end = (i + inChunkSize > itemIds.length)
+              ? itemIds.length
+              : i + inChunkSize;
+          final chunk = itemIds.sublist(i, end);
+
+          final rawModifiers = await _client
+              .from('order_item_modifiers')
+              .select('id, item_id, name, qty, price')
+              .inFilter('item_id', chunk)
+              .order('id', ascending: true);
+
+          for (final row in (rawModifiers as List)) {
+            final modifier = OrderItemModifier.fromMap(
+              Map<String, dynamic>.from(row as Map),
+            );
+            grouped
+                .putIfAbsent(modifier.itemId, () => <OrderItemModifier>[])
+                .add(modifier);
+          }
         }
         modifiersByItem = grouped;
         taxLinesByItem = await _loadTaxLinesByItem(itemIds);
@@ -1257,20 +1280,30 @@ class SalesRepository {
         return items;
       }
 
-      final rawModifiers = await _client
-          .from('order_item_modifiers')
-          .select('id, item_id, name, qty, price')
-          .inFilter('item_id', itemIds)
-          .order('id', ascending: true);
-
+      // Chunking inFilter (ver _loadTaxLinesByItem) — protege contra 414.
+      const inChunkSize = 100;
       final modifiersByItem = <String, List<OrderItemModifier>>{};
-      for (final row in (rawModifiers as List)) {
-        final modifier = OrderItemModifier.fromMap(
-          Map<String, dynamic>.from(row as Map),
-        );
-        modifiersByItem
-            .putIfAbsent(modifier.itemId, () => <OrderItemModifier>[])
-            .add(modifier);
+
+      for (var i = 0; i < itemIds.length; i += inChunkSize) {
+        final end = (i + inChunkSize > itemIds.length)
+            ? itemIds.length
+            : i + inChunkSize;
+        final chunk = itemIds.sublist(i, end);
+
+        final rawModifiers = await _client
+            .from('order_item_modifiers')
+            .select('id, item_id, name, qty, price')
+            .inFilter('item_id', chunk)
+            .order('id', ascending: true);
+
+        for (final row in (rawModifiers as List)) {
+          final modifier = OrderItemModifier.fromMap(
+            Map<String, dynamic>.from(row as Map),
+          );
+          modifiersByItem
+              .putIfAbsent(modifier.itemId, () => <OrderItemModifier>[])
+              .add(modifier);
+        }
       }
 
       final taxLinesByItem = await _loadTaxLinesByItem(itemIds);
@@ -1596,14 +1629,24 @@ class SalesRepository {
           .toList(growable: false);
       if (itemIds.length < 2) return;
 
-      final rawMods = await _client
-          .from('order_item_modifiers')
-          .select('item_id')
-          .inFilter('item_id', itemIds);
-      final itemIdsWithMods = (rawMods as List)
-          .map((m) => (m as Map)['item_id']?.toString())
-          .whereType<String>()
-          .toSet();
+      // Chunking inFilter (ver _loadTaxLinesByItem) — protege contra 414.
+      const inChunkSize = 100;
+      final itemIdsWithMods = <String>{};
+      for (var i = 0; i < itemIds.length; i += inChunkSize) {
+        final end = (i + inChunkSize > itemIds.length)
+            ? itemIds.length
+            : i + inChunkSize;
+        final chunk = itemIds.sublist(i, end);
+
+        final rawMods = await _client
+            .from('order_item_modifiers')
+            .select('item_id')
+            .inFilter('item_id', chunk);
+        for (final m in (rawMods as List)) {
+          final id = (m as Map)['item_id']?.toString();
+          if (id != null) itemIdsWithMods.add(id);
+        }
+      }
 
       final groups = <String, List<Map<String, dynamic>>>{};
       for (final item in items) {

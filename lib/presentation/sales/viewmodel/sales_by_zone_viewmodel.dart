@@ -120,6 +120,7 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
         statusByZone: {...state.statusByZone, zoneId: rows},
         isOffline: result.fromCache,
         lastSyncAt: result.cachedAt ?? DateTime.now(),
+        errorByZone: {...state.errorByZone, zoneId: null},
       );
       _indexZone(zoneId, rows);
     } catch (e) {
@@ -132,10 +133,12 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
         state = state.copyWith(
           statusByZone: {...state.statusByZone, zoneId: const <TableStatus>[]},
           error: '$e',
+          errorByZone: {...state.errorByZone, zoneId: '$e'},
         );
       } else {
         state = state.copyWith(
           statusByZone: {...state.statusByZone, zoneId: const <TableStatus>[]},
+          errorByZone: {...state.errorByZone, zoneId: '$e'},
         );
       }
     }

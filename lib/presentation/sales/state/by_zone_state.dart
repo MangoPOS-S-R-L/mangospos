@@ -20,6 +20,13 @@ class ByZoneState {
   /// es true). Sirve para mostrar "ultima sincronizacion hace X".
   final DateTime? lastSyncAt;
 
+  /// Error de carga por zona. Necesario porque cargas concurrentes de
+  /// otras zonas exitosas borraban el `error` global (el copyWith lo
+  /// reasigna en cada llamada). Con este mapa cada zona tiene su propio
+  /// estado y la vista decide mostrar "Reintentar" solo en la zona que
+  /// realmente fallo.
+  final Map<String, String?> errorByZone;
+
   const ByZoneState({
     this.zones = const [],
     this.statusByZone = const {},
@@ -29,6 +36,7 @@ class ByZoneState {
     this.openingTables = const {},
     this.isOffline = false,
     this.lastSyncAt,
+    this.errorByZone = const {},
   });
 
   ByZoneState copyWith({
@@ -40,6 +48,7 @@ class ByZoneState {
     Set<String>? openingTables,
     bool? isOffline,
     DateTime? lastSyncAt,
+    Map<String, String?>? errorByZone,
   }) {
     return ByZoneState(
       zones: zones ?? this.zones,
@@ -50,6 +59,7 @@ class ByZoneState {
       openingTables: openingTables ?? this.openingTables,
       isOffline: isOffline ?? this.isOffline,
       lastSyncAt: lastSyncAt ?? this.lastSyncAt,
+      errorByZone: errorByZone ?? this.errorByZone,
     );
   }
 }

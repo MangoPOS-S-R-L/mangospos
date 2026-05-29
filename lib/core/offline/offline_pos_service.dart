@@ -864,6 +864,49 @@ class OfflinePosService {
           );
         }
         return null;
+      case 'close_cash_session':
+        // Cierre encolado cuando el cajero confirmó el cierre (con o sin
+        // varianza) pero la red se cayó mid-call. El cashier UI ya vio el
+        // resumen y considera la caja cerrada localmente; este replay
+        // garantiza que el server quede en el mismo estado.
+        //
+        // Resolución del session_id: si el cajero abrió caja offline, el
+        // id que tenemos es `local-cash-session-X` y hay que traducirlo
+        // al uuid remoto via el mapping guardado en open_cash_session.
+        // FIFO de la cola garantiza que open_cash_session ya pasó.
+        var closeSessionId = action['session_id']?.toString() ?? '';
+        if (closeSessionId.startsWith('local-cash-session-')) {
+          final sessionMap = await _readCashSessionMap(businessId);
+          final remote = sessionMap[closeSessionId]?.toString();
+          if (remote == null || remote.isEmpty) {
+            throw Exception(
+              'No se pudo resolver la sesión de caja local '
+              '$closeSessionId al cerrarla. ¿open_cash_session se replayó?',
+            );
+          }
+          closeSessionId = remote;
+        }
+        try {
+          await cashierRepository.closeSession(
+            sessionId: closeSessionId,
+            endAmount: ((action['end_amount'] ?? 0) as num).toDouble(),
+            notes: action['notes']?.toString(),
+            forceWithOpenTables: action['force_with_open_tables'] == true,
+          );
+        } on CashRegisterException catch (e) {
+          // Si la sesión ya está cerrada (otro terminal / replay duplicado)
+          // tratamos el action como completado: el estado deseado ya se
+          // cumple (sesión cerrada). El resto de excepciones de negocio
+          // (OPEN_TABLES_EXIST, SESSION_NOT_FOUND) sí las propagamos para
+          // que el cajero las vea en el sync result.
+          if (e.errorCode == 'SESSION_ALREADY_CLOSED') {
+            throw _OfflineSyncSkip(
+              'Sesión $closeSessionId ya estaba cerrada en server.',
+            );
+          }
+          rethrow;
+        }
+        return null;
       case 'inventory_adjust':
         // El RPC fn_inventory_adjust calcula delta server-side con FOR
         // UPDATE: si otro terminal tocó el stock mientras estábamos
@@ -1112,6 +1155,49 @@ class OfflinePosService {
           takeout: action['takeout'] == true,
         );
         return resolvedOrderId;
+      case 'void_order':
+        // Anulación encolada cuando el cajero tocó "Anular orden" pero la
+        // red se cayó antes/durante el closeOrder. La UI ya consideró la
+        // orden anulada localmente (reset del state); este replay
+        // garantiza que el server quede en el mismo estado.
+        //
+        // Limitación v1: la nota de auditoría (reason → table_sessions.notes
+        // vía appendVoidAuditNote) NO se replaya. El RPC fn_close_order_and_table
+        // anula la orden pero no escribe la razón. Si reason vino en el
+        // payload, lo logueamos para que quede en flutter logs como
+        // mínimo registro. Una mejora futura sería un RPC tipo
+        // fn_void_order_with_reason que escriba ambos atómicamente.
+        final voidOrderId = await _resolveOrderIdForAction(
+          businessId: businessId,
+          action: action,
+          salesRepository: salesRepository,
+        );
+        final voidReason = action['reason']?.toString();
+        if (voidReason != null && voidReason.isNotEmpty) {
+          debugPrint(
+            'void_order replay: anulando orden $voidOrderId con razón '
+            '"$voidReason" (la razón no se persiste en server en v1, '
+            'solo queda en este log).',
+          );
+        }
+        try {
+          await salesRepository.closeOrder(
+            orderId: voidOrderId,
+            status: 'void',
+          );
+        } catch (e) {
+          // Si la orden ya está cerrada (otro terminal anuló o cobró,
+          // o este replay corrió duplicado) tratamos el action como
+          // completado — el estado deseado ya se cumple.
+          if (_isItemMissingError(e) ||
+              e.toString().toLowerCase().contains('already')) {
+            throw _OfflineSyncSkip(
+              'Orden $voidOrderId ya estaba cerrada en server.',
+            );
+          }
+          rethrow;
+        }
+        return voidOrderId;
       case 'send_to_kitchen':
       case 'confirm_local_order':
         final resolvedOrderId = await _resolveOrderIdForAction(

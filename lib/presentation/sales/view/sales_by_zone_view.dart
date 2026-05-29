@@ -563,7 +563,9 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
       byZoneVmProvider.select((s) => s.statusByZone[widget.zoneId]),
     );
     final zoneLoading = ref.watch(byZoneVmProvider.select((s) => s.loading));
-    final zoneError = ref.watch(byZoneVmProvider.select((s) => s.error));
+    final zoneError = ref.watch(
+      byZoneVmProvider.select((s) => s.errorByZone[widget.zoneId]),
+    );
 
     if (tables == null) {
       return const ZoneTablesSkeleton();

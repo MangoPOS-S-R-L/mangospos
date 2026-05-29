@@ -350,6 +350,25 @@ class _CashierViewState extends ConsumerState<CashierView>
               // Cancelado por el usuario en el dialog de varianza.
               return;
             }
+            // Cierre encolado: el RPC online falló por red, se replayará
+            // cuando vuelva la conexión. Avisamos al cajero y seguimos
+            // navegando para que no se quede atascado en el wizard.
+            final enqueuedOffline =
+                closeResponse[kCloseCashSessionEnqueuedKey] == true;
+            if (enqueuedOffline) {
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'Sin conexión: cierre de caja encolado. Se aplicará al reconectar.',
+                  ),
+                  backgroundColor: Colors.orange,
+                  duration: Duration(seconds: 5),
+                ),
+              );
+              GoRouter.of(context).replace(AppRoutes.cashier);
+              return;
+            }
             // Audit del modo usado (no bloquea si falla — se reintenta luego).
             unawaited(
               ref
@@ -483,14 +502,19 @@ class _CashierViewState extends ConsumerState<CashierView>
                       'Cierre cancelado por el usuario en alerta de varianza.',
                 );
               }
-              unawaited(
-                repo
-                    .markSessionCloseMode(
-                      sessionId: sessionId,
-                      mode: PosSettingsRepository.cashCloseDetailed,
-                    )
-                    .catchError((_) {}),
-              );
+              // Cierre encolado por red caída: el sync replayará el
+              // close_cash_session al reconectar. Saltamos el audit de
+              // modo (el server aún no sabe del cierre).
+              if (closeResponse[kCloseCashSessionEnqueuedKey] != true) {
+                unawaited(
+                  repo
+                      .markSessionCloseMode(
+                        sessionId: sessionId,
+                        mode: PosSettingsRepository.cashCloseDetailed,
+                      )
+                      .catchError((_) {}),
+                );
+              }
             },
           ),
         ),

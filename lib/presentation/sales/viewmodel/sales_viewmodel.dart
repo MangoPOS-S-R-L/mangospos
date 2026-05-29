@@ -2065,12 +2065,83 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       return;
     }
     final trimmedReason = reason?.trim();
-    if (trimmedReason != null && trimmedReason.isNotEmpty) {
-      await appendVoidAuditNote(reason: trimmedReason);
+    final businessId = _activeBusinessId;
+
+    // Helper local: detecta errores de red transitorios para diferenciarlos
+    // de errores de negocio (orden ya cerrada, RLS, validación RPC, etc.).
+    // Si es de red → encolamos void_order y resetamos UI; si no → propaga
+    // para que el caller muestre el error real al cajero.
+    bool isNetworkError(Object e) {
+      final msg = e.toString().toLowerCase();
+      return msg.contains('socketexception') ||
+          msg.contains('clientexception') ||
+          msg.contains('timeoutexception') ||
+          msg.contains('handshakeexception') ||
+          msg.contains('failed host lookup') ||
+          msg.contains('connection refused') ||
+          msg.contains('connection closed') ||
+          msg.contains('connection reset') ||
+          msg.contains('network is unreachable');
     }
-    await ref
-        .read(salesRepositoryProvider)
-        .closeOrder(orderId: orderId, status: 'void');
+
+    Future<void> enqueueVoidOffline() async {
+      if (businessId == null || businessId.isEmpty) return;
+      // Si la orden aún es local (nunca llegó al server) no tiene sentido
+      // encolar — al cajero ya no le importa esa orden, simplemente
+      // descartamos. El espejo local del void se aplica abajo con el
+      // reset del state.
+      if (orderId.startsWith('local-order-')) return;
+      await _offlinePos.enqueueAction(
+        businessId: businessId,
+        action: <String, dynamic>{
+          'type': 'void_order',
+          'order_id': orderId,
+          if (trimmedReason != null && trimmedReason.isNotEmpty)
+            'reason': trimmedReason,
+        },
+      );
+    }
+
+    // Caso 1: ya estamos offline declarado. No intentamos online, encolamos
+    // directamente. (La audit note igual NO se persiste en server — ver
+    // limitación en el case 'void_order' del _replayAction.)
+    if (!_connectivity.isConnected) {
+      await enqueueVoidOffline();
+      _hasManualFiscalTypeSelection = false;
+      state = const CurrentOrderState();
+      return;
+    }
+
+    // Caso 2: online declarado. Intentamos persistir audit note + close. Si
+    // cualquiera falla por red mid-call, encolamos void_order como fallback
+    // y resetamos UI igual.
+    try {
+      if (trimmedReason != null && trimmedReason.isNotEmpty) {
+        try {
+          await appendVoidAuditNote(reason: trimmedReason);
+        } catch (e) {
+          if (!isNetworkError(e)) rethrow;
+          // Network falló en audit note: seguimos al closeOrder (que
+          // probablemente también falle) y encolamos abajo. No
+          // duplicamos enqueue acá.
+          debugPrint(
+            'cancelCurrentOrder: audit note falló por red, '
+            'continuamos al closeOrder. $e',
+          );
+        }
+      }
+      await ref
+          .read(salesRepositoryProvider)
+          .closeOrder(orderId: orderId, status: 'void');
+    } catch (e) {
+      if (!isNetworkError(e)) rethrow;
+      debugPrint(
+        'cancelCurrentOrder: closeOrder online falló por red, encolando '
+        'void_order para sync posterior. $e',
+      );
+      await enqueueVoidOffline();
+    }
+
     _hasManualFiscalTypeSelection = false;
     state = const CurrentOrderState();
   }
