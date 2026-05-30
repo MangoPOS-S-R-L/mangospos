@@ -1107,10 +1107,25 @@ class ReportsRepository {
       final serviceFee =
           orderLevelServiceFee + (derivedServiceFeeByOrder[oid] ?? 0);
 
+      // Anti double-count de LEY: en órdenes legacy con tax_rate
+      // consolidado (28% = ITBIS+Ley baked en items.tax), el campo
+      // `fiscal_documents.itbis_amount` se guardó incluyendo la
+      // porción de Ley. Aparte derivamos la Ley del items.tax y la
+      // sumamos a `totalServiceFee`. Si ahora también la cuentamos
+      // dentro de `totalItbis`, queda dos veces en pantalla
+      // (card "Impuestos cobrados" Y card "LEY" mostrando la misma
+      // plata). Restamos la porción derivada para que el ITBIS
+      // exhibido sea puro.
+      //
+      // En órdenes modernas (doc.service_fee guardado explícito,
+      // items sin rate combinado), `derived` es 0 → noop.
+      final derived = derivedServiceFeeByOrder[oid] ?? 0;
+      final pureItbis = (itbis - derived).clamp(0.0, double.infinity);
+
       if (status == 'active') {
         activeCount += 1;
         totalSubtotal += subtotal;
-        totalItbis += itbis;
+        totalItbis += pureItbis;
         totalServiceFee += serviceFee;
         totalAmount += total;
       } else {
@@ -1129,7 +1144,7 @@ class ReportsRepository {
       );
       if (status == 'active') {
         bucket['amount'] = _toDouble(bucket['amount']) + total;
-        bucket['itbis'] = _toDouble(bucket['itbis']) + itbis;
+        bucket['itbis'] = _toDouble(bucket['itbis']) + pureItbis;
         bucket['service_fee'] = _toDouble(bucket['service_fee']) + serviceFee;
         bucket['count'] = (bucket['count'] as int) + 1;
       }

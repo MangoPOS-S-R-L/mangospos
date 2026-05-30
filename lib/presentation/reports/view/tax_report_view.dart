@@ -109,7 +109,9 @@ class _TaxReportBody extends StatelessWidget {
               value: '$activeCount',
             ),
             ReportHeroStat(
-              label: 'Total ITBIS',
+              // Label dinámico desde tax_breakdown del comercio (ITBIS, IVA,
+              // IGV…). Antes hardcoded "Total ITBIS" → rompía multi-país.
+              label: 'Total $primaryTaxLabel',
               value: currency.format(totalItbis),
             ),
           ],
@@ -183,10 +185,10 @@ class _TaxReportBody extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const ReportSectionLabel(
+              ReportSectionLabel(
                 title: 'Desglose por tipo de comprobante',
                 subtitle:
-                    'Total facturado e ITBIS agrupado por tipo NCF.',
+                    'Total facturado e $primaryTaxLabel agrupado por tipo NCF.',
               ),
               const SizedBox(height: AppSpacing.lg),
               if (typeRows.isEmpty)

@@ -243,6 +243,7 @@ class _RegisterStep3ViewState extends ConsumerState<RegisterStep3View> {
   }
 
   Future<void> _runSetup() async {
+    if (!mounted) return;
     setState(() {
       _completed = false;
       _requiresEmailConfirmation = false;
@@ -250,7 +251,9 @@ class _RegisterStep3ViewState extends ConsumerState<RegisterStep3View> {
       _error = null;
     });
     try {
-      final result = await ref.read(registerStep2VmProvider.notifier).submitAll();
+      final result = await ref
+          .read(registerStep2VmProvider.notifier)
+          .submitAll(requestOtp: _promptForOtpCode);
       if (!mounted) return;
       setState(() {
         _completed = true;
@@ -313,6 +316,95 @@ class _RegisterStep3ViewState extends ConsumerState<RegisterStep3View> {
         );
       }
     }
+  }
+
+  /// Modal de verificación de correo cuando el email ya tiene cuenta.
+  /// Devuelve el código tipeado o `null` si el usuario cancela. La lógica
+  /// real de enviar y validar el OTP vive en el viewmodel — este widget
+  /// solo recolecta el código de la UI.
+  Future<String?> _promptForOtpCode(String email) async {
+    if (!mounted) return null;
+    final controller = TextEditingController();
+    String? errorText;
+
+    final result = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
+              icon: const Icon(Icons.mark_email_read_outlined,
+                  color: MangoTokens.primary, size: 44),
+              title: const Text('Verifica tu correo'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Ese correo ya tiene una cuenta. Te enviamos un código '
+                    'de 6 dígitos a $email — pégalo aquí para confirmar que '
+                    'eres tú y continuar con el registro de tu negocio.',
+                    style: const TextStyle(fontSize: 14, height: 1.4),
+                  ),
+                  const SizedBox(height: 18),
+                  TextField(
+                    controller: controller,
+                    autofocus: true,
+                    keyboardType: TextInputType.number,
+                    maxLength: 6,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 6,
+                    ),
+                    decoration: InputDecoration(
+                      counterText: '',
+                      hintText: '······',
+                      hintStyle: const TextStyle(
+                        letterSpacing: 6,
+                        color: Color(0xFFCBD5E1),
+                      ),
+                      errorText: errorText,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(null),
+                  child: const Text('Cancelar'),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: MangoTokens.primary,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: () {
+                    final code = controller.text.trim();
+                    if (code.length != 6 ||
+                        int.tryParse(code) == null) {
+                      setLocal(() => errorText = 'El código son 6 dígitos.');
+                      return;
+                    }
+                    Navigator.of(ctx).pop(code);
+                  },
+                  child: const Text('Verificar'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    controller.dispose();
+    return result;
   }
 }
 

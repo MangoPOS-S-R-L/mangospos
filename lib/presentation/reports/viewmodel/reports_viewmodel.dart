@@ -351,10 +351,26 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
           if (myToken != _loadToken) return;
           state = state.copyWith(inventorySummary: summary);
         case ReportCategory.taxes:
-          final summary = await _repository.getTaxSummary(
-            businessId: businessId, from: from, to: to);
+          // El reporte de Impuestos pinta su data desde `fiscalSummary`
+          // (NCFs emitidos = fuente oficial DGII). `taxSummary` sigue
+          // sirviendo para los tiles del hub y el método legacy
+          // `getTaxMetricCards`. Antes esta case solo cargaba taxSummary
+          // → entrando directo al reporte se veía todo en cero porque
+          // fiscalSummary quedaba null.
+          //
+          // Las dos queries son independientes y baratas — paralelo con
+          // Future.wait corta el wall-clock a la mitad.
+          final results = await Future.wait([
+            _repository.getTaxSummary(
+                businessId: businessId, from: from, to: to),
+            _repository.getFiscalDocumentsSummary(
+                businessId: businessId, from: from, to: to),
+          ]);
           if (myToken != _loadToken) return;
-          state = state.copyWith(taxSummary: summary);
+          state = state.copyWith(
+            taxSummary: results[0],
+            fiscalSummary: results[1],
+          );
         case ReportCategory.fiscal:
           final summary = await _repository.getFiscalDocumentsSummary(
             businessId: businessId, from: from, to: to);
@@ -1276,6 +1292,18 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         ? '${serviceFeeRate.toStringAsFixed(serviceFeeRate.truncateToDouble() == serviceFeeRate ? 0 : 2)}% sobre base'
         : 'Cargo legal aplicado en el ticket';
 
+    // Excedente no gravable: la diferencia entre lo cobrado (totalAmount)
+    // y los componentes facturables (subtotal + itbis + service_fee).
+    // Cuando un cliente paga más que la cuenta (propina voluntaria o
+    // vuelto no registrado), ese excedente se cobra pero NO se factura
+    // como ingreso gravable. La función fn_recompute_fd_for_scope v4
+    // (migración 20260530_0012) mantiene los componentes limpios del
+    // menú y deja el excedente implícito en fd.total; esta card lo
+    // hace explícito en el reporte para que la math cuadre visualmente.
+    final excedenteNoGravable =
+        totalAmount - totalSubtotal - totalItbis - totalServiceFee;
+    final hayExcedente = excedenteNoGravable > 0.01;
+
     return [
       SalesMetricCardData(
         title: taxCardTitle,
@@ -1298,6 +1326,14 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         icon: Icons.sell_outlined,
         color: const Color(0xFF7C3AED),
       ),
+      if (hayExcedente)
+        SalesMetricCardData(
+          title: 'Excedente no gravable',
+          value: state.currency.formatAmount(excedenteNoGravable),
+          subtitle: 'Propina / vuelto sin registrar',
+          icon: Icons.savings_outlined,
+          color: const Color(0xFF94A3B8),
+        ),
       SalesMetricCardData(
         title: 'Total facturado',
         value: state.currency.formatAmount(totalAmount),

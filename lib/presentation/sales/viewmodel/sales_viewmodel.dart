@@ -134,6 +134,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   /// - El opener se resuelve cada vez porque puede cambiar entre mesas;
   ///   si esto se vuelve hot path, agregar cache por orderId.
   Future<String?> _resolveItemEmployeeId() async {
+    // 1) Active waiter (PIN multimesero) siempre tiene la máxima prioridad
+    //    cuando está activo en el dispositivo, ya que es la persona física
+    //    que está agregando el item en este momento.
+    final activeWaiter = ref.read(activeWaiterProvider);
+    if (activeWaiter != null) return activeWaiter.employeeId;
+
+    // 2) Opener de la mesa actual vía `fn_order_opener_employee_id`
+    //    como fallback si no hay un activeWaiter con PIN.
     final orderId = state.order?.id;
     if (orderId != null && orderId.isNotEmpty) {
       try {
@@ -149,9 +157,6 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         debugPrint('[audit] fn_order_opener_employee_id falló: $e');
       }
     }
-
-    final activeWaiter = ref.read(activeWaiterProvider);
-    if (activeWaiter != null) return activeWaiter.employeeId;
 
     if (_cachedAuthEmployeeId != null) return _cachedAuthEmployeeId;
 
@@ -922,6 +927,50 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
   }
 
+  /// Asigna un cliente a una sub-cuenta (check) puntual en vez de a la
+  /// sesión completa. Se usa cuando el cajero tiene una sub-cuenta
+  /// seleccionada en el header: el cliente debe quedar en `order_checks`
+  /// de ese check, no en `table_sessions` (general). Antes este flujo
+  /// siempre caía en [assignCustomerToCurrentOrder] → assignCustomerToSession
+  /// y "machacaba" todas las sub-cuentas con el mismo nombre general.
+  Future<void> assignCustomerToCheck({
+    required String checkId,
+    required String customerId,
+    required String customerName,
+  }) async {
+    final order = state.order;
+    if (order == null) return;
+
+    try {
+      await ref
+          .read(salesRepositoryProvider)
+          .assignCustomerToCheck(
+            checkId: checkId,
+            customerId: customerId,
+            customerName: customerName,
+          );
+      // Reflejar de inmediato en el check local para que el chip del header
+      // y los tabs muestren el nombre sin esperar al reload del bundle.
+      final updatedChecks = state.checks
+          .map(
+            (c) => c.id == checkId
+                ? c.copyWith(customerId: customerId, customerName: customerName)
+                : c,
+          )
+          .toList(growable: false);
+      state = state.copyWith(checks: updatedChecks);
+      await _loadOrderDetail(
+        order.id,
+        origin: state.origin,
+        caller: 'assignCustomerToCheck',
+      );
+    } catch (e) {
+      state = state.copyWith(
+        error: 'Error al asignar cliente a la subcuenta: $e',
+      );
+    }
+  }
+
   void updateFiscalType(String type) {
     _hasManualFiscalTypeSelection = true;
     state = state.copyWith(fiscalType: _normalizeFiscalTypeValue(type));
@@ -1165,6 +1214,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         );
       }
 
+      // Item optimista: mostramos de inmediato el mesero activo (PIN
+      // multimesero) si lo hay. La resolución completa del employee_id para
+      // persistir se hace aparte vía _resolveItemEmployeeId().
+      final activeWaiter = ref.read(activeWaiterProvider);
       optimisticItem = OrderItem(
         id: tempId,
         orderId: orderId,
@@ -1185,6 +1238,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         taxRate: resolvedTaxRate,
         originalTaxRate: resolvedFullTaxRate,
         createdAt: DateTime.now(),
+        createdByEmployeeId: activeWaiter?.employeeId,
+        createdByEmployeeName: activeWaiter?.displayName,
         modifiers: selectedModifiers
             .map(
               (modifier) => OrderItemModifier(

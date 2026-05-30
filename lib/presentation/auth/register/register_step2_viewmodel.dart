@@ -40,7 +40,22 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
     }
   }
 
-  Future<RegisterSubmitResult> submitAll() async {
+  /// Ejecuta el bootstrap completo (signUp → profile → business → membership).
+  ///
+  /// Si el correo ya tiene una cuenta auth (usuario huérfano sin business, o
+  /// dueño existente queriendo crear un negocio adicional), pedimos un código
+  /// OTP por correo en vez de validar la contraseña. Esto resuelve el caso
+  /// del usuario que no recuerda su contraseña vieja pero sí tiene acceso a
+  /// su email, sin abrir un hueco de seguridad (cualquiera podría secuestrar
+  /// cuentas si saltáramos toda verificación).
+  ///
+  /// El caller pasa `requestOtp(email)` — una función async que abre un
+  /// modal en la UI pidiendo el código, y devuelve el código tipeado (o
+  /// `null` si el usuario cancela). El viewmodel no construye UI; solo
+  /// orquesta el flujo y espera.
+  Future<RegisterSubmitResult> submitAll({
+    Future<String?> Function(String email)? requestOtp,
+  }) async {
     final supabase = SupabaseConfig.client;
 
     try {
@@ -107,25 +122,62 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
         }
         userId = user.id;
       } else {
-        // Path recovery: usuario ya existe, probar signIn
-        final AuthResponse signInResp;
-        try {
-          signInResp = await supabase.auth.signInWithPassword(
-            email: step1.email!,
-            password: step1.password!,
-          );
-        } on AuthException {
-          // El password no matchea con la cuenta existente.
+        // Path recovery: usuario ya existe. En vez de pedir el password
+        // (que el usuario probablemente no recuerda), enviamos un OTP al
+        // email para confirmar que es realmente el dueño del correo.
+        //
+        // Sin esto, un usuario que olvidó su password pero quiere crear
+        // un negocio nuevo quedaba bloqueado con "contraseña no coincide".
+        // Y si simplemente saltáramos la verificación, cualquiera podría
+        // crear un business bajo el email de otra persona conociendo
+        // solo el correo — secuestro de cuenta trivial.
+        if (requestOtp == null) {
           throw Exception(
-            'Ese correo ya tiene una cuenta y la contraseña no coincide. '
-            'Inicia sesión desde la pantalla principal o usa "¿Olvidaste tu contraseña?".',
+            'Ese correo ya tiene una cuenta. Vuelve a intentarlo o inicia '
+            'sesión desde la pantalla principal.',
           );
         }
-        session = signInResp.session;
-        final user = signInResp.user ?? session?.user;
+
+        // 1) Disparar envío del OTP. `shouldCreateUser: false` evita que
+        //    Supabase cree un user nuevo si por alguna razón el email
+        //    desapareció — queremos solo recovery, no signup encubierto.
+        try {
+          await supabase.auth.signInWithOtp(
+            email: step1.email!,
+            shouldCreateUser: false,
+          );
+        } on AuthException catch (e) {
+          throw Exception(
+            'No pudimos enviar el código de verificación: ${_friendlyAuthError(e)}',
+          );
+        }
+
+        // 2) Esperar a que la UI muestre el modal y devuelva el código.
+        final code = (await requestOtp(step1.email!))?.trim();
+        if (code == null || code.isEmpty) {
+          throw Exception('Verificación de correo cancelada.');
+        }
+
+        // 3) Verificar el OTP → autentica como el usuario existente.
+        final AuthResponse otpResp;
+        try {
+          otpResp = await supabase.auth.verifyOTP(
+            type: OtpType.email,
+            token: code,
+            email: step1.email!,
+          );
+        } on AuthException catch (e) {
+          throw Exception(
+            'Código inválido o expirado: ${_friendlyAuthError(e)}',
+          );
+        }
+
+        session = otpResp.session ?? supabase.auth.currentSession;
+        final user = otpResp.user ?? session?.user;
         if (user == null) {
           throw Exception(
-            'No se pudo recuperar la cuenta. Intenta iniciar sesión desde la pantalla principal.',
+            'No se pudo recuperar la cuenta tras verificar el código. '
+            'Intenta iniciar sesión desde la pantalla principal.',
           );
         }
         userId = user.id;

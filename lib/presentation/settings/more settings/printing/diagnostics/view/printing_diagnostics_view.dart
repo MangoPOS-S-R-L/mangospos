@@ -271,9 +271,7 @@ class _PrintingDiagnosticsViewState
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           tooltip: 'Regresar',
-          onPressed: () => Navigator.of(context).canPop()
-              ? Navigator.of(context).pop()
-              : context.go(AppRoutes.printingBase),
+          onPressed: () => context.go(AppRoutes.settings),
         ),
         title: const Text('Diagnóstico de impresión'),
       ),

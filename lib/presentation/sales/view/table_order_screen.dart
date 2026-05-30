@@ -745,19 +745,34 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     if (customerName == null || customerName.isEmpty) return;
     if (!mounted) return;
 
-    await ref
-        .read(currentOrderProvider.notifier)
-        .assignCustomerToCurrentOrder(
-          customerId: customerId,
-          customerName: customerName,
-          customerLegalName: customerLegalName,
-          customerTaxId: customerTaxId,
-        );
+    // Si hay una sub-cuenta seleccionada en el header, el cliente va a ESE
+    // check (order_checks), no a la sesión general. Así cada sub-cuenta
+    // conserva su propio nombre en vez de quedarse con el general.
+    final selectedCheckId = ref.read(currentOrderProvider).selectedCheckId;
+    if (selectedCheckId != null) {
+      await ref
+          .read(currentOrderProvider.notifier)
+          .assignCustomerToCheck(
+            checkId: selectedCheckId,
+            customerId: customerId,
+            customerName: customerName,
+          );
+    } else {
+      await ref
+          .read(currentOrderProvider.notifier)
+          .assignCustomerToCurrentOrder(
+            customerId: customerId,
+            customerName: customerName,
+            customerLegalName: customerLegalName,
+            customerTaxId: customerTaxId,
+          );
+    }
 
     if (!context.mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('Cliente asignado: $customerName')));
+    final scopeLabel = selectedCheckId != null ? ' a la subcuenta' : '';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Cliente asignado$scopeLabel: $customerName')),
+    );
   }
 
   Future<void> _handleApplyDiscount(BuildContext context) async {
@@ -1558,6 +1573,25 @@ class _CartView extends ConsumerWidget {
     return item.status != 'paid' && item.status != 'void';
   }
 
+  /// Nombre a mostrar en el chip de cliente del header. Si hay una
+  /// sub-cuenta seleccionada, muestra el cliente PROPIO de ese check
+  /// (order_checks.customer_name); si no, el cliente general de la mesa.
+  String _resolveHeaderCustomerName(CurrentOrderState orderState) {
+    final selectedCheckId = orderState.selectedCheckId;
+    if (selectedCheckId != null) {
+      for (final check in orderState.checks) {
+        if (check.id == selectedCheckId) {
+          final name = check.customerName?.trim();
+          return (name != null && name.isNotEmpty) ? name : 'Cliente';
+        }
+      }
+    }
+    final generalName = orderState.customerName?.trim();
+    return (generalName != null && generalName.isNotEmpty)
+        ? generalName
+        : 'Cliente';
+  }
+
   double _sumItemQty(Iterable<OrderItem> items) {
     return items.fold<double>(0, (sum, item) => sum + item.quantity);
   }
@@ -1762,9 +1796,15 @@ class _CartView extends ConsumerWidget {
       }
     }
 
-    // Sincronizar estas variables con el estado más reciente
-    final finalCustomerId = currentOrderState.customerId;
-    final finalCustomerName = currentOrderState.customerName;
+    // Sincronizar estas variables con el estado más reciente.
+    // Split bill (2026-05-30): si estamos cobrando una sub-cuenta puntual,
+    // `customerId`/`customerName` llegan con el cliente PROPIO del check
+    // (order_checks.customer_id/customer_name). Hay que respetarlos en vez
+    // de pisarlos con el cliente general de la mesa — antes el recibo/cobro
+    // de cada sub-cuenta salía con el nombre general. Fallback al estado
+    // general cuando el check no tiene cliente asignado o se paga todo.
+    final finalCustomerId = customerId ?? currentOrderState.customerId;
+    final finalCustomerName = customerName ?? currentOrderState.customerName;
     final finalFiscalType = currentOrderState.fiscalType;
     final finalCustomerTaxId = currentOrderState.customerTaxId;
     final finalCustomerLegalName = currentOrderState.customerLegalName;
@@ -2645,9 +2685,7 @@ class _CartView extends ConsumerWidget {
                           label: ConstrainedBox(
                             constraints: const BoxConstraints(maxWidth: 148),
                             child: Text(
-                              orderState.customerName?.trim().isNotEmpty == true
-                                  ? orderState.customerName!
-                                  : 'Cliente',
+                              _resolveHeaderCustomerName(orderState),
                               overflow: TextOverflow.ellipsis,
                               maxLines: 1,
                             ),

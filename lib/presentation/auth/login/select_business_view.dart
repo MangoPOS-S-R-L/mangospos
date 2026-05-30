@@ -158,6 +158,20 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
     }
   }
 
+  /// Cierra la sesión Supabase y vuelve al login. Útil cuando el usuario
+  /// quedó bloqueado en esta pantalla — cuenta huérfana, business pending,
+  /// o entró con un correo equivocado — y necesita salir sin matar la app.
+  Future<void> _handleSignOut() async {
+    try {
+      await Supabase.instance.client.auth.signOut(
+        scope: SignOutScope.local,
+      );
+    } catch (e) {
+      AppLogger.w('Error cerrando sesión desde select_business: $e');
+    }
+    if (mounted) context.go(AppRoutes.login);
+  }
+
   Future<void> _handleSelect(Map<String, dynamic> item) async {
     final businessId = item['business_id'] as String?;
     if (businessId == null) return;
@@ -377,6 +391,26 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
                 backgroundColor: const Color(0xFFEF4444),
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          // Salida del estado bloqueado: si la cuenta no tiene negocios
+          // asociados (huérfana, pending, o el usuario entró con otra
+          // cuenta por error), permitir cerrar sesión y volver al login
+          // sin tener que matar la app.
+          SizedBox(
+            width: double.infinity,
+            child: TextButton.icon(
+              onPressed: _handleSignOut,
+              icon: const Icon(Icons.logout, size: 18),
+              label: const Text('Cerrar sesión'),
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFF64748B),
+                padding: const EdgeInsets.symmetric(vertical: 12),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),

@@ -575,6 +575,20 @@ class SettingsView extends ConsumerWidget {
             color: const Color(0xFFFFF0D9),
             route: AppRoutes.printingOrders,
           ),
+          _SettingsOption(
+            title: 'Diagnóstico',
+            subtitle: 'Estado del agente, dispositivos e impresoras',
+            icon: Icons.health_and_safety_outlined,
+            color: const Color(0xFFEAF0FF),
+            route: AppRoutes.printingDiagnostics,
+          ),
+          _SettingsOption(
+            title: 'Salud de impresión',
+            subtitle: 'Semáforo de impresoras y cola pendiente',
+            icon: Icons.monitor_heart_outlined,
+            color: const Color(0xFFE6F7EE),
+            route: AppRoutes.printingHealth,
+          ),
         ],
       ),
       _SettingsSection(

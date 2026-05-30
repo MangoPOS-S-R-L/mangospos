@@ -194,9 +194,7 @@ class _PrintingProductsViewState extends ConsumerState<PrintingProductsView> {
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           tooltip: 'Regresar',
-          onPressed: () => Navigator.of(context).canPop()
-              ? Navigator.of(context).pop()
-              : context.go(AppRoutes.printingBase),
+          onPressed: () => context.go(AppRoutes.settings),
         ),
         title: const Text('Productos por área de impresión'),
       ),

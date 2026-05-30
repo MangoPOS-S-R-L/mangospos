@@ -4,6 +4,8 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
@@ -125,25 +127,51 @@ class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
     }
   }
 
+  Widget _scaffold(BuildContext context, Widget body) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF3F4F6),
+      appBar: AppBar(
+        backgroundColor: MangoColors.white,
+        foregroundColor: MangoColors.darkGray,
+        elevation: 0.6,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          tooltip: 'Regresar',
+          onPressed: () => context.go(AppRoutes.settings),
+        ),
+        title: const Text('Impresoras'),
+      ),
+      body: body,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final vm = ref.watch(printingPrintersViewModelProvider);
     final vmCtrl = ref.read(printingPrintersViewModelProvider.notifier);
 
     if (vm.isLoading && vm.items.isEmpty) {
-      return const Center(
-        child: CircularProgressIndicator(color: MangoColors.primaryOrange),
+      return _scaffold(
+        context,
+        const Center(
+          child: CircularProgressIndicator(color: MangoColors.primaryOrange),
+        ),
       );
     }
 
     if (vm.errorMessage != null && vm.items.isEmpty) {
-      return _ErrorBox(
-        message: vm.errorMessage!,
-        onRetry: () => _bootstrap(force: true),
+      return _scaffold(
+        context,
+        _ErrorBox(
+          message: vm.errorMessage!,
+          onRetry: () => _bootstrap(force: true),
+        ),
       );
     }
 
-    return Stack(
+    return _scaffold(
+      context,
+      Stack(
       children: [
         PrintingPageShell(
           title: 'Impresoras',
@@ -280,6 +308,7 @@ class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
             ),
           ),
       ],
+      ),
     );
   }
 }

@@ -894,6 +894,37 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
             }),
           );
         }
+
+        // Persistir el cliente asignado a cada sub-cuenta. Cuando el cajero
+        // le asigna un cliente a una sub-cuenta recién creada dentro del
+        // modal, el check todavía es "temp_" (sin UUID) y
+        // assignCustomerToCheck no pudo escribirlo en BD. Ahora que el
+        // backend ya creó los checks reales por posición, mapeamos
+        // posición → id real y los persistimos. Idempotente para los checks
+        // que ya existían (re-escribe el mismo cliente).
+        final realIdByPosition = <int, String>{
+          for (final rc in consolidatedChecks) rc.position: rc.id,
+        };
+        final customerWrites = state.checks
+            .where(
+              (c) =>
+                  c.customerId != null &&
+                  c.customerId!.isNotEmpty &&
+                  c.customerName != null &&
+                  c.customerName!.trim().isNotEmpty &&
+                  realIdByPosition.containsKey(c.position),
+            )
+            .map(
+              (c) => _salesRepo.assignCustomerToCheck(
+                checkId: realIdByPosition[c.position]!,
+                customerId: c.customerId!,
+                customerName: c.customerName!,
+              ),
+            )
+            .toList(growable: false);
+        if (customerWrites.isNotEmpty) {
+          await Future.wait(customerWrites);
+        }
       }
 
       state = state.copyWith(
