@@ -92,6 +92,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   List<Map<String, dynamic>> _cachedBusinessTaxes = const [];
   bool _hasManualFiscalTypeSelection = false;
 
+  // Anti doble-disparo para `addItem`. No usamos un lock global porque el alta
+  // es optimista y el cajero agrega varios items rápido (no hay stepper de
+  // cantidad: tocar el producto N veces ES la forma de pedir N unidades). Solo
+  // descartamos un segundo disparo del MISMO producto dentro de una ventana muy
+  // corta (~doble-click accidental o doble evento del touchscreen). Un toque
+  // deliberado a ritmo normal (>300ms) pasa sin problema.
+  static const int _addItemDebounceMs = 300;
+  String? _lastAddItemKey;
+  int _lastAddItemMs = 0;
+
   /// Parsed tax definitions from [_cachedBusinessTaxes].
   List<TaxDef> get _taxDefs =>
       _cachedBusinessTaxes.map(TaxDef.fromMap).toList(growable: false);
@@ -1094,6 +1104,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       state = state.copyWith(error: 'Orden no disponible. Reintenta.');
       return;
     }
+
+    // Anti doble-click: descarta el segundo disparo del mismo producto (con los
+    // mismos modifiers) dentro de _addItemDebounceMs. Ver nota del campo.
+    final addKey = '$menuItemId|$takeout|'
+        '${selectedModifiers.map((m) => '${m.name}x${m.qty}').join(',')}';
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    if (_lastAddItemKey == addKey &&
+        nowMs - _lastAddItemMs < _addItemDebounceMs) {
+      return;
+    }
+    _lastAddItemKey = addKey;
+    _lastAddItemMs = nowMs;
 
     // PRD 4: bloqueo defensivo. Si la orden activa ya fue cobrada o anulada,
     // el state está stale — no podemos agregar items a una orden cerrada.

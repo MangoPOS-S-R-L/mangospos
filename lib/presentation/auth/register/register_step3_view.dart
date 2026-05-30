@@ -23,6 +23,10 @@ class _RegisterStep3ViewState extends ConsumerState<RegisterStep3View> {
   String? _successMessage;
   String? _error;
   Timer? _redirectTimer;
+  // Candado anti doble-submit: `_runSetup` se dispara desde initState y desde
+  // dos botones "Reintentar". Sin este flag, dos taps rápidos lanzarían dos
+  // `submitAll()` en paralelo y podrían crear DOS negocios para el mismo dueño.
+  bool _running = false;
 
   static const _steps = <AuthShellStep>[
     AuthShellStep(title: 'Crear cuenta', complete: true),
@@ -243,7 +247,8 @@ class _RegisterStep3ViewState extends ConsumerState<RegisterStep3View> {
   }
 
   Future<void> _runSetup() async {
-    if (!mounted) return;
+    if (!mounted || _running) return;
+    _running = true;
     setState(() {
       _completed = false;
       _requiresEmailConfirmation = false;
@@ -315,6 +320,8 @@ class _RegisterStep3ViewState extends ConsumerState<RegisterStep3View> {
           ),
         );
       }
+    } finally {
+      _running = false;
     }
   }
 
