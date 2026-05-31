@@ -129,6 +129,7 @@ class ReportsRepository {
     result['sales_by_modifier'] ??= const <Map<String, dynamic>>[];
     result['sales_by_receipt'] ??= const <Map<String, dynamic>>[];
     result['sales_by_adjustment'] ??= const <Map<String, dynamic>>[];
+    result['sales_by_production_area'] ??= const <Map<String, dynamic>>[];
 
     return result;
   }
@@ -158,6 +159,7 @@ class ReportsRepository {
         'sales_by_category': const <Map<String, dynamic>>[],
         'sales_by_employee': const <Map<String, dynamic>>[],
         'sales_by_zone': const <Map<String, dynamic>>[],
+        'sales_by_production_area': const <Map<String, dynamic>>[],
       };
 
 

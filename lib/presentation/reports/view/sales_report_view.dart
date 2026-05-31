@@ -509,6 +509,23 @@ class _SalesReportBody extends StatelessWidget {
             isFullReport: true,
           ),
         ];
+      case SalesSubReport.byProductionArea:
+        return [
+          _SalesCommercialReportCard(
+            currency: currency,
+            title: 'Ventas por área de producción',
+            subtitle:
+                'Distribución de ingresos por área de despacho (cocina, bar, caja).',
+            icon: Icons.soup_kitchen_outlined,
+            color: const Color(0xFFEA580C),
+            rows: viewModel.getProductionAreaRows(),
+            emptyText: 'No hay ventas por área de producción en el rango.',
+            showQuantity: true,
+            amountLabel: 'Ventas',
+            countLabel: 'Órdenes',
+            isFullReport: true,
+          ),
+        ];
       case SalesSubReport.byHour:
         return [
           ReportChartCard(

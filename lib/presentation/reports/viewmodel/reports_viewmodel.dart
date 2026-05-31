@@ -23,6 +23,7 @@ enum SalesSubReport {
   byDiscounts,
   byProduct,
   byZone,
+  byProductionArea,
   byHour,
 }
 
@@ -520,6 +521,8 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         return 'Ventas por producto';
       case SalesSubReport.byZone:
         return 'Por zona';
+      case SalesSubReport.byProductionArea:
+        return 'Por área de producción';
       case SalesSubReport.byHour:
         return 'Por hora';
     }
@@ -877,6 +880,22 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
           (row) => SalesBreakdownRow(
             label: row['label']?.toString() ?? 'Sin zona',
             amount: (row['amount'] as num?)?.toDouble() ?? 0,
+            count: (row['count'] as num?)?.toInt() ?? 0,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  List<SalesBreakdownRow> getProductionAreaRows() {
+    final rows =
+        (state.salesSummary?['sales_by_production_area'] as List?) ?? const [];
+    return rows
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .map(
+          (row) => SalesBreakdownRow(
+            label: row['label']?.toString() ?? 'Sin área',
+            amount: (row['amount'] as num?)?.toDouble() ?? 0,
+            quantity: (row['quantity'] as num?)?.toDouble() ?? 0,
             count: (row['count'] as num?)?.toInt() ?? 0,
           ),
         )
