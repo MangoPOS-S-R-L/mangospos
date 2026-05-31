@@ -102,6 +102,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   String? _lastAddItemKey;
   int _lastAddItemMs = 0;
 
+  // Caché en memoria de grupos de modificadores/combo por menuItemId.
+  // Cada tap a un producto consulta estos grupos ANTES de agregar el item
+  // (table_order_screen._handleProductTap). Sin caché eso es un round-trip a
+  // Supabase en cada tap —incluso para productos sin modificadores— y el item
+  // recién aparece cuando la red responde (~200ms). Cacheando, el primer tap
+  // de cada producto paga la red una vez y los siguientes son instantáneos.
+  // Vive lo que vive el provider (la sesión de venta). Las definiciones de
+  // modificadores se configuran antes del servicio y casi no cambian en medio,
+  // así que el riesgo de servir data vieja es bajo y aceptable.
+  final Map<String, List<Map<String, dynamic>>> _modifierGroupsCache = {};
+  final Map<String, List<Map<String, dynamic>>> _comboGroupsCache = {};
+
   /// Parsed tax definitions from [_cachedBusinessTaxes].
   List<TaxDef> get _taxDefs =>
       _cachedBusinessTaxes.map(TaxDef.fromMap).toList(growable: false);
@@ -1838,18 +1850,28 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
   }
 
-  Future<List<Map<String, dynamic>>> getMenuItemComboGroups(String menuItemId) {
-    return ref
+  Future<List<Map<String, dynamic>>> getMenuItemComboGroups(
+    String menuItemId,
+  ) async {
+    final cached = _comboGroupsCache[menuItemId];
+    if (cached != null) return cached;
+    final groups = await ref
         .read(salesRepositoryProvider)
         .getComboGroupsForMenuItem(menuItemId);
+    _comboGroupsCache[menuItemId] = groups;
+    return groups;
   }
 
   Future<List<Map<String, dynamic>>> getMenuItemModifierGroups(
     String menuItemId,
-  ) {
-    return ref
+  ) async {
+    final cached = _modifierGroupsCache[menuItemId];
+    if (cached != null) return cached;
+    final groups = await ref
         .read(salesRepositoryProvider)
         .getModifierGroupsForMenuItem(menuItemId);
+    _modifierGroupsCache[menuItemId] = groups;
+    return groups;
   }
 
   Future<void> replaceItemModifiers({

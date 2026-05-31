@@ -89,17 +89,18 @@ Future<bool> _ensureCanDeleteOrderItem(
 }) async {
   if (isDraft) return true;
 
-  final sessionCtrl = ref.read(sessionProvider.notifier);
-  if (sessionCtrl.hasPermission('ventas.orden.eliminar_item')) {
-    return true;
-  }
+  // Solo el owner del negocio se salta el PIN. Cualquier otro rol (admin,
+  // supervisor, cajero, mesero…) debe escribir PIN de supervisor/admin para
+  // reducir la cantidad o eliminar un item que YA salió impreso a cocina/bar.
+  if (ref.read(sessionProvider).isOwner) return true;
+
   final authorized = await showPinVerificationModal(
     context,
     ref,
     level: PinAccessLevel.supervisor,
     title: 'Autorización para eliminar',
     subtitle:
-        'Se requiere PIN de Supervisor o Administrador para eliminar este producto.',
+        'Se requiere PIN de Supervisor o Administrador para reducir o eliminar este producto.',
   );
   return authorized;
 }
@@ -462,23 +463,9 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       return;
     }
 
-    // Permission gate: rol con permiso → directo. Sin permiso → PIN
-    // supervisor para bypass.
-    final sessionCtrl = ref.read(sessionProvider.notifier);
-    final hasDirectPermission =
-        sessionCtrl.hasPermission('ventas.mesas.mover_unir');
-    if (!hasDirectPermission) {
-      final authorized = await showPinVerificationModal(
-        context,
-        ref,
-        level: PinAccessLevel.supervisor,
-        title: 'Autorización para transferir',
-        subtitle:
-            'Se requiere PIN de Supervisor o Administrador para transferir cuentas entre mesas.',
-      );
-      if (!authorized) return;
-      if (!context.mounted) return;
-    }
+    // El gate de PIN vive dentro del diálogo (_submit), que es el punto
+    // único de ejecución para ambos flujos (transferir y unir mesas). No
+    // lo duplicamos aquí para no pedir el PIN dos veces.
 
     // Resolver businessId vía el resolver canónico (mismo patrón que
     // otras pantallas — Order no expone business_id directo).
@@ -605,11 +592,11 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     final orderState = ref.read(currentOrderProvider);
     if (orderState.order == null) return;
 
-    final sessionCtrl = ref.read(sessionProvider.notifier);
-    final hasDirectPermission = sessionCtrl.hasPermission(
-      'ventas.orden.anular',
-    );
-    if (!hasDirectPermission) {
+    // Solo el owner del negocio se salta el PIN. Cualquier otro rol
+    // (admin, supervisor, cajero, mesero…) debe escribir PIN de
+    // supervisor/admin para anular o liberar la mesa.
+    final isOwner = ref.read(sessionProvider).isOwner;
+    if (!isOwner) {
       final authorized = await showPinVerificationModal(
         context,
         ref,

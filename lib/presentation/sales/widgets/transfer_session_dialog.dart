@@ -141,16 +141,14 @@ class _TransferSessionDialogState
     if (!_canSubmit) return;
     final messenger = ScaffoldMessenger.of(context);
 
-    // PIN solo si el rol del usuario NO tiene el permiso directo.
-    // Admin/owner/supervisor con `ventas.mesas.mover_unir` activado pasan
-    // directo. El caller (_handleTransferSession) ya valida lo mismo
-    // ANTES de abrir el dialog, así que cuando llegamos aquí, los usuarios
-    // sin permiso ya pasaron el PIN una vez — pedirlo otra vez es ruido.
-    final sessionCtrl = ref.read(sessionProvider.notifier);
-    final hasDirectPermission =
-        sessionCtrl.hasPermission('ventas.mesas.mover_unir');
+    // Solo el owner del negocio se salta el PIN. Cualquier otro rol
+    // (admin, supervisor, cajero, mesero…) debe escribir PIN de
+    // supervisor/admin para transferir o unir cuentas. Este es el punto
+    // único de enforcement para ambos flujos de entrada (transferir desde
+    // la cuenta y unir mesas desde el grid de zonas).
+    final isOwner = ref.read(sessionProvider).isOwner;
 
-    if (!hasDirectPermission) {
+    if (!isOwner) {
       final pinOk = await showPinVerificationModal(
         context,
         ref,
