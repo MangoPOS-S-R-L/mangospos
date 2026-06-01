@@ -7,6 +7,7 @@ import 'package:mangopos/core/multimesero/active_waiter_provider.dart';
 import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/core/offline/offline_queue_status_provider.dart';
+import 'package:mangopos/core/offline/hub/hub_mode.dart' show kHubModeEnabled;
 import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/data/repositories/sales_repository.dart';
 import 'package:mangopos/core/tax/tax_engine.dart';
@@ -2538,6 +2539,24 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       // del topbar refresque su count y el shell muestre la notificación
       // post-sync con detalle (pagos completados, NCFs emitidos, etc.).
       ref.read(offlineQueueStatusProvider.notifier).publishSyncResult(result);
+
+      // F3b-3c: si este dispositivo es el Hub Local, drena también su op-log
+      // a Supabase (las ops que recibió de otras cajas mientras no había red).
+      // En los dispositivos que NO son Hub el op-log está vacío → no-op. Gated
+      // por kHubModeEnabled; best-effort (no rompe el sync de la cola propia).
+      if (kHubModeEnabled) {
+        try {
+          await _offlinePos.syncHubOpLog(
+            businessId: businessId,
+            salesRepository: ref.read(salesRepositoryProvider),
+            printingService: ref.read(printingServiceProvider),
+            inventoryRepository: ref.read(inventoryRepositoryProvider),
+            cashierRepository: ref.read(cashierRepositoryProvider),
+          );
+        } catch (e) {
+          debugPrint('[SalesVM] syncHubOpLog (drenado del Hub) falló: $e');
+        }
+      }
 
       if (result.completed > 0 &&
           state.order != null &&
