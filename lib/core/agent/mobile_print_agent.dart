@@ -19,7 +19,9 @@ import 'package:flutter_usb_printer/flutter_usb_printer.dart';
 import 'package:shelf/shelf.dart' as shelf;
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
+import 'package:shelf_web_socket/shelf_web_socket.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../offline/hub/hub_op_log.dart';
 
@@ -44,6 +46,12 @@ class MobilePrintAgent {
   /// Op-log del Hub Local (F3b). Solo se usa cuando este dispositivo actúa
   /// como Hub; los endpoints /hub/ops y /hub/state lo alimentan/leen.
   final HubOpLog _hubOpLog = HubOpLog();
+
+  /// Suscriptores WebSocket del feed del Hub (F3c), por negocio. Cada op
+  /// aplicada en /hub/ops se difunde a los sockets de ese negocio (el KDS y
+  /// los demás terminales). Se llena cuando un cliente se conecta a
+  /// /hub/events y envía `{"subscribe": "<business_id>"}`.
+  final Map<String, Set<WebSocketChannel>> _hubSubscribers = {};
   final FlutterUsbPrinter _usbPrinter = FlutterUsbPrinter();
 
   bool get isRunning => _server != null;
@@ -112,6 +120,9 @@ class MobilePrintAgent {
     // op-log (GET). Con auth (igual que el resto de endpoints).
     router.post('/hub/ops', _handleHubOps);
     router.get('/hub/state', _handleHubState);
+    // Feed en vivo (F3c): WebSocket. El cliente envía
+    // {"subscribe":"<business_id>"} al conectar y recibe cada op aplicada.
+    router.get('/hub/events', _hubEventsHandler());
 
     // Printer discovery
     router.get('/printers', _handleListPrinters);
@@ -202,7 +213,57 @@ class MobilePrintAgent {
     final businessId = body['business_id']?.toString() ?? '';
     if (businessId.isEmpty) return _jsonError('Missing business_id', 400);
     final seq = await _hubOpLog.append(businessId, body);
+    // Difundir la op aplicada (con su seq) a los suscriptores del feed.
+    _broadcastOp(businessId, {...body, 'seq': seq});
     return _jsonOk({'seq': seq, 'op_id': body['op_id'] ?? body['id']});
+  }
+
+  /// Handler del WebSocket del feed del Hub (F3c). El cliente, al conectar,
+  /// envía `{"subscribe":"<business_id>"}`; a partir de ahí recibe cada op.
+  shelf.Handler _hubEventsHandler() {
+    return webSocketHandler((WebSocketChannel channel, String? _) {
+      String? subscribedBiz;
+      channel.stream.listen(
+        (message) {
+          try {
+            final data = jsonDecode(message as String);
+            if (data is Map && data['subscribe'] != null) {
+              subscribedBiz = data['subscribe'].toString();
+              _hubSubscribers
+                  .putIfAbsent(subscribedBiz!, () => <WebSocketChannel>{})
+                  .add(channel);
+            }
+          } catch (_) {
+            // Mensaje no-JSON / desconocido: ignorar.
+          }
+        },
+        onDone: () {
+          if (subscribedBiz != null) {
+            _hubSubscribers[subscribedBiz]?.remove(channel);
+          }
+        },
+        onError: (_) {
+          if (subscribedBiz != null) {
+            _hubSubscribers[subscribedBiz]?.remove(channel);
+          }
+        },
+      );
+    });
+  }
+
+  /// Difunde una op a los suscriptores WebSocket del negocio. Limpia sockets
+  /// muertos al vuelo.
+  void _broadcastOp(String businessId, Map<String, dynamic> op) {
+    final subs = _hubSubscribers[businessId];
+    if (subs == null || subs.isEmpty) return;
+    final msg = jsonEncode(op);
+    for (final ch in subs.toList()) {
+      try {
+        ch.sink.add(msg);
+      } catch (_) {
+        subs.remove(ch);
+      }
+    }
   }
 
   /// F3b: sirve el delta del op-log desde `since` (query param) para que un

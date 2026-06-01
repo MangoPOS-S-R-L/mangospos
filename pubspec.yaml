@@ -93,6 +93,9 @@ dependencies:
   auto_updater: ^1.0.0
   shelf: ^1.4.2
   shelf_router: ^1.1.4
+  # Servidor WebSocket del Hub Local (F3c): feed en vivo de ops a los
+  # terminales/KDS. El cliente usa web_socket_channel (ya presente).
+  shelf_web_socket: ^3.0.0
   cached_network_image: ^3.4.1
   multicast_dns: ^0.3.2
   excel: ^4.0.6
