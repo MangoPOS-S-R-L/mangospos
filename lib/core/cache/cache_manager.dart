@@ -519,6 +519,69 @@ class CacheManager {
     debugPrint(
       'Cached $key (${bytes.length} bytes, TTL: ${effectiveTTL.inMinutes}min)',
     );
+
+    // Tras escribir, hacemos cumplir el tope global de tamaño (G14). Sin
+    // esto el cache crecía sin límite — `maxTotalCacheSizeMB` era una
+    // constante decorativa.
+    //
+    // Compresión (flags compressData/enableCompression): NO implementada a
+    // propósito. gzip no es trivial cross-plataforma (dart:io no existe en
+    // web) y el enforcement de tamaño ya previene el problema real
+    // (crecimiento ilimitado); comprimir solo retrasaría el desalojo. Si en
+    // el futuro pesa, implementar gzip native-only vía import condicional y
+    // marcar las entradas comprimidas en la metadata.
+    await _enforceSizeLimit();
+  }
+
+  /// Mantiene el total del cache (`cache_*`) bajo
+  /// [CacheConfig.maxTotalCacheSizeMB]. Si se excede, desaloja entradas por
+  /// prioridad ascendente de importancia (low → critical) y, dentro de cada
+  /// nivel, las más viejas primero (LRU por `cachedAt`). Las críticas
+  /// (productos, ventas, caja, mesas) solo se tocarían en el caso patológico
+  /// de que aún se exceda tras desalojar todo lo demás.
+  Future<void> _enforceSizeLimit() async {
+    const capBytes = CacheConfig.maxTotalCacheSizeMB * 1024 * 1024;
+    var total = await _storage.getTotalSizeByPrefix(StorageKeys.cachePrefix);
+    if (total <= capBytes) return;
+
+    final keys = await _storage.getKeysByPrefix(StorageKeys.cachePrefix);
+    final entries =
+        <({String key, int size, DateTime cachedAt, int priority})>[];
+    for (final k in keys) {
+      final meta = await _getMetadata(k);
+      final size = meta?.sizeInBytes ?? await _storage.getSizeInBytes(k);
+      final cachedAt =
+          meta?.cachedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final module = meta?.module ?? _extractModuleName(k);
+      final priority = (CacheConfig.getModuleConfig(module)?.priority ??
+              CachePriority.low)
+          .index; // critical=0 … low=3
+      entries.add(
+        (key: k, size: size, cachedAt: cachedAt, priority: priority),
+      );
+    }
+
+    // Desalojar primero lo menos importante (mayor index = low) y, a igual
+    // prioridad, lo más viejo.
+    entries.sort((a, b) {
+      if (a.priority != b.priority) return b.priority.compareTo(a.priority);
+      return a.cachedAt.compareTo(b.cachedAt);
+    });
+
+    var evicted = 0;
+    for (final e in entries) {
+      if (total <= capBytes) break;
+      await _storage.delete(e.key);
+      await _storage.delete('metadata_${e.key}');
+      total -= e.size;
+      evicted++;
+    }
+    if (evicted > 0) {
+      debugPrint(
+        'CacheManager: desalojadas $evicted entradas para respetar el tope '
+        'de ${CacheConfig.maxTotalCacheSizeMB}MB.',
+      );
+    }
   }
 
   // ==================== UTILIDADES ====================
