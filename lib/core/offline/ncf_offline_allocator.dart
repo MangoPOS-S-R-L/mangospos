@@ -72,35 +72,55 @@ class NcfOfflineAllocator {
   String _key(String businessId, String ncfType, String serie) =>
       'offline_ncf_last_${businessId}_${ncfType}_$serie';
 
+  // Mutex por-serie: cuando este allocator es el ÚNICO asignador de la LAN
+  // (el Hub), varias cajas piden NCF a la vez. El read-modify-write del
+  // contador debe serializarse para no asignar el mismo número dos veces.
+  // Dart es un solo hilo, pero los `await` (storage) permiten interleaving;
+  // este lock encadena las asignaciones de la misma serie.
+  final Map<String, Future<void>> _locks = {};
+
+  Future<T> _synchronized<T>(String key, Future<T> Function() action) {
+    final prev = _locks[key] ?? Future<void>.value();
+    final next = prev.then((_) => action());
+    // El lock guarda un future que completa cuando termina esta acción
+    // (tragando el error para no romper la cadena de la serie).
+    _locks[key] = next.then((_) {}, onError: (_) {});
+    return next;
+  }
+
   /// Asigna el próximo NCF del rango. Devuelve null si el rango está agotado.
+  /// Serializado por (negocio, tipo, serie) → seguro como asignador único del
+  /// Hub ante peticiones concurrentes de varias cajas.
   Future<NcfAssignment?> allocate({
     required String businessId,
     required NcfRange range,
-  }) async {
-    final storage = await _storage;
+  }) {
     final key = _key(businessId, range.ncfType, range.serie);
-    final stored = int.tryParse(await storage.read(key) ?? '');
+    return _synchronized(key, () async {
+      final storage = await _storage;
+      final stored = int.tryParse(await storage.read(key) ?? '');
 
-    // El "último consumido" base es el mayor entre: lo que llevamos local, el
-    // current_number del server (seed) y rangeStart-1 (rango virgen).
-    var last = range.rangeStart - 1;
-    for (final candidate in [stored, range.seedCurrent]) {
-      if (candidate != null && candidate > last) last = candidate;
-    }
+      // El "último consumido" base es el mayor entre: lo que llevamos local,
+      // el current_number del server (seed) y rangeStart-1 (rango virgen).
+      var last = range.rangeStart - 1;
+      for (final candidate in [stored, range.seedCurrent]) {
+        if (candidate != null && candidate > last) last = candidate;
+      }
 
-    final next = last + 1;
-    if (next > range.rangeEnd) {
-      // Agotado → el caller emite recibo provisional sin NCF.
-      return null;
-    }
+      final next = last + 1;
+      if (next > range.rangeEnd) {
+        // Agotado → el caller emite recibo provisional sin NCF.
+        return null;
+      }
 
-    await storage.write(key, '$next');
-    return NcfAssignment(
-      ncf: formatNcf(range.prefix, next),
-      number: next,
-      ncfType: range.ncfType,
-      serie: range.serie,
-    );
+      await storage.write(key, '$next');
+      return NcfAssignment(
+        ncf: formatNcf(range.prefix, next),
+        number: next,
+        ncfType: range.ncfType,
+        serie: range.serie,
+      );
+    });
   }
 
   /// Último número consumido localmente para esta serie (para reconciliación

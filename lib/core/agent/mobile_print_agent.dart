@@ -24,6 +24,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../offline/hub/hub_op_log.dart';
+import '../offline/ncf_offline_allocator.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Agent configuration
@@ -46,6 +47,12 @@ class MobilePrintAgent {
   /// Op-log del Hub Local (F3b). Solo se usa cuando este dispositivo actúa
   /// como Hub; los endpoints /hub/ops y /hub/state lo alimentan/leen.
   final HubOpLog _hubOpLog = HubOpLog();
+
+  /// Asignador de NCF del Hub (F4). Cuando este dispositivo es el Hub, es el
+  /// ÚNICO que asigna NCF offline → numeración secuencial sin huecos. El
+  /// allocator serializa por serie, así que es seguro ante varias cajas
+  /// pidiendo a la vez.
+  final NcfOfflineAllocator _ncfAllocator = NcfOfflineAllocator();
 
   /// Suscriptores WebSocket del feed del Hub (F3c), por negocio. Cada op
   /// aplicada en /hub/ops se difunde a los sockets de ese negocio (el KDS y
@@ -120,6 +127,9 @@ class MobilePrintAgent {
     // op-log (GET). Con auth (igual que el resto de endpoints).
     router.post('/hub/ops', _handleHubOps);
     router.get('/hub/state', _handleHubState);
+    // Hub Local (F4): asigna el próximo NCF de una serie (asignador único en
+    // LAN → numeración secuencial sin huecos).
+    router.post('/hub/ncf/next', _handleHubNcfNext);
     // Feed en vivo (F3c): WebSocket. El cliente envía
     // {"subscribe":"<business_id>"} al conectar y recibe cada op aplicada.
     router.get('/hub/events', _hubEventsHandler());
@@ -276,6 +286,50 @@ class MobilePrintAgent {
     final ops = await _hubOpLog.since(businessId, seq: since);
     final seq = await _hubOpLog.currentSeq(businessId);
     return _jsonOk({'seq': seq, 'ops': ops});
+  }
+
+  /// F4: asigna el próximo NCF de una serie. El allocator serializa por serie,
+  /// así que varias cajas pidiendo a la vez obtienen números únicos. Devuelve
+  /// `{ncf, number}` o `{exhausted: true}` si el rango se agotó (el caller
+  /// emite recibo provisional). Body: business_id, ncf_type, serie, prefix,
+  /// range_start, range_end, seed_current?.
+  Future<shelf.Response> _handleHubNcfNext(shelf.Request request) async {
+    final body = await _readJson(request);
+    if (body == null) return _jsonError('Invalid JSON body', 400);
+    final businessId = body['business_id']?.toString() ?? '';
+    final ncfType = body['ncf_type']?.toString() ?? '';
+    final serie = body['serie']?.toString() ?? '';
+    final prefix = body['prefix']?.toString() ?? '';
+    final rangeStart = (body['range_start'] as num?)?.toInt();
+    final rangeEnd = (body['range_end'] as num?)?.toInt();
+    if (businessId.isEmpty ||
+        ncfType.isEmpty ||
+        serie.isEmpty ||
+        prefix.isEmpty ||
+        rangeStart == null ||
+        rangeEnd == null) {
+      return _jsonError('Missing NCF range fields', 400);
+    }
+    final assignment = await _ncfAllocator.allocate(
+      businessId: businessId,
+      range: NcfRange(
+        ncfType: ncfType,
+        serie: serie,
+        prefix: prefix,
+        rangeStart: rangeStart,
+        rangeEnd: rangeEnd,
+        seedCurrent: (body['seed_current'] as num?)?.toInt(),
+      ),
+    );
+    if (assignment == null) {
+      return _jsonOk({'exhausted': true});
+    }
+    return _jsonOk({
+      'ncf': assignment.ncf,
+      'number': assignment.number,
+      'ncf_type': assignment.ncfType,
+      'serie': assignment.serie,
+    });
   }
 
   shelf.Response _handleStatus(shelf.Request request) {
