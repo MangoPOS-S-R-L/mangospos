@@ -46,6 +46,9 @@ class _SalesReportBody extends StatelessWidget {
 
     final isMobile = ResponsiveHelper.isMobile(context);
     final cardPad = isMobile ? 14.0 : AppSpacing.cardPadding;
+    // F5: si el resumen viene del cache offline, mostramos un aviso de
+    // frescura en vez de aparentar datos en vivo.
+    final cachedAt = viewModel.salesDataCachedAt;
     Widget pdfBtn() => OutlinedButton.icon(
           style: reportOutlineButtonStyle(),
           onPressed: () async {
@@ -80,6 +83,10 @@ class _SalesReportBody extends StatelessWidget {
             state.error!,
             style: const TextStyle(color: AppColors.destructive),
           ),
+        ],
+        if (cachedAt != null) ...[
+          const SizedBox(height: AppSpacing.itemGap),
+          _OfflineDataBanner(cachedAt: cachedAt),
         ],
         SizedBox(height: isMobile ? AppSpacing.itemGap : AppSpacing.xl),
         Container(
@@ -555,6 +562,47 @@ class _SalesReportBody extends StatelessWidget {
 // ---------------------------------------------------------------------------
 // Sales-specific widgets
 // ---------------------------------------------------------------------------
+
+/// Aviso de datos offline (F5): el resumen mostrado proviene del cache local
+/// porque no hay conexión. Indica cuándo se capturó para que el cajero sepa
+/// que puede estar desactualizado.
+class _OfflineDataBanner extends StatelessWidget {
+  const _OfflineDataBanner({required this.cachedAt});
+
+  final DateTime cachedAt;
+
+  @override
+  Widget build(BuildContext context) {
+    final stamp = DateFormat('dd MMM yyyy · HH:mm').format(cachedAt);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7ED),
+        borderRadius: BorderRadius.circular(reportRadius),
+        border: Border.all(color: const Color(0xFFFDBA74)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.cloud_off_rounded,
+              size: 18, color: Color(0xFFB45309)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Sin conexión — mostrando datos guardados al $stamp. '
+              'Pueden estar desactualizados; se refrescan al reconectar.',
+              style: const TextStyle(
+                color: Color(0xFF92400E),
+                fontSize: 12.5,
+                height: 1.3,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class _SalesCommercialReportCard extends StatelessWidget {
   const _SalesCommercialReportCard({
