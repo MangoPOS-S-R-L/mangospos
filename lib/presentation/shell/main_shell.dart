@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/core/offline/offline_queue_status_provider.dart';
+import 'package:mangopos/core/offline/hub/hub_mode_controller.dart';
 import 'package:mangopos/presentation/shell/offline_logout_guard.dart';
 import 'package:mangopos/core/printing/printer_heartbeat_provider.dart';
 import 'package:mangopos/core/services/fullscreen/fullscreen_service.dart';
@@ -39,6 +40,13 @@ class _MainShellState extends ConsumerState<MainShell> {
 
   @override
   Widget build(BuildContext context) {
+    // Mantiene vivo el HubModeController desde el arranque del shell: al ser un
+    // provider no-autoDispose, basta con instanciarlo una vez para que empiece
+    // a observar conectividad y, cuando se active kHubModeEnabled, drene su
+    // op-log al reconectar. Usamos read (no watch) para no re-construir el shell
+    // en cada cambio de modo; con la flag apagada el controller queda inerte.
+    ref.read(hubModeProvider);
+
     // Wrap del child con dos guards en orden de prioridad:
     //   1. PendingApprovalGuard: si la cuenta está pendiente de aprobación
     //      (status='pending'), bloquea con pantalla "en revisión".
