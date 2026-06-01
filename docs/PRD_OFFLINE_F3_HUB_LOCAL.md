@@ -104,7 +104,21 @@ El Hub mantiene en SQLite (drift, ya disponible):
 
 ---
 
-## 9. Decisiones que necesito de ti (antes de codear)
+## 9. Decisiones (RESUELTAS por el dueño 2026-05-31)
+
+- **A. Host del Hub:** ✅ **Primario designado + failover.**
+- **B. Feed en vivo:** ✅ **WebSocket** (dep `shelf_web_socket` cuando toque F3c).
+- **C. Arranque:** ✅ **F3a primero.**
+
+> **Nota técnica descubierta al implementar F3a:** `multicast_dns` (el paquete actual) solo CONSULTA mDNS, no ANUNCIA servicios. El agente desktop (Node.js) sí se anuncia (bonjour-service). Para que una **tablet** sea un Hub descubrible se necesitaría una dep de registro (`nsd`/`bonsoir`) — decisión diferida. F3a evita esto: descubre el Hub vía el `AgentDiscovery` existente (encuentra el agente desktop) y/o una **dirección de Hub configurable**, sin dep nueva. El anuncio desde tablet se decide al hacer F3d/failover en tablets.
+
+### F3a — alcance concreto (sin dependencias nuevas, detrás de flag apagado)
+1. `HubMode` (cloud/hub/solo) + `HubModeController` que resuelve el modo desde conectividad + alcanzabilidad del Hub.
+2. `HubClient`: prueba `GET /hub/health` contra la dirección configurada y/o descubierta.
+3. `/hub/health` en el agente (`shelf`).
+4. Flag `kHubEnabled=false` → no cambia nada en producción hasta cablear F3b+.
+
+### Decisiones originales (para referencia)
 
 **A. ¿Quién corre el Hub?**
 - *Primario designado + failover* (recomendado): configurable, por defecto el equipo con agente desktop o una tablet elegida. Simple y predecible.

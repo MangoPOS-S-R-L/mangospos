@@ -100,6 +100,11 @@ class MobilePrintAgent {
     router.get('/health', _handleHealth);
     router.get('/status', _handleStatus);
 
+    // Hub Local (F3): health/handshake. Por ahora solo anuncia capacidad de
+    // Hub y el seq actual (0 hasta que F3b agregue el op-log). El cliente lo
+    // usa para detectar el modo Hub. Sin auth (igual que /health).
+    router.get('/hub/health', _handleHubHealth);
+
     // Printer discovery
     router.get('/printers', _handleListPrinters);
     router.get('/api/printers/discover', _handleListPrinters);
@@ -144,8 +149,8 @@ class MobilePrintAgent {
     return (shelf.Handler innerHandler) {
       return (shelf.Request request) async {
         final path = request.url.path;
-        // Skip auth for health/status
-        if (path == 'health' || path == 'status') {
+        // Skip auth for health/status y el handshake del Hub.
+        if (path == 'health' || path == 'status' || path == 'hub/health') {
           return innerHandler(request);
         }
         final authHeader = request.headers['authorization'] ?? '';
@@ -166,6 +171,18 @@ class MobilePrintAgent {
 
   shelf.Response _handleHealth(shelf.Request request) {
     return _jsonOk({'status': 'ok'});
+  }
+
+  /// Handshake del Hub Local (F3). `seq` es el último número de operación
+  /// aplicado por el Hub; en F3a aún no hay op-log, así que es 0. El cliente
+  /// (HubClient) usa esto para confirmar que el endpoint es un Hub alcanzable.
+  shelf.Response _handleHubHealth(shelf.Request request) {
+    return _jsonOk({
+      'status': 'ok',
+      'role': 'hub',
+      'hub_protocol': 1,
+      'seq': 0,
+    });
   }
 
   shelf.Response _handleStatus(shelf.Request request) {
