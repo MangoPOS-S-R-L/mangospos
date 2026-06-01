@@ -1049,9 +1049,17 @@ class ReportsRepository {
 
     // --- Global tax type aggregation ---
     final globalTaxBreakdown = <String, Map<String, dynamic>>{};
+    // ITBIS (y todo impuesto NO marcado como servicio/propina) derivado de
+    // los items REALES, por orden. Sale de taxBreakdownByOrder, que ya
+    // excluye la porción de servicio/LEY. Es la base config-driven del ITBIS
+    // del reporte: refleja lo que de verdad se cobró por línea, así que un
+    // producto exento o una venta sin impuesto simplemente no suma nada y
+    // sale sin impuesto. Nunca se imputa con base × tasa.
+    final derivedItbisByOrder = <String, double>{};
 
     for (final oid in orderIds) {
       final items = taxBreakdownByOrder[oid] ?? const [];
+      var orderItbis = 0.0;
       for (final item in items) {
         final rateKey = item['rate_key'] as String;
         final bucket = globalTaxBreakdown.putIfAbsent(
@@ -1068,7 +1076,9 @@ class ReportsRepository {
             _toDouble(bucket['tax_amount']) + _toDouble(item['tax_amount']);
         bucket['base'] = _toDouble(bucket['base']) + _toDouble(item['base']);
         bucket['count'] = (bucket['count'] as int) + 1;
+        orderItbis += _toDouble(item['tax_amount']);
       }
+      if (orderItbis != 0) derivedItbisByOrder[oid] = orderItbis;
     }
 
     // taxBreakdownRows is built after standard aggregations so it can use
@@ -1094,39 +1104,65 @@ class ReportsRepository {
       final oid = doc['order_id']?.toString() ?? '';
       final docTaxes = taxBreakdownByOrder[oid] ?? const [];
 
-      // service_fee = (orden-level: doc.service_fee o orders.service_fee)
-      //              + (items-level: derivado de rate=10 baked o split 28%).
-      // Suma, no prioridad: hay docs mixtos donde parte de la propina
-      // se computó al cierre vía calculate_order_totals (queda en
-      // doc.service_fee) y otra parte estaba baked dentro de items.tax
-      // como rate=10 (legacy). Ambos representan propina cobrada al
-      // cliente y deben sumarse para reflejar el total real.
-      // En docs limpios (modernos o backfilled) derived = 0, así que
-      // no hay double-count.
+      // --- Desglose config-driven (ITBIS vs LEY/servicio) ---
+      // El split sale de lo que REALMENTE se cobró por línea (order_items.tax)
+      // cruzado con la config de `taxes`, NO de fiscal_documents.itbis_amount
+      // —que en muchos negocios trae el combinado (18+10) junto, o 0 cuando el
+      // precio es inclusive—. Así aplica igual a negocios 18+10, solo-10 o
+      // solo-18, y un producto/venta sin impuesto sale sin impuesto.
       final orderLevelServiceFee = docServiceFee > 0
           ? docServiceFee
           : (serviceFeeByOrder[oid] ?? 0);
-      final serviceFee =
-          orderLevelServiceFee + (derivedServiceFeeByOrder[oid] ?? 0);
+      final derivedSvc = derivedServiceFeeByOrder[oid] ?? 0;
+      final derivedItbis = derivedItbisByOrder[oid] ?? 0;
+      final itemTaxTotal = derivedItbis + derivedSvc;
 
-      // Anti double-count de LEY: en órdenes legacy con tax_rate
-      // consolidado (28% = ITBIS+Ley baked en items.tax), el campo
-      // `fiscal_documents.itbis_amount` se guardó incluyendo la
-      // porción de Ley. Aparte derivamos la Ley del items.tax y la
-      // sumamos a `totalServiceFee`. Si ahora también la cuentamos
-      // dentro de `totalItbis`, queda dos veces en pantalla
-      // (card "Impuestos cobrados" Y card "LEY" mostrando la misma
-      // plata). Restamos la porción derivada para que el ITBIS
-      // exhibido sea puro.
-      //
-      // En órdenes modernas (doc.service_fee guardado explícito,
-      // items sin rate combinado), `derived` es 0 → noop.
-      final derived = derivedServiceFeeByOrder[oid] ?? 0;
-      final pureItbis = (itbis - derived).clamp(0.0, double.infinity);
+      double pureItbis;
+      double serviceFee;
+      if (itemTaxTotal > 0.005) {
+        // Los items cargan el impuesto: usar el split derivado de la config.
+        // Refleja exactamente lo cobrado; nada se imputa.
+        pureItbis = derivedItbis;
+        serviceFee = orderLevelServiceFee + derivedSvc;
+      } else if (configuredServiceFeeRate > 0 &&
+          configuredTaxOnlyRate > 0 &&
+          subtotal > 0 &&
+          (((itbis / subtotal) * 100) -
+                      (configuredTaxOnlyRate + configuredServiceFeeRate))
+                  .abs() <
+              0.5) {
+        // Sin impuesto en items, pero itbis_amount trae el combinado (28%)
+        // metido junto (docs manuales/quick legacy). Lo partimos por las
+        // tasas configuradas para no inflar el ITBIS con la porción de LEY.
+        final combined = configuredTaxOnlyRate + configuredServiceFeeRate;
+        final svcPortion = itbis * (configuredServiceFeeRate / combined);
+        pureItbis = itbis - svcPortion;
+        serviceFee = orderLevelServiceFee + svcPortion;
+      } else {
+        // Camino legacy: confiar en las columnas del documento tal cual.
+        pureItbis = (itbis - derivedSvc).clamp(0.0, double.infinity);
+        serviceFee = orderLevelServiceFee + derivedSvc;
+      }
+
+      // Comprobante de cortesía/comp o anulado de facto (total <= 0): no se
+      // cobró nada, así que no aporta impuesto ni base. Sin esto, una orden
+      // con descuento 100% (subtotales y tax negativos en los items) hace
+      // que el fallback `(itbis - derivedSvc)` con derivedSvc negativo
+      // fabrique ITBIS/LEY fantasma.
+      if (total <= 0.005) {
+        pureItbis = 0;
+        serviceFee = 0;
+      }
+
+      // Base gravable consistente: total menos los impuestos resueltos.
+      // Evita el sobreconteo en documentos con precio inclusive donde
+      // fiscal_documents.subtotal == total. Garantiza base + itbis + ley = total.
+      final taxableBase =
+          (total - pureItbis - serviceFee).clamp(0.0, double.infinity);
 
       if (status == 'active') {
         activeCount += 1;
-        totalSubtotal += subtotal;
+        totalSubtotal += taxableBase;
         totalItbis += pureItbis;
         totalServiceFee += serviceFee;
         totalAmount += total;
@@ -1139,6 +1175,7 @@ class ReportsRepository {
         () => {
           'label': _ncfTypeLabel(ncfType),
           'amount': 0.0,
+          'subtotal': 0.0,
           'itbis': 0.0,
           'service_fee': 0.0,
           'count': 0,
@@ -1146,6 +1183,7 @@ class ReportsRepository {
       );
       if (status == 'active') {
         bucket['amount'] = _toDouble(bucket['amount']) + total;
+        bucket['subtotal'] = _toDouble(bucket['subtotal']) + taxableBase;
         bucket['itbis'] = _toDouble(bucket['itbis']) + pureItbis;
         bucket['service_fee'] = _toDouble(bucket['service_fee']) + serviceFee;
         bucket['count'] = (bucket['count'] as int) + 1;
