@@ -21,6 +21,8 @@ import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../offline/hub/hub_op_log.dart';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Agent configuration
 // ─────────────────────────────────────────────────────────────────────────────
@@ -38,6 +40,10 @@ class MobilePrintAgent {
   HttpServer? _server;
   int _port = _defaultPort;
   final List<Map<String, dynamic>> _jobHistory = [];
+
+  /// Op-log del Hub Local (F3b). Solo se usa cuando este dispositivo actúa
+  /// como Hub; los endpoints /hub/ops y /hub/state lo alimentan/leen.
+  final HubOpLog _hubOpLog = HubOpLog();
   final FlutterUsbPrinter _usbPrinter = FlutterUsbPrinter();
 
   bool get isRunning => _server != null;
@@ -100,10 +106,12 @@ class MobilePrintAgent {
     router.get('/health', _handleHealth);
     router.get('/status', _handleStatus);
 
-    // Hub Local (F3): health/handshake. Por ahora solo anuncia capacidad de
-    // Hub y el seq actual (0 hasta que F3b agregue el op-log). El cliente lo
-    // usa para detectar el modo Hub. Sin auth (igual que /health).
+    // Hub Local (F3): health/handshake. Sin auth (igual que /health).
     router.get('/hub/health', _handleHubHealth);
+    // Hub Local (F3b): recibir una operación (POST) y servir el delta del
+    // op-log (GET). Con auth (igual que el resto de endpoints).
+    router.post('/hub/ops', _handleHubOps);
+    router.get('/hub/state', _handleHubState);
 
     // Printer discovery
     router.get('/printers', _handleListPrinters);
@@ -183,6 +191,30 @@ class MobilePrintAgent {
       'hub_protocol': 1,
       'seq': 0,
     });
+  }
+
+  /// F3b: recibe una operación de un terminal, la agrega al op-log (seq +
+  /// idempotente por op_id) y devuelve el seq asignado. El body es la acción
+  /// (mismo shape que `enqueueAction`) e incluye `business_id`.
+  Future<shelf.Response> _handleHubOps(shelf.Request request) async {
+    final body = await _readJson(request);
+    if (body == null) return _jsonError('Invalid JSON body', 400);
+    final businessId = body['business_id']?.toString() ?? '';
+    if (businessId.isEmpty) return _jsonError('Missing business_id', 400);
+    final seq = await _hubOpLog.append(businessId, body);
+    return _jsonOk({'seq': seq, 'op_id': body['op_id'] ?? body['id']});
+  }
+
+  /// F3b: sirve el delta del op-log desde `since` (query param) para que un
+  /// terminal/KDS se ponga al día. Devuelve `{seq, ops}`.
+  Future<shelf.Response> _handleHubState(shelf.Request request) async {
+    final q = request.url.queryParameters;
+    final businessId = q['business_id'] ?? '';
+    if (businessId.isEmpty) return _jsonError('Missing business_id', 400);
+    final since = int.tryParse(q['since'] ?? '0') ?? 0;
+    final ops = await _hubOpLog.since(businessId, seq: since);
+    final seq = await _hubOpLog.currentSeq(businessId);
+    return _jsonOk({'seq': seq, 'ops': ops});
   }
 
   shelf.Response _handleStatus(shelf.Request request) {
