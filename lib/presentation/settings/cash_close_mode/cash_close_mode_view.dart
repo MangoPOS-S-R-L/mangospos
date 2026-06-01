@@ -20,6 +20,7 @@ class _CashCloseModeViewState extends ConsumerState<CashCloseModeView> {
   String? _resolvedBusinessId;
   String? _selected;
   bool _allowRecount = false;
+  bool _printSalesByArea = false;
   bool _loading = true;
   bool _saving = false;
   String? _error;
@@ -36,11 +37,13 @@ class _CashCloseModeViewState extends ConsumerState<CashCloseModeView> {
       final repo = ref.read(posSettingsRepositoryProvider);
       final mode = await repo.getCashCloseMode(id);
       final allowRecount = await repo.getAllowRecount(id);
+      final printSalesByArea = await repo.getCashClosePrintSalesByArea(id);
       if (!mounted) return;
       setState(() {
         _resolvedBusinessId = id;
         _selected = mode;
         _allowRecount = allowRecount;
+        _printSalesByArea = printSalesByArea;
         _loading = false;
       });
     } catch (e) {
@@ -82,6 +85,47 @@ class _CashCloseModeViewState extends ConsumerState<CashCloseModeView> {
       if (!mounted) return;
       setState(() {
         _allowRecount = previous;
+        _saving = false;
+        _error = 'No se pudo guardar el cambio: $e';
+      });
+    }
+  }
+
+  Future<void> _setPrintSalesByArea(bool enabled) async {
+    if (_saving ||
+        _resolvedBusinessId == null ||
+        enabled == _printSalesByArea) {
+      return;
+    }
+    final previous = _printSalesByArea;
+    setState(() {
+      _printSalesByArea = enabled;
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await ref
+          .read(posSettingsRepositoryProvider)
+          .setCashClosePrintSalesByArea(
+            businessId: _resolvedBusinessId!,
+            enabled: enabled,
+          );
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            enabled
+                ? 'El cierre de caja incluirá el desglose por área de producción.'
+                : 'Desglose por área de producción desactivado en el cierre.',
+          ),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _printSalesByArea = previous;
         _saving = false;
         _error = 'No se pudo guardar el cambio: $e';
       });
@@ -188,6 +232,13 @@ class _CashCloseModeViewState extends ConsumerState<CashCloseModeView> {
           value: _allowRecount,
           onChanged: _saving ? null : _setAllowRecount,
         ),
+        const SizedBox(height: 24),
+        const _SectionLabel('Reporte de cierre'),
+        const SizedBox(height: 8),
+        _SalesByAreaSwitch(
+          value: _printSalesByArea,
+          onChanged: _saving ? null : _setPrintSalesByArea,
+        ),
       ],
     );
   }
@@ -266,6 +317,80 @@ class _RecountSwitch extends StatelessWidget {
                   'contar» en el flujo de cierre que limpia los montos y '
                   'reinicia el conteo. Solo aplica antes de firmar; una '
                   'vez confirmado el cierre, no se puede revertir.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.black54,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Switch.adaptive(
+            value: value,
+            activeTrackColor: MangoColors.primaryOrange,
+            onChanged: onChanged,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SalesByAreaSwitch extends StatelessWidget {
+  const _SalesByAreaSwitch({required this.value, required this.onChanged});
+
+  final bool value;
+  final ValueChanged<bool>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: value ? MangoColors.primaryOrange : MangoColors.cardBorder,
+          width: value ? 1.5 : 1,
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: value
+                  ? const Color(0xFFFFEDD5)
+                  : const Color(0xFFF3F4F6),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(
+              Icons.pie_chart_outline_rounded,
+              color: value ? MangoColors.primaryOrange : MangoColors.muted,
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text(
+                  'Incluir ventas por área de producción',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.black87,
+                  ),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  'Si está activado, el papel del cierre de caja agrega un '
+                  'desglose de ventas por área (cocina, bar, etc.) con monto, '
+                  'unidades y órdenes, para el periodo de la sesión.',
                   style: TextStyle(
                     fontSize: 12,
                     color: Colors.black54,
