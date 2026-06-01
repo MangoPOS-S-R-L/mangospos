@@ -30,6 +30,7 @@ class _TaxReportBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final currency = state.currency.formatter;
+    final cachedAt = viewModel.taxDataCachedAt;
 
     // All data comes from fiscal_documents
     final fs = state.fiscalSummary ?? const <String, dynamic>{};
@@ -121,6 +122,11 @@ class _TaxReportBody extends StatelessWidget {
           const SizedBox(height: AppSpacing.itemGap),
           Text(state.error!,
               style: const TextStyle(color: AppColors.destructive)),
+        ],
+
+        if (cachedAt != null) ...[
+          const SizedBox(height: AppSpacing.itemGap),
+          OfflineDataBanner(cachedAt: cachedAt),
         ],
 
         const SizedBox(height: AppSpacing.xl),
