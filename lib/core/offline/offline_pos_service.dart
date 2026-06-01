@@ -5,6 +5,7 @@ import 'package:uuid/uuid.dart';
 
 import 'package:mangopos/core/offline/storage/offline_queue_dao.dart';
 import 'package:mangopos/core/offline/storage/offline_queue_db.dart';
+import 'package:mangopos/core/offline/hub/hub_op_log.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
 import 'package:mangopos/core/security/secure_blob_cipher.dart';
 import 'package:mangopos/core/storage/storage_service.dart';
@@ -150,6 +151,11 @@ class OfflinePosService {
   /// comportamiento de siempre. Null en modo cloud/solo → cero cambio.
   Future<int?> Function(String businessId, Map<String, dynamic> op)?
       _hubUploader;
+
+  /// Op-log del Hub (F3b-3b). Cuando ESTE dispositivo es el Hub, el uplink
+  /// drena este log a Supabase. Misma key/SP que el agente, así que comparten
+  /// el mismo registro.
+  final HubOpLog _hubOpLog = HubOpLog();
 
   /// Activa/desactiva el enrutado al Hub. Lo llama HubModeController según el
   /// modo. Pasar null vuelve al encolado local puro.
@@ -758,6 +764,108 @@ class OfflinePosService {
       skipped: skipped,
       pending: pending,
       dead: dead,
+      lastMappedOrderId: lastMappedOrderId,
+      lastError: lastError,
+      conflicts: List<OfflineSyncConflict>.unmodifiable(conflicts),
+    );
+  }
+
+  /// Uplink único Hub→Supabase (F3b-3b). Cuando ESTE dispositivo es el Hub y
+  /// vuelve la conexión, drena su op-log a Supabase replayando cada op EN
+  /// ORDEN seq (FIFO) con la MISMA lógica que la cola por-device
+  /// (`_replayAction` + markers de idempotencia + mappings local→remoto).
+  ///
+  /// Resolución de IDs entre terminales: el op-log trae `local-order-X` /
+  /// `tmp_Y` de varios terminales. No hace falta un mecanismo nuevo: como el
+  /// replay corre en orden seq, la primera op que referencia un id local
+  /// crea el recurso en server y guarda el mapping en este dispositivo (el
+  /// Hub); las ops siguientes lo resuelven. El FIFO garantiza creación antes
+  /// que mutación.
+  ///
+  /// Idempotencia: usa `completed_ops`/`fingerprints` como la cola normal, así
+  /// que re-correr es seguro. Solo limpia el op-log si todo subió sin fallos;
+  /// si algo falló, lo deja para reintentar (los ya completados se saltan por
+  /// marker). Uplink único = el Hub es el único que sube → cero duplicación.
+  Future<OfflineQueueSyncResult> syncHubOpLog({
+    required String businessId,
+    required SalesRepository salesRepository,
+    required PrintingService printingService,
+    required InventoryRepository inventoryRepository,
+    required CashierRepository cashierRepository,
+  }) async {
+    final ops = await _hubOpLog.since(businessId); // orden seq (FIFO)
+    if (ops.isEmpty) return const OfflineQueueSyncResult();
+
+    var processed = 0;
+    var completed = 0;
+    var failed = 0;
+    String? lastMappedOrderId;
+    String? lastError;
+    final conflicts = <OfflineSyncConflict>[];
+    final completedOps = await _readCompletedOps(businessId);
+    final completedFingerprints = await _readCompletedFingerprints(businessId);
+
+    for (final op in ops) {
+      final opId = op['op_id']?.toString() ?? op['id']?.toString();
+      final fingerprint = op['fingerprint']?.toString();
+      // Ya aplicada (re-run o subió antes) → idempotente, saltar.
+      if ((opId != null && completedOps.contains(opId)) ||
+          (fingerprint != null && completedFingerprints.contains(fingerprint))) {
+        completed++;
+        continue;
+      }
+      processed++;
+      try {
+        final mapped = await _replayAction(
+          businessId: businessId,
+          action: op,
+          salesRepository: salesRepository,
+          printingService: printingService,
+          inventoryRepository: inventoryRepository,
+          cashierRepository: cashierRepository,
+          conflicts: conflicts,
+        );
+        lastMappedOrderId = mapped ?? lastMappedOrderId;
+        completed++;
+        if (opId != null && opId.isNotEmpty) {
+          await _markOpCompleted(businessId: businessId, opId: opId);
+        }
+        if (fingerprint != null && fingerprint.isNotEmpty) {
+          await _markFingerprintCompleted(
+              businessId: businessId, fingerprint: fingerprint);
+        }
+      } on _OfflineSyncSkip catch (skip) {
+        // Conflicto cross-terminal: la op ya no aplica (item borrado, etc.).
+        // Idempotente: la marcamos completada y reportamos.
+        conflicts.add(OfflineSyncConflict(
+          actionType: op['type']?.toString() ?? 'unknown',
+          actionId: opId,
+          reason: skip.reason,
+        ));
+        completed++;
+        if (opId != null && opId.isNotEmpty) {
+          await _markOpCompleted(businessId: businessId, opId: opId);
+        }
+      } catch (e) {
+        failed++;
+        lastError = e.toString();
+        // Si volvió a caer la red, cortamos: el resto fallaría igual y se
+        // reintenta en el próximo uplink (los completados se saltan).
+        if (_isConnectivityError(e)) break;
+      }
+    }
+
+    // Solo vaciamos el op-log si todo subió. Si algo falló, lo conservamos
+    // para reintentar (idempotencia evita doble aplicación).
+    if (failed == 0) {
+      await _hubOpLog.clear(businessId);
+    }
+
+    return OfflineQueueSyncResult(
+      processed: processed,
+      completed: completed,
+      failed: failed,
+      pending: failed,
       lastMappedOrderId: lastMappedOrderId,
       lastError: lastError,
       conflicts: List<OfflineSyncConflict>.unmodifiable(conflicts),
