@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../services/session/session_controller.dart';
 import '../../network/connectivity_service.dart';
 import '../../storage/storage_service.dart';
+import '../offline_pos_service.dart';
 import 'hub_client.dart';
 import 'hub_mode.dart';
 
@@ -56,6 +57,22 @@ class HubModeController extends StateNotifier<HubMode> {
       isConnected: connected,
       hubReachable: hubReachable,
     );
+
+    // Cablea/desconecta el enrutado de mutaciones al Hub (F3b-3): en modo
+    // hub, OfflinePosService.enqueueAction enviará las ops al Hub alcanzable;
+    // en cloud/solo se limpia y vuelve al encolado local puro.
+    final hubUrl = _reachableHubUrl;
+    if (mode == HubMode.hub && hubUrl != null) {
+      OfflinePosService().setHubUploader(
+        (businessId, op) => _hubClient.postOp(
+          hubUrl,
+          {...op, 'business_id': businessId},
+        ),
+      );
+    } else {
+      OfflinePosService().setHubUploader(null);
+    }
+
     if (mode != state) state = mode;
   }
 

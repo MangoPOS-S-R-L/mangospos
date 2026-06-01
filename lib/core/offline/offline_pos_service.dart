@@ -142,6 +142,24 @@ class OfflinePosService {
   /// items, cliente). Migración perezosa de valores legacy en texto plano.
   final SecureBlobCipher _cipher = SecureBlobCipher.instance;
 
+  /// Seam del Hub Local (F3b-3). Cuando el terminal está en modo `hub`,
+  /// `HubModeController` setea este uploader (un closure que hace
+  /// `HubClient.postOp` contra el Hub alcanzable). Si está seteado,
+  /// `enqueueAction` envía la op al Hub en vez de a la cola local; si el Hub
+  /// no responde (devuelve null o lanza), cae a la cola local — el
+  /// comportamiento de siempre. Null en modo cloud/solo → cero cambio.
+  Future<int?> Function(String businessId, Map<String, dynamic> op)?
+      _hubUploader;
+
+  /// Activa/desactiva el enrutado al Hub. Lo llama HubModeController según el
+  /// modo. Pasar null vuelve al encolado local puro.
+  void setHubUploader(
+    Future<int?> Function(String businessId, Map<String, dynamic> op)?
+        uploader,
+  ) {
+    _hubUploader = uploader;
+  }
+
   /// DAO de drift/sqlite para cola + completed_ops + fingerprints.
   /// El resto del cache (snapshots, mappings, catalog, inventory) sigue
   /// en SharedPreferences vía [_storage] — es alcance de Fase 6 solo
@@ -382,7 +400,6 @@ class OfflinePosService {
     required String businessId,
     required Map<String, dynamic> action,
   }) async {
-    final current = await _readQueue(businessId);
     // Anotamos device_id de origen (audit LWW). Best-effort: si falla
     // la lectura del id no bloqueamos el enqueue.
     final deviceId = await _resolveDeviceId(businessId);
@@ -390,7 +407,27 @@ class OfflinePosService {
     if (deviceId != null && enriched['device_id'] == null) {
       enriched['device_id'] = deviceId;
     }
-    current.add(_normalizeAction(enriched));
+    // Normalizamos ANTES de decidir el destino: la op necesita op_id y
+    // fingerprint tanto para la cola local como para la idempotencia del Hub.
+    final normalized = _normalizeAction(enriched);
+
+    // F3b-3: en modo hub, enrutamos la op al Hub Local en vez de a la cola
+    // local. Si el Hub la acepta (seq != null), terminamos: el Hub es ahora
+    // el dueño de esa op y su uplink la subirá a Supabase. Si el Hub no
+    // responde, caemos a la cola local — exactamente el comportamiento de
+    // modo solo. El uploader es null en cloud/solo → este bloque no corre.
+    final uploader = _hubUploader;
+    if (uploader != null) {
+      try {
+        final seq = await uploader(businessId, normalized);
+        if (seq != null) return;
+      } catch (_) {
+        // Hub inalcanzable o error → fallback a cola local.
+      }
+    }
+
+    final current = await _readQueue(businessId);
+    current.add(normalized);
     final compacted = _compactQueue(current);
     await _writeQueue(businessId, compacted);
   }
