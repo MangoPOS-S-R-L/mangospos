@@ -71,7 +71,11 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
       backgroundColor: AppColors.background,
       body: viewModel.isLoading
           ? Center(child: CircularProgressIndicator(color: AppColors.primary))
-          : SingleChildScrollView(
+          : Padding(
+              // Header fijo arriba; la tabla/lista vive en un Expanded con su
+              // propio scroll virtualizado (ListView perezoso). Antes todo iba
+              // en un SingleChildScrollView con shrinkWrap, que construía
+              // TODAS las filas de golpe.
               padding: const EdgeInsets.all(AppSpacing.xxl),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -133,15 +137,17 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                   _buildToolbar(context, viewModel),
                   const SizedBox(height: AppSpacing.xxl),
 
-                  _ProductsTable(
-                    products: products,
-                    viewModel: viewModel,
-                    onEdit: (product) => _showAddEditDialog(
-                      context,
-                      viewModel,
-                      product: product,
+                  Expanded(
+                    child: _ProductsTable(
+                      products: products,
+                      viewModel: viewModel,
+                      onEdit: (product) => _showAddEditDialog(
+                        context,
+                        viewModel,
+                        product: product,
+                      ),
+                      onDelete: (id) => _confirmDelete(context, viewModel, id),
                     ),
-                    onDelete: (id) => _confirmDelete(context, viewModel, id),
                   ),
                 ],
               ),
@@ -710,12 +716,12 @@ class _ProductsTable extends StatelessWidget {
               ),
             )
           else
-            ListView.separated(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: products.length,
-              separatorBuilder: (context, index) =>
-                  Divider(height: 1, color: AppColors.border),
+            Expanded(
+              child: ListView.separated(
+                shrinkWrap: false,
+                itemCount: products.length,
+                separatorBuilder: (context, index) =>
+                    Divider(height: 1, color: AppColors.border),
               itemBuilder: (context, index) {
                 final product = products[index];
                 final categoryName =
@@ -918,6 +924,7 @@ class _ProductsTable extends StatelessWidget {
                   ),
                 );
               },
+              ),
             ),
         ],
       ),
@@ -1157,8 +1164,7 @@ class _ProductsCardList extends StatelessWidget {
       );
     }
     return ListView.separated(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
+      shrinkWrap: false,
       itemCount: products.length,
       separatorBuilder: (_, _) => const SizedBox(height: 10),
       itemBuilder: (context, index) {
