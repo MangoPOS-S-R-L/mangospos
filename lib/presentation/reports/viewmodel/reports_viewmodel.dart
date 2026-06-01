@@ -709,6 +709,13 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
     return DateTime.tryParse(raw);
   }
 
+  /// Igual que [salesDataCachedAt] pero para el resumen de finanzas/caja (F5-2).
+  DateTime? get financesDataCachedAt {
+    final raw = state.cashSummary?['_offline_cached_at']?.toString();
+    if (raw == null || raw.isEmpty) return null;
+    return DateTime.tryParse(raw);
+  }
+
   List<SalesMetricCardData> getSalesMetricCards() {
     final summary = state.salesSummary ?? const <String, dynamic>{};
     final totalSales = (summary['total_sales'] as num?)?.toDouble() ?? 0;

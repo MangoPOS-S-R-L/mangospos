@@ -190,7 +190,44 @@ class ReportsRepository {
       };
 
 
+  /// Resumen de caja/finanzas. F5-2: cachea al cargar online y, sin red,
+  /// sirve el snapshot cacheado del MISMO rango (marcado `_offline_cached_at`)
+  /// para poder ver el cierre del día offline. Si no hay cache para ese rango,
+  /// propaga el error.
   Future<Map<String, dynamic>> getCashSummary({
+    required String businessId,
+    required DateTime from,
+    required DateTime to,
+  }) async {
+    final fromIso = AppTime.astToUtcIso(from);
+    final toIso = AppTime.astToUtcIso(to);
+    try {
+      final result = await _getCashSummaryOnline(
+          businessId: businessId, from: from, to: to);
+      await ReportsOfflineCache().saveCashSummary(
+        businessId: businessId,
+        fromIso: fromIso,
+        toIso: toIso,
+        summary: result,
+      );
+      return result;
+    } catch (e) {
+      final cached = await ReportsOfflineCache().loadCashSummary(
+        businessId: businessId,
+        fromIso: fromIso,
+        toIso: toIso,
+      );
+      if (cached != null) {
+        return {
+          ...cached.summary,
+          '_offline_cached_at': cached.savedAt.toIso8601String(),
+        };
+      }
+      rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>> _getCashSummaryOnline({
     required String businessId,
     required DateTime from,
     required DateTime to,

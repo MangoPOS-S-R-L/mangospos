@@ -21,10 +21,15 @@ class ReportsOfflineCache {
 
   Future<StorageService> get _storage async => StorageService.getInstance();
 
-  String _salesKey(String businessId) =>
-      'offline_reports_sales_summary_$businessId';
+  // Key por tipo de resumen ("sales", "cash", …). 'sales' conserva la key
+  // histórica de F5-1 (`offline_reports_sales_summary_$businessId`) para no
+  // invalidar snapshots ya guardados.
+  String _key(String kind, String businessId) =>
+      'offline_reports_${kind}_summary_$businessId';
 
-  Future<void> saveSalesSummary({
+  /// Guarda un snapshot de resumen ([kind]) por negocio + rango.
+  Future<void> _save({
+    required String kind,
     required String businessId,
     required String fromIso,
     required String toIso,
@@ -38,23 +43,24 @@ class ReportsOfflineCache {
         'to': toIso,
         'summary': summary,
       });
-      await storage.write(_salesKey(businessId), payload);
+      await storage.write(_key(kind, businessId), payload);
     } catch (e) {
-      debugPrint('ReportsOfflineCache.saveSalesSummary error: $e');
+      debugPrint('ReportsOfflineCache._save($kind) error: $e');
     }
   }
 
-  /// Devuelve el resumen cacheado SOLO si el rango coincide con el pedido.
-  /// `savedAt` indica cuándo se capturó (para el aviso de frescura). Null si
-  /// no hay cache o el rango no coincide.
-  Future<({Map<String, dynamic> summary, DateTime savedAt})?> loadSalesSummary({
+  /// Devuelve el snapshot ([kind]) cacheado SOLO si el rango coincide con el
+  /// pedido. `savedAt` = cuándo se capturó (para el aviso). Null si no hay
+  /// cache o el rango no coincide.
+  Future<({Map<String, dynamic> summary, DateTime savedAt})?> _load({
+    required String kind,
     required String businessId,
     required String fromIso,
     required String toIso,
   }) async {
     try {
       final storage = await _storage;
-      final raw = await storage.read(_salesKey(businessId));
+      final raw = await storage.read(_key(kind, businessId));
       if (raw == null || raw.isEmpty) return null;
       final payload = Map<String, dynamic>.from(jsonDecode(raw) as Map);
       if (payload['from'] != fromIso || payload['to'] != toIso) return null;
@@ -64,8 +70,52 @@ class ReportsOfflineCache {
               DateTime.fromMillisecondsSinceEpoch(0);
       return (summary: summary, savedAt: savedAt);
     } catch (e) {
-      debugPrint('ReportsOfflineCache.loadSalesSummary error: $e');
+      debugPrint('ReportsOfflineCache._load($kind) error: $e');
       return null;
     }
   }
+
+  // --- Ventas (F5-1) ---
+  Future<void> saveSalesSummary({
+    required String businessId,
+    required String fromIso,
+    required String toIso,
+    required Map<String, dynamic> summary,
+  }) =>
+      _save(
+          kind: 'sales',
+          businessId: businessId,
+          fromIso: fromIso,
+          toIso: toIso,
+          summary: summary);
+
+  Future<({Map<String, dynamic> summary, DateTime savedAt})?> loadSalesSummary({
+    required String businessId,
+    required String fromIso,
+    required String toIso,
+  }) =>
+      _load(
+          kind: 'sales', businessId: businessId, fromIso: fromIso, toIso: toIso);
+
+  // --- Finanzas / caja (F5-2) ---
+  Future<void> saveCashSummary({
+    required String businessId,
+    required String fromIso,
+    required String toIso,
+    required Map<String, dynamic> summary,
+  }) =>
+      _save(
+          kind: 'cash',
+          businessId: businessId,
+          fromIso: fromIso,
+          toIso: toIso,
+          summary: summary);
+
+  Future<({Map<String, dynamic> summary, DateTime savedAt})?> loadCashSummary({
+    required String businessId,
+    required String fromIso,
+    required String toIso,
+  }) =>
+      _load(
+          kind: 'cash', businessId: businessId, fromIso: fromIso, toIso: toIso);
 }

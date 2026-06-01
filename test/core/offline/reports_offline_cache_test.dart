@@ -79,4 +79,41 @@ void main() {
     );
     expect(loaded!.summary['net_sales'], 999);
   });
+
+  test('caja (F5-2): save/load independiente de ventas (kinds distintos)',
+      () async {
+    await cache.saveCashSummary(
+      businessId: biz,
+      fromIso: from,
+      toIso: to,
+      summary: {'net_cash_flow': 4200},
+    );
+    await cache.saveSalesSummary(
+      businessId: biz,
+      fromIso: from,
+      toIso: to,
+      summary: {'net_sales': 1},
+    );
+    final cash =
+        await cache.loadCashSummary(businessId: biz, fromIso: from, toIso: to);
+    expect(cash!.summary['net_cash_flow'], 4200);
+    final sales =
+        await cache.loadSalesSummary(businessId: biz, fromIso: from, toIso: to);
+    expect(sales!.summary['net_sales'], 1);
+  });
+
+  test('caja: rango distinto devuelve null', () async {
+    await cache.saveCashSummary(
+      businessId: biz,
+      fromIso: from,
+      toIso: to,
+      summary: {'net_cash_flow': 10},
+    );
+    final loaded = await cache.loadCashSummary(
+      businessId: biz,
+      fromIso: '2026-01-01T00:00:00.000Z',
+      toIso: '2026-01-02T00:00:00.000Z',
+    );
+    expect(loaded, isNull);
+  });
 }
