@@ -876,25 +876,51 @@ class ReportsRepository {
     final fromIso = AppTime.astToUtcIso(from);
     final toIso = AppTime.astToUtcIso(to);
 
-    final rows = List<Map<String, dynamic>>.from(
-      await _client
-          .from('fiscal_documents')
-          .select(
-            'id, order_id, payment_id, customer_id, ncf_type, ncf_number, customer_rnc, customer_name, subtotal, taxable_amount, itbis_amount, service_fee, total, status, issued_at',
-          )
-          .eq('business_id', businessId)
-          .gte('issued_at', fromIso)
-          .lt('issued_at', toIso)
-          .order('issued_at', ascending: true),
-    );
-
-    // --- Fetch configured taxes for label lookup ---
-    final taxConfigs = List<Map<String, dynamic>>.from(
-      await _client
-          .from(ReportsQueries.tableTaxes)
-          .select('id, name, rate, is_active, is_service_fee')
-          .eq('business_id', businessId),
-    );
+    // Carga en UN viaje vía RPC get_fiscal_summary_bundle (documents + taxes +
+    // order_items + orders del rango). Antes eran 7-15 round-trips
+    // (fiscal_documents, taxes, y order_items/orders en lotes de 150). La
+    // AGREGACIÓN sigue 100% en Dart, así que los números no cambian; este
+    // RPC solo mueve el fetch al servidor. Fallback al camino multi-query si
+    // el RPC todavía no está desplegado.
+    List<Map<String, dynamic>> rows;
+    List<Map<String, dynamic>> taxConfigs;
+    List<Map<String, dynamic>>? bundledItems;
+    List<Map<String, dynamic>>? bundledOrders;
+    try {
+      final bundle = await _client.rpc(
+        'get_fiscal_summary_bundle',
+        params: {'_business_id': businessId, '_from': fromIso, '_to': toIso},
+      );
+      List<Map<String, dynamic>> asMaps(Object? v) =>
+          List<Map<String, dynamic>>.from(
+            (v as List? ?? const [])
+                .map((e) => Map<String, dynamic>.from(e as Map)),
+          );
+      final m = Map<String, dynamic>.from(bundle as Map);
+      rows = asMaps(m['documents']);
+      taxConfigs = asMaps(m['taxes']);
+      bundledItems = asMaps(m['order_items']);
+      bundledOrders = asMaps(m['orders']);
+    } catch (_) {
+      // Fallback legacy: queries directas (el RPC no existe o falló).
+      rows = List<Map<String, dynamic>>.from(
+        await _client
+            .from('fiscal_documents')
+            .select(
+              'id, order_id, payment_id, customer_id, ncf_type, ncf_number, customer_rnc, customer_name, subtotal, taxable_amount, itbis_amount, service_fee, total, status, issued_at',
+            )
+            .eq('business_id', businessId)
+            .gte('issued_at', fromIso)
+            .lt('issued_at', toIso)
+            .order('issued_at', ascending: true),
+      );
+      taxConfigs = List<Map<String, dynamic>>.from(
+        await _client
+            .from(ReportsQueries.tableTaxes)
+            .select('id, name, rate, is_active, is_service_fee')
+            .eq('business_id', businessId),
+      );
+    }
     final taxNameByRate = <String, String>{};
     double configuredServiceFeeRate = 0;
     double configuredTaxOnlyRate = 0;
@@ -941,26 +967,27 @@ class ReportsRepository {
         .toSet()
         .toList(growable: false);
 
-    // --- Fetch order items (tax_rate, tax, subtotal) for those orders ---
-    final orderItems = orderIds.isEmpty
-        ? <Map<String, dynamic>>[]
-        : await _selectInBatches(
-            table: ReportsQueries.tableOrderItems,
-            select:
-                'order_id, tax, tax_rate, subtotal, total, qty, quantity, status',
-            column: 'order_id',
-            values: orderIds,
-          );
+    // --- Order items + orders: del bundle si vino del RPC; si no, fallback. ---
+    final orderItems = bundledItems ??
+        (orderIds.isEmpty
+            ? <Map<String, dynamic>>[]
+            : await _selectInBatches(
+                table: ReportsQueries.tableOrderItems,
+                select:
+                    'order_id, tax, tax_rate, subtotal, total, qty, quantity, status',
+                column: 'order_id',
+                values: orderIds,
+              ));
 
-    // --- Fetch orders for service_fee ---
-    final orderRows = orderIds.isEmpty
-        ? <Map<String, dynamic>>[]
-        : await _selectInBatches(
-            table: ReportsQueries.tableOrders,
-            select: 'id, service_fee, status_ext',
-            column: 'id',
-            values: orderIds,
-          );
+    final orderRows = bundledOrders ??
+        (orderIds.isEmpty
+            ? <Map<String, dynamic>>[]
+            : await _selectInBatches(
+                table: ReportsQueries.tableOrders,
+                select: 'id, service_fee, status_ext',
+                column: 'id',
+                values: orderIds,
+              ));
     final serviceFeeByOrder = <String, double>{};
     for (final o in orderRows) {
       final oid = o['id']?.toString() ?? '';
