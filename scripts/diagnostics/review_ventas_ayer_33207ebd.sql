@@ -497,3 +497,33 @@ join fiscal_documents fd on fd.order_id = oi.order_id
 where fd.ncf_number = 'B0200066291'
   and fd.business_id = '33207ebd-985d-455c-bdbb-1b38af8b36ea'::uuid
 order by oi.created_at;
+
+-- ---------------------------------------------------------------------
+-- (P) FIX CONFIG: vincular ITBIS + LEY a los productos sin impuesto.
+--     Acotado a productos activos del negocio que HOY no tienen NINGÚN
+--     impuesto vinculado (los 5 del bloque I). Idempotente.
+--     OJO: solo afecta ventas NUEVAS (el resolver lee el vínculo al
+--     agregar el ítem). Las ventas pasadas en tax_rate=0 no cambian.
+--     Corre primero el bloque I y confirma que la lista es la esperada.
+-- ---------------------------------------------------------------------
+insert into menu_item_taxes (item_id, tax_id)
+select mi.id, t.id
+from menu_items mi
+cross join taxes t
+where mi.business_id = '33207ebd-985d-455c-bdbb-1b38af8b36ea'::uuid
+  and mi.is_active = true
+  and t.business_id = '33207ebd-985d-455c-bdbb-1b38af8b36ea'::uuid
+  and t.is_active = true
+  -- solo productos que hoy NO tienen ningún impuesto vinculado
+  and not exists (
+    select 1 from menu_item_taxes y
+    join taxes tt on tt.id = y.tax_id and coalesce(tt.is_active, true)
+    where y.item_id = mi.id
+  )
+  -- no duplicar el par (item, tax)
+  and not exists (
+    select 1 from menu_item_taxes x
+    where x.item_id = mi.id and x.tax_id = t.id
+  );
+
+-- Verificación: re-correr el bloque I debe devolver 0 filas.
