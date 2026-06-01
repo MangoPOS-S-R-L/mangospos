@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../../printing/agent_discovery.dart';
+import '../ncf_offline_allocator.dart';
 
 /// Cliente del Hub Local (F3). En F3a solo hace el *handshake*: localizar un
 /// Hub alcanzable en la LAN y confirmar que responde `/hub/health`. Las
@@ -123,6 +124,49 @@ class HubClient {
       return (seq: (body['seq'] as num?)?.toInt() ?? 0, ops: ops);
     } catch (e) {
       debugPrint('[HubClient] getStateSince falló: $e');
+      return null;
+    }
+  }
+
+  /// Pide al Hub el próximo NCF de una serie (`POST /hub/ncf/next`). El Hub
+  /// es el asignador único en LAN, así que el número es secuencial y sin
+  /// colisión entre cajas. Devuelve null si el rango se agotó (→ recibo
+  /// provisional) o si el Hub no responde.
+  Future<NcfAssignment?> allocateNcf(
+    String baseUrl, {
+    required String businessId,
+    required NcfRange range,
+  }) async {
+    try {
+      final resp = await _http
+          .post(
+            Uri.parse('${_normalize(baseUrl)}/hub/ncf/next'),
+            headers: _authHeaders,
+            body: jsonEncode({
+              'business_id': businessId,
+              'ncf_type': range.ncfType,
+              'serie': range.serie,
+              'prefix': range.prefix,
+              'range_start': range.rangeStart,
+              'range_end': range.rangeEnd,
+              if (range.seedCurrent != null) 'seed_current': range.seedCurrent,
+            }),
+          )
+          .timeout(_opTimeout);
+      if (resp.statusCode != 200) return null;
+      final b = jsonDecode(resp.body);
+      if (b is! Map || b['exhausted'] == true) return null;
+      final number = (b['number'] as num?)?.toInt();
+      final ncf = b['ncf']?.toString();
+      if (number == null || ncf == null) return null;
+      return NcfAssignment(
+        ncf: ncf,
+        number: number,
+        ncfType: range.ncfType,
+        serie: range.serie,
+      );
+    } catch (e) {
+      debugPrint('[HubClient] allocateNcf falló: $e');
       return null;
     }
   }

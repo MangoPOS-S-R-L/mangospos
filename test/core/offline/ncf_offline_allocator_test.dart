@@ -95,4 +95,23 @@ void main() {
     final a = await alloc.allocate(businessId: biz, range: range);
     expect(a!.number, 1);
   });
+
+  test('asignaciones CONCURRENTES no duplican (Hub como asignador único)',
+      () async {
+    const big = NcfRange(
+      ncfType: 'B02',
+      serie: 'C1',
+      prefix: 'B02',
+      rangeStart: 1,
+      rangeEnd: 1000,
+    );
+    // 50 cajas piden NCF "a la vez" — sin await entre sí.
+    final results = await Future.wait(
+      List.generate(50, (_) => alloc.allocate(businessId: biz, range: big)),
+    );
+    final numbers = results.map((r) => r!.number).toList()..sort();
+    expect(numbers.toSet().length, 50); // todos únicos, sin duplicados
+    expect(numbers.first, 1);
+    expect(numbers.last, 50);
+  });
 }
