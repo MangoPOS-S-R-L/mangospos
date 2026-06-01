@@ -2298,8 +2298,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         action: <String, dynamic>{
           'type': 'void_order',
           'order_id': orderId,
-          if (trimmedReason != null && trimmedReason.isNotEmpty)
+          if (trimmedReason != null && trimmedReason.isNotEmpty) ...{
             'reason': trimmedReason,
+            // Actor + timestamp del momento de la anulación, para que el
+            // replay persista una nota de auditoría fiel (no la del sync).
+            'void_by': ref.read(sessionProvider).userName,
+            'voided_at': DateTime.now().toIso8601String(),
+          },
         },
       );
     }

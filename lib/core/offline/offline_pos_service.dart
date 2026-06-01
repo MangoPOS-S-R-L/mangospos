@@ -557,6 +557,9 @@ class OfflinePosService {
   }) async {
     final queue = await _readQueue(businessId);
     if (queue.isEmpty) {
+      // Sin acciones pendientes → toda comanda offline ya se re-despachó
+      // vía send_to_kitchen; limpiamos la cola de impresión stale.
+      await _drainStalePrintQueue(businessId, queue);
       return const OfflineQueueSyncResult();
     }
 
@@ -708,6 +711,7 @@ class OfflinePosService {
     }
 
     await _pruneQueue(businessId, queue);
+    await _drainStalePrintQueue(businessId, queue);
     final pending = queue.where((item) => !_isSettled(item)).length;
     final dead = queue.where(_isDead).length;
     return OfflineQueueSyncResult(
@@ -1108,6 +1112,41 @@ class OfflinePosService {
           rethrow;
         }
         return null;
+      case 'cash_transaction':
+        // Movimiento manual de caja (depósito/retiro/gasto) encolado sin
+        // red. Resolvemos el session_id local→remoto igual que
+        // close_cash_session; el FIFO de la cola garantiza que
+        // open_cash_session ya se replayó antes.
+        //
+        // Limitación v1: el RPC fn_cash_transaction_create estampa
+        // created_at = now() (no acepta timestamp), así que el movimiento
+        // queda fechado al momento del sync, no al offline. La sesión a la
+        // que pertenece sí es la correcta (se pasa explícita). Si la razón
+        // exigía aprobación de supervisor y no se capturó offline, el RPC
+        // la rechaza y la acción cae a dead-letter (visible al cajero) —
+        // nunca se omite la validación.
+        var txnSessionId = action['session_id']?.toString() ?? '';
+        if (txnSessionId.startsWith('local-cash-session-')) {
+          final sessionMap = await _readCashSessionMap(businessId);
+          final remote = sessionMap[txnSessionId]?.toString();
+          if (remote == null || remote.isEmpty) {
+            throw Exception(
+              'No se pudo resolver la sesión de caja local $txnSessionId '
+              'para el movimiento. ¿open_cash_session se replayó?',
+            );
+          }
+          txnSessionId = remote;
+        }
+        await cashierRepository.createManualTransaction(
+          sessionId: txnSessionId,
+          amount: ((action['amount'] ?? 0) as num).toDouble(),
+          type: action['cash_type']?.toString() ?? 'withdrawal',
+          reasonCode: action['reason_code']?.toString() ?? '',
+          description: action['description']?.toString(),
+          createdBy: action['created_by']?.toString(),
+          approvedBy: action['approved_by']?.toString(),
+        );
+        return null;
       case 'inventory_adjust':
         // El RPC fn_inventory_adjust calcula delta server-side con FOR
         // UPDATE: si otro terminal tocó el stock mientras estábamos
@@ -1362,25 +1401,16 @@ class OfflinePosService {
         // orden anulada localmente (reset del state); este replay
         // garantiza que el server quede en el mismo estado.
         //
-        // Limitación v1: la nota de auditoría (reason → table_sessions.notes
-        // vía appendVoidAuditNote) NO se replaya. El RPC fn_close_order_and_table
-        // anula la orden pero no escribe la razón. Si reason vino en el
-        // payload, lo logueamos para que quede en flutter logs como
-        // mínimo registro. Una mejora futura sería un RPC tipo
-        // fn_void_order_with_reason que escriba ambos atómicamente.
+        // El RPC fn_close_order_and_table anula la orden pero no escribe la
+        // razón. Tras anular, persistimos la nota de auditoría aparte
+        // (F2.3) con el actor/timestamp capturados al momento del void, no
+        // los del sync. Best-effort: si la nota falla no rompemos la
+        // anulación (lo crítico es que la orden quede void).
         final voidOrderId = await _resolveOrderIdForAction(
           businessId: businessId,
           action: action,
           salesRepository: salesRepository,
         );
-        final voidReason = action['reason']?.toString();
-        if (voidReason != null && voidReason.isNotEmpty) {
-          debugPrint(
-            'void_order replay: anulando orden $voidOrderId con razón '
-            '"$voidReason" (la razón no se persiste en server en v1, '
-            'solo queda en este log).',
-          );
-        }
         try {
           await salesRepository.closeOrder(
             orderId: voidOrderId,
@@ -1397,6 +1427,23 @@ class OfflinePosService {
             );
           }
           rethrow;
+        }
+        final voidReason = action['reason']?.toString();
+        if (voidReason != null && voidReason.trim().isNotEmpty) {
+          try {
+            await salesRepository.appendVoidAuditNote(
+              orderId: voidOrderId,
+              reason: voidReason,
+              userName: action['void_by']?.toString(),
+              voidedAt: DateTime.tryParse(action['voided_at']?.toString() ?? ''),
+              businessId: businessId,
+            );
+          } catch (e) {
+            // Best-effort: la orden ya quedó anulada (lo crítico). Si la
+            // nota de auditoría no se pudo escribir, lo logueamos y
+            // seguimos — no reintentamos el void por esto.
+            debugPrint('void_order replay: nota de auditoría falló: $e');
+          }
         }
         return voidOrderId;
       case 'send_to_kitchen':
@@ -1724,6 +1771,40 @@ class OfflinePosService {
     // entradas más viejas de 30 días. Antes el cap era 500 entries en
     // memoria; el cap por tiempo es más robusto y predecible.
     await _pruneCompletedOlderThan(const Duration(days: 30));
+  }
+
+  /// Limpia la cola de impresión offline (`offline_print_queue_*`) cuando
+  /// ya no quedan envíos a cocina pendientes.
+  ///
+  /// Contexto: al enviar una orden a cocina sin red, `sendLocalOrderToKitchen`
+  /// imprime a las impresoras cacheadas y, para áreas sin impresora cacheada,
+  /// agrega una entrada a `offline_print_queue` (a modo de registro). PERO el
+  /// mismo flujo encola además un `send_to_kitchen`; su replay llama a
+  /// `sendOrderToKitchen` (online), que re-despacha TODAS las áreas y escala
+  /// a la cola cloud las que no tienen impresora. Es decir, el re-despacho ya
+  /// está garantizado por el replay.
+  ///
+  /// Por eso NO reenviamos desde aquí (sería doble impresión): solo
+  /// recolectamos las entradas stale para que la cola no crezca sin límite
+  /// (gap "se llena pero no se drena"). Esperamos a que no queden
+  /// send_to_kitchen/confirm_local_order pendientes; en ese punto toda
+  /// comanda encolada ya fue re-despachada por su acción.
+  Future<void> _drainStalePrintQueue(
+    String businessId,
+    List<Map<String, dynamic>> queue,
+  ) async {
+    final hasPendingKitchenSend = queue.any(
+      (a) =>
+          !_isSettled(a) &&
+          (a['type'] == 'send_to_kitchen' ||
+              a['type'] == 'confirm_local_order'),
+    );
+    if (hasPendingKitchenSend) return;
+    final storage = await _storage;
+    final existing = await storage.readList(_printQueueKey(businessId));
+    if (existing != null && existing.isNotEmpty) {
+      await storage.delete(_printQueueKey(businessId));
+    }
   }
 
   Future<Map<String, dynamic>> _readOrderMap(String businessId) async {
