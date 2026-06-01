@@ -157,4 +157,28 @@ El Hub mantiene en SQLite (drift, ya disponible):
 
 ---
 
-*Diseño basado en el código real al 2026-05-31. No implementar hasta resolver §9.*
+## 12. Estado de implementación (al 2026-05-31)
+
+Todo detrás de `kHubModeEnabled=false` → cero impacto en producción.
+
+**Construido y testeado (lado Dart):**
+- F3a: `HubMode`/`resolveHubMode`, `HubClient` (descubrir + /hub/health), `HubModeController`.
+- F3b: `HubOpLog` (op-log seq+idempotente), endpoints `/hub/ops` y `/hub/state`, `HubClient.postOp/getStateSince`, enrutado de `enqueueAction` al Hub (seam `_hubUploader`), uplink único `syncHubOpLog`.
+- F3c-1/2: servidor WS `/hub/events` + difusión, cliente `HubEventStream` (reconexión).
+- F3c (proyección): `HubKitchenProjector` — reconstruye `KitchenOrder[]` desde el op-log (pura, 8 tests).
+
+**Pendiente para ACTIVAR F3 (requiere validación en dispositivos reales):**
+1. **Wiring del KDS:** que `kds_viewmodel`, en modo hub, cargue desde `HubEventStream` + `GET /hub/state` proyectado con `HubKitchenProjector` (en vez del Realtime de Supabase), y enrute los cambios de estado como ops.
+2. **Op `kds_item_status`** + su replay en `_replayAction` (resolver item_id → remoto y llamar `kitchen_repo`), para que los cambios de estado del KDS sin red suban al reconectar.
+3. **Baseline:** capturar snapshot de cocina activa al entrar a modo hub (para mostrar comandas previas a la caída, no solo las nuevas).
+4. **Triggers (F3b-3c):** que el dispositivo Hub llame `syncHubOpLog` al reconectar; observar `hubModeProvider` en el bootstrap.
+5. **Anuncio mDNS desde tablet** (`nsd`/`bonsoir`) si el Hub corre en tablet (el desktop ya se anuncia).
+6. **Paridad Node.js:** op-log + endpoints + WS + uplink en `agent/` (JS) para el Hub desktop.
+7. **Seguridad LAN:** reemplazar el token hardcoded por token por-negocio (de F0).
+8. **Prueba multi-dispositivo** antes de encender el flag.
+
+> Razón de parar el "build" aquí: del punto 1 en adelante todo necesita correr contra dispositivos reales en una LAN para ser confiable (es flujo de cocina, sensible). Construirlo a ciegas sería frágil. La lógica pura (proyector, op-log, resolución) ya está lista y testeada para ese momento.
+
+---
+
+*Diseño basado en el código real al 2026-05-31. Transporte F3 construido tras §9; activación pendiente per §12.*
