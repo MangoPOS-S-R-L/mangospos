@@ -28,7 +28,7 @@ class ReportsOfflineCache {
       'offline_reports_${kind}_summary_$businessId';
 
   /// Guarda un snapshot de resumen ([kind]) por negocio + rango.
-  Future<void> _save({
+  Future<void> saveSummary({
     required String kind,
     required String businessId,
     required String fromIso,
@@ -52,7 +52,7 @@ class ReportsOfflineCache {
   /// Devuelve el snapshot ([kind]) cacheado SOLO si el rango coincide con el
   /// pedido. `savedAt` = cuándo se capturó (para el aviso). Null si no hay
   /// cache o el rango no coincide.
-  Future<({Map<String, dynamic> summary, DateTime savedAt})?> _load({
+  Future<({Map<String, dynamic> summary, DateTime savedAt})?> loadSummary({
     required String kind,
     required String businessId,
     required String fromIso,
@@ -82,7 +82,7 @@ class ReportsOfflineCache {
     required String toIso,
     required Map<String, dynamic> summary,
   }) =>
-      _save(
+      saveSummary(
           kind: 'sales',
           businessId: businessId,
           fromIso: fromIso,
@@ -94,7 +94,7 @@ class ReportsOfflineCache {
     required String fromIso,
     required String toIso,
   }) =>
-      _load(
+      loadSummary(
           kind: 'sales', businessId: businessId, fromIso: fromIso, toIso: toIso);
 
   // --- Finanzas / caja (F5-2) ---
@@ -104,7 +104,7 @@ class ReportsOfflineCache {
     required String toIso,
     required Map<String, dynamic> summary,
   }) =>
-      _save(
+      saveSummary(
           kind: 'cash',
           businessId: businessId,
           fromIso: fromIso,
@@ -116,6 +116,6 @@ class ReportsOfflineCache {
     required String fromIso,
     required String toIso,
   }) =>
-      _load(
+      loadSummary(
           kind: 'cash', businessId: businessId, fromIso: fromIso, toIso: toIso);
 }

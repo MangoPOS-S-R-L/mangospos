@@ -703,15 +703,20 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
   /// Si el resumen de ventas actual viene del cache offline (F5), devuelve
   /// cuándo se capturó; null si es data fresca (online). La vista lo usa para
   /// mostrar el aviso "datos sin conexión al …".
-  DateTime? get salesDataCachedAt {
-    final raw = state.salesSummary?['_offline_cached_at']?.toString();
-    if (raw == null || raw.isEmpty) return null;
-    return DateTime.tryParse(raw);
-  }
+  DateTime? get salesDataCachedAt => _cachedAtOf(state.salesSummary);
 
   /// Igual que [salesDataCachedAt] pero para el resumen de finanzas/caja (F5-2).
-  DateTime? get financesDataCachedAt {
-    final raw = state.cashSummary?['_offline_cached_at']?.toString();
+  DateTime? get financesDataCachedAt =>
+      _cachedAtOf(state.cashSummary);
+
+  /// Frescura del cache offline para las demás categorías (F5-resto).
+  DateTime? get purchasesDataCachedAt => _cachedAtOf(state.purchasesSummary);
+  DateTime? get inventoryDataCachedAt => _cachedAtOf(state.inventorySummary);
+  DateTime? get taxDataCachedAt => _cachedAtOf(state.taxSummary);
+  DateTime? get fiscalDataCachedAt => _cachedAtOf(state.fiscalSummary);
+
+  DateTime? _cachedAtOf(Map<String, dynamic>? summary) {
+    final raw = summary?['_offline_cached_at']?.toString();
     if (raw == null || raw.isEmpty) return null;
     return DateTime.tryParse(raw);
   }

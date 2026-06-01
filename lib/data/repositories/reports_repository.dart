@@ -190,6 +190,46 @@ class ReportsRepository {
       };
 
 
+  /// Envuelve un loader de resumen con cache offline (F5): cachea al cargar
+  /// online y, ante error de red, sirve el snapshot cacheado del MISMO rango
+  /// (marcado `_offline_cached_at`). Si no hay cache para ese rango, propaga
+  /// el error. [kind] separa los snapshots por categoría de reporte.
+  Future<Map<String, dynamic>> _withOfflineCache({
+    required String kind,
+    required String businessId,
+    required DateTime from,
+    required DateTime to,
+    required Future<Map<String, dynamic>> Function() loader,
+  }) async {
+    final fromIso = AppTime.astToUtcIso(from);
+    final toIso = AppTime.astToUtcIso(to);
+    try {
+      final result = await loader();
+      await ReportsOfflineCache().saveSummary(
+        kind: kind,
+        businessId: businessId,
+        fromIso: fromIso,
+        toIso: toIso,
+        summary: result,
+      );
+      return result;
+    } catch (e) {
+      final cached = await ReportsOfflineCache().loadSummary(
+        kind: kind,
+        businessId: businessId,
+        fromIso: fromIso,
+        toIso: toIso,
+      );
+      if (cached != null) {
+        return {
+          ...cached.summary,
+          '_offline_cached_at': cached.savedAt.toIso8601String(),
+        };
+      }
+      rethrow;
+    }
+  }
+
   /// Resumen de caja/finanzas. F5-2: cachea al cargar online y, sin red,
   /// sirve el snapshot cacheado del MISMO rango (marcado `_offline_cached_at`)
   /// para poder ver el cierre del día offline. Si no hay cache para ese rango,
@@ -533,6 +573,20 @@ class ReportsRepository {
     required String businessId,
     required DateTime from,
     required DateTime to,
+  }) =>
+      _withOfflineCache(
+        kind: 'tax',
+        businessId: businessId,
+        from: from,
+        to: to,
+        loader: () =>
+            _getTaxSummaryOnline(businessId: businessId, from: from, to: to),
+      );
+
+  Future<Map<String, dynamic>> _getTaxSummaryOnline({
+    required String businessId,
+    required DateTime from,
+    required DateTime to,
   }) async {
     final fromIso = AppTime.astToUtcIso(from);
     final toIso = AppTime.astToUtcIso(to);
@@ -827,6 +881,20 @@ class ReportsRepository {
     required String businessId,
     required DateTime from,
     required DateTime to,
+  }) =>
+      _withOfflineCache(
+        kind: 'purchases',
+        businessId: businessId,
+        from: from,
+        to: to,
+        loader: () => _getPurchasesSummaryOnline(
+            businessId: businessId, from: from, to: to),
+      );
+
+  Future<Map<String, dynamic>> _getPurchasesSummaryOnline({
+    required String businessId,
+    required DateTime from,
+    required DateTime to,
   }) async {
     final fromIso = AppTime.astToUtcIso(from);
     final toIso = AppTime.astToUtcIso(to);
@@ -933,6 +1001,20 @@ class ReportsRepository {
   }
 
   Future<Map<String, dynamic>> getFiscalDocumentsSummary({
+    required String businessId,
+    required DateTime from,
+    required DateTime to,
+  }) =>
+      _withOfflineCache(
+        kind: 'fiscal',
+        businessId: businessId,
+        from: from,
+        to: to,
+        loader: () => _getFiscalDocumentsSummaryOnline(
+            businessId: businessId, from: from, to: to),
+      );
+
+  Future<Map<String, dynamic>> _getFiscalDocumentsSummaryOnline({
     required String businessId,
     required DateTime from,
     required DateTime to,
@@ -1346,6 +1428,20 @@ class ReportsRepository {
   }
 
   Future<Map<String, dynamic>> getInventorySummary({
+    required String businessId,
+    required DateTime from,
+    required DateTime to,
+  }) =>
+      _withOfflineCache(
+        kind: 'inventory',
+        businessId: businessId,
+        from: from,
+        to: to,
+        loader: () => _getInventorySummaryOnline(
+            businessId: businessId, from: from, to: to),
+      );
+
+  Future<Map<String, dynamic>> _getInventorySummaryOnline({
     required String businessId,
     required DateTime from,
     required DateTime to,

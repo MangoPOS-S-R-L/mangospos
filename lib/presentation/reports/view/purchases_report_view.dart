@@ -29,6 +29,7 @@ class _PurchasesReportBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final currency = state.currency.formatter;
+    final cachedAt = viewModel.purchasesDataCachedAt;
     final metrics = viewModel.getPurchaseMetricCards();
     final statusRows = viewModel.getPurchaseStatusRows();
     final supplierRows = viewModel.getPurchaseSupplierRows();
@@ -58,6 +59,10 @@ class _PurchasesReportBody extends StatelessWidget {
             state.error!,
             style: const TextStyle(color: AppColors.destructive),
           ),
+        ],
+        if (cachedAt != null) ...[
+          const SizedBox(height: AppSpacing.itemGap),
+          OfflineDataBanner(cachedAt: cachedAt),
         ],
         const SizedBox(height: AppSpacing.xl),
         buildMetricsWrap(metrics),

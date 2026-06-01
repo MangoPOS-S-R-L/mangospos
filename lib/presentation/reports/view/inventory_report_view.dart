@@ -29,6 +29,7 @@ class _InventoryReportBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final currency = state.currency.formatter;
+    final cachedAt = viewModel.inventoryDataCachedAt;
     final metrics = viewModel.getInventoryMetricCards();
     final topRows = viewModel.getInventoryTopStockRows();
     final alertRows = viewModel.getInventoryAlertRows();
@@ -60,6 +61,10 @@ class _InventoryReportBody extends StatelessWidget {
             state.error!,
             style: const TextStyle(color: AppColors.destructive),
           ),
+        ],
+        if (cachedAt != null) ...[
+          const SizedBox(height: AppSpacing.itemGap),
+          OfflineDataBanner(cachedAt: cachedAt),
         ],
         const SizedBox(height: AppSpacing.xl),
         buildMetricsWrap(metrics),
