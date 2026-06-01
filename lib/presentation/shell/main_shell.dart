@@ -9,6 +9,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/core/offline/offline_queue_status_provider.dart';
 import 'package:mangopos/core/offline/hub/hub_mode_controller.dart';
+import 'package:mangopos/core/offline/offline_refreshers.dart';
 import 'package:mangopos/presentation/shell/offline_logout_guard.dart';
 import 'package:mangopos/core/printing/printer_heartbeat_provider.dart';
 import 'package:mangopos/core/services/fullscreen/fullscreen_service.dart';
@@ -46,6 +47,11 @@ class _MainShellState extends ConsumerState<MainShell> {
     // op-log al reconectar. Usamos read (no watch) para no re-construir el shell
     // en cada cambio de modo; con la flag apagada el controller queda inerte.
     ref.read(hubModeProvider);
+
+    // F6: mantiene vivo el coordinador de bajada desde el arranque del shell
+    // (read, no watch). Refresca catálogo/zonas/inventario del negocio activo
+    // al reconectar y periódicamente, para operar offline con datos al día.
+    ref.read(offlineSyncCoordinatorProvider);
 
     // Wrap del child con dos guards en orden de prioridad:
     //   1. PendingApprovalGuard: si la cuenta está pendiente de aprobación
