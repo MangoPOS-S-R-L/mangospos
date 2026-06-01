@@ -1,5 +1,6 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:mangopos/data/models/printing.dart' show PrinterConfig;
+import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
 import 'package:mangopos/presentation/cashier/state/blind_cash_close_models.dart';
@@ -22,16 +23,71 @@ class CashClosePrintService {
     required DateTime printedAt,
     String? cashRegisterId,
     int recountCount = 0,
+    String? sessionId,
   }) async {
+    // Desglose por área de producción: solo si el negocio activó el toggle
+    // y tenemos la sesión para acotar el periodo. Best-effort — si falla,
+    // el cierre se imprime igual sin esta sección.
+    final salesByArea = sessionId != null && sessionId.isNotEmpty
+        ? await _loadSalesByAreaIfEnabled(sessionId)
+        : const <Map<String, dynamic>>[];
+
     final bytes = _buildEscPos(
       input: input,
       result: result,
       denominations: denominations,
       printedAt: printedAt,
       recountCount: recountCount,
+      salesByArea: salesByArea,
     );
 
     await _printThermalOrThrow(bytes, cashRegisterId: cashRegisterId);
+  }
+
+  /// Lee el toggle `cash_close_print_sales_by_area`; si está activo, trae el
+  /// desglose de ventas por área de producción para la ventana de la sesión
+  /// [sessionId] (opened_at → closed_at/ahora) vía la RPC get_sales_summary_v2
+  /// (mismo campo `sales_by_production_area` del reporte de Ventas). Devuelve
+  /// `[]` si el toggle está off o ante cualquier error (no rompe el cierre).
+  Future<List<Map<String, dynamic>>> _loadSalesByAreaIfEnabled(
+    String sessionId,
+  ) async {
+    try {
+      final businessId = await resolveBusinessIdOrNull(_client, 'auto');
+      if (businessId == null) return const [];
+      final enabled = await PosSettingsRepository(_client)
+          .getCashClosePrintSalesByArea(businessId);
+      if (!enabled) return const [];
+
+      final session = await _client
+          .from('cash_register_sessions')
+          .select('opened_at, closed_at')
+          .eq('id', sessionId)
+          .maybeSingle();
+      final openedAt = session?['opened_at']?.toString();
+      if (openedAt == null || openedAt.isEmpty) return const [];
+      final closedAt = (session?['closed_at']?.toString().isNotEmpty == true)
+          ? session!['closed_at'].toString()
+          : DateTime.now().toUtc().toIso8601String();
+
+      // Llamamos la RPC directo con los timestamps UTC de la sesión (no via
+      // ReportsRepository, que asume DateTimes en hora local AST).
+      final resp = await _client.rpc('get_sales_summary_v2', params: {
+        '_business_id': businessId,
+        '_from': openedAt,
+        '_to': closedAt,
+      });
+      if (resp is! Map) return const [];
+      final rows = resp['sales_by_production_area'];
+      if (rows is! List) return const [];
+      return rows
+          .whereType<Object?>()
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList(growable: false);
+    } catch (e) {
+      debugPrint('[CashClosePrint] desglose por área falló: $e');
+      return const [];
+    }
   }
 
   List<int> _buildEscPos({
@@ -40,6 +96,7 @@ class CashClosePrintService {
     required List<DenominationCount> denominations,
     required DateTime printedAt,
     int recountCount = 0,
+    List<Map<String, dynamic>> salesByArea = const [],
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
     gen.initialize();
@@ -143,6 +200,10 @@ class CashClosePrintService {
         sign: '-',
       );
     }
+
+    // Desglose de ventas por área de producción (toggle por negocio). Va
+    // tras los movimientos y antes de los datos del cajero/firma.
+    _renderSalesByAreaSection(gen, salesByArea);
 
     gen.text('Cajero: ${input.cashierName}');
     gen.text(
@@ -257,6 +318,44 @@ class CashClosePrintService {
     gen.separator();
     gen.setBold(true);
     gen.textRow('Subtotal $title', '$sign ${formatRD(total)}');
+    gen.setBold(false);
+    gen.doubleSeparator();
+  }
+
+  /// Desglose de ventas por área de producción (cocina, bar, caja…) para el
+  /// periodo de la sesión. Cada área muestra su monto y, debajo, unidades y
+  /// órdenes. Se omite por completo si la lista está vacía (toggle off o sin
+  /// ventas con área en el periodo).
+  void _renderSalesByAreaSection(
+    EscPosGenerator gen,
+    List<Map<String, dynamic>> salesByArea,
+  ) {
+    if (salesByArea.isEmpty) return;
+    gen.setBold(true);
+    gen.text('VENTAS POR AREA DE PRODUCCION');
+    gen.setBold(false);
+    var total = 0.0;
+    for (final area in salesByArea) {
+      final label = (area['label']?.toString().trim().isNotEmpty == true)
+          ? area['label'].toString().trim()
+          : 'Sin area';
+      final amount = (area['amount'] as num?)?.toDouble() ?? 0;
+      final quantity = (area['quantity'] as num?)?.toDouble() ?? 0;
+      final count = (area['count'] as num?)?.toInt() ?? 0;
+      total += amount;
+
+      final shortLabel =
+          label.length > 28 ? '${label.substring(0, 25)}...' : label;
+      gen.textRow(shortLabel, formatRD(amount));
+      // Línea secundaria con unidades y órdenes (formato compacto).
+      final qtyLabel = quantity == quantity.roundToDouble()
+          ? quantity.toStringAsFixed(0)
+          : quantity.toStringAsFixed(2);
+      gen.text('  $qtyLabel und  ·  $count ord');
+    }
+    gen.separator();
+    gen.setBold(true);
+    gen.textRow('Total areas', formatRD(total));
     gen.setBold(false);
     gen.doubleSeparator();
   }

@@ -88,6 +88,7 @@ class _StepResultState extends State<StepResult> {
         denominations: widget.denominations,
         printedAt: DateTime.now(),
         recountCount: recountCount,
+        sessionId: sessionId,
       );
       if (!mounted) return;
       if (!silent) {

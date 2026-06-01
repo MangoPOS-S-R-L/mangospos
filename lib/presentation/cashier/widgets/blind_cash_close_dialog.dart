@@ -947,6 +947,7 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
         denominations: state.denominations,
         printedAt: DateTime.now(),
         recountCount: recountCount,
+        sessionId: widget.sessionId,
       );
       if (!silent && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

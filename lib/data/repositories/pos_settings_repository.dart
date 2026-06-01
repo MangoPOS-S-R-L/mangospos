@@ -294,6 +294,33 @@ class PosSettingsRepository {
     }, onConflict: 'business_id');
   }
 
+  /// Flag por negocio: si TRUE, el ticket de cierre de caja incluye un
+  /// desglose de "Ventas por área de producción" para el periodo de la
+  /// sesión. Default `false` (no cambia el ticket sin opt-in). Tolerante a
+  /// que la columna aún no exista (cae a false).
+  Future<bool> getCashClosePrintSalesByArea(String businessId) async {
+    try {
+      final row = await _client
+          .from('business_settings')
+          .select('cash_close_print_sales_by_area')
+          .eq('business_id', businessId)
+          .maybeSingle();
+      return row?['cash_close_print_sales_by_area'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> setCashClosePrintSalesByArea({
+    required String businessId,
+    required bool enabled,
+  }) async {
+    await _client.from('business_settings').upsert({
+      'business_id': businessId,
+      'cash_close_print_sales_by_area': enabled,
+    }, onConflict: 'business_id');
+  }
+
   /// Auditoría: registra un evento "Volver a contar" en `audit_logs`.
   /// Captura los montos previos al reset para que el admin pueda ver
   /// patrones (e.g. cuánto varió el cajero entre conteos). Tolerante a
