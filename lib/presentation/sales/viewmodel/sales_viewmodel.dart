@@ -65,6 +65,15 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   Timer? _loadingWatchdogTimer;
   static const Duration _loadingMaxAge = Duration(seconds: 45);
   StreamSubscription<bool>? _connectivitySubscription;
+  /// Timer de respaldo para drenar la cola offline. El sync principal lo
+  /// dispara la transición offline→online del `connectionStream`, pero ese
+  /// trigger puede perderse: si el stream nunca emite (el adapter nunca
+  /// "bajó", solo Supabase tuvo blips) o si una acción quedó `failed` con
+  /// backoff que vence mientras la app está online e inactiva, nadie la
+  /// reintenta. Este timer es la red de seguridad: cada
+  /// [_periodicSyncInterval], si hay conexión y pendientes, fuerza un sync.
+  Timer? _periodicSyncTimer;
+  static const Duration _periodicSyncInterval = Duration(minutes: 3);
   String? _queuedRefreshOrderId;
   bool _queuedClearIfPaid = false;
   bool _refreshOrderInFlight = false;
@@ -278,6 +287,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
     });
 
+    // Red de seguridad: drena la cola periódicamente aunque el stream de
+    // reconexión no haya disparado. No-op si no hay conexión, ya hay un
+    // sync en vuelo, o la cola está vacía — así no genera ruido ni red
+    // innecesaria.
+    _periodicSyncTimer ??= Timer.periodic(_periodicSyncInterval, (_) {
+      unawaited(_runPeriodicSyncTick());
+    });
+
     // Watchdog del flag `loading`. Cualquier transición false→true arma
     // un timer que lo fuerza a false tras `_loadingMaxAge` si nunca volvió
     // por las vías normales (catch/finally). Sin esto, un await HTTP que
@@ -309,6 +326,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       _refreshOrderDebounceTimer = null;
       _loadingWatchdogTimer?.cancel();
       _loadingWatchdogTimer = null;
+      _periodicSyncTimer?.cancel();
+      _periodicSyncTimer = null;
       _connectivitySubscription?.cancel();
       _connectivitySubscription = null;
     });
@@ -2279,8 +2298,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         action: <String, dynamic>{
           'type': 'void_order',
           'order_id': orderId,
-          if (trimmedReason != null && trimmedReason.isNotEmpty)
+          if (trimmedReason != null && trimmedReason.isNotEmpty) ...{
             'reason': trimmedReason,
+            // Actor + timestamp del momento de la anulación, para que el
+            // replay persista una nota de auditoría fiel (no la del sync).
+            'void_by': ref.read(sessionProvider).userName,
+            'voided_at': DateTime.now().toIso8601String(),
+          },
         },
       );
     }
@@ -2452,6 +2476,23 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     final orderId = state.order?.id;
     if (orderId == null) return;
     _scheduleOrderRefresh(orderId, clearIfPaid: clearIfPaid);
+  }
+
+  /// Tick del timer de respaldo. Barato: sale temprano si no hay conexión,
+  /// ya hay un sync corriendo, no hay business activo o la cola no tiene
+  /// pendientes. Solo entonces dispara el sync real.
+  Future<void> _runPeriodicSyncTick() async {
+    if (_syncInFlight) return;
+    if (!_connectivity.isConnected) return;
+    final businessId = _activeBusinessId;
+    if (businessId == null || businessId.isEmpty) return;
+    try {
+      final pending = await _offlinePos.pendingActionsCount(businessId);
+      if (pending <= 0) return;
+    } catch (_) {
+      return;
+    }
+    await syncPendingOfflineActions();
   }
 
   Future<void> syncPendingOfflineActions({bool force = false}) async {

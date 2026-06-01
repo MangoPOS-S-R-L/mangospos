@@ -161,8 +161,10 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
     });
 
     try {
-      await ref
-          .read(cashierRepositoryProvider)
+      // Vía viewmodel: si no hay red, encola el movimiento (cash_transaction)
+      // en vez de perderlo. `appliedOnline=false` → quedó offline.
+      final appliedOnline = await ref
+          .read(cashierViewModelProvider)
           .createManualTransaction(
             sessionId: data.session.id,
             amount: amount,
@@ -197,9 +199,12 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '${_labelForType(_selectedType)} registrado correctamente',
+            appliedOnline
+                ? '${_labelForType(_selectedType)} registrado correctamente'
+                : '${_labelForType(_selectedType)} guardado sin conexión. Se sincronizará al reconectar.',
           ),
-          backgroundColor: MangoColors.successGreen,
+          backgroundColor:
+              appliedOnline ? MangoColors.successGreen : const Color(0xFFEA580C),
         ),
       );
     } catch (e) {

@@ -938,6 +938,55 @@ class CashierViewModel extends ChangeNotifier {
     _lastCashOpenValidationAt = AppTime.nowAst();
   }
 
+  /// Registra un movimiento manual de caja (depósito/retiro/gasto). Si la
+  /// red se cae, lo encola como `cash_transaction` para replay al
+  /// reconectar — antes esto se perdía sin conexión (gap F2). Devuelve
+  /// `true` si se aplicó online, `false` si quedó encolado offline.
+  Future<bool> createManualTransaction({
+    required String sessionId,
+    required double amount,
+    required String type,
+    required String reasonCode,
+    String? description,
+    String? approvedBy,
+  }) async {
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    try {
+      await _repository.createManualTransaction(
+        sessionId: sessionId,
+        amount: amount,
+        type: type,
+        reasonCode: reasonCode,
+        description: description,
+        createdBy: userId,
+        approvedBy: approvedBy,
+      );
+      return true;
+    } catch (e) {
+      // Solo caemos a offline ante error de conectividad. Errores de
+      // negocio (razón inválida, aprobación requerida, sesión cerrada) se
+      // propagan para que el cajero los corrija en el momento.
+      if (!_isConnectivityError(e)) rethrow;
+      final businessId = _businessId;
+      if (businessId == null) rethrow;
+      await OfflinePosService().enqueueAction(
+        businessId: businessId,
+        action: {
+          'type': 'cash_transaction',
+          'session_id': sessionId,
+          'amount': amount,
+          'cash_type': type,
+          'reason_code': reasonCode,
+          'description': description,
+          'created_by': userId,
+          'approved_by': approvedBy,
+          'created_at': DateTime.now().toUtc().toIso8601String(),
+        },
+      );
+      return false;
+    }
+  }
+
   bool _isConnectivityError(Object e) {
     if (e is SocketException) return true;
     if (e is TimeoutException) return true;

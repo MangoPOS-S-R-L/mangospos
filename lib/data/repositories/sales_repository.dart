@@ -2117,6 +2117,53 @@ class SalesRepository {
     }
   }
 
+  /// Agrega una línea de auditoría de anulación a la nota de la sesión de
+  /// [orderId]. Resuelve la sesión de la orden, lee la nota actual y le
+  /// appendea `[ANULACION][stamp] actor: razón` (mismo formato que el flujo
+  /// online en SalesViewModel.appendVoidAuditNote).
+  ///
+  /// Lo usa el replay offline de `void_order` para persistir la razón que
+  /// en v1 solo quedaba en logs (gap F2.3). Best-effort: el caller no debe
+  /// romper la anulación si esto falla.
+  Future<void> appendVoidAuditNote({
+    required String orderId,
+    required String reason,
+    String? userName,
+    DateTime? voidedAt,
+    String? businessId,
+  }) async {
+    final trimmed = reason.trim();
+    if (trimmed.isEmpty) return;
+
+    final orderRow = await _client
+        .from('orders')
+        .select('session_id')
+        .eq('id', orderId)
+        .maybeSingle();
+    final sessionId = orderRow?['session_id']?.toString();
+    if (sessionId == null || sessionId.isEmpty) return;
+
+    final sessionRow = await _client
+        .from('table_sessions')
+        .select('note')
+        .eq('id', sessionId)
+        .maybeSingle();
+    final current = (sessionRow?['note']?.toString() ?? '').trim();
+
+    final stamp = (voidedAt ?? DateTime.now()).toLocal().toIso8601String();
+    final actor = (userName == null || userName.trim().isEmpty)
+        ? 'Usuario'
+        : userName.trim();
+    final auditLine = '[ANULACION][$stamp] $actor: $trimmed';
+    final nextNote = current.isEmpty ? auditLine : '$current\n$auditLine';
+
+    await updateSessionNote(
+      sessionId: sessionId,
+      note: nextNote,
+      businessId: businessId,
+    );
+  }
+
   // ============================================================
   // 🔧 UTILIDADES
   // ============================================================

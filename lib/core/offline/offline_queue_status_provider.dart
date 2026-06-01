@@ -12,18 +12,26 @@ import 'offline_pos_service.dart';
 class OfflineQueueStatus {
   const OfflineQueueStatus({
     this.pending = 0,
+    this.dead = 0,
     this.lastResult,
   });
 
   final int pending;
+
+  /// Acciones en dead-letter (agotaron reintentos). Se cuentan aparte de
+  /// [pending] porque no reintentan solas: requieren que el cajero las
+  /// reintente o descarte desde el visor de la cola.
+  final int dead;
   final OfflineQueueSyncResult? lastResult;
 
   OfflineQueueStatus copyWith({
     int? pending,
+    int? dead,
     OfflineQueueSyncResult? lastResult,
   }) =>
       OfflineQueueStatus(
         pending: pending ?? this.pending,
+        dead: dead ?? this.dead,
         lastResult: lastResult ?? this.lastResult,
       );
 }
@@ -54,15 +62,16 @@ class OfflineQueueStatusController
   Future<void> refreshNow() async {
     final businessId = _ref.read(sessionProvider).activeBusinessId;
     if (businessId == null || businessId.isEmpty) {
-      if (state.pending != 0) {
-        state = state.copyWith(pending: 0);
+      if (state.pending != 0 || state.dead != 0) {
+        state = state.copyWith(pending: 0, dead: 0);
       }
       return;
     }
     try {
       final count = await _offlinePos.pendingActionsCount(businessId);
-      if (count != state.pending) {
-        state = state.copyWith(pending: count);
+      final deadCount = await _offlinePos.deadActionsCount(businessId);
+      if (count != state.pending || deadCount != state.dead) {
+        state = state.copyWith(pending: count, dead: deadCount);
       }
     } catch (_) {
       // Falla silenciosa: si no podemos contar la cola, dejamos el
@@ -75,6 +84,7 @@ class OfflineQueueStatusController
   void publishSyncResult(OfflineQueueSyncResult result) {
     state = OfflineQueueStatus(
       pending: result.pending,
+      dead: result.dead,
       lastResult: result,
     );
   }

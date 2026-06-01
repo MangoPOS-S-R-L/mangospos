@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/core/offline/offline_queue_status_provider.dart';
+import 'package:mangopos/presentation/shell/offline_logout_guard.dart';
 import 'package:mangopos/core/printing/printer_heartbeat_provider.dart';
 import 'package:mangopos/core/services/fullscreen/fullscreen_service.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
@@ -209,28 +210,38 @@ class _MainShellState extends ConsumerState<MainShell> {
   /// lanza desde el viewmodel para evitar acoplar al BuildContext del
   /// shell con la lógica de sync.
   void _showSyncSnackBar(BuildContext context, OfflineQueueSyncResult r) {
+    // Nota de dead-letter: acciones que agotaron reintentos y requieren
+    // intervención manual. Se anexa a cualquier mensaje para que el cajero
+    // sepa que hay operaciones atascadas que no reintentan solas.
+    final deadNote =
+        r.dead > 0 ? ' ${r.dead} sin resolver (requieren revisión).' : '';
     final Color bg;
     final String message;
     if (r.hasFailures) {
       bg = const Color(0xFFEF4444);
       message =
-          'Sync parcial: ${r.completed} OK, ${r.failed} con error. Pendientes: ${r.pending}.';
+          'Sync parcial: ${r.completed} OK, ${r.failed} con error. Pendientes: ${r.pending}.$deadNote';
     } else if (r.hasConflicts) {
       // Sync completo pero con conflictos cross-device (ej: items
       // borrados por otro terminal, modificadores stale). Mostramos en
       // ambar para que destaque y ofrecemos acción "Ver detalle".
       bg = const Color(0xFFF59E0B);
       message =
-          '${r.completed} sincronizada(s) — ${r.conflicts.length} con conflicto entre terminales.';
+          '${r.completed} sincronizada(s) — ${r.conflicts.length} con conflicto entre terminales.$deadNote';
     } else if (r.completed > 0) {
-      bg = const Color(0xFF22C55E);
+      bg = r.dead > 0 ? const Color(0xFFF59E0B) : const Color(0xFF22C55E);
       message = r.pending > 0
-          ? '${r.completed} operación(es) sincronizada(s). Quedan ${r.pending} pendientes.'
-          : '${r.completed} operación(es) sincronizada(s). Cola al día.';
+          ? '${r.completed} operación(es) sincronizada(s). Quedan ${r.pending} pendientes.$deadNote'
+          : '${r.completed} operación(es) sincronizada(s). Cola al día.$deadNote';
     } else if (r.pending > 0) {
       // Sin trabajo hecho pero quedaron operaciones — típicamente sin red.
       bg = const Color(0xFFF59E0B);
-      message = '${r.pending} operación(es) en espera de conexión.';
+      message = '${r.pending} operación(es) en espera de conexión.$deadNote';
+    } else if (r.dead > 0) {
+      // Solo dead-letter: nada que sincronizar pero hay atascadas.
+      bg = const Color(0xFFEF4444);
+      message =
+          '${r.dead} operación(es) sin resolver. Revísalas desde el ícono de la cola.';
     } else {
       return;
     }
@@ -340,11 +351,13 @@ class _OfflineQueueBadge extends ConsumerWidget {
       Offset.zero & overlay.size,
     );
 
+    final hasDead = ref.read(offlineQueueStatusProvider).dead > 0;
+
     final action = await showMenu<String>(
       context: context,
       position: position,
-      items: const [
-        PopupMenuItem(
+      items: [
+        const PopupMenuItem(
           value: 'sync',
           child: Row(
             children: [
@@ -354,7 +367,21 @@ class _OfflineQueueBadge extends ConsumerWidget {
             ],
           ),
         ),
-        PopupMenuItem(
+        // Solo si hay dead-letter: reintentar las que agotaron sus
+        // reintentos (útil cuando el cajero corrigió la causa raíz).
+        if (hasDead)
+          const PopupMenuItem(
+            value: 'retry_dead',
+            child: Row(
+              children: [
+                Icon(Icons.replay_rounded, size: 18, color: Color(0xFFB45309)),
+                SizedBox(width: 8),
+                Text('Reintentar sin resolver',
+                    style: TextStyle(color: Color(0xFFB45309))),
+              ],
+            ),
+          ),
+        const PopupMenuItem(
           value: 'clear',
           child: Row(
             children: [
@@ -375,9 +402,40 @@ class _OfflineQueueBadge extends ConsumerWidget {
       await ref
           .read(currentOrderProvider.notifier)
           .syncPendingOfflineActions(force: true);
+    } else if (action == 'retry_dead') {
+      await _retryDead(context, ref);
     } else if (action == 'clear') {
       await _confirmAndClear(context, ref);
     }
+  }
+
+  /// Resucita las acciones en dead-letter (vuelven a pending, intentos 0)
+  /// y dispara un sync inmediato. Pensado para cuando el cajero corrigió
+  /// la causa del atasco y quiere que reintenten.
+  Future<void> _retryDead(BuildContext context, WidgetRef ref) async {
+    final businessId = ref.read(sessionProvider).activeBusinessId;
+    if (businessId == null || businessId.isEmpty) return;
+
+    final revived = await OfflinePosService().retryDeadActions(businessId);
+    if (!context.mounted) return;
+    if (revived == 0) {
+      await ref.read(offlineQueueStatusProvider.notifier).refreshNow();
+      return;
+    }
+    // Reactivadas → intentar sincronizar de inmediato.
+    await ref
+        .read(currentOrderProvider.notifier)
+        .syncPendingOfflineActions(force: true);
+    await ref.read(offlineQueueStatusProvider.notifier).refreshNow();
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: const Color(0xFF2563EB),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 3),
+        content: Text('$revived operación(es) reencoladas para reintento.'),
+      ),
+    );
   }
 
   Future<void> _confirmAndClear(
@@ -437,19 +495,34 @@ class _OfflineQueueBadge extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final status = ref.watch(offlineQueueStatusProvider);
     final count = status.pending;
+    final dead = status.dead;
     final hasPending = count > 0;
-    final badgeText = count > 99 ? '99+' : '$count';
+    final hasDead = dead > 0;
+    // El indicador se enciende con pendientes O con dead-letter: si todo
+    // lo pendiente murió, `pending` sería 0 pero el cajero igual debe ver
+    // que hay operaciones atascadas (en rojo, no en ámbar).
+    final active = hasPending || hasDead;
+    final total = count + dead;
+    final badgeText = total > 99 ? '99+' : '$total';
+    // Rojo = hay dead-letter (requiere acción). Ámbar = solo pendientes
+    // (esperan conexión). Gris = todo al día.
+    final accent = hasDead
+        ? const Color(0xFFB91C1C)
+        : const Color(0xFFB45309);
 
     return Tooltip(
-      message: hasPending
-          ? '$count operación(es) offline pendiente(s) — click para sync o limpiar'
-          : 'Todo sincronizado',
+      message: hasDead
+          ? '$dead sin resolver (requieren revisión)'
+              '${hasPending ? ' · $count pendiente(s)' : ''} — click para gestionar'
+          : hasPending
+              ? '$count operación(es) offline pendiente(s) — click para sync o limpiar'
+              : 'Todo sincronizado',
       child: MouseRegion(
-        cursor: hasPending
+        cursor: active
             ? SystemMouseCursors.click
             : SystemMouseCursors.basic,
         child: GestureDetector(
-          onTap: hasPending ? () => _showMenu(context, ref) : null,
+          onTap: active ? () => _showMenu(context, ref) : null,
           child: Stack(
             clipBehavior: Clip.none,
             children: [
@@ -457,20 +530,24 @@ class _OfflineQueueBadge extends ConsumerWidget {
                 width: 40,
                 height: 40,
                 decoration: BoxDecoration(
-                  color: hasPending
-                      ? const Color(0xFFFFF3CD)
-                      : Colors.grey[100],
+                  color: hasDead
+                      ? const Color(0xFFFEE2E2)
+                      : hasPending
+                          ? const Color(0xFFFFF3CD)
+                          : Colors.grey[100],
                   shape: BoxShape.circle,
                 ),
                 alignment: Alignment.center,
                 child: Icon(
-                  hasPending ? Icons.cloud_off_rounded : Icons.cloud_done_rounded,
-                  color: hasPending
-                      ? const Color(0xFFB45309)
-                      : Colors.grey[500],
+                  hasDead
+                      ? Icons.error_outline_rounded
+                      : hasPending
+                          ? Icons.cloud_off_rounded
+                          : Icons.cloud_done_rounded,
+                  color: active ? accent : Colors.grey[500],
                 ),
               ),
-              if (hasPending)
+              if (active)
                 Positioned(
                   top: -2,
                   right: -2,
@@ -484,7 +561,7 @@ class _OfflineQueueBadge extends ConsumerWidget {
                       vertical: 2,
                     ),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFB45309),
+                      color: accent,
                       borderRadius: BorderRadius.circular(999),
                       border: Border.all(color: Colors.white, width: 1.5),
                     ),
@@ -982,6 +1059,9 @@ class _UserInfo extends ConsumerWidget {
                 context.go(AppRoutes.settings);
                 break;
               case _UserMenuAction.logout:
+                final proceed = await confirmLogoutDiscardingOffline(
+                    context, session.activeBusinessId);
+                if (!proceed || !context.mounted) break;
                 await ctrl.signOut();
                 if (!context.mounted) return;
                 context.go(AppRoutes.login);

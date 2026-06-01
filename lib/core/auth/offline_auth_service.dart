@@ -7,6 +7,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../network/connectivity_service.dart';
+import '../security/secure_blob_cipher.dart';
 import '../storage/storage_service.dart';
 
 /// Snapshot de un usuario autorizado al business, persistido offline.
@@ -209,12 +210,17 @@ class OfflineAuthService {
             ))
         .toList(growable: false);
 
-    // Persistir en SharedPreferences. Los hashes son public-safe.
+    // Persistir en SharedPreferences, CIFRADO en reposo: los pin_hash son
+    // bcrypt (one-way), pero el roster también lleva PII (nombres, emails,
+    // roles) que no debe quedar legible en disco. Ver [SecureBlobCipher].
     final storage = await StorageService.getInstance();
     final serialized = users
         .map((u) => u.toJson())
         .toList(growable: false);
-    await storage.write(_rosterKey(businessId), jsonEncode(serialized));
+    await storage.write(
+      _rosterKey(businessId),
+      await SecureBlobCipher.instance.seal(jsonEncode(serialized)),
+    );
     await storage.write(
       _rosterSyncedAtKey(businessId),
       DateTime.now().toUtc().toIso8601String(),
@@ -231,7 +237,10 @@ class OfflineAuthService {
     if (raw == null || raw.isEmpty) return const [];
 
     try {
-      final decoded = jsonDecode(raw);
+      // Descifra (tolera roster legacy en texto plano: migración perezosa).
+      final plain = await SecureBlobCipher.instance.open(raw);
+      if (plain == null || plain.isEmpty) return const [];
+      final decoded = jsonDecode(plain);
       if (decoded is! List) return const [];
       return decoded
           .whereType<Map>()

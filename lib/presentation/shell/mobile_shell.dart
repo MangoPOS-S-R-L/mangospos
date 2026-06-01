@@ -13,6 +13,7 @@ import '../../app/router/routes.dart';
 import '../../app/theme/mango_colors.dart';
 import '../../core/offline/offline_queue_status_provider.dart';
 import '../../data/repositories/pos_settings_repository.dart';
+import 'offline_logout_guard.dart';
 import '../../services/session/session_controller.dart';
 import '../inventory/viewmodel/expiring_lots_badge_provider.dart';
 import '../inventory/viewmodel/low_stock_badge_provider.dart';
@@ -304,6 +305,9 @@ class _MobileDrawer extends ConsumerWidget {
                     bg: const Color(0xFFFFE7E7),
                     textColor: const Color(0xFFDC2626),
                     onTap: () async {
+                      final proceed = await confirmLogoutDiscardingOffline(
+                          context, session.activeBusinessId);
+                      if (!proceed || !context.mounted) return;
                       Navigator.of(context).pop();
                       await ctrl.signOut();
                       if (!context.mounted) return;
@@ -652,19 +656,30 @@ class _AppBarOfflineQueueBadge extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final status = ref.watch(offlineQueueStatusProvider);
     final count = status.pending;
+    final dead = status.dead;
     final hasPending = count > 0;
-    if (!hasPending) return const SizedBox.shrink();
+    final hasDead = dead > 0;
+    // Visible con pendientes O con dead-letter: si todo lo pendiente
+    // murió, igual hay que avisar (en rojo). Rojo = requiere acción,
+    // ámbar = solo espera conexión.
+    if (!hasPending && !hasDead) return const SizedBox.shrink();
+    final total = count + dead;
+    final accent =
+        hasDead ? const Color(0xFFB91C1C) : const Color(0xFFB45309);
     return IconButton(
-      tooltip: '$count operación(es) offline pendiente(s)',
+      tooltip: hasDead
+          ? '$dead sin resolver (requieren revisión)'
+              '${hasPending ? ' · $count pendiente(s)' : ''}'
+          : '$count operación(es) offline pendiente(s)',
       onPressed: () => ref
           .read(currentOrderProvider.notifier)
           .syncPendingOfflineActions(force: true),
       icon: Stack(
         clipBehavior: Clip.none,
         children: [
-          const Icon(
-            Icons.cloud_off_rounded,
-            color: Color(0xFFB45309),
+          Icon(
+            hasDead ? Icons.error_outline_rounded : Icons.cloud_off_rounded,
+            color: accent,
           ),
           Positioned(
             top: -4,
@@ -673,13 +688,13 @@ class _AppBarOfflineQueueBadge extends ConsumerWidget {
               constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
               padding: const EdgeInsets.symmetric(horizontal: 4),
               decoration: BoxDecoration(
-                color: const Color(0xFFB45309),
+                color: accent,
                 borderRadius: BorderRadius.circular(999),
                 border: Border.all(color: Colors.white, width: 1.5),
               ),
               alignment: Alignment.center,
               child: Text(
-                count > 99 ? '99+' : '$count',
+                total > 99 ? '99+' : '$total',
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 9,

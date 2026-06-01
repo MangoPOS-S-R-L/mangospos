@@ -19,7 +19,11 @@ import 'package:flutter_usb_printer/flutter_usb_printer.dart';
 import 'package:shelf/shelf.dart' as shelf;
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
+import 'package:shelf_web_socket/shelf_web_socket.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
+
+import '../offline/hub/hub_op_log.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Agent configuration
@@ -38,6 +42,16 @@ class MobilePrintAgent {
   HttpServer? _server;
   int _port = _defaultPort;
   final List<Map<String, dynamic>> _jobHistory = [];
+
+  /// Op-log del Hub Local (F3b). Solo se usa cuando este dispositivo actúa
+  /// como Hub; los endpoints /hub/ops y /hub/state lo alimentan/leen.
+  final HubOpLog _hubOpLog = HubOpLog();
+
+  /// Suscriptores WebSocket del feed del Hub (F3c), por negocio. Cada op
+  /// aplicada en /hub/ops se difunde a los sockets de ese negocio (el KDS y
+  /// los demás terminales). Se llena cuando un cliente se conecta a
+  /// /hub/events y envía `{"subscribe": "<business_id>"}`.
+  final Map<String, Set<WebSocketChannel>> _hubSubscribers = {};
   final FlutterUsbPrinter _usbPrinter = FlutterUsbPrinter();
 
   bool get isRunning => _server != null;
@@ -100,6 +114,16 @@ class MobilePrintAgent {
     router.get('/health', _handleHealth);
     router.get('/status', _handleStatus);
 
+    // Hub Local (F3): health/handshake. Sin auth (igual que /health).
+    router.get('/hub/health', _handleHubHealth);
+    // Hub Local (F3b): recibir una operación (POST) y servir el delta del
+    // op-log (GET). Con auth (igual que el resto de endpoints).
+    router.post('/hub/ops', _handleHubOps);
+    router.get('/hub/state', _handleHubState);
+    // Feed en vivo (F3c): WebSocket. El cliente envía
+    // {"subscribe":"<business_id>"} al conectar y recibe cada op aplicada.
+    router.get('/hub/events', _hubEventsHandler());
+
     // Printer discovery
     router.get('/printers', _handleListPrinters);
     router.get('/api/printers/discover', _handleListPrinters);
@@ -144,8 +168,8 @@ class MobilePrintAgent {
     return (shelf.Handler innerHandler) {
       return (shelf.Request request) async {
         final path = request.url.path;
-        // Skip auth for health/status
-        if (path == 'health' || path == 'status') {
+        // Skip auth for health/status y el handshake del Hub.
+        if (path == 'health' || path == 'status' || path == 'hub/health') {
           return innerHandler(request);
         }
         final authHeader = request.headers['authorization'] ?? '';
@@ -166,6 +190,92 @@ class MobilePrintAgent {
 
   shelf.Response _handleHealth(shelf.Request request) {
     return _jsonOk({'status': 'ok'});
+  }
+
+  /// Handshake del Hub Local (F3). `seq` es el último número de operación
+  /// aplicado por el Hub; en F3a aún no hay op-log, así que es 0. El cliente
+  /// (HubClient) usa esto para confirmar que el endpoint es un Hub alcanzable.
+  shelf.Response _handleHubHealth(shelf.Request request) {
+    return _jsonOk({
+      'status': 'ok',
+      'role': 'hub',
+      'hub_protocol': 1,
+      'seq': 0,
+    });
+  }
+
+  /// F3b: recibe una operación de un terminal, la agrega al op-log (seq +
+  /// idempotente por op_id) y devuelve el seq asignado. El body es la acción
+  /// (mismo shape que `enqueueAction`) e incluye `business_id`.
+  Future<shelf.Response> _handleHubOps(shelf.Request request) async {
+    final body = await _readJson(request);
+    if (body == null) return _jsonError('Invalid JSON body', 400);
+    final businessId = body['business_id']?.toString() ?? '';
+    if (businessId.isEmpty) return _jsonError('Missing business_id', 400);
+    final seq = await _hubOpLog.append(businessId, body);
+    // Difundir la op aplicada (con su seq) a los suscriptores del feed.
+    _broadcastOp(businessId, {...body, 'seq': seq});
+    return _jsonOk({'seq': seq, 'op_id': body['op_id'] ?? body['id']});
+  }
+
+  /// Handler del WebSocket del feed del Hub (F3c). El cliente, al conectar,
+  /// envía `{"subscribe":"<business_id>"}`; a partir de ahí recibe cada op.
+  shelf.Handler _hubEventsHandler() {
+    return webSocketHandler((WebSocketChannel channel, String? _) {
+      String? subscribedBiz;
+      channel.stream.listen(
+        (message) {
+          try {
+            final data = jsonDecode(message as String);
+            if (data is Map && data['subscribe'] != null) {
+              subscribedBiz = data['subscribe'].toString();
+              _hubSubscribers
+                  .putIfAbsent(subscribedBiz!, () => <WebSocketChannel>{})
+                  .add(channel);
+            }
+          } catch (_) {
+            // Mensaje no-JSON / desconocido: ignorar.
+          }
+        },
+        onDone: () {
+          if (subscribedBiz != null) {
+            _hubSubscribers[subscribedBiz]?.remove(channel);
+          }
+        },
+        onError: (_) {
+          if (subscribedBiz != null) {
+            _hubSubscribers[subscribedBiz]?.remove(channel);
+          }
+        },
+      );
+    });
+  }
+
+  /// Difunde una op a los suscriptores WebSocket del negocio. Limpia sockets
+  /// muertos al vuelo.
+  void _broadcastOp(String businessId, Map<String, dynamic> op) {
+    final subs = _hubSubscribers[businessId];
+    if (subs == null || subs.isEmpty) return;
+    final msg = jsonEncode(op);
+    for (final ch in subs.toList()) {
+      try {
+        ch.sink.add(msg);
+      } catch (_) {
+        subs.remove(ch);
+      }
+    }
+  }
+
+  /// F3b: sirve el delta del op-log desde `since` (query param) para que un
+  /// terminal/KDS se ponga al día. Devuelve `{seq, ops}`.
+  Future<shelf.Response> _handleHubState(shelf.Request request) async {
+    final q = request.url.queryParameters;
+    final businessId = q['business_id'] ?? '';
+    if (businessId.isEmpty) return _jsonError('Missing business_id', 400);
+    final since = int.tryParse(q['since'] ?? '0') ?? 0;
+    final ops = await _hubOpLog.since(businessId, seq: since);
+    final seq = await _hubOpLog.currentSeq(businessId);
+    return _jsonOk({'seq': seq, 'ops': ops});
   }
 
   shelf.Response _handleStatus(shelf.Request request) {
