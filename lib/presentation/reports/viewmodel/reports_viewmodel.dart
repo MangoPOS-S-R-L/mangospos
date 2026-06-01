@@ -325,16 +325,25 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
 
       switch (category) {
         case ReportCategory.sales:
-          final results = await Future.wait([
-            _repository.getSalesSummary(
-              businessId: businessId, from: from, to: to),
-            _repository.getMonthlyProductProjection(businessId: businessId),
-          ]);
+          // getSalesSummary cae a cache offline (F5) si no hay red. La
+          // proyección mensual es secundaria y SOLO sirve online; si falla
+          // (offline) no debe tumbar el reporte → best-effort, queda vacía.
+          final salesSummary = await _repository.getSalesSummary(
+              businessId: businessId, from: from, to: to);
+          Map<String, double> projection = const {};
+          try {
+            projection = Map<String, double>.from(
+              await _repository.getMonthlyProductProjection(
+                  businessId: businessId),
+            );
+          } catch (_) {
+            // Sin red: nos quedamos sin proyección, el resumen (posiblemente
+            // cacheado) igual se muestra.
+          }
           if (myToken != _loadToken) return; // superseded
           state = state.copyWith(
-            salesSummary: results[0],
-            productProjection:
-                Map<String, double>.from(results[1] as Map),
+            salesSummary: salesSummary,
+            productProjection: projection,
           );
         case ReportCategory.finances:
           final summary = await _repository.getCashSummary(
@@ -689,6 +698,22 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
           ),
         ];
     }
+  }
+
+  /// Si el resumen de ventas actual viene del cache offline (F5), devuelve
+  /// cuándo se capturó; null si es data fresca (online). La vista lo usa para
+  /// mostrar el aviso "datos sin conexión al …".
+  DateTime? get salesDataCachedAt {
+    final raw = state.salesSummary?['_offline_cached_at']?.toString();
+    if (raw == null || raw.isEmpty) return null;
+    return DateTime.tryParse(raw);
+  }
+
+  /// Igual que [salesDataCachedAt] pero para el resumen de finanzas/caja (F5-2).
+  DateTime? get financesDataCachedAt {
+    final raw = state.cashSummary?['_offline_cached_at']?.toString();
+    if (raw == null || raw.isEmpty) return null;
+    return DateTime.tryParse(raw);
   }
 
   List<SalesMetricCardData> getSalesMetricCards() {

@@ -32,6 +32,7 @@ class _FinanceReportBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final currency = state.currency.formatter;
+    final cachedAt = viewModel.financesDataCachedAt;
     final metrics = viewModel.getFinanceMetricCards();
     final typeRows = viewModel.getFinanceTypeRows();
     final sessionRows = viewModel.getFinanceSessionRows();
@@ -62,6 +63,10 @@ class _FinanceReportBody extends StatelessWidget {
             state.error!,
             style: const TextStyle(color: AppColors.destructive),
           ),
+        ],
+        if (cachedAt != null) ...[
+          const SizedBox(height: AppSpacing.itemGap),
+          OfflineDataBanner(cachedAt: cachedAt),
         ],
         const SizedBox(height: AppSpacing.xl),
         buildMetricsWrap(metrics),

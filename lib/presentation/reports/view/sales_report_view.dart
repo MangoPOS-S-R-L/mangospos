@@ -46,6 +46,9 @@ class _SalesReportBody extends StatelessWidget {
 
     final isMobile = ResponsiveHelper.isMobile(context);
     final cardPad = isMobile ? 14.0 : AppSpacing.cardPadding;
+    // F5: si el resumen viene del cache offline, mostramos un aviso de
+    // frescura en vez de aparentar datos en vivo.
+    final cachedAt = viewModel.salesDataCachedAt;
     Widget pdfBtn() => OutlinedButton.icon(
           style: reportOutlineButtonStyle(),
           onPressed: () async {
@@ -80,6 +83,10 @@ class _SalesReportBody extends StatelessWidget {
             state.error!,
             style: const TextStyle(color: AppColors.destructive),
           ),
+        ],
+        if (cachedAt != null) ...[
+          const SizedBox(height: AppSpacing.itemGap),
+          OfflineDataBanner(cachedAt: cachedAt),
         ],
         SizedBox(height: isMobile ? AppSpacing.itemGap : AppSpacing.xl),
         Container(

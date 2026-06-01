@@ -1,6 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/fiscal/ncf_types.dart';
+import '../../core/offline/reports_offline_cache.dart';
 import '../../core/utils/app_time.dart';
 import '../datasources/queries/reports_queries.dart';
 import '../utils/payment_amount_utils.dart';
@@ -109,29 +110,55 @@ class ReportsRepository {
     final fromIso = AppTime.astToUtcIso(from);
     final toIso = AppTime.astToUtcIso(to);
 
-    final response = await _client.rpc(
-      'get_sales_summary_v2',
-      params: {
-        '_business_id': businessId,
-        '_from': fromIso,
-        '_to': toIso,
-      },
-    );
+    try {
+      final response = await _client.rpc(
+        'get_sales_summary_v2',
+        params: {
+          '_business_id': businessId,
+          '_from': fromIso,
+          '_to': toIso,
+        },
+      );
 
-    if (response == null) {
-      return _emptySalesSummary(fromIso, toIso);
+      final result = response == null
+          ? _emptySalesSummary(fromIso, toIso)
+          : Map<String, dynamic>.from(response as Map);
+
+      // Defaults para campos no cubiertos por el RPC v2
+      result['modifier_sales_total'] ??= 0;
+      result['sales_by_modifier'] ??= const <Map<String, dynamic>>[];
+      result['sales_by_receipt'] ??= const <Map<String, dynamic>>[];
+      result['sales_by_adjustment'] ??= const <Map<String, dynamic>>[];
+      result['sales_by_production_area'] ??= const <Map<String, dynamic>>[];
+
+      // F5: cacheamos el resumen para poder verlo sin conexión (solo
+      // lectura). Best-effort — no bloquea ni rompe la carga online.
+      await ReportsOfflineCache().saveSalesSummary(
+        businessId: businessId,
+        fromIso: fromIso,
+        toIso: toIso,
+        summary: result,
+      );
+
+      return result;
+    } catch (e) {
+      // F5: sin conexión, servimos el snapshot cacheado del MISMO rango,
+      // marcado con `_offline_cached_at` para que la UI muestre el aviso de
+      // "datos sin conexión". Si no hay cache para ese rango, propagamos el
+      // error (comportamiento de siempre).
+      final cached = await ReportsOfflineCache().loadSalesSummary(
+        businessId: businessId,
+        fromIso: fromIso,
+        toIso: toIso,
+      );
+      if (cached != null) {
+        return {
+          ...cached.summary,
+          '_offline_cached_at': cached.savedAt.toIso8601String(),
+        };
+      }
+      rethrow;
     }
-
-    final result = Map<String, dynamic>.from(response as Map);
-
-    // Defaults para campos no cubiertos por el RPC v2
-    result['modifier_sales_total'] ??= 0;
-    result['sales_by_modifier'] ??= const <Map<String, dynamic>>[];
-    result['sales_by_receipt'] ??= const <Map<String, dynamic>>[];
-    result['sales_by_adjustment'] ??= const <Map<String, dynamic>>[];
-    result['sales_by_production_area'] ??= const <Map<String, dynamic>>[];
-
-    return result;
   }
 
   Map<String, dynamic> _emptySalesSummary(String fromIso, String toIso) => {
@@ -163,7 +190,44 @@ class ReportsRepository {
       };
 
 
+  /// Resumen de caja/finanzas. F5-2: cachea al cargar online y, sin red,
+  /// sirve el snapshot cacheado del MISMO rango (marcado `_offline_cached_at`)
+  /// para poder ver el cierre del día offline. Si no hay cache para ese rango,
+  /// propaga el error.
   Future<Map<String, dynamic>> getCashSummary({
+    required String businessId,
+    required DateTime from,
+    required DateTime to,
+  }) async {
+    final fromIso = AppTime.astToUtcIso(from);
+    final toIso = AppTime.astToUtcIso(to);
+    try {
+      final result = await _getCashSummaryOnline(
+          businessId: businessId, from: from, to: to);
+      await ReportsOfflineCache().saveCashSummary(
+        businessId: businessId,
+        fromIso: fromIso,
+        toIso: toIso,
+        summary: result,
+      );
+      return result;
+    } catch (e) {
+      final cached = await ReportsOfflineCache().loadCashSummary(
+        businessId: businessId,
+        fromIso: fromIso,
+        toIso: toIso,
+      );
+      if (cached != null) {
+        return {
+          ...cached.summary,
+          '_offline_cached_at': cached.savedAt.toIso8601String(),
+        };
+      }
+      rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>> _getCashSummaryOnline({
     required String businessId,
     required DateTime from,
     required DateTime to,

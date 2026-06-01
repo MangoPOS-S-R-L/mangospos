@@ -1069,3 +1069,44 @@ class ReportTotalPill extends StatelessWidget {
     );
   }
 }
+
+/// Aviso de datos offline (F5): el resumen mostrado proviene del cache local
+/// porque no hay conexión. Indica cuándo se capturó para que el usuario sepa
+/// que puede estar desactualizado. Compartido por los reportes (ventas,
+/// finanzas, …).
+class OfflineDataBanner extends StatelessWidget {
+  const OfflineDataBanner({super.key, required this.cachedAt});
+
+  final DateTime cachedAt;
+
+  @override
+  Widget build(BuildContext context) {
+    final stamp = DateFormat('dd MMM yyyy · HH:mm').format(cachedAt);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7ED),
+        borderRadius: BorderRadius.circular(reportRadius),
+        border: Border.all(color: const Color(0xFFFDBA74)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.cloud_off_rounded, size: 18, color: Color(0xFFB45309)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Sin conexión — mostrando datos guardados al $stamp. '
+              'Pueden estar desactualizados; se refrescan al reconectar.',
+              style: const TextStyle(
+                color: Color(0xFF92400E),
+                fontSize: 12.5,
+                height: 1.3,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
