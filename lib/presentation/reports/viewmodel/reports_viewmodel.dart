@@ -352,26 +352,17 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
           if (myToken != _loadToken) return;
           state = state.copyWith(inventorySummary: summary);
         case ReportCategory.taxes:
-          // El reporte de Impuestos pinta su data desde `fiscalSummary`
-          // (NCFs emitidos = fuente oficial DGII). `taxSummary` sigue
-          // sirviendo para los tiles del hub y el método legacy
-          // `getTaxMetricCards`. Antes esta case solo cargaba taxSummary
-          // → entrando directo al reporte se veía todo en cero porque
-          // fiscalSummary quedaba null.
-          //
-          // Las dos queries son independientes y baratas — paralelo con
-          // Future.wait corta el wall-clock a la mitad.
-          final results = await Future.wait([
-            _repository.getTaxSummary(
-                businessId: businessId, from: from, to: to),
-            _repository.getFiscalDocumentsSummary(
-                businessId: businessId, from: from, to: to),
-          ]);
+          // El reporte de Impuestos pinta su data SOLO desde `fiscalSummary`
+          // (NCFs emitidos = fuente oficial DGII). NO cargamos `taxSummary`
+          // aquí: es legacy y solo lo consumen los tiles del hub
+          // (loadHubSummary) y `getTaxMetricCards`. Cargarlo en esta pantalla
+          // duplicaba el wall-clock con el método más pesado del repo
+          // (payments + items + modifiers + orders + summarizeItemPricing por
+          // ítem) sin que el view lo use.
+          final fiscal = await _repository.getFiscalDocumentsSummary(
+              businessId: businessId, from: from, to: to);
           if (myToken != _loadToken) return;
-          state = state.copyWith(
-            taxSummary: results[0],
-            fiscalSummary: results[1],
-          );
+          state = state.copyWith(fiscalSummary: fiscal);
         case ReportCategory.fiscal:
           final summary = await _repository.getFiscalDocumentsSummary(
             businessId: businessId, from: from, to: to);

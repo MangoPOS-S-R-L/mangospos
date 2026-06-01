@@ -172,10 +172,9 @@ class _ReportScaffoldState extends ConsumerState<ReportScaffold> {
         return state.inventorySummary == null;
       case ReportCategory.taxes:
         // El view de Impuestos pinta toda su data desde fiscalSummary
-        // (NCFs emitidos). Si quitamos el skeleton apenas llega
-        // taxSummary, el usuario ve ceros prematuros antes de que
-        // fiscalSummary termine. Requerir ambos.
-        return state.taxSummary == null || state.fiscalSummary == null;
+        // (NCFs emitidos). Solo eso decide si hay data — `taxSummary` es
+        // legacy y ya no se carga en esta pantalla.
+        return state.fiscalSummary == null;
       case ReportCategory.fiscal:
         return state.fiscalSummary == null;
     }
