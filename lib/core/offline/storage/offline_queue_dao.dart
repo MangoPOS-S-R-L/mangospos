@@ -13,12 +13,20 @@ import 'dart:convert';
 
 import 'package:drift/drift.dart';
 
+import '../../security/secure_blob_cipher.dart';
 import 'offline_queue_db.dart';
 
 class OfflineQueueDao {
-  OfflineQueueDao(this._db);
+  OfflineQueueDao(this._db, {SecureBlobCipher? cipher})
+      : _cipher = cipher ?? SecureBlobCipher.instance;
 
   final OfflineQueueDb _db;
+
+  /// Cifra/descifra el `payloadJson` (datos sensibles de la op: montos, RNC,
+  /// productos, notas) a nivel de columna con AES-GCM (G9b). Las columnas
+  /// estructuradas (id, tipo, estado, timestamps) quedan en claro para poder
+  /// consultarlas. La BD sigue siendo sqlite plano — sin SQLCipher.
+  final SecureBlobCipher _cipher;
 
   /// Lee toda la cola de un business en orden cronológico (FIFO).
   /// Reemplaza `storage.readList(offline_queue_{businessId})`.
@@ -27,7 +35,7 @@ class OfflineQueueDao {
       ..where((t) => t.businessId.equals(businessId))
       ..orderBy([(t) => OrderingTerm(expression: t.queuedAt)]);
     final rows = await query.get();
-    return rows.map(_rowToActionMap).toList(growable: true);
+    return Future.wait(rows.map(_rowToActionMap));
   }
 
   /// Reemplaza la cola completa (transacción atómica DELETE + INSERT).
@@ -47,7 +55,7 @@ class OfflineQueueDao {
     final id = action['id']?.toString();
     if (id == null || id.isEmpty) return;
     await _db.into(_db.queueActions).insertOnConflictUpdate(
-          _actionMapToCompanion(businessId, action),
+          await _actionMapToCompanion(businessId, action),
         );
   }
 
@@ -81,7 +89,7 @@ class OfflineQueueDao {
           .go();
       for (final action in safeActions) {
         await _db.into(_db.queueActions).insertOnConflictUpdate(
-              _actionMapToCompanion(businessId, action),
+              await _actionMapToCompanion(businessId, action),
             );
       }
     });
@@ -172,8 +180,12 @@ class OfflineQueueDao {
     'processing_started_at',
   };
 
-  Map<String, dynamic> _rowToActionMap(QueueActionRow row) {
-    final extras = (jsonDecode(row.payloadJson) as Map?) ?? const {};
+  Future<Map<String, dynamic>> _rowToActionMap(QueueActionRow row) async {
+    // Descifra el payload (tolera filas legacy en texto plano vía
+    // SecureBlobCipher.open). Si el descifrado falla, tratamos los extras
+    // como vacíos — las columnas estructuradas igual reconstruyen la op.
+    final plain = await _cipher.open(row.payloadJson) ?? '{}';
+    final extras = (jsonDecode(plain) as Map?) ?? const {};
     final merged = <String, dynamic>{
       ...Map<String, dynamic>.from(extras),
       'id': row.id,
@@ -193,10 +205,10 @@ class OfflineQueueDao {
     return merged;
   }
 
-  QueueActionsCompanion _actionMapToCompanion(
+  Future<QueueActionsCompanion> _actionMapToCompanion(
     String businessId,
     Map<String, dynamic> action,
-  ) {
+  ) async {
     final payloadExtras = <String, dynamic>{};
     for (final entry in action.entries) {
       if (_structuredKeys.contains(entry.key)) continue;
@@ -206,7 +218,7 @@ class OfflineQueueDao {
       id: action['id']?.toString() ?? '',
       businessId: businessId,
       type: action['type']?.toString() ?? 'unknown',
-      payloadJson: jsonEncode(payloadExtras),
+      payloadJson: await _cipher.seal(jsonEncode(payloadExtras)),
       status: Value(action['status']?.toString() ?? 'pending'),
       attempts:
           Value((action['attempts'] as num?)?.toInt() ?? 0),
