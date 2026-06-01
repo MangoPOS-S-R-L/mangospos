@@ -83,10 +83,35 @@ class OfflineQueueDb extends _$OfflineQueueDb {
   OfflineQueueDb() : super(openConnection());
 
   /// Para tests: construye una DB en memoria sin tocar disco.
-  OfflineQueueDb.inMemory(QueryExecutor executor) : super(executor);
+  OfflineQueueDb.inMemory(super.executor);
 
   @override
   int get schemaVersion => 1;
+
+  /// Estrategia de migración. Hoy estamos en v1 (sin upgrades), pero el
+  /// framework debe existir ANTES de que el esquema crezca (F3/F4 del
+  /// roadmap offline agregan tablas/columnas). Sin esto, subir
+  /// `schemaVersion` haría que Drift no supiera migrar y, en el peor caso,
+  /// se perdería la cola pendiente del cajero.
+  ///
+  /// Cómo evolucionar el esquema en el futuro (forward-only):
+  ///   1. Cambiar la tabla/columna en este archivo.
+  ///   2. Subir `schemaVersion` a N.
+  ///   3. Agregar el paso en `onUpgrade`:
+  ///        if (from < N) { await m.addColumn(tabla, tabla.nuevaCol); }
+  ///   4. Regenerar: `flutter pub run build_runner build`.
+  /// Cada paso debe preservar las filas existentes (nunca dropear datos
+  /// de la cola sin un respaldo explícito).
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+        onCreate: (m) async {
+          await m.createAll();
+        },
+        onUpgrade: (m, from, to) async {
+          // v1: no hay upgrades todavía. Los pasos por versión van aquí
+          // cuando se suba `schemaVersion` (ver doc arriba).
+        },
+      );
 
   /// Singleton por proceso. Drift maneja un único pool por archivo, así
   /// que abrir esto N veces sería un bug; lo restringimos.

@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 
 import 'package:flutter/foundation.dart' show debugPrint, kDebugMode, kIsWeb;
 import 'package:mangopos/core/auth/offline_auth_service.dart';
+import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/core/network/supabase_config.dart';
@@ -907,10 +908,27 @@ class SessionController extends Notifier<SessionState> {
 
   Future<void> signOut() async {
     _explicitSignOut = true;
+    // Capturamos el negocio activo ANTES de resetear el state: tras
+    // setUnauthenticated() activeBusinessId queda null y no sabríamos qué
+    // limpiar.
+    final businessId = state.activeBusinessId;
     try {
       await Supabase.instance.client.auth.signOut();
     } finally {
       _explicitSignOut = false;
+      // Limpieza de seguridad: borra los datos transaccionales offline del
+      // negocio (snapshots de órdenes, cola, mappings, cola de impresión)
+      // para que el siguiente cajero en este dispositivo no vea montos ni
+      // ventas del anterior. Conserva catálogo/inventario (no sensibles,
+      // acelera el re-login) y roster/device binding (necesarios para el
+      // login por PIN offline). Best-effort: nunca debe bloquear el logout.
+      if (businessId != null && businessId.isNotEmpty) {
+        try {
+          await OfflinePosService().clearOfflineBusinessData(businessId);
+        } catch (e) {
+          debugPrint('[session] limpieza offline en signOut falló: $e');
+        }
+      }
       setUnauthenticated();
     }
   }
