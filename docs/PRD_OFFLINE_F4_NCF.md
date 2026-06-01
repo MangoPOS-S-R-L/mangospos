@@ -102,4 +102,19 @@ Rango autorizado del negocio para B02:  [1 .. 100000]
 
 ---
 
-*Diseño basado en el código real al 2026-06-01. No implementar la emisión offline real sin §4 (contador/DGII) y §5 (producto).*
+## 8. Estado de implementación + el bloqueo real del carvado
+
+**Construido (gateado, `kOfflineNcfEnabled=false`):**
+- F4-1: `NcfOfflineAllocator` (asigna NCF local del rango del dispositivo, agota→null) + migración 20260601_0004 (device_id, offline_issued). 8 tests.
+- F4-2 (lado lectura): `NcfRangeService.resolveDeviceRange` — lee la fila de `ncf_sequences` del dispositivo y arma el `NcfRange` que consume el allocator.
+
+**Bloqueo del carvado (lado escritura) — PREGUNTA FISCAL precisa para el contador:**
+En el modelo actual, `ncf_sequences.prefix = serie + tipo` y la `serie` debe estar **autorizada por DGII**. Entonces "rangos por dispositivo" puede significar dos cosas FISCALMENTE distintas, y solo el contador sabe cuál aplica a este negocio:
+- **(a) Series separadas por terminal**: DGII autoriza una serie distinta por caja (cada una con su propio rango). El NCF impreso difiere por serie. Cero solapamiento por diseño.
+- **(b) Partición del rango de UNA serie**: una sola serie autorizada, y repartimos su rango numérico en bloques disjuntos por dispositivo. Mismo prefijo, números disjuntos.
+
+El **carvado y la emisión offline NO se codifican hasta que el contador defina (a) o (b)** — implementarlo a ciegas baca el modelo fiscal equivocado. Con la respuesta, el carvado son ~1-2 días (RPC que reparte + alerta de agotamiento) sobre la infra ya lista.
+
+---
+
+*Diseño basado en el código real al 2026-06-01. F4-1/F4-2 (infra gateada) construidos; carvado + emisión esperan §4/§8 (contador/DGII) y §5 (producto).*
