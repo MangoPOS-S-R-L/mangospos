@@ -117,4 +117,32 @@ El **carvado y la emisión offline NO se codifican hasta que el contador defina 
 
 ---
 
-*Diseño basado en el código real al 2026-06-01. F4-1/F4-2 (infra gateada) construidos; carvado + emisión esperan §4/§8 (contador/DGII) y §5 (producto).*
+## 9. MODELO PREFERIDO: Hub Local como asignador (sin huecos)
+
+Si los equipos están en la **misma LAN** (caso normal), el **Hub Local (F3)**
+debe ser el **único asignador de NCF** mientras no hay internet — igual que
+Supabase online. Todas las cajas piden el próximo número al Hub vía un endpoint
+dedicado (`POST /hub/ncf/next`, atómico sobre el `current_number` de la serie).
+
+Ventaja decisiva: **numeración secuencial sin huecos** aunque facturen varias
+cajas a la vez. Elimina el problema fiscal de los sub-rangos por dispositivo
+(bloques reservados-no-usados = huecos a justificar).
+
+```
+Online              → Supabase asigna (como hoy)
+Offline + Hub LAN   → el Hub asigna secuencial, SIN huecos   ← preferido
+Offline sin Hub     → recibo provisional sin NCF (caja aislada) ← fallback raro
+```
+
+Los sub-rangos por dispositivo (allocator F4-1) quedan solo como **fallback**
+para una caja aislada del Hub. El carvado por dispositivo (§2) deja de ser el
+camino principal cuando hay Hub.
+
+Implicación de build: el carvado masivo pierde prioridad; lo que se necesita es
+el endpoint de asignación en el Hub + reconciliación del `current_number` al
+reconectar (reusa el uplink de F3b). Depende de activar F3 (Hub) y de la
+confirmación fiscal (§4 / consulta al contador en `F4_NCF_OFFLINE_CONSULTA_CONTADOR.md`).
+
+---
+
+*Diseño basado en el código real al 2026-06-01. F4-1/F4-2 (infra gateada) construidos; el modelo preferido (Hub asignador, §9) + emisión esperan activar F3 y la firma fiscal (§4/§8).*
