@@ -124,6 +124,7 @@ class ReportsCsvExportService {
         'Ventas netas',
         'Costo',
         'Ganancia bruta',
+        'Margen %',
         'Tickets',
       ]);
       for (final row in productRows) {
@@ -137,6 +138,7 @@ class ReportsCsvExportService {
           row.netSales.toStringAsFixed(2),
           row.cost.toStringAsFixed(2),
           row.grossProfit.toStringAsFixed(2),
+          row.marginPct == null ? '' : row.marginPct!.toStringAsFixed(1),
           row.tickets.toString(),
         ]);
       }

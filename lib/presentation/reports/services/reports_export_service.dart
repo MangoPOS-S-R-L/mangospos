@@ -243,6 +243,7 @@ class ReportsExportService {
           'Netas',
           'Costo',
           'Gan. bruta',
+          'Margen %',
         ],
         data: rows
             .map(
@@ -256,6 +257,9 @@ class ReportsExportService {
                 numberFormat.format(row.netSales),
                 numberFormat.format(row.cost),
                 numberFormat.format(row.grossProfit),
+                row.marginPct == null
+                    ? '--'
+                    : '${row.marginPct!.toStringAsFixed(1)}%',
               ],
             )
             .toList(growable: false),

@@ -90,6 +90,8 @@ class ProductSalesReportRow {
   final double netSales;
   final double cost;
   final double grossProfit;
+  // RF-R1: margen % = utilidad / venta neta × 100. Null cuando net_sales <= 0.
+  final double? marginPct;
   final int tickets;
 
   const ProductSalesReportRow({
@@ -104,6 +106,7 @@ class ProductSalesReportRow {
     required this.netSales,
     required this.cost,
     required this.grossProfit,
+    this.marginPct,
     required this.tickets,
   });
 }
@@ -729,6 +732,11 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
     final paymentsCount = (summary['payments_count'] as num?)?.toInt() ?? 0;
     final itemsSold = (summary['items_sold'] as num?)?.toInt() ?? 0;
     final avgTicket = (summary['avg_ticket'] as num?)?.toDouble() ?? 0;
+    // RF-R1: rentabilidad. gross_profit_total/total_cost vienen del RPC; margin_pct
+    // es null cuando no hay ventas. Calculado con el costo ACTUAL del producto.
+    final grossProfit = (summary['gross_profit_total'] as num?)?.toDouble() ?? 0;
+    final totalCost = (summary['total_cost'] as num?)?.toDouble() ?? 0;
+    final marginPct = (summary['margin_pct_total'] as num?)?.toDouble();
 
     final currency = state.currency.formatter;
     final numberFormat = NumberFormat('#,##0', 'en_US');
@@ -762,6 +770,29 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         subtitle: 'Montos cancelados o void en el rango',
         icon: Icons.cancel_outlined,
         color: const Color(0xFFDC2626),
+      ),
+      SalesMetricCardData(
+        title: 'Utilidad bruta',
+        value: currency.format(grossProfit),
+        subtitle: 'Ventas netas menos costo (costo actual)',
+        icon: Icons.trending_up_outlined,
+        color: const Color(0xFF0F766E),
+      ),
+      SalesMetricCardData(
+        title: 'Costo de ventas',
+        value: currency.format(totalCost),
+        subtitle: 'Costo actual de los productos vendidos',
+        icon: Icons.sell_outlined,
+        color: const Color(0xFFB45309),
+      ),
+      SalesMetricCardData(
+        title: 'Margen',
+        value: marginPct == null
+            ? '--'
+            : '${NumberFormat('#,##0.0', 'en_US').format(marginPct)}%',
+        subtitle: 'Utilidad bruta sobre ventas netas',
+        icon: Icons.percent_outlined,
+        color: const Color(0xFF7C3AED),
       ),
     ];
   }
@@ -830,6 +861,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
               netSales: (row['net_sales'] as num?)?.toDouble() ?? 0,
               cost: (row['cost'] as num?)?.toDouble() ?? 0,
               grossProfit: (row['gross_profit'] as num?)?.toDouble() ?? 0,
+              marginPct: (row['margin_pct'] as num?)?.toDouble(),
               tickets: (row['tickets'] as num?)?.toInt() ?? 0,
             );
           },

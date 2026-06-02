@@ -1096,7 +1096,7 @@ class _ProductSalesReportSection extends StatelessWidget {
               CommercialStatTile(
                 label: 'Ganancia bruta',
                 value: currency.format(totals['grossProfit'] ?? 0),
-                hint: 'Netas menos costo registrado',
+                hint: 'Netas menos costo actual del producto',
               ),
             ]
                 .map((tile) => SizedBox(width: 220, child: tile))
@@ -1164,6 +1164,7 @@ class _ProductSalesDataTable extends StatelessWidget {
               _moneyColumn('Netas'),
               _moneyColumn('Costo'),
               _moneyColumn('Gan. bruta'),
+              _moneyColumn('Margen %'),
             ],
             rows: [
               for (final row in visibleRows)
@@ -1205,6 +1206,19 @@ class _ProductSalesDataTable extends StatelessWidget {
                         style: TextStyle(
                           fontWeight: FontWeight.w700,
                           color: row.grossProfit >= 0
+                              ? const Color(0xFF047857)
+                              : AppColors.destructive,
+                        ),
+                      ),
+                    ),
+                    DataCell(
+                      Text(
+                        row.marginPct == null
+                            ? '--'
+                            : '${row.marginPct!.toStringAsFixed(1)}%',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: (row.marginPct ?? 0) >= 0
                               ? const Color(0xFF047857)
                               : AppColors.destructive,
                         ),
