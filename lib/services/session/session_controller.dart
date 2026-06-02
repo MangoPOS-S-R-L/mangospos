@@ -916,15 +916,15 @@ class SessionController extends Notifier<SessionState> {
       await Supabase.instance.client.auth.signOut();
     } finally {
       _explicitSignOut = false;
-      // Limpieza de seguridad: borra los datos transaccionales offline del
-      // negocio (snapshots de órdenes, cola, mappings, cola de impresión)
-      // para que el siguiente cajero en este dispositivo no vea montos ni
-      // ventas del anterior. Conserva catálogo/inventario (no sensibles,
-      // acelera el re-login) y roster/device binding (necesarios para el
-      // login por PIN offline). Best-effort: nunca debe bloquear el logout.
+      // Limpieza al cerrar sesión. IMPORTANTE: NO descartamos operaciones
+      // offline SIN SINCRONIZAR — deben quedarse para subir en el próximo
+      // login (mismo u otro cajero); perderlas sería perder ventas/inventario.
+      // Con preservePending solo podamos lo ya `completed`; la cola pendiente,
+      // snapshots y mappings se conservan. Best-effort: nunca bloquea el logout.
       if (businessId != null && businessId.isNotEmpty) {
         try {
-          await OfflinePosService().clearOfflineBusinessData(businessId);
+          await OfflinePosService()
+              .clearOfflineBusinessData(businessId, preservePending: true);
         } catch (e) {
           debugPrint('[session] limpieza offline en signOut falló: $e');
         }
