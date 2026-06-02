@@ -20,7 +20,7 @@ class CatalogRefreshService {
 
   // Mismo select que MenuBrowserViewModel: si uno cambia, revisar el otro.
   static const _menuItemsSelect =
-      'id,name,price,image_url,category_id,is_active,position,tax_mode,item_type,is_inventory_tracked,allow_negative_sale,menu_item_taxes(tax_id,taxes(name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery))';
+      'id,name,price,image_url,category_id,is_active,position,tax_mode,item_type,is_inventory_tracked,allow_negative_sale,barcode,sku,menu_item_taxes(tax_id,taxes(name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery))';
 
   Future<void> refresh(String businessId) async {
     final existing = await _catalog.loadSnapshot(businessId);
