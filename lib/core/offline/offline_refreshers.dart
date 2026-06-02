@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/data/repositories/inventory_repository.dart';
+import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/data/repositories/zones_repository.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 
@@ -21,9 +22,10 @@ typedef BusinessIdResolver = String? Function();
 /// - catálogo  → [CatalogRefreshService]
 /// - zonas     → [ZonesRepository.fetchZones] (cachea como efecto secundario)
 /// - inventario→ [InventoryRepository.getItems] de la bodega principal
+/// - config    → [PosSettingsRepository.refreshBusinessSettings] (F6-3)
 ///
-/// El roster ya baja por su cuenta (OfflineAuthService.startBackgroundSync) y
-/// config/fiscal/NCF quedan para F6-3 (aún no tienen cache offline propio).
+/// El roster ya baja por su cuenta (OfflineAuthService.startBackgroundSync).
+/// Fiscal/seed NCF quedan para más adelante (aún sin cache offline propio).
 ///
 /// Los `refresh*` son inyectables para test; en producción usan los servicios
 /// reales. El best-effort (capturar errores por refresher) lo hace el
@@ -34,9 +36,10 @@ List<Future<void> Function()> buildOfflineRefreshers({
   Future<void> Function(String businessId)? refreshCatalog,
   Future<void> Function(String businessId)? refreshZones,
   Future<void> Function(String businessId)? refreshInventory,
+  Future<void> Function(String businessId)? refreshConfig,
 }) {
   // Resuelto perezosamente: solo se toca Supabase.instance si de verdad corre
-  // un refresher por defecto (en test se inyectan los tres y no se toca).
+  // un refresher por defecto (en test se inyectan todos y no se toca).
   SupabaseClient resolveClient() => client ?? Supabase.instance.client;
   final catalog = refreshCatalog ??
       (String b) => CatalogRefreshService(resolveClient()).refresh(b);
@@ -46,6 +49,9 @@ List<Future<void> Function()> buildOfflineRefreshers({
       };
   final inventory = refreshInventory ??
       (String b) => _refreshInventoryMainWarehouse(resolveClient(), b);
+  final config = refreshConfig ??
+      (String b) =>
+          PosSettingsRepository(resolveClient()).refreshBusinessSettings(b);
 
   Future<void> Function() guard(Future<void> Function(String) fn) {
     return () async {
@@ -55,7 +61,7 @@ List<Future<void> Function()> buildOfflineRefreshers({
     };
   }
 
-  return [guard(catalog), guard(zones), guard(inventory)];
+  return [guard(catalog), guard(zones), guard(inventory), guard(config)];
 }
 
 /// Refresca el inventario de la bodega principal (la primera que devuelve
