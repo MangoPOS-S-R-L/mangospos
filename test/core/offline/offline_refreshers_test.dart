@@ -5,14 +5,16 @@ import 'package:mangopos/core/offline/offline_refreshers.dart';
 /// inventario y aplica el guard del negocio activo. Colaboradores inyectados
 /// (sin red/BD).
 void main() {
-  test('arma un refresher por módulo (catálogo, zonas, inventario)', () {
+  test('arma un refresher por módulo (catálogo, zonas, inventario, config)',
+      () {
     final refreshers = buildOfflineRefreshers(
       resolveBusinessId: () => 'biz-1',
       refreshCatalog: (_) async {},
       refreshZones: (_) async {},
       refreshInventory: (_) async {},
+      refreshConfig: (_) async {},
     );
-    expect(refreshers.length, 3);
+    expect(refreshers.length, 4);
   });
 
   test('con negocio activo → corre cada refresher con ese businessId',
@@ -23,11 +25,17 @@ void main() {
       refreshCatalog: (b) async => seen['catalog'] = b,
       refreshZones: (b) async => seen['zones'] = b,
       refreshInventory: (b) async => seen['inventory'] = b,
+      refreshConfig: (b) async => seen['config'] = b,
     );
     for (final r in refreshers) {
       await r();
     }
-    expect(seen, {'catalog': 'biz-1', 'zones': 'biz-1', 'inventory': 'biz-1'});
+    expect(seen, {
+      'catalog': 'biz-1',
+      'zones': 'biz-1',
+      'inventory': 'biz-1',
+      'config': 'biz-1',
+    });
   });
 
   test('sin negocio activo (null) → no-op, no llama a los servicios', () async {
@@ -37,6 +45,7 @@ void main() {
       refreshCatalog: (_) async => calls++,
       refreshZones: (_) async => calls++,
       refreshInventory: (_) async => calls++,
+      refreshConfig: (_) async => calls++,
     );
     for (final r in refreshers) {
       await r();
@@ -51,6 +60,7 @@ void main() {
       refreshCatalog: (_) async => calls++,
       refreshZones: (_) async => calls++,
       refreshInventory: (_) async => calls++,
+      refreshConfig: (_) async => calls++,
     );
     for (final r in refreshers) {
       await r();

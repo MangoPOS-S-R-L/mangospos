@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/currency/usd_display_settings.dart';
+import '../../core/offline/business_settings_offline_cache.dart';
 
 export '../../core/currency/usd_display_settings.dart';
 
@@ -237,19 +239,45 @@ class PosSettingsRepository {
   static const String cashCloseDetailed = 'detailed';
 
   final SupabaseClient _client;
+  final BusinessSettingsOfflineCache _settingsCache =
+      BusinessSettingsOfflineCache();
+
+  /// F6-3: lee la fila COMPLETA de `business_settings` y la cachea en disco
+  /// (fire-and-forget) para que los getters tengan fallback offline. Los
+  /// getters parsean su columna del row que esto devuelve.
+  Future<Map<String, dynamic>?> _fetchAndCacheRow(String businessId) async {
+    final row = await _client
+        .from('business_settings')
+        .select()
+        .eq('business_id', businessId)
+        .maybeSingle();
+    if (row == null) return null;
+    final map = Map<String, dynamic>.from(row);
+    unawaited(_settingsCache.saveRow(businessId: businessId, row: map));
+    return map;
+  }
+
+  /// Fila cacheada de `business_settings` (o null). Fallback offline de los
+  /// getters: parsean su columna de aquí en vez de caer al default ciego.
+  Future<Map<String, dynamic>?> _cachedRow(String businessId) =>
+      _settingsCache.loadRow(businessId);
+
+  /// F6-3: refresher proactivo para el OfflineSyncCoordinator — baja y cachea
+  /// la config del negocio al reconectar/periódicamente. Best-effort.
+  Future<void> refreshBusinessSettings(String businessId) async {
+    await _fetchAndCacheRow(businessId);
+  }
 
   Future<String> getCashCloseMode(String businessId) async {
-    try {
-      final row = await _client
-          .from('business_settings')
-          .select('cash_close_mode')
-          .eq('business_id', businessId)
-          .maybeSingle();
-
+    String parse(Map<String, dynamic>? row) {
       final raw = row?['cash_close_mode']?.toString();
       return raw == cashCloseDetailed ? cashCloseDetailed : cashCloseCompact;
+    }
+
+    try {
+      return parse(await _fetchAndCacheRow(businessId));
     } catch (_) {
-      return cashCloseCompact;
+      return parse(await _cachedRow(businessId));
     }
   }
 
@@ -273,14 +301,10 @@ class PosSettingsRepository {
   /// Default `false` (preserva comportamiento legacy).
   Future<bool> getAllowRecount(String businessId) async {
     try {
-      final row = await _client
-          .from('business_settings')
-          .select('allow_recount')
-          .eq('business_id', businessId)
-          .maybeSingle();
+      final row = await _fetchAndCacheRow(businessId);
       return row?['allow_recount'] == true;
     } catch (_) {
-      return false;
+      return (await _cachedRow(businessId))?['allow_recount'] == true;
     }
   }
 
@@ -300,14 +324,11 @@ class PosSettingsRepository {
   /// que la columna aún no exista (cae a false).
   Future<bool> getCashClosePrintSalesByArea(String businessId) async {
     try {
-      final row = await _client
-          .from('business_settings')
-          .select('cash_close_print_sales_by_area')
-          .eq('business_id', businessId)
-          .maybeSingle();
+      final row = await _fetchAndCacheRow(businessId);
       return row?['cash_close_print_sales_by_area'] == true;
     } catch (_) {
-      return false;
+      return (await _cachedRow(businessId))?['cash_close_print_sales_by_area'] ==
+          true;
     }
   }
 
@@ -371,15 +392,12 @@ class PosSettingsRepository {
 
   Future<bool> getPromptPeopleCountOnTableOpen(String businessId) async {
     try {
-      final row = await _client
-          .from('business_settings')
-          .select('prompt_people_count_on_table_open')
-          .eq('business_id', businessId)
-          .maybeSingle();
-
+      final row = await _fetchAndCacheRow(businessId);
       return row?['prompt_people_count_on_table_open'] == true;
     } catch (_) {
-      return false;
+      return (await _cachedRow(businessId))?[
+              'prompt_people_count_on_table_open'] ==
+          true;
     }
   }
 
@@ -400,24 +418,22 @@ class PosSettingsRepository {
       return cached.mode;
     }
 
-    try {
-      final row = await _client
-          .from('business_settings')
-          .select('receipt_item_display_mode')
-          .eq('business_id', businessId)
-          .maybeSingle();
-
+    String parse(Map<String, dynamic>? row) {
       final mode = row?['receipt_item_display_mode']?.toString();
-      final normalized = mode == receiptItemsSeparate
+      return mode == receiptItemsSeparate
           ? receiptItemsSeparate
           : receiptItemsGrouped;
+    }
+
+    try {
+      final normalized = parse(await _fetchAndCacheRow(businessId));
       _receiptModeCache[businessId] = _CachedReceiptMode(
         normalized,
         DateTime.now(),
       );
       return normalized;
     } catch (_) {
-      return receiptItemsGrouped;
+      return parse(await _cachedRow(businessId));
     }
   }
 
@@ -450,24 +466,22 @@ class PosSettingsRepository {
       return cached.mode;
     }
 
-    try {
-      final row = await _client
-          .from('business_settings')
-          .select('discount_display_mode')
-          .eq('business_id', businessId)
-          .maybeSingle();
-
+    String parse(Map<String, dynamic>? row) {
       final mode = row?['discount_display_mode']?.toString();
-      final normalized = mode == discountPostDiscount
+      return mode == discountPostDiscount
           ? discountPostDiscount
           : discountPreDiscount;
+    }
+
+    try {
+      final normalized = parse(await _fetchAndCacheRow(businessId));
       _discountModeCache[businessId] = _CachedDiscountMode(
         normalized,
         DateTime.now(),
       );
       return normalized;
     } catch (_) {
-      return discountPreDiscount;
+      return parse(await _cachedRow(businessId));
     }
   }
 
@@ -500,24 +514,22 @@ class PosSettingsRepository {
       return cached.value;
     }
 
-    try {
-      final row = await _client
-          .from('business_settings')
-          .select('header_destinations_disabled')
-          .eq('business_id', businessId)
-          .maybeSingle();
-
+    List<String> parse(Map<String, dynamic>? row) {
       final raw = row?['header_destinations_disabled'];
-      final list = raw is List
+      return raw is List
           ? raw.map((e) => e.toString()).toList(growable: false)
           : const <String>[];
+    }
+
+    try {
+      final list = parse(await _fetchAndCacheRow(businessId));
       _headerDisabledCache[businessId] = _CachedStringList(
         list,
         DateTime.now(),
       );
       return list;
     } catch (_) {
-      return const <String>[];
+      return parse(await _cachedRow(businessId));
     }
   }
 
@@ -556,16 +568,12 @@ class PosSettingsRepository {
     }
 
     try {
-      final row = await _client
-          .from('business_settings')
-          .select('open_drawer_on_cash')
-          .eq('business_id', businessId)
-          .maybeSingle();
+      final row = await _fetchAndCacheRow(businessId);
       final value = row?['open_drawer_on_cash'] == true;
       _openDrawerCache[businessId] = _CachedBool(value, DateTime.now());
       return value;
     } catch (_) {
-      return false;
+      return (await _cachedRow(businessId))?['open_drawer_on_cash'] == true;
     }
   }
 
@@ -587,18 +595,15 @@ class PosSettingsRepository {
   Future<({bool precheck, bool receipt})> getPrintMultiCopyModes(
     String businessId,
   ) async {
+    ({bool precheck, bool receipt}) parse(Map<String, dynamic>? row) => (
+          precheck: row?['print_precheck_multi_copy'] == true,
+          receipt: row?['print_receipt_multi_copy'] == true,
+        );
+
     try {
-      final row = await _client
-          .from('business_settings')
-          .select(
-              'print_precheck_multi_copy, print_receipt_multi_copy')
-          .eq('business_id', businessId)
-          .maybeSingle();
-      final precheck = row?['print_precheck_multi_copy'] == true;
-      final receipt = row?['print_receipt_multi_copy'] == true;
-      return (precheck: precheck, receipt: receipt);
+      return parse(await _fetchAndCacheRow(businessId));
     } catch (_) {
-      return (precheck: false, receipt: false);
+      return parse(await _cachedRow(businessId));
     }
   }
 
@@ -624,17 +629,15 @@ class PosSettingsRepository {
   Future<({bool dineIn, bool takeout})> getKitchenBanners(
     String businessId,
   ) async {
+    ({bool dineIn, bool takeout}) parse(Map<String, dynamic>? row) => (
+          dineIn: row?['kitchen_banner_dine_in'] != false,
+          takeout: row?['kitchen_banner_takeout'] != false,
+        );
+
     try {
-      final row = await _client
-          .from('business_settings')
-          .select('kitchen_banner_dine_in, kitchen_banner_takeout')
-          .eq('business_id', businessId)
-          .maybeSingle();
-      final dineIn = row?['kitchen_banner_dine_in'] != false;
-      final takeout = row?['kitchen_banner_takeout'] != false;
-      return (dineIn: dineIn, takeout: takeout);
+      return parse(await _fetchAndCacheRow(businessId));
     } catch (_) {
-      return (dineIn: true, takeout: true);
+      return parse(await _cachedRow(businessId));
     }
   }
 
@@ -643,23 +646,14 @@ class PosSettingsRepository {
   /// Carga los feature flags del negocio. Si la fila no existe o la
   /// query falla, devuelve defaults (todo prendido = legacy).
   Future<BusinessFeatures> getBusinessFeatures(String businessId) async {
-    try {
-      final row = await _client
-          .from('business_settings')
-          .select(
-            'sales_mode_table_enabled, sales_mode_manual_enabled, '
-            'sales_mode_quick_enabled, sales_mode_delivery_enabled, '
-            'kitchen_enabled, barcode_enabled, inventory_mode, '
-            'multimesero_enabled, transfers_require_approval, '
-            'kitchen_banner_dine_in, kitchen_banner_takeout',
-          )
-          .eq('business_id', businessId)
-          .maybeSingle();
+    BusinessFeatures parse(Map<String, dynamic>? row) => row == null
+        ? BusinessFeatures.defaults
+        : BusinessFeatures.fromMap(row);
 
-      if (row == null) return BusinessFeatures.defaults;
-      return BusinessFeatures.fromMap(row);
+    try {
+      return parse(await _fetchAndCacheRow(businessId));
     } catch (_) {
-      return BusinessFeatures.defaults;
+      return parse(await _cachedRow(businessId));
     }
   }
 
@@ -669,20 +663,14 @@ class PosSettingsRepository {
   /// `enabled = false` que es el comportamiento legacy (no muestra
   /// nada).
   Future<UsdDisplaySettings> getUsdDisplaySettings(String businessId) async {
-    try {
-      final row = await _client
-          .from('business_settings')
-          .select(
-            'usd_display_enabled, usd_symbol, usd_rate, '
-            'usd_rate_updated_at, usd_symbol_position',
-          )
-          .eq('business_id', businessId)
-          .maybeSingle();
+    UsdDisplaySettings parse(Map<String, dynamic>? row) => row == null
+        ? const UsdDisplaySettings.disabled()
+        : UsdDisplaySettings.fromMap(row);
 
-      if (row == null) return const UsdDisplaySettings.disabled();
-      return UsdDisplaySettings.fromMap(row);
+    try {
+      return parse(await _fetchAndCacheRow(businessId));
     } catch (_) {
-      return const UsdDisplaySettings.disabled();
+      return parse(await _cachedRow(businessId));
     }
   }
 
