@@ -370,6 +370,51 @@ nuevo.**
 
 ---
 
+## 12-bis. Reportes retail (extensión del módulo de Reportes)
+
+El módulo de Reportes ya es maduro (ventas con 11 sub-reportes, por mesero, caja,
+impuestos, compras, inventario, fiscal; export PDF/CSV; presets de fecha; cache
+offline; `fl_chart`). Estos **extras** no existen y son los que un retailer espera —
+donde le ganamos a Square/Loyverse en RD. Algunos sirven también a restaurante y se
+pueden adelantar en `main`.
+
+### Transversales (sirven a restaurante Y retail — adelantables en `main`)
+- **RF-R1 Margen / rentabilidad por producto y categoría.** Utilidad bruta
+  (venta neta − costo) y margen %. El RPC `get_sales_summary_v2` ya emite `cost` y
+  `gross_profit` stubbeados en 0; solo hay que cablear el costo real. Ver
+  [SPEC_REPORTE_MARGEN.md](SPEC_REPORTE_MARGEN.md). **Mejor relación valor/esfuerzo.**
+- **RF-R2 Comparación de períodos.** "Este período vs anterior", % de crecimiento,
+  flechas. Hoy se filtra por rango pero no se compara. Polish de alto impacto.
+- **RF-R3 Auditoría de anulaciones/descuentos/cortesías (loss prevention).** Vista
+  dedicada: quién anuló, tendencia de cortesías, reembolsos.
+- **RF-R4 Cierre Z / Reporte X.** Resumen fiscal de fin de día (estándar retail que
+  piden contadores). Refuerza el foso fiscal NCF. Data ya disponible.
+- **RF-R5 Heatmap hora × día de la semana.** Para staffing/horarios. Ya existe el
+  breakdown por hora; falta la matriz visual.
+
+### Retail-específicos (dependen de fases de este PRD)
+- **RF-R6 Rotación de inventario y stock muerto.** *El reporte más importante para un
+  colmado* (cientos de SKUs): qué no se mueve en 30/60/90 días y velocidad de
+  rotación. Se arma con `inventory_movements`. → Fase **R3**.
+- **RF-R7 Valorización de inventario (FIFO/LIFO).** Valor del stock a costo, usando
+  `inventory_lots`. Estándar retail/contable. → Fase **R3**.
+- **RF-R8 Sugerencia de reorden / punto de pedido.** Basada en velocidad de venta.
+  Feature "killer". → Fase **R3**.
+- **RF-R9 Aging de cuentas por cobrar (fiado).** Saldos por cliente por antigüedad
+  (0-30 / 31-60 / +60). → Fase **R4**.
+- **RF-R10 Registro de ventas restringidas (licorería).** Log auditable de ventas de
+  alcohol/edad-restringida con hora, para cumplimiento. → Fase **R5**.
+
+### Polish (cuando haya tracción)
+- **RF-R11 Reportes programados** (email/WhatsApp): digest diario/semanal al dueño
+  (encaja con la infra de agentes/`schedule`).
+- **RF-R12 Análisis de canasta** (qué se vende junto): colocación de productos y combos.
+
+> **Orden sugerido por impacto/esfuerzo:** RF-R1 → RF-R2 → RF-R6 → RF-R4. Los R1/R2/R4
+> no dependen de la rama retail y benefician a los restaurantes hoy.
+
+---
+
 ## 13. Fuera de alcance (por ahora)
 
 - E-commerce / tienda online.
