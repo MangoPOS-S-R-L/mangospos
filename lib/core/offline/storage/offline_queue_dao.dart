@@ -72,6 +72,17 @@ class OfflineQueueDao {
     return deleted;
   }
 
+  /// Borra SOLO las acciones ya `completed` de este business, conservando las
+  /// NO sincronizadas (pending/processing/failed/dead). Se usa en logout para
+  /// no perder operaciones offline sin subir. Devuelve cuántas se borraron.
+  Future<int> deleteCompletedActions(String businessId) async {
+    final deleted = await (_db.delete(_db.queueActions)
+          ..where((t) =>
+              t.businessId.equals(businessId) & t.status.equals('completed')))
+        .go();
+    return deleted;
+  }
+
   Future<void> writeQueue(
     String businessId,
     List<Map<String, dynamic>> actions,

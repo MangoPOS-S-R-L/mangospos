@@ -555,9 +555,28 @@ class OfflinePosService {
   Future<void> clearOfflineBusinessData(
     String businessId, {
     bool includeReadCaches = false,
+    bool preservePending = false,
   }) async {
     if (businessId.isEmpty) return;
     final storage = await _storage;
+
+    // Logout: NO descartar operaciones offline sin sincronizar. Conservamos la
+    // cola no-completada (pending/processing/failed/dead) + snapshots, mappings
+    // y cola de impresión (estado que el sync necesita y que no debe perderse al
+    // cerrar sesión). Solo podamos lo ya `completed`. El siguiente login (mismo
+    // u otro cajero) retoma el sync de lo pendiente.
+    if (preservePending) {
+      if (kIsWeb) {
+        final queue = await _readQueue(businessId);
+        final unsynced = queue
+            .where((a) => a['status']?.toString() != _statusCompleted)
+            .toList(growable: false);
+        await _writeQueue(businessId, unsynced);
+      } else {
+        await _queueDao!.deleteCompletedActions(businessId);
+      }
+      return;
+    }
 
     // 1. Cola de acciones (transaccional, contiene payloads de venta).
     if (kIsWeb) {
