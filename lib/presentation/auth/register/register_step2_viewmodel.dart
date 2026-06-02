@@ -1,6 +1,8 @@
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mangopos/core/business/retail_profile_defaults.dart';
+import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/env/supabase_flutter.dart';
 import 'package:mangopos/presentation/auth/register/register_step1_viewmodel.dart';
 import 'package:mangopos/services/session/session_controller.dart';
@@ -247,6 +249,25 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
         userId: userId,
         step2: step2,
       );
+
+      // R0 retail: si el tipo de negocio es retail, sembramos el preset de
+      // feature flags (mostrador, sin mesas/cocina, con escaneo e inventario
+      // básico) en business_settings. Best-effort: un fallo aquí NO debe
+      // abortar el registro — la configuración no es crítica para crear la
+      // cuenta y el dueño puede ajustarla luego en Ajustes. Tipos no-retail
+      // devuelven null y conservan los defaults legacy (todo prendido).
+      final retailPreset =
+          RetailProfileDefaults.forBusinessType(step2.businessType);
+      if (retailPreset != null) {
+        try {
+          await PosSettingsRepository(supabase).setBusinessFeatures(
+            businessId: business['id'] as String,
+            features: retailPreset,
+          );
+        } catch (_) {
+          // Configuración no crítica: el registro continúa.
+        }
+      }
 
       // 4. Fetch plan info para calcular trial_days reales (PRD-Azul §5.1).
       //    Si por alguna razón el plan fue desactivado entre Step 1 y Step 3,

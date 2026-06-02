@@ -58,6 +58,24 @@ const businessTypeOptions = <BusinessTypeOption>[
     icon: Icons.storefront_rounded,
   ),
   BusinessTypeOption(
+    label: 'Colmado',
+    dbValue: 'Colmado',
+    subtitle: 'Mostrador, escaneo, fiado e inventario.',
+    icon: Icons.shopping_basket_rounded,
+  ),
+  BusinessTypeOption(
+    label: 'Tienda / Minimarket',
+    dbValue: 'Tienda / Minimarket',
+    subtitle: 'Catalogo amplio con escaneo y stock serio.',
+    icon: Icons.shopping_cart_rounded,
+  ),
+  BusinessTypeOption(
+    label: 'Licorería',
+    dbValue: 'Licoreria',
+    subtitle: 'Bebidas por unidad o caja, con escaneo.',
+    icon: Icons.liquor_rounded,
+  ),
+  BusinessTypeOption(
     label: 'Bar de Jugos / Comida Saludable',
     dbValue: 'Bar de Jugos / Comida Saludable',
     subtitle: 'Jugos, bowls y menu saludable.',
