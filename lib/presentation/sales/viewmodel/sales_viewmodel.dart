@@ -2596,7 +2596,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       if (!result.hasFailures && result.pending == 0) {
         state = state.copyWith(lastSyncAt: DateTime.now());
       }
-    } catch (e) {
+    } catch (e, st) {
+      // Diagnóstico: el banner solo muestra "Error sincronizando offline."; el
+      // detalle real se perdía. Lo emitimos a consola para poder rastrear qué
+      // operación de la cola falla (NCF, RLS, constraint, red, etc.).
+      debugPrint('[SalesVM] syncOffline FALLÓ: $e\n$st');
       state = state.copyWith(error: 'Error sincronizando offline: $e');
       await _refreshOfflineMonitor(
         syncStatus: 'Error sincronizando offline.',
