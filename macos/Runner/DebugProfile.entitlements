@@ -4,6 +4,13 @@
 <dict>
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
+	<!-- Requerido por flutter_secure_storage (cifrado de la cola offline, G9b)
+	     para acceder al Keychain bajo App Sandbox. Sin esto: errSecMissingEntitlement
+	     (-34018) y el sync offline falla al sellar cada acción. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	</array>
 	<key>com.apple.security.cs.allow-jit</key>
 	<true/>
 	<key>com.apple.security.network.server</key>
