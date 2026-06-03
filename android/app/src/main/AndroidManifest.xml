@@ -9,6 +9,7 @@
             android:exported="true"
             android:launchMode="singleTop"
             android:taskAffinity=""
+            android:resizeableActivity="true"
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
@@ -50,11 +51,30 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
 
-    <!-- USB (OTG printers) -->
-    <uses-feature android:name="android.hardware.usb.host" android:required="false"/>
-
     <!-- Camera (for QR scanning if needed) -->
     <uses-permission android:name="android.permission.CAMERA"/>
+
+    <!-- ============================================================
+         ChromeOS / tablets: marca TODO el hardware como opcional.
+         Sin esto, los permisos de arriba hacen que Android infiera
+         features como REQUERIDOS y excluyan Chromebooks (sin pantalla
+         táctil, GPS, telefonía, cámara trasera, etc.) o tablets que no
+         los tengan. La app debe degradar con gracia cuando falten.
+         ============================================================ -->
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
+    <uses-feature android:name="android.hardware.touchscreen.multitouch" android:required="false"/>
+    <uses-feature android:name="android.hardware.faketouch" android:required="false"/>
+    <uses-feature android:name="android.hardware.wifi" android:required="false"/>
+    <uses-feature android:name="android.hardware.usb.host" android:required="false"/>
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false"/>
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false"/>
+    <uses-feature android:name="android.hardware.location" android:required="false"/>
+    <uses-feature android:name="android.hardware.location.gps" android:required="false"/>
+    <uses-feature android:name="android.hardware.location.network" android:required="false"/>
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
+    <uses-feature android:name="android.hardware.camera.any" android:required="false"/>
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
+    <uses-feature android:name="android.hardware.telephony" android:required="false"/>
 
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

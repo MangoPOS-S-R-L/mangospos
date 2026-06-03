@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:mangopos/core/business/business_model.dart';
 import 'package:mangopos/core/multimesero/active_waiter_provider.dart';
 import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
@@ -15,6 +16,8 @@ import 'package:mangopos/core/tax/tax_exceptions.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
+import 'retail_carts_provider.dart';
 import '../state/sales_state.dart';
 import '../../../data/models/sales_models.dart';
 import '../../../data/models/order_item_tax_line.dart';
@@ -55,6 +58,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   static const _courtesyPrefix = '[CORTESIA:';
   static const _promoPrefix = '[PROMO_AUTO:';
   final Map<String, CurrentOrderState> _tableCache = {};
+  // Retail: slotId del carrito de venta rápida actualmente activo. null en
+  // restaurante o cuando no hay carritos retail. Es la clave del snapshot
+  // offline del carrito activo (persistencia por carrito). Ver
+  // [retailCartsProvider] y newRetailCart/switchRetailCart.
+  String? _activeRetailSlotId;
+  // Tope suave de ventas rápidas simultáneas para evitar acumulación.
+  static const int _maxRetailCarts = 12;
   final OfflinePosService _offlinePos = OfflinePosService();
   final ConnectivityService _connectivity = ConnectivityService();
   Timer? _refreshOrderDebounceTimer;
@@ -268,6 +278,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       _realtimeChannel?.unsubscribe();
       _realtimeChannel = null;
       _subscribedOrderId = null;
+      // Retail: los carritos pertenecían al negocio anterior.
+      _activeRetailSlotId = null;
+      ref.read(retailCartsProvider.notifier).clear();
       state = const CurrentOrderState();
     });
 
@@ -721,14 +734,24 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
     await _offlinePos.saveSnapshot(
       businessId: businessId,
-      slotId:
-          tableId ??
-          (origin == 'table' ? (state.order?.sessionId ?? origin) : origin),
+      slotId: _resolvePersistSlotId(origin, tableId),
       origin: origin,
       tableId: tableId,
       state: state,
       localOnly: localOnly,
     );
+  }
+
+  /// Clave de snapshot para persistir el state actual. Retail quick usa el
+  /// slotId del carrito activo (un snapshot por carrito); el resto conserva el
+  /// comportamiento legacy (sessionId para mesas, origin para quick/manual).
+  String _resolvePersistSlotId(String origin, String? tableId) {
+    if (tableId != null) return tableId;
+    if (origin == 'quick' && _activeRetailSlotId != null) {
+      return _activeRetailSlotId!;
+    }
+    if (origin == 'table') return state.order?.sessionId ?? origin;
+    return origin;
   }
 
   Future<bool> ensureCashSessionOpen() async {
@@ -885,9 +908,17 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     await openManual(forceRestart: true);
   }
 
+  bool get _isRetail => ref.read(currentBusinessModelProvider).isRetail;
+
   Future<void> ensureQuickOrder() async {
-    // Reusar solo si la orden está abierta. Si fue paid/voided/sent y el
-    // usuario vuelve al tab, se abre una nueva sesión Quick limpia.
+    // Retail: la venta rápida soporta varios carritos simultáneos. En vez de
+    // reabrir una única sesión quick, inicializamos/restauramos los carritos.
+    if (_isRetail) {
+      await _ensureRetailCartsInitialized();
+      return;
+    }
+    // Restaurante: reusar solo si la orden está abierta. Si fue paid/voided/sent
+    // y el usuario vuelve al tab, se abre una nueva sesión Quick limpia.
     final current = state.order;
     if (state.origin == 'quick' &&
         current != null &&
@@ -895,6 +926,255 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       return;
     }
     await openQuick(forceRestart: true);
+  }
+
+  // ===========================================================================
+  // RETAIL — carritos de venta rápida simultáneos (solo modo retail).
+  // currentOrderProvider sigue mostrando el carrito ACTIVO; retailCartsProvider
+  // mantiene la lista de pestañas. Cada carrito es una sesión quick aparte.
+  // ===========================================================================
+
+  /// Al entrar a venta rápida en retail: si ya hay carritos en memoria activa
+  /// el actual; si no, intenta restaurar de disco; si tampoco, crea el primero.
+  Future<void> _ensureRetailCartsInitialized() async {
+    final carts = ref.read(retailCartsProvider);
+    if (carts.carts.isNotEmpty) {
+      final active = carts.active ?? carts.carts.first;
+      // Si el state ya muestra ese carrito y su orden está cargada, no hacemos
+      // nada (evita recargar al volver a entrar a la pantalla).
+      if (_activeRetailSlotId == active.slotId && state.order != null) {
+        ref.read(retailCartsProvider.notifier).setActive(active.slotId);
+        return;
+      }
+      await switchRetailCart(active.slotId);
+      return;
+    }
+    final restored = await restoreRetailCarts();
+    if (restored) return;
+    await newRetailCart();
+  }
+
+  /// Crea un carrito de venta rápida nuevo SIN cerrar los demás y lo activa.
+  Future<void> newRetailCart() async {
+    if (!_isRetail) return;
+    // Persistir el carrito activo actual antes de cambiar de slot.
+    await _persistCurrentState();
+
+    await _ensureBusinessTaxSettingsLoaded();
+    if (!await ensureCashSessionOpen()) return;
+
+    final businessId = _activeBusinessId;
+    if (businessId == null || businessId.isEmpty) {
+      state = state.copyWith(
+        loading: false,
+        error: 'No se pudo identificar el negocio.',
+      );
+      return;
+    }
+
+    if (ref.read(retailCartsProvider).carts.length >= _maxRetailCarts) {
+      state = state.copyWith(
+        loading: false,
+        error: 'Máximo de $_maxRetailCarts ventas rápidas simultáneas.',
+      );
+      return;
+    }
+
+    final slotId = 'quick-${const Uuid().v4()}';
+    _activeRetailSlotId = slotId;
+    ref.read(retailCartsProvider.notifier).addCart(slotId: slotId);
+    state = const CurrentOrderState(loading: true, origin: 'quick');
+
+    try {
+      // RPC dedicado: mesa virtual por carrito → NO anula las otras ventas
+      // rápidas abiertas (a diferencia de openManualOrQuick).
+      final res = await ref.read(salesRepositoryProvider).openRetailCart(
+            slot: slotId,
+            businessId: businessId,
+            peopleCount: 1,
+          );
+      final orderId = res['order_id'] as String;
+      ref.read(retailCartsProvider.notifier).setOrderId(slotId, orderId);
+      await _loadOrderDetail(orderId, origin: 'quick', caller: 'newRetailCart');
+    } catch (e) {
+      if (!_connectivity.isConnected) {
+        // Offline: draft local con este slot. Al sincronizar, el replay abre la
+        // sesión quick real y remapea el local-order-… (igual que las mesas).
+        final draft = await _offlinePos.createLocalDraft(
+          businessId: businessId,
+          origin: 'quick',
+          slotId: slotId,
+        );
+        ref
+            .read(retailCartsProvider.notifier)
+            .setOrderId(slotId, draft.order!.id);
+        state = _normalizeHydratedState(
+          draft.copyWith(
+            loading: false,
+            error: 'Venta abierta offline: se sincronizará al reconectar.',
+          ),
+        );
+      } else {
+        state = state.copyWith(
+          loading: false,
+          error: 'No se pudo abrir la venta rápida: $e',
+        );
+      }
+    }
+    await _persistRetailCartsIndex();
+  }
+
+  /// Cambia el carrito activo: persiste el actual y carga la orden del carrito
+  /// destino en `currentOrderProvider`.
+  Future<void> switchRetailCart(String slotId) async {
+    if (!_isRetail) return;
+    if (_activeRetailSlotId == slotId && state.order != null) {
+      ref.read(retailCartsProvider.notifier).setActive(slotId);
+      return;
+    }
+
+    await _persistCurrentState();
+
+    RetailCart? cart;
+    for (final c in ref.read(retailCartsProvider).carts) {
+      if (c.slotId == slotId) {
+        cart = c;
+        break;
+      }
+    }
+    if (cart == null) return;
+
+    _activeRetailSlotId = slotId;
+    ref.read(retailCartsProvider.notifier).setActive(slotId);
+    state = const CurrentOrderState(loading: true, origin: 'quick');
+
+    final orderId = cart.orderId;
+    if (orderId != null && !orderId.startsWith('local-order-')) {
+      try {
+        await _loadOrderDetail(
+          orderId,
+          origin: 'quick',
+          caller: 'switchRetailCart',
+        );
+        await _persistRetailCartsIndex();
+        return;
+      } catch (_) {
+        // cae al snapshot offline abajo
+      }
+    }
+
+    final businessId = _activeBusinessId;
+    if (businessId != null && businessId.isNotEmpty) {
+      final snap = await _offlinePos.loadSnapshot(
+        businessId: businessId,
+        slotId: slotId,
+      );
+      if (snap != null) {
+        state = _normalizeHydratedState(
+          snap.copyWith(loading: false, origin: 'quick'),
+        );
+        await _persistRetailCartsIndex();
+        return;
+      }
+    }
+    state = state.copyWith(
+      loading: false,
+      error: 'No se pudo cargar esta venta.',
+    );
+  }
+
+  /// Cierra una pestaña de carrito (descarta su orden si tiene). Devuelve a
+  /// otro carrito o crea uno vacío si era el último.
+  Future<void> closeRetailCart(String slotId) async {
+    if (!_isRetail) return;
+    final notifier = ref.read(retailCartsProvider.notifier);
+
+    // Si el carrito a cerrar es el activo y tiene una orden con items, la
+    // anulamos (cancelCurrentOrder ya manela online/offline). Si es otro
+    // carrito, solo limpiamos su snapshot (su orden quedará abierta en server,
+    // recuperable; no la tocamos para no requerir cargarla solo para anular).
+    if (slotId == _activeRetailSlotId &&
+        state.order != null &&
+        state.items.where((i) => i.status != 'void').isNotEmpty) {
+      await cancelCurrentOrder();
+    } else {
+      final businessId = _activeBusinessId;
+      if (businessId != null && businessId.isNotEmpty) {
+        await _offlinePos.saveSnapshot(
+          businessId: businessId,
+          slotId: slotId,
+          origin: 'quick',
+          state: const CurrentOrderState(),
+          localOnly: true,
+        );
+      }
+    }
+
+    final next = notifier.removeCart(slotId);
+    if (slotId == _activeRetailSlotId) {
+      _activeRetailSlotId = null;
+      if (next != null) {
+        await switchRetailCart(next);
+      } else {
+        state = const CurrentOrderState();
+        await newRetailCart();
+      }
+    }
+    await _persistRetailCartsIndex();
+  }
+
+  /// Restaura las pestañas de carritos desde disco (tras reinicio). Devuelve
+  /// true si había carritos guardados.
+  Future<bool> restoreRetailCarts() async {
+    final businessId = _activeBusinessId;
+    if (businessId == null || businessId.isEmpty) return false;
+    final idx = await _offlinePos.loadRetailCartsIndex(businessId: businessId);
+    if (idx == null || idx.carts.isEmpty) return false;
+    final carts = idx.carts
+        .map((m) => RetailCart.fromMap(m))
+        .toList(growable: false);
+    final active = idx.activeSlotId ?? carts.first.slotId;
+    ref.read(retailCartsProvider.notifier).replaceAll(carts, active);
+    await switchRetailCart(active);
+    return true;
+  }
+
+  Future<void> _persistRetailCartsIndex() async {
+    final businessId = _activeBusinessId;
+    if (businessId == null || businessId.isEmpty) return;
+    final s = ref.read(retailCartsProvider);
+    await _offlinePos.saveRetailCartsIndex(
+      businessId: businessId,
+      carts: s.carts.map((c) => c.toMap()).toList(growable: false),
+      activeSlotId: s.activeSlotId,
+    );
+  }
+
+  /// Tras cobrar el carrito activo (retail): limpia su snapshot, quita la
+  /// pestaña y pasa a otro carrito (o crea uno vacío si era el último).
+  Future<void> _finalizeActiveRetailCartAfterPayment() async {
+    final slotId = _activeRetailSlotId;
+    final businessId = _activeBusinessId;
+    if (slotId != null && businessId != null && businessId.isNotEmpty) {
+      await _offlinePos.saveSnapshot(
+        businessId: businessId,
+        slotId: slotId,
+        origin: 'quick',
+        state: const CurrentOrderState(),
+        localOnly: true,
+      );
+    }
+    final next = slotId != null
+        ? ref.read(retailCartsProvider.notifier).removeCart(slotId)
+        : null;
+    _activeRetailSlotId = null;
+    if (next != null) {
+      await switchRetailCart(next);
+    } else {
+      state = const CurrentOrderState();
+      await newRetailCart();
+    }
+    await _persistRetailCartsIndex();
   }
 
   /// Abre una orden de delivery existente (ya creada por DeliveryViewModel).
@@ -959,6 +1239,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         customerLegalName: customerLegalName,
         customerTaxId: customerTaxId,
       );
+      // Retail: reflejar el cliente en la etiqueta de la pestaña del carrito.
+      if (_isRetail && _activeRetailSlotId != null) {
+        ref
+            .read(retailCartsProvider.notifier)
+            .setCustomerName(_activeRetailSlotId!, customerName);
+        await _persistRetailCartsIndex();
+      }
       await _loadOrderDetail(
         order.id,
         origin: state.origin,
@@ -2638,7 +2925,21 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         await _loadOrderDetail(orderId, caller: 'scheduledRefresh');
         if (clearIfPaid && (state.order?.isPaid ?? false)) {
           _hasManualFiscalTypeSelection = false;
-          state = const CurrentOrderState();
+          // Retail multi-carrito: en vez de dejar el state vacío, cerramos la
+          // pestaña pagada y pasamos a otro carrito (o creamos uno vacío).
+          if (_isRetail && _activeRetailSlotId != null) {
+            final activeCart = ref.read(retailCartsProvider).active;
+            if (activeCart?.orderId == state.order?.id) {
+              await _finalizeActiveRetailCartAfterPayment();
+            } else {
+              // Evento tardío de un pago de OTRO carrito (ya finalizado): no
+              // toques el activo; recárgalo para no dejar el state mostrando
+              // la orden vieja pagada.
+              await switchRetailCart(_activeRetailSlotId!);
+            }
+          } else {
+            state = const CurrentOrderState();
+          }
         }
       }
     } finally {

@@ -98,6 +98,14 @@ class OfflineAuthService {
     iOptions: IOSOptions(
       accessibility: KeychainAccessibility.first_unlock_this_device,
     ),
+    // macOS: en builds ad-hoc/dev (sin DEVELOPMENT_TEAM) el data-protection
+    // keychain falla con errSecMissingEntitlement (-34018) porque el
+    // access-group no tiene prefijo de Team. Usamos el keychain de archivo,
+    // válido bajo App Sandbox con la identidad propia de la app.
+    mOptions: MacOsOptions(
+      accessibility: KeychainAccessibility.first_unlock_this_device,
+      useDataProtectionKeyChain: false,
+    ),
   );
 
   static const _kDeviceTokenKey = 'mp_offline_device_token';

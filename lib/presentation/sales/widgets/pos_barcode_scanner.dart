@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:mangopos/core/business/business_features_provider.dart';
 import 'package:mangopos/core/offline/offline_catalog_service.dart';
+import 'package:mangopos/core/business/business_model.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import '../viewmodel/sales_viewmodel.dart';
 
@@ -166,7 +167,13 @@ class _PosBarcodeScannerState extends ConsumerState<PosBarcodeScanner> {
       final notifier = ref.read(currentOrderProvider.notifier);
       if (ref.read(currentOrderProvider).order == null) {
         if (widget.autoOpenQuick) {
-          await notifier.openQuick();
+          // Retail: enrutar por el sistema de carritos (ensureQuickOrder crea
+          // el primer carrito si no hay), no abrir una sesión quick única.
+          if (ref.read(currentBusinessModelProvider).isRetail) {
+            await notifier.ensureQuickOrder();
+          } else {
+            await notifier.openQuick();
+          }
         } else {
           _toast('Inicia la venta antes de escanear', error: true);
           return;

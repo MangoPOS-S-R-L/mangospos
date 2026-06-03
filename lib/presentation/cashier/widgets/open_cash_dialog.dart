@@ -112,7 +112,8 @@ class _OpenCashDialogState extends ConsumerState<OpenCashDialog> {
     });
 
     try {
-      await ref.read(cashierViewModelProvider).openBox(val);
+      final openedOffline =
+          await ref.read(cashierViewModelProvider).openBox(val);
       HapticFeedback.mediumImpact();
       if (mounted) {
         Navigator.of(context).pop();
@@ -120,17 +121,24 @@ class _OpenCashDialogState extends ConsumerState<OpenCashDialog> {
           SnackBar(
             content: Row(
               children: [
-                const Icon(Icons.check_circle, color: Colors.white),
+                Icon(
+                  openedOffline ? Icons.sync_problem : Icons.check_circle,
+                  color: Colors.white,
+                ),
                 SizedBox(width: context.wp(2)),
-                const Expanded(
+                Expanded(
                   child: Text(
-                    'Caja abierta exitosamente',
-                    style: TextStyle(fontWeight: FontWeight.w600),
+                    openedOffline
+                        ? 'Caja abierta sin conexión — pendiente de sincronizar'
+                        : 'Caja abierta exitosamente',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                 ),
               ],
             ),
-            backgroundColor: MangoColors.successGreen,
+            backgroundColor: openedOffline
+                ? MangoColors.primaryOrange
+                : MangoColors.successGreen,
             behavior: SnackBarBehavior.floating,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),

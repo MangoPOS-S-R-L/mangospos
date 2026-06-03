@@ -11,6 +11,7 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/breakpoints.dart';
 import 'package:mangopos/app/theme/sizes.dart';
 import 'package:mangopos/core/business/business_features_provider.dart';
+import 'package:mangopos/core/business/business_model.dart';
 import 'package:mangopos/core/printing/printer_heartbeat_scheduler.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/presentation/cashier/widgets/open_cash_dialog.dart';
@@ -60,6 +61,30 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
       route = '';
     }
     final selected = _selectedFromRoute(route);
+
+    // Retail: la ruta default de ventas monta SalesByZoneView ("Salón
+    // Principal / No hay mesas en esta zona"), que no aplica sin mesas.
+    // Cuando el negocio resuelve a retail (carga async → este build se
+    // re-ejecuta), redirigimos una sola vez a Venta rápida. Restaurantes
+    // conservan el aterrizaje por zona intacto.
+    final businessModel = ref.watch(currentBusinessModelProvider);
+    if (businessModel.isRetail && _isDefaultZoneRoute(route)) {
+      // Sin guarda de "una sola vez": debe redirigir CADA vez que caigamos
+      // en la ruta de zonas (ej. volver a tocar "Ventas"), porque en retail
+      // el sidebar/rail están ocultos y el usuario quedaría atrapado en la
+      // vista vacía. No hay loop: tras el go la URL lleva mode=rapida y la
+      // condición deja de cumplirse.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        context.go(
+          Uri(
+            path: AppRoutes.salesReact,
+            queryParameters: const {'mode': 'rapida'},
+          ).toString(),
+        );
+      });
+    }
+
     final orderState = ref.watch(currentOrderProvider);
     final isCashOpen = ref.watch(
       cashierViewModelProvider.select((vm) => vm.isCashOpen),
@@ -84,9 +109,11 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
       backgroundColor: SalesTheme.background,
       body: Row(
         children: [
-          // 📂 SIDEBAR IZQUIERDO (responsive)
-          Container(
-            width: sidebarWidth,
+          // 📂 SIDEBAR IZQUIERDO (responsive). Retail: oculto — solo se
+          // opera por venta rápida, sin navegación entre modos de venta.
+          if (!businessModel.isRetail)
+            Container(
+              width: sidebarWidth,
             decoration: const BoxDecoration(
               color: SalesTheme.cardBackground,
               border: Border(
@@ -232,6 +259,14 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
             child: Column(
               children: [
                 const TaxConfigErrorBanner(),
+                // Retail: el sidebar (que normalmente muestra el aviso de
+                // "caja cerrada" y permite abrirla) está oculto; surfaceamos
+                // ese aviso aquí para no perder el punto de apertura de caja.
+                if (businessModel.isRetail && !isCashOpen)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+                    child: _CashClosedBanner(compact: false),
+                  ),
                 if (orderState.isOfflineMode ||
                     orderState.syncInFlight ||
                     orderState.pendingOfflineActions > 0 ||
@@ -249,6 +284,16 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
         ],
       ),
     );
+  }
+
+  /// La ruta default de ventas (sin `mode`) que monta SalesByZoneView.
+  bool _isDefaultZoneRoute(String route) {
+    final uri = Uri.tryParse(route);
+    if (uri == null) return false;
+    final isSalesPath =
+        uri.path == AppRoutes.salesReact || uri.path == AppRoutes.sales;
+    final mode = uri.queryParameters['mode']?.toLowerCase().trim();
+    return isSalesPath && (mode == null || mode.isEmpty);
   }
 
   SalesTab _selectedFromRoute(String route) {

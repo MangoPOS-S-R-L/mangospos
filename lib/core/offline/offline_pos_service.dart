@@ -252,6 +252,8 @@ class OfflinePosService {
 
   String _snapshotKey(String businessId, String slotId) =>
       'offline_snapshot_${businessId}_$slotId';
+  String _retailCartsIndexKey(String businessId) =>
+      'retail_carts_index_$businessId';
   String _queueKey(String businessId) => 'offline_queue_$businessId';
   String _printQueueKey(String businessId) => 'offline_print_queue_$businessId';
   String _orderMapKey(String businessId) => 'offline_order_map_$businessId';
@@ -360,10 +362,79 @@ class OfflinePosService {
     }
   }
 
+  /// Persiste el índice de carritos de venta rápida (retail) cifrado: la lista
+  /// de pestañas + cuál está activa. Permite reconstruir las pestañas tras un
+  /// reinicio/cierre de la app. El estado de cada carrito vive en su propio
+  /// snapshot (`slotId` por carrito); esto solo guarda el "mapa".
+  Future<void> saveRetailCartsIndex({
+    required String businessId,
+    required List<Map<String, dynamic>> carts,
+    String? activeSlotId,
+  }) async {
+    final storage = await _storage;
+    final payload = {
+      'carts': carts,
+      'active_slot_id': activeSlotId,
+      'saved_at': DateTime.now().toIso8601String(),
+    };
+    await storage.write(
+      _retailCartsIndexKey(businessId),
+      await _cipher.seal(jsonEncode(payload)),
+    );
+  }
+
+  /// Lee el índice de carritos retail. Null si no existe o el descifrado falla.
+  Future<({List<Map<String, dynamic>> carts, String? activeSlotId})?>
+      loadRetailCartsIndex({required String businessId}) async {
+    final storage = await _storage;
+    final raw = await storage.read(_retailCartsIndexKey(businessId));
+    if (raw == null || raw.isEmpty) return null;
+    final plain = await _cipher.open(raw);
+    if (plain == null || plain.isEmpty) return null;
+    try {
+      final map = Map<String, dynamic>.from(jsonDecode(plain) as Map);
+      final carts = (map['carts'] as List? ?? const [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList(growable: false);
+      return (carts: carts, activeSlotId: map['active_slot_id'] as String?);
+    } catch (e) {
+      debugPrint('OfflinePosService.loadRetailCartsIndex error: $e');
+      return null;
+    }
+  }
+
+  /// Busca el `slot_id` del snapshot cuyo `order.id` coincide con
+  /// [localOrderId]. Lo usa el replay para recrear una venta rápida retail por
+  /// su carrito (slot) — y enrutar a `fn_open_retail_cart` en vez del RPC
+  /// compartido que anularía los demás carritos. Null si no se encuentra.
+  Future<String?> findSnapshotSlotForOrder({
+    required String businessId,
+    required String localOrderId,
+  }) async {
+    final storage = await _storage;
+    final prefix = 'offline_snapshot_${businessId}_';
+    final keys = await storage.getKeysByPrefix(prefix);
+    for (final key in keys) {
+      try {
+        final payload = await _readSnapshot(storage, key);
+        if (payload == null) continue;
+        final state = Map<String, dynamic>.from(payload['state'] as Map? ?? {});
+        final order = Map<String, dynamic>.from(state['order'] as Map? ?? {});
+        if (order['id'] == localOrderId) {
+          return payload['slot_id']?.toString();
+        }
+      } catch (_) {
+        // snapshot corrupto/ilegible → seguimos con el siguiente
+      }
+    }
+    return null;
+  }
+
   Future<CurrentOrderState> createLocalDraft({
     required String businessId,
     required String origin,
     String? tableId,
+    String? slotId,
     String? label,
   }) async {
     final orderId = 'local-order-${_uuid.v4()}';
@@ -392,7 +463,7 @@ class OfflinePosService {
 
     await saveSnapshot(
       businessId: businessId,
-      slotId: tableId ?? origin,
+      slotId: slotId ?? tableId ?? origin,
       origin: origin,
       tableId: tableId,
       state: state,
@@ -1713,12 +1784,31 @@ class OfflinePosService {
         peopleCount: 1,
       );
     } else {
-      created = await salesRepository.openManualOrQuick(
-        origin: origin,
-        customerName: null,
-        peopleCount: 1,
-        businessId: businessId,
-      );
+      // Retail: si esta orden local pertenece a un carrito de venta rápida
+      // (slot 'quick-…'), recrearla con fn_open_retail_cart (mesa virtual
+      // dedicada por carrito) para NO anular los demás carritos. El RPC
+      // compartido fn_open_manual_or_quick cerraría la sesión quick previa.
+      String? retailSlot;
+      if (origin == 'quick') {
+        retailSlot = await findSnapshotSlotForOrder(
+          businessId: businessId,
+          localOrderId: originalOrderId,
+        );
+      }
+      if (retailSlot != null && retailSlot.startsWith('quick-')) {
+        created = await salesRepository.openRetailCart(
+          slot: retailSlot,
+          businessId: businessId,
+          peopleCount: 1,
+        );
+      } else {
+        created = await salesRepository.openManualOrQuick(
+          origin: origin,
+          customerName: null,
+          peopleCount: 1,
+          businessId: businessId,
+        );
+      }
     }
     final remoteOrderId = created['order_id']?.toString();
     if (remoteOrderId == null || remoteOrderId.isEmpty) {

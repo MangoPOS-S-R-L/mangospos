@@ -82,7 +82,13 @@ class CashierRepository {
       ),
     );
 
-    final success = response['success'] as bool? ?? true;
+    // El RPC fn_open_cash_session devuelve varias formas de error SIN la
+    // clave `success` (ej. {'error': 'cash_register_id es requerido'} o los
+    // conflictos device/user que traen {'error': ..., 'session_id': ...}).
+    // Por eso no podemos asumir éxito cuando falta `success`: si hay clave
+    // `error`, es fallo. De lo contrario un error del server se reportaba
+    // como "Caja abierta exitosamente" sin haber creado sesión real.
+    final success = response['success'] as bool? ?? !response.containsKey('error');
     if (!success) {
       throw CashRegisterException(
         errorCode: response['error_code']?.toString() ?? 'CONFLICT',
