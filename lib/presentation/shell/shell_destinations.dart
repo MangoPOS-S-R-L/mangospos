@@ -5,6 +5,7 @@
 import 'package:flutter/material.dart';
 
 import '../../app/router/routes.dart';
+import '../../data/repositories/pos_settings_repository.dart';
 
 class ShellDestination {
   final String label;
@@ -14,6 +15,11 @@ class ShellDestination {
   final String? permissionCode;
   final List<String>? inactivePaths;
 
+  /// Feature flag de negocio que debe estar prendido para mostrar el destino.
+  /// `null` = siempre visible (solo gateado por permiso de rol). Se evalúa con
+  /// [isDestinationFeatureEnabled]. Ej.: 'kitchen' oculta Cocina/KDS en retail.
+  final String? requiresFeature;
+
   const ShellDestination({
     required this.label,
     required this.route,
@@ -21,6 +27,7 @@ class ShellDestination {
     this.materialIcon,
     this.permissionCode,
     this.inactivePaths,
+    this.requiresFeature,
   }) : assert(
           svgAsset != null || materialIcon != null,
           'Debe proporcionarse svgAsset o materialIcon',
@@ -53,6 +60,7 @@ const List<ShellDestination> kPrimaryDestinations = [
     route: AppRoutes.kitchen,
     svgAsset: 'assets/icons/cocina_principal.svg',
     permissionCode: 'kds.acceso',
+    requiresFeature: 'kitchen',
   ),
   ShellDestination(
     label: 'Productos',
@@ -77,6 +85,19 @@ const List<ShellDestination> kPrimaryDestinations = [
     ],
   ),
 ];
+
+/// ¿El destino está habilitado según los feature flags del negocio?
+/// Destinos sin `requiresFeature` siempre pasan. Mientras la config carga,
+/// [features] son los defaults (todo prendido) — comportamiento histórico.
+bool isDestinationFeatureEnabled(
+    ShellDestination d, BusinessFeatures features) {
+  switch (d.requiresFeature) {
+    case 'kitchen':
+      return features.kitchenEnabled;
+    default:
+      return true;
+  }
+}
 
 /// Decide si un destino está "activo" para una ruta actual dada.
 bool isDestinationActive(ShellDestination d, String currentLocation) {

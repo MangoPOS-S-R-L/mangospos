@@ -11,6 +11,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../app/router/routes.dart';
 import '../../app/theme/mango_colors.dart';
+import '../../core/business/business_features_provider.dart';
 import '../../core/offline/offline_queue_status_provider.dart';
 import '../../data/repositories/pos_settings_repository.dart';
 import 'offline_logout_guard.dart';
@@ -224,12 +225,15 @@ class _MobileDrawer extends ConsumerWidget {
                     );
                     final disabledRoutes =
                         disabledAsync.valueOrNull ?? const <String>[];
+                    final features = ref.watchBusinessFeatures();
                     return kPrimaryDestinations.where((d) {
                       final code = d.permissionCode;
                       final hasPerm =
                           code == null || ctrl.hasPermission(code);
                       final hidden = disabledRoutes.contains(d.route);
-                      return hasPerm && !hidden;
+                      final featureOk =
+                          isDestinationFeatureEnabled(d, features);
+                      return hasPerm && !hidden && featureOk;
                     }).map(
                       (d) => _DrawerNavTile(
                         destination: d,

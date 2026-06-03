@@ -4,4 +4,7 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- ChromeOS: el manifest principal ya la declara opcional; se repite aquí
+         para que el lint chrome-os-manifest-checks no marque esta variante. -->
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
 </manifest>

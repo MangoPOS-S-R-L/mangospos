@@ -74,6 +74,40 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
       final list = res as List<dynamic>;
       debugPrint('>>> [SelectBusiness] list.length=${list.length}');
       if (list.isEmpty) {
+        // user_businesses puede venir vacío aunque el dueño SÍ tenga un
+        // negocio: el trigger que enlaza al owner pudo no haberse reflejado
+        // todavía (lag justo tras el registro) o la fila quedó huérfana.
+        // Antes de mostrar el callejón sin salida "no tienes negocios",
+        // buscamos directamente un negocio cuyo owner_id sea este usuario
+        // (la RLS businesses_owner_select lo permite). Si existe, entramos:
+        // el PendingApprovalGuard mostrará la pantalla "en revisión" cuando
+        // el status sea 'pending', en vez de dejar al dueño atascado aquí.
+        final owned = await supabase
+            .from('businesses')
+            .select('id, business_name, branch_name, domain')
+            .eq('owner_id', user.id)
+            .order('created_at')
+            .limit(1)
+            .maybeSingle();
+
+        if (owned != null && owned['id'] != null) {
+          AppLogger.i(
+            '[SelectBusiness] user_businesses vacío; negocio propio '
+            '${owned['id']} encontrado por owner_id. Entrando '
+            '(el guard mostrará "en revisión" si está pending).',
+          );
+          await _handleSelect(<String, dynamic>{
+            'business_id': owned['id'],
+            'role': 'owner',
+            'businesses': {
+              'business_name': owned['business_name'],
+              'branch_name': owned['branch_name'],
+              'domain': owned['domain'],
+            },
+          });
+          return;
+        }
+
         setState(() {
           _error = 'No tienes negocios asociados todavía.';
           _isLoading = false;

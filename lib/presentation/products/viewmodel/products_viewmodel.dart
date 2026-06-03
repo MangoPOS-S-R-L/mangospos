@@ -7,7 +7,6 @@ import 'package:mangopos/data/repositories/category_repository.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 import 'package:excel/excel.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../../core/storage/image_upload_helper.dart';
@@ -591,7 +590,8 @@ class ProductsViewModel extends ChangeNotifier {
         TextCellValue('Costo'),
         TextCellValue('SKU'),
         TextCellValue('Codigo de Barras'),
-        TextCellValue('Descripcion'),
+        TextCellValue('Categoria'),
+        TextCellValue('Impuesto'),
       ]);
       
       var directory = await getDownloadsDirectory();
@@ -665,79 +665,7 @@ class ProductsViewModel extends ChangeNotifier {
     }
   }
 
-  Future<void> importProductsFromExcel() async {
-    if (_businessId == null) return;
-    
-    try {
-      FilePickerResult? result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['xlsx', 'xls'],
-      );
-
-      if (result != null) {
-        _isLoading = true;
-        notifyListeners();
-
-        final file = File(result.files.single.path!);
-        var bytes = file.readAsBytesSync();
-        var excel = Excel.decodeBytes(bytes);
-
-        for (var table in excel.tables.keys) {
-          final sheet = excel.tables[table];
-          if (sheet == null) continue;
-          
-          bool isHeader = true;
-          for (var row in sheet.rows) {
-            if (isHeader) {
-              isHeader = false;
-              continue;
-            }
-            
-            if (row.isEmpty || row[0] == null) continue;
-            
-            final name = row[0]?.value?.toString() ?? '';
-            if (name.isEmpty) continue;
-            
-            final priceStr = row.length > 1 ? row[1]?.value?.toString() ?? '0' : '0';
-            final price = double.tryParse(priceStr) ?? 0.0;
-            
-            final costStr = row.length > 2 ? row[2]?.value?.toString() ?? '0' : '0';
-            final cost = double.tryParse(costStr) ?? 0.0;
-            
-            final sku = row.length > 3 ? row[3]?.value?.toString() : null;
-            final barcode = row.length > 4 ? row[4]?.value?.toString() : null;
-            final description = row.length > 5 ? row[5]?.value?.toString() : null;
-            
-            await _repository.createProduct(
-              businessId: _businessId!,
-              name: name,
-              price: price,
-              categoryId: null,
-              cost: cost,
-              sku: sku,
-              barcode: barcode,
-              description: description,
-              taxMode: 'exclusive',
-              isActive: true,
-              itemType: 'standard',
-              // Bulk-import desde Excel: no asignamos area por default — el
-              // admin debe editar cada producto y elegir un area configurada.
-              hasVariants: false,
-              taxIds: [],
-            );
-          }
-        }
-        
-        await _fetchProducts();
-        _error = 'Productos importados exitosamente';
-        _isLoading = false;
-        notifyListeners();
-      }
-    } catch (e) {
-      debugPrint('Error importing products: $e');
-      _error = 'Error importando productos: $e';
-      _isLoading = false;
-      notifyListeners();
-    }
-  }
+  // El import masivo ahora vive en ImportCatalogDialog + CatalogImportRepository
+  // (categorías, impuestos, idempotencia por SKU, resiliencia por fila y
+  // soporte CSV/Excel). Ver lib/presentation/products/widgets/import_catalog_dialog.dart.
 }

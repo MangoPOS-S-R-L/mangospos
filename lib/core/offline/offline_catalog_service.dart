@@ -89,6 +89,37 @@ class OfflineCatalogSnapshot {
   List<Map<String, dynamic>> allProducts() =>
       products.map(_copyMap).toList(growable: false);
 
+  /// Resuelve un código escaneado (RF-R1) a un producto del catálogo. Hace
+  /// match exacto contra `barcode` primero y `sku` después, solo entre
+  /// productos activos. Devuelve `null` si no hay coincidencia.
+  ///
+  /// Nota: requiere que el snapshot incluya `barcode`/`sku` (se agregaron al
+  /// SELECT del catálogo); un snapshot viejo no los tendrá hasta re-sincronizar.
+  Map<String, dynamic>? findByBarcode(String code) {
+    final needle = code.trim();
+    if (needle.isEmpty) return null;
+
+    bool isActive(Map<String, dynamic> item) {
+      final v = item['is_active'];
+      if (v is bool) return v;
+      final s = v?.toString().toLowerCase();
+      // Default true: si la columna no viene, no excluimos (igual que el grid).
+      return s == null || s == 'true' || s == 't' || s == '1';
+    }
+
+    Map<String, dynamic>? matchOn(String field) {
+      for (final item in products) {
+        if (!isActive(item)) continue;
+        if (item[field]?.toString().trim() == needle) {
+          return _copyMap(item);
+        }
+      }
+      return null;
+    }
+
+    return matchOn('barcode') ?? matchOn('sku');
+  }
+
   factory OfflineCatalogSnapshot.fromJson(Map<String, dynamic> json) {
     return OfflineCatalogSnapshot(
       savedAt:

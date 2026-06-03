@@ -42,6 +42,16 @@ class SecureBlobCipher {
     iOptions: IOSOptions(
       accessibility: KeychainAccessibility.first_unlock_this_device,
     ),
+    // macOS: el data-protection keychain (default) exige un access-group con
+    // prefijo de Team. En builds ad-hoc/dev (CODE_SIGN_IDENTITY="-", sin
+    // DEVELOPMENT_TEAM) ese prefijo no existe y el Keychain devuelve
+    // errSecMissingEntitlement (-34018), rompiendo el sellado de la cola
+    // offline (G9b). Usamos el keychain de archivo, accesible bajo App
+    // Sandbox con la identidad propia de la app sin necesidad de Team.
+    mOptions: MacOsOptions(
+      accessibility: KeychainAccessibility.first_unlock_this_device,
+      useDataProtectionKeyChain: false,
+    ),
   );
 
   final AesGcm _algorithm = AesGcm.with256bits();

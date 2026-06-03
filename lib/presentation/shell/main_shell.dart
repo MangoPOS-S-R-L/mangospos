@@ -23,6 +23,7 @@ import '../../app/router/routes.dart';
 import '../billing/widgets/billing_guard.dart';
 import '../onboarding/pending_approval_guard.dart';
 import '../inventory/viewmodel/expiring_lots_badge_provider.dart';
+import '../../core/business/business_features_provider.dart';
 import '../inventory/viewmodel/low_stock_badge_provider.dart';
 import '../sales/viewmodel/sales_viewmodel.dart';
 import 'mobile_shell.dart';
@@ -147,12 +148,15 @@ class _MainShellState extends ConsumerState<MainShell> {
                         // que es el comportamiento histórico.
                         final disabledRoutes = disabledAsync.valueOrNull ??
                             const <String>[];
+                        final features = ref.watchBusinessFeatures();
                         final visible = kPrimaryDestinations.where((d) {
                           final code = d.permissionCode;
                           final hasPerm =
                               code == null || sessionCtrl.hasPermission(code);
                           final hidden = disabledRoutes.contains(d.route);
-                          return hasPerm && !hidden;
+                          final featureOk =
+                              isDestinationFeatureEnabled(d, features);
+                          return hasPerm && !hidden && featureOk;
                         }).toList(growable: false);
                         return Row(
                           mainAxisSize: MainAxisSize.min,

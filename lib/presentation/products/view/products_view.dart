@@ -9,6 +9,7 @@ import 'package:mangopos/presentation/settings/more%20settings/system%20settings
 import 'package:mangopos/services/session/session_controller.dart';
 import '../viewmodel/products_viewmodel.dart';
 import '../widgets/add_edit_product_dialog.dart';
+import '../widgets/import_catalog_dialog.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
 class ProductsView extends ConsumerStatefulWidget {
@@ -537,11 +538,12 @@ class _ProductsHeader extends ConsumerWidget {
           onSelected: (value) async {
             final viewModel = ref.read(productsViewModelProvider);
             if (value == 'import') {
-              await viewModel.importProductsFromExcel();
-              if (context.mounted && viewModel.error != null) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(viewModel.error!)),
-                );
+              final imported = await showDialog<bool>(
+                context: context,
+                builder: (_) => const ImportCatalogDialog(),
+              );
+              if (imported == true) {
+                await viewModel.init();
               }
             } else if (value == 'export') {
               await viewModel.exportProductsToExcel();
@@ -566,7 +568,7 @@ class _ProductsHeader extends ConsumerWidget {
                 children: [
                   Icon(Icons.upload_file, size: 20),
                   SizedBox(width: 8),
-                  Text('Importar desde Excel'),
+                  Text('Importar (Excel/CSV)'),
                 ],
               ),
             ),

@@ -490,6 +490,36 @@ class SalesRepository {
     }
   }
 
+  /// Retail: abre una venta rápida en una mesa virtual DEDICADA por carrito
+  /// (`slot`), permitiendo varias ventas rápidas simultáneas sin que abrir una
+  /// nueva anule las demás. A diferencia de [openManualOrQuick] (que comparte
+  /// una sola mesa virtual 'quick' y cierra la sesión previa), cada slot tiene
+  /// su propia mesa/sesión/orden. Idempotente por slot: reabrir el mismo slot
+  /// devuelve su orden abierta.
+  Future<Map<String, dynamic>> openRetailCart({
+    required String slot,
+    required String businessId,
+    int peopleCount = 1,
+  }) async {
+    try {
+      final response = await _client.rpc(
+        'fn_open_retail_cart',
+        params: {
+          'p_business_id': businessId,
+          'p_user_id': _client.auth.currentUser?.id,
+          'p_slot': slot,
+          'p_people_count': peopleCount,
+        },
+      );
+      if (response == null) {
+        throw Exception('No se pudo abrir la venta rápida');
+      }
+      return Map<String, dynamic>.from(response as Map);
+    } catch (e) {
+      throw Exception('Error al abrir venta rápida (retail): $e');
+    }
+  }
+
   /// Asignar una orden manual a una mesa real
   Future<Map<String, dynamic>> assignManualOrderToTable({
     required String orderId,

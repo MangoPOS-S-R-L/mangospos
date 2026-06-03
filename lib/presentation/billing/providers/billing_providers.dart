@@ -18,9 +18,22 @@ import '../../../data/models/billing_state.dart';
 import '../../../data/repositories/billing_repository.dart';
 
 /// Catálogo de planes activos. Se cachea por toda la sesión (rara vez cambia).
+/// Source of truth: tabla `plans`, que es espejo de `plan_catalog` (panel admin)
+/// vía el trigger de la migración 20260602_0003.
 final availablePlansProvider = FutureProvider<List<BillingPlan>>((ref) {
   final repo = ref.watch(billingRepositoryProvider);
   return repo.listAvailablePlans();
+});
+
+/// Planes seleccionables en el REGISTRO/onboarding: solo planes de pago.
+/// Excluye trial/free (precio 0), que existen en el catálogo para billing pero
+/// no son opciones elegibles en el signup (el trial se aplica como periodo, no
+/// como plan a elegir). Derivado de [availablePlansProvider].
+final signupPlansProvider = FutureProvider<List<BillingPlan>>((ref) async {
+  final plans = await ref.watch(availablePlansProvider.future);
+  return plans
+      .where((p) => p.priceCentsMonthly > 0)
+      .toList(growable: false);
 });
 
 /// Estado billing del business (membership anchor + plan + último charge).

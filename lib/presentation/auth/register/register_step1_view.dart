@@ -61,7 +61,7 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(registerStep1VmProvider);
-    final plansAsync = ref.watch(availablePlansProvider);
+    final plansAsync = ref.watch(signupPlansProvider);
 
     // Auto-seleccionar el primer plan disponible si aún no hay selección.
     // El `initialPlan` (query param) si está, intenta matchear por code; si no

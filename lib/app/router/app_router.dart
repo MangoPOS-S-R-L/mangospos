@@ -85,6 +85,7 @@ import '../../presentation/sales/view/sales_by_zone_view.dart';
 import '../../presentation/sales/view/delivery_express_view.dart';
 import '../../presentation/sales/view/self_service_view.dart';
 import '../../presentation/sales/view/table_order_screen.dart';
+import '../../presentation/sales/widgets/pos_barcode_scanner.dart';
 import '../../presentation/reports/view/reports_view.dart';
 import '../../presentation/reports/view/sales_by_waiter_view.dart';
 import '../../presentation/reports/view/sales_report_view.dart';
@@ -384,7 +385,12 @@ class AppRouter {
                     case 'manual':
                       return const OrderScreen(origin: OrderOrigin.manual);
                     case 'rapida':
-                      return const OrderScreen(origin: OrderOrigin.quick);
+                      // RF-R1: escaneo de barras HID en venta rápida (retail).
+                      // Gateado por barcodeEnabled dentro de PosBarcodeScanner.
+                      return const PosBarcodeScanner(
+                        autoOpenQuick: true,
+                        child: OrderScreen(origin: OrderOrigin.quick),
+                      );
                     case 'delivery':
                       return const DeliveryExpressView();
                     case 'delivery_order':

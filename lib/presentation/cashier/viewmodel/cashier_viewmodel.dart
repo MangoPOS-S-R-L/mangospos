@@ -781,7 +781,11 @@ class CashierViewModel extends ChangeNotifier {
     _bestDayName = data['best_day_name'] ?? '-';
   }
 
-  Future<void> openBox(double amount) async {
+  /// Abre la caja. Devuelve `true` si la apertura se resolvió por la rama
+  /// OFFLINE (sesión local encolada para sync) y `false` si se confirmó
+  /// online contra el server. El caller usa esto para no mostrar "Caja
+  /// abierta exitosamente" cuando en realidad quedó pendiente de sync.
+  Future<bool> openBox(double amount) async {
     if (_currentRegisterId == null) {
       final businessId = _businessId;
       if (businessId == null) {
@@ -867,8 +871,16 @@ class CashierViewModel extends ChangeNotifier {
           deviceName: deviceName,
         );
         await init(); // Refresh — solo en path online (lee server state).
+        return false; // Confirmado online.
       } catch (e) {
         if (!_isConnectivityError(e)) rethrow;
+        // Diagnóstico: dejamos rastro del error real que clasificamos como
+        // "sin red". Si esto aparece estando online, el clasificador
+        // (_isConnectivityError) está tragando un error que NO es de red y
+        // bajamos a offline indebidamente (banner falso "caja abierta").
+        debugPrint(
+          '[openBox] openSession cayó a fallback offline. Error real: $e',
+        );
         // Fallback offline: sesión local + encolar para replay al sync.
         await _openBoxOfflineFallback(
           amount: amount,
@@ -876,6 +888,7 @@ class CashierViewModel extends ChangeNotifier {
           deviceId: deviceId,
           deviceName: deviceName,
         );
+        return true; // Quedó pendiente de sincronizar.
       }
     } catch (e) {
       rethrow;

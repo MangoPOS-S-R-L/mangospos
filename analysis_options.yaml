@@ -9,6 +9,16 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
+analyzer:
+  # No analizar artefactos generados (manifests fusionados, etc.).
+  exclude:
+    - build/**
+  # Chequeos de compatibilidad con ChromeOS: detectan hardware requerido,
+  # actividades no redimensionables y orientaciones bloqueadas que impedirían
+  # instalar/usar la app en Chromebooks.
+  optional-checks:
+    chrome-os-manifest-checks
+
 linter:
   # The lint rules applied to this project can be customized in the
   # section below to disable rules from the `package:flutter_lints/flutter.yaml`
