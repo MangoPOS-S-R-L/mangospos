@@ -20,6 +20,7 @@ import '../inventory/viewmodel/expiring_lots_badge_provider.dart';
 import '../inventory/viewmodel/low_stock_badge_provider.dart';
 import '../sales/viewmodel/sales_viewmodel.dart';
 import 'shell_destinations.dart';
+import 'update_available_banner.dart';
 
 class MobileShell extends ConsumerStatefulWidget {
   final Widget child;
@@ -107,7 +108,13 @@ class _MobileShellState extends ConsumerState<MobileShell> {
         ],
       ),
       drawer: _MobileDrawer(currentLocation: loc),
-      body: widget.child,
+      body: Column(
+        children: [
+          // Banner de actualización (solo web, solo si hay deploy nuevo).
+          const UpdateAvailableBanner(),
+          Expanded(child: widget.child),
+        ],
+      ),
       bottomNavigationBar: SafeArea(
         top: false,
         child: Container(

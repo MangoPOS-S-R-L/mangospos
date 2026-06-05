@@ -26,9 +26,11 @@ class FiscalDocumentsDetailCard extends StatelessWidget {
   });
 
   final List<Map<String, dynamic>> documents;
+
   /// Inyectado por el caller (típico: `state.currency.formatter` desde una
   /// pantalla de reportes). Centraliza el símbolo en `business_settings`.
   final NumberFormat currency;
+
   /// Label del cargo de servicio configurado por el comercio (viene de
   /// `fiscalSummary.service_fee_label`). Se usa como header de columna y
   /// como sentinel para mapear el monto del service_fee al label correcto.
@@ -124,101 +126,123 @@ class FiscalDocumentsDetailCard extends StatelessWidget {
               message: emptyMessage,
             )
           else
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: DataTable(
-                headingRowColor: WidgetStateProperty.all(MangoColors.bgLight),
-                headingTextStyle: const TextStyle(
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.foreground,
-                  fontSize: 12,
-                ),
-                dataRowMinHeight: 44,
-                dataRowMaxHeight: 58,
-                columnSpacing: 20,
-                horizontalMargin: 12,
-                columns: [
-                  const DataColumn(label: Text('NCF')),
-                  const DataColumn(label: Text('Tipo')),
-                  const DataColumn(label: Text('Cliente')),
-                  const DataColumn(label: Text('RNC/Cédula')),
-                  const DataColumn(label: Text('Subtotal'), numeric: true),
-                  ...taxLabels.map(
-                    (label) => DataColumn(
-                      label: Text(label),
-                      numeric: true,
+            // LayoutBuilder + ConstrainedBox(minWidth) hace que la tabla se
+            // estire a todo el ancho de la tarjeta cuando hay pocas columnas
+            // (header, divisores y color de fila Anulado cubren toda la fila),
+            // y siga haciendo scroll horizontal cuando hay muchas columnas de
+            // impuestos y el contenido excede el ancho disponible.
+            LayoutBuilder(
+              builder: (context, constraints) => SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                  child: DataTable(
+                    headingRowColor: WidgetStateProperty.all(
+                      MangoColors.bgLight,
                     ),
-                  ),
-                  const DataColumn(label: Text('Total'), numeric: true),
-                  const DataColumn(label: Text('Estado')),
-                  const DataColumn(label: Text('Fecha')),
-                ],
-                rows: documents.map((doc) {
-                  final ncfNumber = doc['ncf_number']?.toString() ?? '';
-                  final ncfType = doc['ncf_type']?.toString() ?? '';
-                  final customerName =
-                      doc['customer_name']?.toString() ?? 'CONSUMIDOR FINAL';
-                  final customerRnc = doc['customer_rnc']?.toString() ?? '-';
-                  final subtotal = (doc['subtotal'] as num?)?.toDouble() ?? 0;
-                  final total = (doc['total'] as num?)?.toDouble() ?? 0;
-                  final status = doc['status']?.toString() ?? 'active';
-                  final issuedAt =
-                      DateTime.tryParse(doc['issued_at']?.toString() ?? '') ??
-                          DateTime.now();
-                  final isVoid = status != 'active';
-
-                  return DataRow(
-                    color: isVoid
-                        ? WidgetStateProperty.all(
-                            AppColors.destructive.withValues(alpha: 0.04),
-                          )
-                        : null,
-                    cells: [
-                      DataCell(
-                        Text(
-                          ncfNumber,
-                          style: const TextStyle(fontWeight: FontWeight.w600),
-                        ),
+                    headingTextStyle: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.foreground,
+                      fontSize: 12,
+                    ),
+                    dataRowMinHeight: 44,
+                    dataRowMaxHeight: 58,
+                    columnSpacing: 20,
+                    horizontalMargin: 12,
+                    columns: [
+                      const DataColumn(label: Text('NCF')),
+                      const DataColumn(label: Text('Tipo')),
+                      const DataColumn(label: Text('Cliente')),
+                      const DataColumn(label: Text('RNC/Cédula')),
+                      const DataColumn(label: Text('Subtotal'), numeric: true),
+                      ...taxLabels.map(
+                        (label) =>
+                            DataColumn(label: Text(label), numeric: true),
                       ),
-                      DataCell(Text(ncfTypeName(ncfType))),
-                      DataCell(
-                        ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 180),
-                          child: Text(
-                            customerName,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ),
-                      DataCell(
-                        Text(customerRnc.isEmpty ? '-' : customerRnc),
-                      ),
-                      DataCell(Text(currency.format(subtotal))),
-                      ...taxLabels.map((label) {
-                        final amount =
-                            taxAmountForLabel(doc, label, serviceFeeLabel);
-                        return DataCell(
-                          Text(amount > 0 ? currency.format(amount) : '-'),
-                        );
-                      }),
-                      DataCell(
-                        Text(
-                          currency.format(total),
-                          style: const TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                      ),
-                      DataCell(
-                        ReportStatusTag(
-                          label: isVoid ? 'Anulado' : 'Activo',
-                          tone: isVoid
-                              ? AppColors.destructive
-                              : MangoColors.successGreen,
-                        ),
-                      ),
-                      DataCell(Text(dateFormat.format(issuedAt.toLocal()))),
+                      const DataColumn(label: Text('Total'), numeric: true),
+                      const DataColumn(label: Text('Estado')),
+                      const DataColumn(label: Text('Fecha')),
                     ],
-                  );
-                }).toList(),
+                    rows: documents.map((doc) {
+                      final ncfNumber = doc['ncf_number']?.toString() ?? '';
+                      final ncfType = doc['ncf_type']?.toString() ?? '';
+                      final customerName =
+                          doc['customer_name']?.toString() ??
+                          'CONSUMIDOR FINAL';
+                      final customerRnc =
+                          doc['customer_rnc']?.toString() ?? '-';
+                      final subtotal =
+                          (doc['subtotal'] as num?)?.toDouble() ?? 0;
+                      final total = (doc['total'] as num?)?.toDouble() ?? 0;
+                      final status = doc['status']?.toString() ?? 'active';
+                      final issuedAt =
+                          DateTime.tryParse(
+                            doc['issued_at']?.toString() ?? '',
+                          ) ??
+                          DateTime.now();
+                      final isVoid = status != 'active';
+
+                      return DataRow(
+                        color: isVoid
+                            ? WidgetStateProperty.all(
+                                AppColors.destructive.withValues(alpha: 0.04),
+                              )
+                            : null,
+                        cells: [
+                          DataCell(
+                            Text(
+                              ncfNumber,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          DataCell(Text(ncfTypeName(ncfType))),
+                          DataCell(
+                            ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 180),
+                              child: Text(
+                                customerName,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ),
+                          DataCell(
+                            Text(customerRnc.isEmpty ? '-' : customerRnc),
+                          ),
+                          DataCell(Text(currency.format(subtotal))),
+                          ...taxLabels.map((label) {
+                            final amount = taxAmountForLabel(
+                              doc,
+                              label,
+                              serviceFeeLabel,
+                            );
+                            return DataCell(
+                              Text(amount > 0 ? currency.format(amount) : '-'),
+                            );
+                          }),
+                          DataCell(
+                            Text(
+                              currency.format(total),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          DataCell(
+                            ReportStatusTag(
+                              label: isVoid ? 'Anulado' : 'Activo',
+                              tone: isVoid
+                                  ? AppColors.destructive
+                                  : MangoColors.successGreen,
+                            ),
+                          ),
+                          DataCell(Text(dateFormat.format(issuedAt.toLocal()))),
+                        ],
+                      );
+                    }).toList(),
+                  ),
+                ),
               ),
             ),
         ],

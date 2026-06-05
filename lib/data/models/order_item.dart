@@ -15,6 +15,9 @@ class OrderItem extends Equatable {
   final double discounts;
   final double tax;
   final double total;
+  // Oferta/promoción aplicada a esta línea (atribución para aplicar promos en
+  // todos los flujos y para el reporte de ventas por oferta). Null = sin oferta.
+  final String? promotionId;
 
   const OrderItem({
     required this.id,
@@ -31,6 +34,7 @@ class OrderItem extends Equatable {
     required this.discounts,
     required this.tax,
     required this.total,
+    this.promotionId,
   });
 
   factory OrderItem.fromMap(Map<String, dynamic> map) {
@@ -49,36 +53,39 @@ class OrderItem extends Equatable {
       discounts: (map['discounts'] ?? 0).toDouble(),
       tax: (map['tax'] ?? 0).toDouble(),
       total: (map['total'] ?? 0).toDouble(),
+      promotionId: map['promotion_id'],
     );
   }
 
   Map<String, dynamic> toMap() => {
-        'id': id,
-        'order_id': orderId,
-        'check_id': checkId,
-        'product_id': productId,
-        'product_name': productName,
-        'qty': qty,
-        'unit_price': unitPrice,
-        'is_takeout': isTakeout,
-        'status': status,
-        'notes': notes,
-        'subtotal': subtotal,
-        'discounts': discounts,
-        'tax': tax,
-        'total': total,
-      };
+    'id': id,
+    'order_id': orderId,
+    'check_id': checkId,
+    'product_id': productId,
+    'product_name': productName,
+    'qty': qty,
+    'unit_price': unitPrice,
+    'is_takeout': isTakeout,
+    'status': status,
+    'notes': notes,
+    'subtotal': subtotal,
+    'discounts': discounts,
+    'tax': tax,
+    'total': total,
+    'promotion_id': promotionId,
+  };
 
   @override
   List<Object?> get props => [
-        id,
-        orderId,
-        productName,
-        qty,
-        unitPrice,
-        isTakeout,
-        status,
-        subtotal,
-        total
-      ];
+    id,
+    orderId,
+    productName,
+    qty,
+    unitPrice,
+    isTakeout,
+    status,
+    subtotal,
+    total,
+    promotionId,
+  ];
 }

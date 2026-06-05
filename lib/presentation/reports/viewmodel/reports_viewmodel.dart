@@ -343,10 +343,25 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
             // Sin red: nos quedamos sin proyección, el resumen (posiblemente
             // cacheado) igual se muestra.
           }
+          // El subreporte "Por comprobante" (SalesSubReport.byReceipt) pinta el
+          // detalle de NCFs desde `fiscalSummary['documents']`, igual que el
+          // reporte de Comprobantes Fiscales. La categoría Ventas no lo cargaba,
+          // así que esa pestaña salía siempre vacía aunque hubiera NCFs en la
+          // base. Lo cargamos best-effort: si falla (offline / RPC), el resto
+          // del reporte de Ventas se muestra igual.
+          Map<String, dynamic>? fiscal;
+          try {
+            fiscal = await _repository.getFiscalDocumentsSummary(
+                businessId: businessId, from: from, to: to);
+          } catch (_) {
+            // Sin red / RPC no disponible: el subreporte por comprobante queda
+            // vacío, pero las demás vistas de Ventas siguen funcionando.
+          }
           if (myToken != _loadToken) return; // superseded
           state = state.copyWith(
             salesSummary: salesSummary,
             productProjection: projection,
+            fiscalSummary: fiscal ?? state.fiscalSummary,
           );
         case ReportCategory.finances:
           final summary = await _repository.getCashSummary(
@@ -956,7 +971,14 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
   }
 
   List<SalesBreakdownRow> getReceiptRows() {
-    final rows = (state.salesSummary?['sales_by_receipt'] as List?) ?? const [];
+    // Fuente primaria: sales_by_receipt del RPC de ventas. Hoy el RPC v2 no lo
+    // puebla (siempre llega vacío), así que caemos al desglose por tipo de NCF
+    // de `fiscalSummary['by_type']`, que ya trae label/amount/count por
+    // comprobante. Así la tarjeta-resumen queda consistente con el detalle.
+    var rows = (state.salesSummary?['sales_by_receipt'] as List?) ?? const [];
+    if (rows.isEmpty) {
+      rows = (state.fiscalSummary?['by_type'] as List?) ?? const [];
+    }
     return rows
         .map((row) => Map<String, dynamic>.from(row as Map))
         .map(

@@ -28,6 +28,7 @@ import '../inventory/viewmodel/low_stock_badge_provider.dart';
 import '../sales/viewmodel/sales_viewmodel.dart';
 import 'mobile_shell.dart';
 import 'shell_destinations.dart';
+import 'update_available_banner.dart';
 
 class MainShell extends ConsumerStatefulWidget {
   final Widget child;
@@ -213,6 +214,9 @@ class _MainShellState extends ConsumerState<MainShell> {
                 ],
               ),
             ),
+
+            // ======= BANNER ACTUALIZACIÓN (solo web, solo si hay deploy nuevo)
+            const UpdateAvailableBanner(),
 
             // ======= CONTENIDO =======
             Expanded(child: child),
