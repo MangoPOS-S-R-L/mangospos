@@ -446,6 +446,50 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     _lastFiscalSettingsLoad = DateTime.now();
   }
 
+  // "Para llevar por defecto" por modo (business_settings). Cacheado por
+  // businessId. Cuando el flag del modo está ON, las órdenes nuevas de ese
+  // modo arrancan con takeout=true (no aplica a mesas).
+  bool _defaultTakeoutQuick = false;
+  bool _defaultTakeoutManual = false;
+  bool _defaultTakeoutDelivery = false;
+  String? _defaultTakeoutLoadedFor;
+
+  Future<void> _ensureDefaultTakeoutLoaded() async {
+    final businessId = _activeBusinessId;
+    if (businessId == null || businessId.isEmpty) return;
+    if (_defaultTakeoutLoadedFor == businessId) return;
+    try {
+      final row = await Supabase.instance.client
+          .from('business_settings')
+          .select(
+            'default_takeout_quick,default_takeout_manual,default_takeout_delivery',
+          )
+          .eq('business_id', businessId)
+          .maybeSingle();
+      _defaultTakeoutQuick = row?['default_takeout_quick'] == true;
+      _defaultTakeoutManual = row?['default_takeout_manual'] == true;
+      _defaultTakeoutDelivery = row?['default_takeout_delivery'] == true;
+      _defaultTakeoutLoadedFor = businessId;
+    } catch (_) {
+      // best-effort: si falla, el default queda en false (sin para llevar).
+    }
+  }
+
+  /// Devuelve si las órdenes nuevas de este `origin` deben arrancar "para
+  /// llevar" según la config. Las mesas (dine-in) siempre false.
+  bool _defaultTakeoutFor(String? origin) {
+    switch (origin) {
+      case 'quick':
+        return _defaultTakeoutQuick;
+      case 'manual':
+        return _defaultTakeoutManual;
+      case 'delivery':
+        return _defaultTakeoutDelivery;
+      default:
+        return false;
+    }
+  }
+
   Future<void> _ensureBusinessTaxSettingsLoaded() async {
     final businessId = _activeBusinessId;
     if (businessId == null || businessId.isEmpty) {
@@ -623,9 +667,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   CurrentOrderState _normalizeHydratedState(CurrentOrderState source) {
     final order = source.order;
     if (order == null || source.items.isEmpty) {
-      // Sin items, el flag takeout del state queda en false (default).
-      // No persistimos el toggle del usuario sin items que reflejarlo.
-      return source.copyWith(takeout: false);
+      // Sin items: el flag takeout arranca según la config "para llevar
+      // por defecto" del modo (rápida/manual/delivery). Mesas → false.
+      return source.copyWith(takeout: _defaultTakeoutFor(source.origin));
     }
 
     final activeItems = source.items
@@ -633,7 +677,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         .toList(growable: false);
     if (activeItems.isEmpty) {
       return source.copyWith(
-        takeout: false,
+        takeout: _defaultTakeoutFor(source.origin),
         order: order.copyWith(
           subtotal: 0,
           discounts: 0,
@@ -1201,9 +1245,63 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     state = state.copyWith(loading: true, error: null);
     try {
       await openTable(tableId, peopleCount: 1);
-      state = state.copyWith(origin: 'delivery', deliveryType: deliveryType);
+      // Cargar la dirección de entrega ya guardada (si la sesión la tiene).
+      String? address;
+      final sessionId = state.order?.sessionId;
+      if (sessionId != null) {
+        try {
+          address = await ref
+              .read(salesRepositoryProvider)
+              .getSessionDeliveryAddress(
+                sessionId,
+                businessId: _activeBusinessId,
+              );
+        } catch (_) {
+          // best-effort: la dirección es opcional, no rompe la apertura.
+        }
+      }
+      // El origin se fija aquí (después de openTable, que hidrató como
+      // 'table'), así que aplicamos el "para llevar por defecto" de
+      // delivery manualmente cuando la orden aún no tiene items.
+      final deliveryTakeout = state.items.isEmpty
+          ? _defaultTakeoutFor('delivery')
+          : state.takeout;
+      state = address == null
+          ? state.copyWith(
+              origin: 'delivery',
+              deliveryType: deliveryType,
+              takeout: deliveryTakeout,
+              clearDeliveryAddress: true,
+            )
+          : state.copyWith(
+              origin: 'delivery',
+              deliveryType: deliveryType,
+              takeout: deliveryTakeout,
+              deliveryAddress: address,
+            );
     } catch (e) {
       state = state.copyWith(loading: false, error: e.toString());
+    }
+  }
+
+  /// Guarda/edita la dirección de entrega del pedido de delivery. Campo
+  /// opcional: una dirección vacía la limpia. Espejo de
+  /// [assignCustomerToCurrentOrder].
+  Future<void> updateDeliveryAddress(String? address) async {
+    final order = state.order;
+    if (order == null) return;
+    final trimmed = address?.trim();
+    try {
+      await ref.read(salesRepositoryProvider).updateDeliveryAddress(
+            sessionId: order.sessionId,
+            address: trimmed,
+            businessId: _activeBusinessId,
+          );
+      state = (trimmed == null || trimmed.isEmpty)
+          ? state.copyWith(clearDeliveryAddress: true)
+          : state.copyWith(deliveryAddress: trimmed);
+    } catch (e) {
+      state = state.copyWith(error: 'Error al actualizar la dirección: $e');
     }
   }
 
@@ -3186,6 +3284,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
     _refreshOrderDebounceTimer?.cancel();
     await _ensureBusinessTaxSettingsLoaded();
+    await _ensureDefaultTakeoutLoaded();
     await _ensureBusinessFiscalSettingsLoaded();
     final repo = ref.read(salesRepositoryProvider);
     Order? order;

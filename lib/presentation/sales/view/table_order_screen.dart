@@ -359,6 +359,11 @@ class OrderScreen extends ConsumerStatefulWidget {
 class _OrderScreenState extends ConsumerState<OrderScreen> {
   String? _currentTableCode;
 
+  /// Toggle business_settings.delivery_address_enabled, cargado una vez al
+  /// montar cuando el origin es delivery. Controla si el header muestra el
+  /// campo opcional de dirección de entrega.
+  bool _deliveryAddressEnabled = false;
+
   // Snapshot del estado para la limpieza en dispose(). Se mantienen al día en
   // build() vía ref.listen / ref.read para poder liberar la mesa al salir por
   // CUALQUIER ruta (atrás, gesto del sistema, context.go, etc.) sin depender de
@@ -952,7 +957,26 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     _currentTableCode = widget.tableCode;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeOrder();
+      _loadDeliveryAddressSetting();
     });
+  }
+
+  /// Carga el toggle "pedir dirección de entrega" cuando el pedido es
+  /// delivery. Best-effort: si falla, el campo simplemente no se muestra.
+  Future<void> _loadDeliveryAddressSetting() async {
+    if (widget.origin != OrderOrigin.delivery) return;
+    final businessId = ref.read(sessionProvider).activeBusinessId;
+    if (businessId == null || businessId.isEmpty) return;
+    try {
+      final enabled = await ref
+          .read(posSettingsRepositoryProvider)
+          .getDeliveryAddressEnabled(businessId);
+      if (mounted && enabled != _deliveryAddressEnabled) {
+        setState(() => _deliveryAddressEnabled = enabled);
+      }
+    } catch (_) {
+      // Best-effort: dirección es opcional.
+    }
   }
 
   @override
@@ -994,6 +1018,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
               origin: widget.origin,
               tableCode: _currentTableCode ?? '',
               onAssignClient: () => _handleAssignClient(context),
+              deliveryAddressEnabled: _deliveryAddressEnabled,
             );
             final catalog = _CatalogArea(
               origin: widget.origin,
@@ -1161,6 +1186,7 @@ extension _MobileSalesShell on _OrderScreenState {
                   tableCode: widget.tableCode ?? 'Venta libre',
                   isStacked: true,
                   onAssignClient: () => _handleAssignClient(context),
+                  deliveryAddressEnabled: _deliveryAddressEnabled,
                 ),
               ),
             ],
@@ -1627,16 +1653,92 @@ String? _extractLatestVoidAudit(String? note) {
 // -----------------------------------------------------------------------------
 // 2. VISTA DE CARRITO
 // -----------------------------------------------------------------------------
+/// Barra del header de delivery: muestra la dirección de entrega (o un
+/// prompt para agregarla) y abre el editor al tocarla. Campo opcional.
+class _DeliveryAddressBar extends StatelessWidget {
+  final String? address;
+  final VoidCallback onEdit;
+  const _DeliveryAddressBar({required this.address, required this.onEdit});
+
+  @override
+  Widget build(BuildContext context) {
+    final hasAddress = address != null && address!.trim().isNotEmpty;
+    return InkWell(
+      onTap: onEdit,
+      borderRadius: BorderRadius.circular(_salesRadiusButton),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          border: Border.all(color: _salesDivider),
+          borderRadius: BorderRadius.circular(_salesRadiusButton),
+        ),
+        child: Row(
+          children: [
+            const Icon(
+              Icons.location_on_outlined,
+              size: 18,
+              color: _salesTotalColor,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'Dirección de entrega',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: _salesTextSecondary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    hasAddress ? address!.trim() : 'Agregar dirección (opcional)',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: hasAddress
+                          ? _salesTextPrimary
+                          : _salesTextSecondary,
+                      fontWeight:
+                          hasAddress ? FontWeight.w600 : FontWeight.w400,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            const Icon(
+              Icons.edit_outlined,
+              size: 16,
+              color: _salesTextSecondary,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _CartView extends ConsumerWidget {
   final OrderOrigin origin;
   final String tableCode;
   final bool isStacked;
   final Future<void> Function() onAssignClient;
+
+  /// Si true y origin==delivery, el header muestra el campo opcional de
+  /// dirección de entrega (toggle business_settings.delivery_address_enabled).
+  final bool deliveryAddressEnabled;
+
   const _CartView({
     required this.origin,
     required this.tableCode,
     required this.onAssignClient,
     this.isStacked = false,
+    this.deliveryAddressEnabled = false,
   });
 
   bool _isOpenItem(OrderItem item) {
@@ -1660,6 +1762,58 @@ class _CartView extends ConsumerWidget {
     return (generalName != null && generalName.isNotEmpty)
         ? generalName
         : 'Cliente';
+  }
+
+  /// Abre un diálogo para capturar/editar la dirección de entrega del
+  /// delivery. Campo opcional: guardar vacío la limpia. Cancelar no
+  /// cambia nada.
+  Future<void> _editDeliveryAddress(
+    BuildContext context,
+    WidgetRef ref,
+    CurrentOrderState orderState,
+  ) async {
+    final controller =
+        TextEditingController(text: orderState.deliveryAddress ?? '');
+    final result = await showDialog<String?>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
+        title: const Text(
+          'Dirección de entrega',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        content: SizedBox(
+          width: 380,
+          child: TextField(
+            controller: controller,
+            autofocus: true,
+            minLines: 2,
+            maxLines: 4,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: InputDecoration(
+              hintText: 'Calle, número, sector, referencia…',
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogCtx, controller.text),
+            child: const Text('Guardar'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (result == null) return; // cancelado
+    await ref.read(currentOrderProvider.notifier).updateDeliveryAddress(result);
   }
 
   double _sumItemQty(Iterable<OrderItem> items) {
@@ -2051,6 +2205,7 @@ class _CartView extends ConsumerWidget {
             'customerName': finalCustomerName,
             'customerLegalName': finalCustomerLegalName,
             'customerTaxId': finalCustomerTaxId,
+            'deliveryAddress': ref.read(currentOrderProvider).deliveryAddress,
             'issuedAt': issuedAt.toIso8601String(),
             'tableName': tableName,
             'waiterName': waiterName,
@@ -3098,6 +3253,16 @@ class _CartView extends ConsumerWidget {
                   ),
                 ],
               ],
+            ),
+          ),
+
+        // Dirección de entrega (delivery + setting activo). Campo opcional.
+        if (origin == OrderOrigin.delivery && deliveryAddressEnabled)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: _DeliveryAddressBar(
+              address: orderState.deliveryAddress,
+              onEdit: () => _editDeliveryAddress(context, ref, orderState),
             ),
           ),
 
@@ -4581,6 +4746,7 @@ class _CartView extends ConsumerWidget {
                 customerName: data['customerName'] as String?,
                 customerLegalName: data['customerLegalName'] as String?,
                 customerTaxId: data['customerTaxId'] as String?,
+                deliveryAddress: data['deliveryAddress'] as String?,
                 issuedAt: data['issuedAt'] == null
                     ? null
                     : DateTime.tryParse(data['issuedAt'].toString()),

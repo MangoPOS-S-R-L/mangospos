@@ -120,6 +120,17 @@ class BusinessFeatures {
   final bool kitchenBannerDineIn;
   final bool kitchenBannerTakeout;
 
+  /// Si true, los pedidos de delivery muestran un campo opcional de
+  /// dirección de entrega. Default false (opt-in).
+  final bool deliveryAddressEnabled;
+
+  /// "Para llevar por defecto" por modo: cuando es true, las órdenes
+  /// nuevas de ese modo arrancan marcadas para llevar (is_takeout). No
+  /// aplica a mesas. Todos default false (opt-in).
+  final bool defaultTakeoutQuick;
+  final bool defaultTakeoutManual;
+  final bool defaultTakeoutDelivery;
+
   const BusinessFeatures({
     this.salesModeTableEnabled = true,
     this.salesModeManualEnabled = true,
@@ -132,6 +143,10 @@ class BusinessFeatures {
     this.transfersRequireApproval = false,
     this.kitchenBannerDineIn = true,
     this.kitchenBannerTakeout = true,
+    this.deliveryAddressEnabled = false,
+    this.defaultTakeoutQuick = false,
+    this.defaultTakeoutManual = false,
+    this.defaultTakeoutDelivery = false,
   });
 
   /// Defaults aplicados cuando no hay fila en business_settings o
@@ -156,6 +171,10 @@ class BusinessFeatures {
       // NULL: preserva el comportamiento histórico (ambas franjas).
       kitchenBannerDineIn: map['kitchen_banner_dine_in'] != false,
       kitchenBannerTakeout: map['kitchen_banner_takeout'] != false,
+      deliveryAddressEnabled: map['delivery_address_enabled'] == true,
+      defaultTakeoutQuick: map['default_takeout_quick'] == true,
+      defaultTakeoutManual: map['default_takeout_manual'] == true,
+      defaultTakeoutDelivery: map['default_takeout_delivery'] == true,
     );
   }
 
@@ -171,6 +190,10 @@ class BusinessFeatures {
     bool? transfersRequireApproval,
     bool? kitchenBannerDineIn,
     bool? kitchenBannerTakeout,
+    bool? deliveryAddressEnabled,
+    bool? defaultTakeoutQuick,
+    bool? defaultTakeoutManual,
+    bool? defaultTakeoutDelivery,
   }) {
     return BusinessFeatures(
       salesModeTableEnabled:
@@ -189,6 +212,12 @@ class BusinessFeatures {
           transfersRequireApproval ?? this.transfersRequireApproval,
       kitchenBannerDineIn: kitchenBannerDineIn ?? this.kitchenBannerDineIn,
       kitchenBannerTakeout: kitchenBannerTakeout ?? this.kitchenBannerTakeout,
+      deliveryAddressEnabled:
+          deliveryAddressEnabled ?? this.deliveryAddressEnabled,
+      defaultTakeoutQuick: defaultTakeoutQuick ?? this.defaultTakeoutQuick,
+      defaultTakeoutManual: defaultTakeoutManual ?? this.defaultTakeoutManual,
+      defaultTakeoutDelivery:
+          defaultTakeoutDelivery ?? this.defaultTakeoutDelivery,
     );
   }
 
@@ -408,6 +437,29 @@ class PosSettingsRepository {
     await _client.from('business_settings').upsert({
       'business_id': businessId,
       'prompt_people_count_on_table_open': enabled,
+    }, onConflict: 'business_id');
+  }
+
+  /// Toggle "pedir dirección de entrega" en delivery. Cuando es true, los
+  /// pedidos de delivery muestran un campo opcional de dirección. Default
+  /// false (opt-in). Con fallback al cache offline.
+  Future<bool> getDeliveryAddressEnabled(String businessId) async {
+    try {
+      final row = await _fetchAndCacheRow(businessId);
+      return row?['delivery_address_enabled'] == true;
+    } catch (_) {
+      return (await _cachedRow(businessId))?['delivery_address_enabled'] ==
+          true;
+    }
+  }
+
+  Future<void> setDeliveryAddressEnabled({
+    required String businessId,
+    required bool enabled,
+  }) async {
+    await _client.from('business_settings').upsert({
+      'business_id': businessId,
+      'delivery_address_enabled': enabled,
     }, onConflict: 'business_id');
   }
 
@@ -710,6 +762,10 @@ class PosSettingsRepository {
       'transfers_require_approval': features.transfersRequireApproval,
       'kitchen_banner_dine_in': features.kitchenBannerDineIn,
       'kitchen_banner_takeout': features.kitchenBannerTakeout,
+      'delivery_address_enabled': features.deliveryAddressEnabled,
+      'default_takeout_quick': features.defaultTakeoutQuick,
+      'default_takeout_manual': features.defaultTakeoutManual,
+      'default_takeout_delivery': features.defaultTakeoutDelivery,
     }, onConflict: 'business_id');
   }
 }

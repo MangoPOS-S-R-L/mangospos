@@ -735,6 +735,10 @@ class PrintTicketService {
     String? customerName,
     String? customerLegalName,
     String? customerTaxId,
+    /// Dirección de entrega (delivery). Si viene non-null/no-vacía se
+    /// imprime una línea "DIRECCIÓN:" debajo del cliente. Solo aplica a
+    /// pedidos de delivery con dirección capturada.
+    String? deliveryAddress,
     DateTime? issuedAt,
     // PRD 6: settings de moneda secundaria USD (mismo patrón que
     // generatePrecheck). Si null o disabled, no imprime nada de USD.
@@ -880,6 +884,12 @@ class PrintTicketService {
     }
     if (customerTaxId != null && customerTaxId.isNotEmpty) {
       gen.textRow('RNC/CÉDULA:', customerTaxId);
+    }
+
+    // Dirección de entrega (delivery). Puede ser larga → etiqueta + valor
+    // envuelto a ancho de papel (mismo patrón que las notas de item).
+    if (deliveryAddress != null && deliveryAddress.trim().isNotEmpty) {
+      _writeWrappedLine(gen, 'DIRECCIÓN: ${deliveryAddress.trim()}', 48);
     }
 
     if (tableName.isNotEmpty) {

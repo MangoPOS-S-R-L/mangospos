@@ -11,6 +11,7 @@ class DeliveryOrderSummary extends Equatable {
   final int itemsCount;
   final DateTime openedAt;
   final String? customerName;
+  final String? deliveryAddress;
 
   const DeliveryOrderSummary({
     required this.sessionId,
@@ -23,6 +24,7 @@ class DeliveryOrderSummary extends Equatable {
     required this.itemsCount,
     required this.openedAt,
     this.customerName,
+    this.deliveryAddress,
   });
 
   factory DeliveryOrderSummary.fromMap(Map<String, dynamic> m) {
@@ -38,6 +40,7 @@ class DeliveryOrderSummary extends Equatable {
       openedAt: DateTime.tryParse(m['opened_at']?.toString() ?? '') ??
           DateTime.now(),
       customerName: m['customer_name'] as String?,
+      deliveryAddress: m['delivery_address'] as String?,
     );
   }
 
@@ -62,7 +65,7 @@ class DeliveryOrderSummary extends Equatable {
   List<Object?> get props => [
         sessionId, orderId, tableId, tableCode,
         deliveryType, status, total, itemsCount,
-        openedAt, customerName,
+        openedAt, customerName, deliveryAddress,
       ];
 }
 

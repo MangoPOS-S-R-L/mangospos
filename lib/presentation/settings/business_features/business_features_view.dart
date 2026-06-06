@@ -215,6 +215,66 @@ class _BusinessFeaturesViewState extends ConsumerState<BusinessFeaturesView> {
                         _features.copyWith(salesModeDeliveryEnabled: v),
                       ),
                     ),
+                    if (_features.salesModeDeliveryEnabled)
+                      _FlagTile(
+                        icon: Icons.location_on_outlined,
+                        label: 'Pedir dirección de entrega',
+                        subtitle:
+                            'Muestra un campo opcional de dirección en los '
+                            'pedidos de delivery. El cajero puede llenarlo o '
+                            'dejarlo vacío. Desactívalo si no necesitas '
+                            'capturar la dirección.',
+                        value: _features.deliveryAddressEnabled,
+                        onChanged: (v) => _update(
+                          _features.copyWith(deliveryAddressEnabled: v),
+                        ),
+                      ),
+
+                    if (_features.salesModeQuickEnabled ||
+                        _features.salesModeManualEnabled ||
+                        _features.salesModeDeliveryEnabled) ...[
+                      const SizedBox(height: 20),
+                      _Section(title: 'Para llevar por defecto'),
+                      if (_features.salesModeQuickEnabled)
+                        _FlagTile(
+                          icon: Icons.takeout_dining_outlined,
+                          label: 'Venta rápida para llevar',
+                          subtitle:
+                              'Las ventas rápidas nuevas arrancan marcadas '
+                              '"para llevar" (sin recargo). Se puede cambiar '
+                              'en cada orden.',
+                          value: _features.defaultTakeoutQuick,
+                          onChanged: (v) => _update(
+                            _features.copyWith(defaultTakeoutQuick: v),
+                          ),
+                        ),
+                      if (_features.salesModeManualEnabled)
+                        _FlagTile(
+                          icon: Icons.takeout_dining_outlined,
+                          label: 'Venta manual para llevar',
+                          subtitle:
+                              'Las ventas manuales nuevas arrancan marcadas '
+                              '"para llevar" (sin recargo). Se puede cambiar '
+                              'en cada orden.',
+                          value: _features.defaultTakeoutManual,
+                          onChanged: (v) => _update(
+                            _features.copyWith(defaultTakeoutManual: v),
+                          ),
+                        ),
+                      if (_features.salesModeDeliveryEnabled)
+                        _FlagTile(
+                          icon: Icons.takeout_dining_outlined,
+                          label: 'Delivery para llevar',
+                          subtitle:
+                              'Los pedidos de delivery nuevos arrancan '
+                              'marcados "para llevar" (sin recargo). Se puede '
+                              'cambiar en cada orden.',
+                          value: _features.defaultTakeoutDelivery,
+                          onChanged: (v) => _update(
+                            _features.copyWith(defaultTakeoutDelivery: v),
+                          ),
+                        ),
+                    ],
 
                     const SizedBox(height: 20),
                     _Section(title: 'Operación'),

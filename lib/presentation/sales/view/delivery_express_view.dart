@@ -441,6 +441,31 @@ class _DeliveryOrderCardState extends State<_DeliveryOrderCard> {
                   ),
                   const SizedBox(height: 8),
 
+                  // Dirección de entrega (si está capturada)
+                  if (order.deliveryAddress?.trim().isNotEmpty == true) ...[
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.location_on_outlined,
+                          size: 13,
+                          color: AppColors.mutedForeground,
+                        ),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            order.deliveryAddress!.trim(),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppTextStyles.tableMetrics.copyWith(
+                              color: AppColors.mutedForeground,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                  ],
+
                   // BOTTOM: Badge tipo + métricas
                   Row(
                     children: [

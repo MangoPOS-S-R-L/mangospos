@@ -11,6 +11,7 @@ class CurrentOrderState extends Equatable {
   final bool takeout; // ¿para llevar? a nivel orden (UI toggle)
   final String? origin; // 'table' | 'manual' | 'quick' | 'delivery'
   final String? deliveryType; // 'own' | 'uber_eats' | 'pedidos_ya'
+  final String? deliveryAddress; // dirección de entrega (delivery, opcional)
   final String? selectedCheckId;
   final String? customerId;
   final String? customerName;
@@ -43,6 +44,7 @@ class CurrentOrderState extends Equatable {
     this.takeout = false,
     this.origin,
     this.deliveryType,
+    this.deliveryAddress,
     this.selectedCheckId,
     this.customerId,
     this.customerName,
@@ -73,6 +75,8 @@ class CurrentOrderState extends Equatable {
     bool clearOrigin = false,
     String? deliveryType,
     bool clearDeliveryType = false,
+    String? deliveryAddress,
+    bool clearDeliveryAddress = false,
     String? selectedCheckId,
     bool clearSelectedCheck = false,
     String? customerId,
@@ -106,6 +110,9 @@ class CurrentOrderState extends Equatable {
       deliveryType: clearDeliveryType
           ? null
           : (deliveryType ?? this.deliveryType),
+      deliveryAddress: clearDeliveryAddress
+          ? null
+          : (deliveryAddress ?? this.deliveryAddress),
       selectedCheckId: clearSelectedCheck
           ? null
           : (selectedCheckId ?? this.selectedCheckId),
@@ -146,6 +153,7 @@ class CurrentOrderState extends Equatable {
     takeout,
     origin,
     deliveryType,
+    deliveryAddress,
     selectedCheckId,
     customerId,
     customerName,

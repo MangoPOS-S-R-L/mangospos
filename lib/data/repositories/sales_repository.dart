@@ -764,6 +764,47 @@ class SalesRepository {
     }
   }
 
+  /// Actualiza la dirección de entrega del pedido de delivery. Update
+  /// directo sobre `table_sessions.delivery_address` (mismo molde que
+  /// [updateSessionNote]). Opcional: una dirección vacía la deja en null.
+  Future<void> updateDeliveryAddress({
+    required String sessionId,
+    String? address,
+    String? businessId,
+  }) async {
+    try {
+      await _assertSessionInBusinessScope(sessionId, businessId: businessId);
+
+      var query = _client.from('table_sessions').update({
+        'delivery_address':
+            address?.trim().isEmpty == true ? null : address?.trim(),
+      }).eq('id', sessionId);
+
+      final scopedBusinessId = businessId?.trim();
+      if (scopedBusinessId != null && scopedBusinessId.isNotEmpty) {
+        query = query.eq('business_id', scopedBusinessId);
+      }
+
+      await query;
+    } catch (e) {
+      throw Exception('Error al actualizar la dirección de entrega: $e');
+    }
+  }
+
+  /// Lee la dirección de entrega guardada en la sesión (o null).
+  Future<String?> getSessionDeliveryAddress(
+    String sessionId, {
+    String? businessId,
+  }) async {
+    final row = await _client
+        .from('table_sessions')
+        .select('delivery_address')
+        .eq('id', sessionId)
+        .maybeSingle();
+    final value = row?['delivery_address'] as String?;
+    return (value == null || value.trim().isEmpty) ? null : value.trim();
+  }
+
   Future<void> setMenuItemAvailability({
     required String menuItemId,
     required bool isActive,
