@@ -16,6 +16,7 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../app/theme/mango_colors.dart';
+import '../../../core/utils/app_toast.dart';
 import '../../../data/models/owner_profile.dart';
 import '../../../data/repositories/owner_profile_repository.dart';
 import '../../../services/session/session_controller.dart';
@@ -132,15 +133,11 @@ class _MyAccountScreenState extends ConsumerState<MyAccountScreen> {
           .read(ownerProfileRepositoryProvider)
           .updatePin(employeeId: profile.employeeId, newPin: result);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('PIN actualizado correctamente.')),
-      );
+      AppToast.success(context, 'PIN actualizado correctamente.');
       _reload();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo actualizar: $e')),
-      );
+      AppToast.error(context, 'No se pudo actualizar: $e');
     }
   }
 
@@ -164,13 +161,10 @@ class _MyAccountScreenState extends ConsumerState<MyAccountScreen> {
     final email = client.auth.currentUser?.email?.trim();
     if (email == null || email.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'No se pudo verificar tu sesión actual. Vuelve a iniciar '
-            'sesión e inténtalo de nuevo.',
-          ),
-        ),
+      AppToast.info(
+        context,
+        'No se pudo verificar tu sesión actual. Vuelve a iniciar '
+        'sesión e inténtalo de nuevo.',
       );
       return;
     }
@@ -191,13 +185,11 @@ class _MyAccountScreenState extends ConsumerState<MyAccountScreen> {
               lower.contains('password'))
           ? 'La contraseña actual es incorrecta.'
           : 'No se pudo verificar la contraseña actual: ${e.message}';
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      AppToast.error(context, msg);
       return;
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error de red al verificar: $e')),
-      );
+      AppToast.error(context, 'Error de red al verificar: $e');
       return;
     }
 
@@ -205,21 +197,17 @@ class _MyAccountScreenState extends ConsumerState<MyAccountScreen> {
       // Step 2: actualizar a la nueva password.
       await client.auth.updateUser(UserAttributes(password: result.next));
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Contraseña actualizada correctamente.')),
-      );
+      AppToast.success(context, 'Contraseña actualizada correctamente.');
     } on AuthException catch (e) {
       if (!mounted) return;
       final lower = e.message.toLowerCase();
       final msg = lower.contains('weak') || lower.contains('short')
           ? 'La contraseña nueva es demasiado débil.'
           : 'No se pudo actualizar la contraseña: ${e.message}';
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      AppToast.error(context, msg);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo actualizar: $e')),
-      );
+      AppToast.error(context, 'No se pudo actualizar: $e');
     }
   }
 
@@ -237,15 +225,11 @@ class _MyAccountScreenState extends ConsumerState<MyAccountScreen> {
             fullName: result,
           );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Nombre actualizado.')),
-      );
+      AppToast.success(context, 'Nombre actualizado.');
       _reload();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo actualizar: $e')),
-      );
+      AppToast.error(context, 'No se pudo actualizar: $e');
     }
   }
 }
@@ -453,9 +437,7 @@ class _PinCard extends StatelessWidget {
                         ClipboardData(text: profile.pin),
                       );
                       if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('PIN copiado.')),
-                      );
+                      AppToast.info(context, 'PIN copiado.');
                     },
                     icon: const Icon(Icons.copy_rounded,
                         color: MangoColors.muted),

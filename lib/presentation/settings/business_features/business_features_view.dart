@@ -21,6 +21,7 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/business/business_features_provider.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/repositories/inventory_repository.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -83,27 +84,18 @@ class _BusinessFeaturesViewState extends ConsumerState<BusinessFeaturesView> {
       final itemsCreated = (result['items_created'] as num?)?.toInt() ?? 0;
       final recipesCreated =
           (result['recipes_created'] as num?)?.toInt() ?? 0;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: MangoColors.successGreen,
-          duration: const Duration(seconds: 4),
-          content: Text(
-            'Inventario básico activado. Se crearon $itemsCreated '
-            'producto(s) inventariables y $recipesCreated receta(s) '
-            'automáticas (cardinalidad 1).',
-          ),
-        ),
+      AppToast.success(
+        context,
+        'Inventario básico activado. Se crearon $itemsCreated '
+        'producto(s) inventariables y $recipesCreated receta(s) '
+        'automáticas (cardinalidad 1).',
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: const Color(0xFFEF4444),
-          content: Text(
-            'No se pudo inicializar el inventario: $e. Puedes correrlo '
-            'manualmente desde Inventario → Bootstrap.',
-          ),
-        ),
+      AppToast.error(
+        context,
+        'No se pudo inicializar el inventario: $e. Puedes correrlo '
+        'manualmente desde Inventario → Bootstrap.',
       );
     }
   }

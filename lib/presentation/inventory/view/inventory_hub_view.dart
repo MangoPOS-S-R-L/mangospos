@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 
 import '../../../app/router/routes.dart';
 import '../../../core/business/business_features_provider.dart';
@@ -37,7 +38,6 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
 
   Future<void> _runBootstrap() async {
     if (_bootstrapping) return;
-    final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
 
     final confirmed = await showDialog<bool>(
@@ -69,9 +69,7 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
       final client = Supabase.instance.client;
       final businessId = await resolveBusinessIdOrNull(client, 'auto');
       if (businessId == null) {
-        messenger.showSnackBar(const SnackBar(
-          content: Text('No se pudo resolver el negocio activo.'),
-        ));
+        AppToast.info(context, 'No se pudo resolver el negocio activo.');
         return;
       }
 
@@ -103,7 +101,7 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
           : msg.contains('AUTH_REQUIRED')
               ? 'Sesión expirada. Volvé a iniciar sesión.'
               : 'Error: $msg';
-      messenger.showSnackBar(SnackBar(content: Text(friendly)));
+      AppToast.info(context, friendly);
     } finally {
       if (mounted) setState(() => _bootstrapping = false);
     }
@@ -421,12 +419,7 @@ class _HubCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppRadius.lg),
         onTap: available
             ? () => context.go(route)
-            : () => ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Disponible en una próxima fase.'),
-                    duration: Duration(seconds: 2),
-                  ),
-                ),
+            : () => AppToast.info(context, 'Disponible en una próxima fase.'),
         child: Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(

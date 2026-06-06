@@ -192,6 +192,18 @@ class _CatalogColumnState extends ConsumerState<CatalogColumn> {
                     ),
                     const SizedBox(width: 24),
                     _TabButton(
+                      label: 'Ofertas',
+                      isActive: _selectedTab == 3,
+                      onTap: () {
+                        setState(() {
+                          _selectedTab = 3;
+                          _selectedCategoryId = null;
+                        });
+                        ref.read(menuBrowserVmProvider.notifier).loadOffers();
+                      },
+                    ),
+                    const SizedBox(width: 24),
+                    _TabButton(
                       label: 'Favoritos',
                       isActive: _selectedTab == 2,
                       onTap: () {
@@ -229,8 +241,10 @@ class _CatalogColumnState extends ConsumerState<CatalogColumn> {
       );
     } else if (_selectedTab == 1) {
       return _AllProductsView(onProductTap: widget.onProductTap);
-    } else {
+    } else if (_selectedTab == 2) {
       return _FavoritesView(onProductTap: widget.onProductTap);
+    } else {
+      return _OffersView(onProductTap: widget.onProductTap);
     }
   }
 }
@@ -481,6 +495,35 @@ class _FavoritesView extends ConsumerWidget {
       return const _CenteredMessage(
         icon: Icons.star_border,
         text: 'Todavía no hay productos frecuentes',
+      );
+    }
+
+    return _ProductsGrid(products: state.products, onProductTap: onProductTap);
+  }
+}
+
+class _OffersView extends ConsumerWidget {
+  final Function(MenuProduct) onProductTap;
+
+  const _OffersView({required this.onProductTap});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(menuBrowserVmProvider);
+
+    if (state.error != null && !state.loading) {
+      return _CenteredMessage(icon: Icons.error_outline, text: state.error!);
+    }
+
+    if (state.products.isEmpty && state.loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (state.products.isEmpty) {
+      return const _CenteredMessage(
+        icon: Icons.local_offer_outlined,
+        text: 'No tienes ofertas activas para vender.\n'
+            'Crea una en Ajustes → Ofertas y Combos (debe ser auto-aplicar).',
       );
     }
 

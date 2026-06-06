@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_radius.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/core/theme/app_shadows.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
 import 'package:mangopos/data/models/printing_models.dart';
@@ -295,20 +296,10 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         orderedGroupIds: ids,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Orden de modificadores actualizado.'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      AppToast.success(context, 'Orden de modificadores actualizado.');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error al guardar orden: $e'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      AppToast.error(context, 'Error al guardar orden: $e');
     } finally {
       if (mounted) setState(() => _savingGroupsOrder = false);
     }
@@ -1412,9 +1403,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
   }
 
   void _showValidationMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
-    );
+    AppToast.info(context, message);
   }
 
   void _submit() {

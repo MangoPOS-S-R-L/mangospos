@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_radius.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/presentation/customers/viewmodel/customers_viewmodel.dart';
 import 'package:mangopos/services/dgii_lookup_service.dart';
 import 'package:mangopos/services/session/session_controller.dart';
@@ -376,28 +377,13 @@ class _CustomersViewState extends ConsumerState<CustomersView> {
                                               .read(customersViewModelProvider)
                                               .deleteCustomer(customer['id']);
                                           if (!context.mounted) return;
-                                          ScaffoldMessenger.of(
+                                          AppToast.success(
                                             context,
-                                          ).showSnackBar(
-                                            const SnackBar(
-                                              content: Text('Cliente eliminado'),
-                                              behavior:
-                                                  SnackBarBehavior.floating,
-                                            ),
+                                            'Cliente eliminado',
                                           );
                                         } catch (e) {
                                           if (!context.mounted) return;
-                                          ScaffoldMessenger.of(
-                                            context,
-                                          ).showSnackBar(
-                                            SnackBar(
-                                              content: Text('Error: $e'),
-                                              backgroundColor:
-                                                  AppColors.destructive,
-                                              behavior:
-                                                  SnackBarBehavior.floating,
-                                            ),
-                                          );
+                                          AppToast.error(context, 'Error: $e');
                                         }
                                       },
                                       child: Container(
@@ -656,12 +642,7 @@ class _CustomerFormDialogState extends ConsumerState<_CustomerFormDialog> {
   Future<void> _submit() async {
     final name = _nameController.text.trim();
     if (name.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('El nombre es obligatorio.'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      AppToast.info(context, 'El nombre es obligatorio.');
       return;
     }
 
@@ -689,16 +670,11 @@ class _CustomerFormDialogState extends ConsumerState<_CustomerFormDialog> {
       if (mounted) Navigator.of(context).pop();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              _isEdit
-                  ? 'Error al actualizar cliente: $e'
-                  : 'Error al crear cliente: $e',
-            ),
-            backgroundColor: AppColors.destructive,
-            behavior: SnackBarBehavior.floating,
-          ),
+        AppToast.error(
+          context,
+          _isEdit
+              ? 'Error al actualizar cliente: $e'
+              : 'Error al crear cliente: $e',
         );
       }
     } finally {

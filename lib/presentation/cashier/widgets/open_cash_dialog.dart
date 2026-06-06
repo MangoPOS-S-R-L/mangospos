@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:mangopos/core/utils/app_time.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/utils/responsive_utils.dart';
@@ -182,13 +183,7 @@ class _OpenCashDialogState extends ConsumerState<OpenCashDialog> {
           ),
         );
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: $message'),
-            backgroundColor: Colors.red[600],
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
+        AppToast.error(context, 'Error: $message');
       }
     }
   }

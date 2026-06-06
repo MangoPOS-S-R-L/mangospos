@@ -19,6 +19,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 
 import '../state/printing_health_state.dart';
 import '../viewmodel/printing_health_viewmodel.dart';
@@ -51,7 +52,6 @@ class _PrintingHealthViewState extends ConsumerState<PrintingHealthView> {
     WidgetRef ref,
   ) async {
     final vm = ref.read(printingHealthViewModelProvider.notifier);
-    final messenger = ScaffoldMessenger.of(context);
     final jobs = await vm.loadRecentlyPrinted();
     if (!context.mounted) return;
 
@@ -129,14 +129,11 @@ class _PrintingHealthViewState extends ConsumerState<PrintingHealthView> {
                                 Navigator.of(ctx).pop();
                                 final ok = await vm.reprintJob(j.id);
                                 if (!context.mounted) return;
-                                messenger.showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      ok
-                                          ? 'Ticket reencolado para imprimir.'
-                                          : 'No se pudo reimprimir el ticket.',
-                                    ),
-                                  ),
+                                AppToast.info(
+                                  context,
+                                  ok
+                                      ? 'Ticket reencolado para imprimir.'
+                                      : 'No se pudo reimprimir el ticket.',
                                 );
                               },
                             );

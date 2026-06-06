@@ -18,6 +18,7 @@ import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/areas/viewmodel/print_areas_viewmodel.dart';
@@ -166,20 +167,15 @@ class _PrintingProductsViewState extends ConsumerState<PrintingProductsView> {
         areaCode: _selectedAreaCode!,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            '${_selectedItemIds.length} producto(s) asignados a "$areaName".',
-          ),
-        ),
+      AppToast.success(
+        context,
+        '${_selectedItemIds.length} producto(s) asignados a "$areaName".',
       );
       _selectedItemIds.clear();
       await _bootstrap();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo asignar: $e')),
-      );
+      AppToast.error(context, 'No se pudo asignar: $e');
     }
   }
 

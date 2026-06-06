@@ -11,6 +11,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/presentation/settings/cash_reasons/viewmodel/cash_reasons_viewmodel.dart';
 
 class CashReasonsView extends ConsumerStatefulWidget {
@@ -514,12 +515,7 @@ class _CashReasonDialogState extends ConsumerState<_CashReasonDialog> {
     final code = _codeCtrl.text.trim();
     final label = _labelCtrl.text.trim();
     if (code.isEmpty || label.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Código y etiqueta son obligatorios.'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      AppToast.info(context, 'Código y etiqueta son obligatorios.');
       return;
     }
     setState(() => _isSaving = true);

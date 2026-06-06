@@ -4,6 +4,17 @@ import '../models/sales_models.dart';
 
 double _r(double v) => double.parse(v.toStringAsFixed(2));
 
+/// True si la línea es una OFERTA vendida desde el tile (marcador `[DEAL:` en
+/// notes). Para esas líneas el subtotal viene neto y el descuento se muestra
+/// aparte sin doble conteo.
+bool _notesHasDealMarker(String? notes) {
+  if (notes == null || notes.isEmpty) return false;
+  return notes
+      .split('\n')
+      .map((line) => line.trim())
+      .any((line) => line.startsWith('[DEAL:') && line.endsWith(']'));
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Resolve service rate from order-level DB values
 // ─────────────────────────────────────────────────────────────────────────────
@@ -133,6 +144,27 @@ OrderItemPricingSummary summarizeItemPricing(Order? order, OrderItem item, {Stri
   final taxLinesSum = (item.taxLines.isEmpty || item.taxRate == 0)
       ? null
       : _r(item.taxLines.fold<double>(0, (s, line) => s + line.amount));
+
+  // LÍNEA DE OFERTA (tile del catálogo, marcada [DEAL:] en notes): el trigger
+  // backend guarda `subtotal` ya NETO (bruto - descuento) y `tax` sobre el neto.
+  // El cálculo general restaría el descuento OTRA VEZ (doble) y, para productos
+  // inclusive, lo extrae mal (daba 710 en vez de 960). Aquí mostramos el BRUTO
+  // (subtotal + descuento) y el descuento, restando una sola vez: el total queda
+  // = subtotal_neto + tax (idéntico al de la BD). Así abajo se ve "Subtotal /
+  // Descuento" correcto. Solo afecta a estas líneas (no toca el resto).
+  if (_notesHasDealMarker(item.notes)) {
+    final disc = _r(item.discounts);
+    final netSub = _r(item.subtotal);
+    final tx = _r(taxLinesSum ?? item.tax);
+    return OrderItemPricingSummary(
+      subtotal: _r(netSub + disc),
+      tax: tx,
+      discounts: disc,
+      serviceFee: 0,
+      extraServiceFee: 0,
+      total: _r(netSub + tx),
+    );
+  }
 
   // Detectar si los modifiers en draft aún no fueron procesados por el
   // backend (oi.subtotal/oi.tax persistidos no incluyen el modifier nuevo).

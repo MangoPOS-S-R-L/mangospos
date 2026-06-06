@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/models/tax.dart';
 import '../viewmodel/taxes_viewmodel.dart';
 
@@ -67,9 +68,7 @@ class _TaxesViewState extends ConsumerState<TaxesView> {
                       builder: (_) => const _TaxFormDialog(),
                     );
                     if (ok == true && mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Impuesto agregado')),
-                      );
+                      AppToast.success(context, 'Impuesto agregado');
                     }
                   },
                   icon: const Icon(Icons.add),
@@ -276,11 +275,7 @@ class _TaxesTable extends ConsumerWidget {
                           builder: (_) => _TaxFormDialog(editing: t),
                         );
                         if (ok == true && context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Impuesto actualizado'),
-                            ),
-                          );
+                          AppToast.success(context, 'Impuesto actualizado');
                         }
                       },
                       icon: const Icon(Icons.edit, size: 18),
@@ -664,11 +659,7 @@ class _TaxFormDialogState extends ConsumerState<_TaxFormDialog> {
                         final rate = double.tryParse(_rate.text.trim());
 
                         if (name.isEmpty || rate == null) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Completa nombre y porcentaje'),
-                            ),
-                          );
+                          AppToast.info(context, 'Completa nombre y porcentaje');
                           return;
                         }
 

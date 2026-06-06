@@ -10,6 +10,7 @@ import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/core/offline/offline_queue_status_provider.dart';
 import 'package:mangopos/core/offline/hub/hub_mode_controller.dart';
 import 'package:mangopos/core/offline/offline_refreshers.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/presentation/shell/offline_logout_guard.dart';
 import 'package:mangopos/core/printing/printer_heartbeat_provider.dart';
 import 'package:mangopos/core/services/fullscreen/fullscreen_service.dart';
@@ -450,13 +451,9 @@ class _OfflineQueueBadge extends ConsumerWidget {
         .syncPendingOfflineActions(force: true);
     await ref.read(offlineQueueStatusProvider.notifier).refreshNow();
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        backgroundColor: const Color(0xFF2563EB),
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 3),
-        content: Text('$revived operación(es) reencoladas para reintento.'),
-      ),
+    AppToast.info(
+      context,
+      '$revived operación(es) reencoladas para reintento.',
     );
   }
 
@@ -503,13 +500,9 @@ class _OfflineQueueBadge extends ConsumerWidget {
     final deleted = await OfflinePosService().clearPendingActions(businessId);
     await ref.read(offlineQueueStatusProvider.notifier).refreshNow();
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        backgroundColor: const Color(0xFF22C55E),
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 3),
-        content: Text('Cola limpiada: $deleted operacion(es) descartada(s).'),
-      ),
+    AppToast.success(
+      context,
+      'Cola limpiada: $deleted operacion(es) descartada(s).',
     );
   }
 

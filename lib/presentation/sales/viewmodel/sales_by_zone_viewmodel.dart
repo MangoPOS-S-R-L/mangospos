@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../data/models/table_status.dart';
+import '../../../data/models/dining_table.dart';
 import '../../../data/repositories/zones_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 import '../../../core/utils/sorting_utils.dart';
@@ -83,10 +84,16 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
           (entry) => validZoneIds.contains(entry.key),
         ),
       );
+      final filteredLayout = Map<String, List<DiningTable>>.fromEntries(
+        state.layoutByZone.entries.where(
+          (entry) => validZoneIds.contains(entry.key),
+        ),
+      );
 
       state = state.copyWith(
         zones: zones,
         statusByZone: filteredStatus,
+        layoutByZone: filteredLayout,
         loading: false,
         businessId: bizId,
         isOffline: result.fromCache,
@@ -107,6 +114,9 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
 
   Future<void> loadZoneStatus(String zoneId, {bool emitError = true}) async {
     final repo = ref.read(zonesRepoProvider);
+    // Geometría para el floor map (perezosa: solo si aún no se cargó). El
+    // grid no la necesita; un fallo aquí no debe tumbar la carga de estado.
+    unawaited(loadZoneLayout(zoneId));
     try {
       final result = await repo.fetchByZoneWithCache(
         zoneId,
@@ -141,6 +151,29 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
           errorByZone: {...state.errorByZone, zoneId: '$e'},
         );
       }
+    }
+  }
+
+  /// Carga la geometría (posición/forma/tamaño/capacidad) de las mesas de
+  /// una zona para el floor map. Perezosa por defecto: si ya está en
+  /// [ByZoneState.layoutByZone] no vuelve a consultar (el layout cambia
+  /// rara vez). El floor map pasa `force: true` al montar para reflejar
+  /// ediciones hechas en Ajustes. Best-effort: un fallo no afecta al grid
+  /// ni al estado en vivo; el mapa simplemente usa su fallback.
+  Future<void> loadZoneLayout(String zoneId, {bool force = false}) async {
+    if (!force && state.layoutByZone.containsKey(zoneId)) return;
+    try {
+      final repo = ref.read(zonesRepoProvider);
+      final tables = await repo.fetchTablesByZone(zoneId);
+      state = state.copyWith(
+        layoutByZone: {...state.layoutByZone, zoneId: tables},
+      );
+    } catch (e) {
+      developer.log(
+        'Error loading zone layout',
+        name: 'ByZoneViewModel',
+        error: e,
+      );
     }
   }
 

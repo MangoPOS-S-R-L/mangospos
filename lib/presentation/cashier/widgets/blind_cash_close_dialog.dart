@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/presentation/cashier/services/print_service.dart';
 import 'package:mangopos/presentation/cashier/state/blind_cash_close_models.dart';
@@ -950,24 +951,12 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
         sessionId: widget.sessionId,
       );
       if (!silent && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Cierre reimpreso correctamente'),
-            backgroundColor: MangoColors.successGreen,
-            duration: Duration(seconds: 2),
-          ),
-        );
+        AppToast.success(context, 'Cierre reimpreso correctamente');
       }
     } catch (e) {
       if (!mounted) return;
       if (!silent) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('No se pudo imprimir: $e'),
-            backgroundColor: Colors.red.shade600,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
+        AppToast.error(context, 'No se pudo imprimir: $e');
       }
     } finally {
       if (mounted) {

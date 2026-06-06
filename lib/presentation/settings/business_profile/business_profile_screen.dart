@@ -17,6 +17,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/router/routes.dart';
 import '../../../app/theme/mango_colors.dart';
 import '../../../core/business/business_resolver.dart';
+import '../../../core/utils/app_toast.dart';
 import '../../../data/models/business_profile.dart';
 import '../../../data/repositories/business_profile_repository.dart';
 
@@ -176,22 +177,12 @@ class _BusinessProfileScreenState extends ConsumerState<BusinessProfileScreen> {
         footerBlocks: _footerBlocks,
       );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Datos guardados'),
-            backgroundColor: Color(0xFF22C55E),
-          ),
-        );
+        AppToast.success(context, 'Datos guardados');
       }
       await _loadProfile();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error guardando: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(context, 'Error guardando: $e');
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -227,22 +218,12 @@ class _BusinessProfileScreenState extends ConsumerState<BusinessProfileScreen> {
         extension: ext,
       );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Logo actualizado'),
-            backgroundColor: Color(0xFF22C55E),
-          ),
-        );
+        AppToast.success(context, 'Logo actualizado');
       }
       await _loadProfile();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error subiendo logo: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(context, 'Error subiendo logo: $e');
       }
     } finally {
       if (mounted) setState(() => _uploadingLogo = false);
@@ -278,16 +259,12 @@ class _BusinessProfileScreenState extends ConsumerState<BusinessProfileScreen> {
     try {
       await _repo.deleteLogo(bid);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Logo eliminado')),
-        );
+        AppToast.success(context, 'Logo eliminado');
       }
       await _loadProfile();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error eliminando logo: $e')),
-        );
+        AppToast.error(context, 'Error eliminando logo: $e');
       }
     } finally {
       if (mounted) setState(() => _uploadingLogo = false);

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 
 import '../../../services/session/session_controller.dart';
 import '../state/transfers_state.dart';
@@ -191,12 +192,10 @@ class _TransfersViewState extends ConsumerState<TransfersView>
     final canApprove = ref
         .read(sessionProvider.notifier)
         .hasPermission('inventario.transferencias.aprobar');
-    final messenger = ScaffoldMessenger.of(context);
     if (!canApprove) {
-      messenger.showSnackBar(
-        const SnackBar(
-          content: Text('No tienes permiso para aprobar transferencias.'),
-        ),
+      AppToast.info(
+        context,
+        'No tienes permiso para aprobar transferencias.',
       );
       return;
     }
@@ -231,14 +230,10 @@ class _TransfersViewState extends ConsumerState<TransfersView>
             transferId: transfer.id,
           );
       if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('${transfer.transferNumber} aprobada')),
-      );
+      AppToast.info(context, '${transfer.transferNumber} aprobada');
     } catch (e) {
       if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
-      );
+      AppToast.error(context, 'Error: $e');
     }
   }
 
@@ -247,7 +242,6 @@ class _TransfersViewState extends ConsumerState<TransfersView>
     StockTransfer transfer,
   ) async {
     final reasonController = TextEditingController();
-    final messenger = ScaffoldMessenger.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -291,14 +285,10 @@ class _TransfersViewState extends ConsumerState<TransfersView>
                 : reasonController.text.trim(),
           );
       if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('${transfer.transferNumber} cancelada')),
-      );
+      AppToast.info(context, '${transfer.transferNumber} cancelada');
     } catch (e) {
       if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
-      );
+      AppToast.error(context, 'Error: $e');
     }
   }
 

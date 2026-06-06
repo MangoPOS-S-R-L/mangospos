@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/core/business/business_features_provider.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/state/taxes_state.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/viewmodel/taxes_viewmodel.dart';
@@ -83,9 +84,7 @@ class _MenuItemsViewState extends ConsumerState<MenuItemsView> {
                 builder: (_) => const _NewItemDialog(),
               );
               if (ok == true && mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Elemento creado')),
-                );
+                AppToast.success(context, 'Elemento creado');
               }
             },
             icon: const Icon(Icons.add),
@@ -832,12 +831,9 @@ class _NewItemDialogState extends ConsumerState<_NewItemDialog> {
                               }
                             } catch (e) {
                               if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      'No se pudo abrir el selector: $e',
-                                    ),
-                                  ),
+                                AppToast.error(
+                                  context,
+                                  'No se pudo abrir el selector: $e',
                                 );
                               }
                             }

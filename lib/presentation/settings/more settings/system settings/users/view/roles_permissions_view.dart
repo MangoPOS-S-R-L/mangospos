@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/repositories/permissions_repository.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
 import 'package:mangopos/services/session/session_controller.dart';
@@ -338,11 +339,8 @@ class _SettingsRolesViewState extends ConsumerState<SettingsRolesView> {
     final employeeId = widget.targetEmployeeId ?? session.employeeId;
 
     if (userId == null || _businessId == null || employeeId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text(
-                'Falta usuario, negocio o ID de empleado para guardar.')),
-      );
+      AppToast.info(
+          context, 'Falta usuario, negocio o ID de empleado para guardar.');
       return;
     }
     final desiredCodes = <String>{};
@@ -359,14 +357,10 @@ class _SettingsRolesViewState extends ConsumerState<SettingsRolesView> {
         codes: desiredCodes,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Permisos guardados en backend.')),
-      );
+      AppToast.success(context, 'Permisos guardados en backend.');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error al guardar: $e')),
-      );
+      AppToast.error(context, 'Error al guardar: $e');
     }
   }
 }
@@ -709,12 +703,9 @@ class _HeaderCard extends StatelessWidget {
                     isMobile ? 'Definiciones' : 'Ver definiciones',
                     style: TextStyle(fontSize: isMobile ? 12 : 14),
                   ),
-                  onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'Ver backend data structure/roles_usuarios_mangopos.txt',
-                      ),
-                    ),
+                  onPressed: () => AppToast.info(
+                    context,
+                    'Ver backend data structure/roles_usuarios_mangopos.txt',
                   ),
                 ),
               ],

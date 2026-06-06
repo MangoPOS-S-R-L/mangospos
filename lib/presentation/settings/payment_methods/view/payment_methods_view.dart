@@ -11,6 +11,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/models/bank_account.dart';
 import 'package:mangopos/presentation/settings/payment_methods/viewmodel/bank_accounts_viewmodel.dart';
 
@@ -443,13 +444,7 @@ class _BankAccountDialogState extends ConsumerState<_BankAccountDialog> {
     final bank = _bankNameCtrl.text.trim();
     final num = _accountNumberCtrl.text.trim();
     if (bank.isEmpty || num.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content:
-              Text('Banco y número de cuenta son obligatorios.'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      AppToast.info(context, 'Banco y número de cuenta son obligatorios.');
       return;
     }
     setState(() => _isSaving = true);

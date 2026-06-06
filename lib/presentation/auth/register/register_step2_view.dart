@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_tokens.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/models/billing_plan.dart';
 import 'package:mangopos/presentation/auth/register/business_registration_catalog.dart';
 import 'package:mangopos/presentation/auth/register/register_step1_viewmodel.dart';
@@ -330,22 +331,16 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
                           return;
                         }
                         if (selectedPlan == null) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'No hay planes disponibles. Regresa al paso 1.',
-                              ),
-                            ),
+                          AppToast.info(
+                            context,
+                            'No hay planes disponibles. Regresa al paso 1.',
                           );
                           return;
                         }
                         if (!step2.consentGranted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'Debes autorizar el cobro recurrente para continuar.',
-                              ),
-                            ),
+                          AppToast.info(
+                            context,
+                            'Debes autorizar el cobro recurrente para continuar.',
                           );
                           return;
                         }

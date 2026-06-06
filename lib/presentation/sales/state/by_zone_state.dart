@@ -1,9 +1,18 @@
 import '../../../data/models/zone.dart';
 import '../../../data/models/table_status.dart';
+import '../../../data/models/dining_table.dart';
 
 class ByZoneState {
   final List<Zone> zones;
   final Map<String, List<TableStatus>> statusByZone;
+
+  /// Geometría de las mesas por zona (posición, forma, tamaño,
+  /// capacidad) usada por el floor map. Se carga aparte de [statusByZone]
+  /// porque la vista `v_zone_table_status` no expone los campos de layout;
+  /// el viewmodel hace merge por `tableId` al renderizar el mapa. El grid
+  /// no la usa. Cambia rara vez → se cachea y no se recarga en cada tick.
+  final Map<String, List<DiningTable>> layoutByZone;
+
   final bool loading;
   final String? error;
   final String? businessId;
@@ -30,6 +39,7 @@ class ByZoneState {
   const ByZoneState({
     this.zones = const [],
     this.statusByZone = const {},
+    this.layoutByZone = const {},
     this.loading = false,
     this.error,
     this.businessId,
@@ -42,6 +52,7 @@ class ByZoneState {
   ByZoneState copyWith({
     List<Zone>? zones,
     Map<String, List<TableStatus>>? statusByZone,
+    Map<String, List<DiningTable>>? layoutByZone,
     bool? loading,
     String? error,
     String? businessId,
@@ -53,6 +64,7 @@ class ByZoneState {
     return ByZoneState(
       zones: zones ?? this.zones,
       statusByZone: statusByZone ?? this.statusByZone,
+      layoutByZone: layoutByZone ?? this.layoutByZone,
       loading: loading ?? this.loading,
       error: error,
       businessId: businessId ?? this.businessId,

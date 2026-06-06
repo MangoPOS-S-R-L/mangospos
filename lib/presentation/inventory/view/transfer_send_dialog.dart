@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 
 import '../state/inventory_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
@@ -170,7 +171,6 @@ class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
       _errorMessage = null;
     });
     final navigator = Navigator.of(context);
-    final messenger = ScaffoldMessenger.of(context);
     try {
       await ref
           .read(transfersViewModelProvider)
@@ -185,14 +185,11 @@ class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
           );
       if (!mounted) return;
       navigator.pop();
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            _isCrossBusiness
-                ? 'Transferencia inter-sucursal enviada'
-                : 'Transferencia enviada',
-          ),
-        ),
+      AppToast.info(
+        context,
+        _isCrossBusiness
+            ? 'Transferencia inter-sucursal enviada'
+            : 'Transferencia enviada',
       );
     } catch (e) {
       if (!mounted) return;

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/categories/viewmodel/category_viewmodel.dart';
 
 class CategoriesView extends ConsumerStatefulWidget {
@@ -67,14 +68,10 @@ class _CategoriesViewState extends ConsumerState<CategoriesView> {
                       .read(categoriesVmProvider.notifier)
                       .create(name: name.trim());
                   if (!mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Categoría creada')),
-                  );
+                  AppToast.success(context, 'Categoría creada');
                 } catch (e) {
                   if (!mounted) return;
-                  ScaffoldMessenger.of(
-                    context,
-                  ).showSnackBar(SnackBar(content: Text('Error: $e')));
+                  AppToast.error(context, 'Error: $e');
                 }
               }
             },

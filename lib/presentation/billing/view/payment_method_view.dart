@@ -23,6 +23,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/router/routes.dart';
 import '../../../app/theme/mango_colors.dart';
+import '../../../core/utils/app_toast.dart';
 import '../../../data/models/billing_payment_method.dart';
 import '../../../data/repositories/billing_repository.dart';
 import '../../../services/session/session_controller.dart';
@@ -125,12 +126,7 @@ class _PaymentMethodViewState extends ConsumerState<PaymentMethodView> {
       _waitingForCallback = false;
       _lastError = null;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Tarjeta verificada y guardada correctamente.'),
-        backgroundColor: MangoColors.successGreen,
-      ),
-    );
+    AppToast.success(context, 'Tarjeta verificada y guardada correctamente.');
   }
 
   @override

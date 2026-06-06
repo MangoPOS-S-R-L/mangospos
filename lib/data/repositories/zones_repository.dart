@@ -1,21 +1,15 @@
 import 'dart:async';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:mangopos/core/utils/display_name_utils.dart';
 import 'package:mangopos/core/offline/zones_offline_cache.dart';
 
-import '../models/order_item_tax_line.dart';
-import '../models/sales_models.dart';
 import '../models/zone.dart';
 import '../models/table_status.dart';
 import '../models/dining_table.dart';
-import '../utils/order_pricing_utils.dart';
 
 class ZonesRepository {
   final SupabaseClient sb;
   ZonesRepository(this.sb);
-
-  double _roundMoney(double value) => double.parse(value.toStringAsFixed(2));
 
   // ---- ZONAS ----
   Future<List<Zone>> fetchZones(
@@ -139,405 +133,9 @@ class ZonesRepository {
       await query.order('code', ascending: true),
     );
 
-    final currentUserId = sb.auth.currentUser?.id;
-    final waiterUserIds = rows
-        .map((row) => row['waiter_user_id']?.toString().trim())
-        .whereType<String>()
-        .where((id) => id.isNotEmpty)
-        .toSet()
-        .toList(growable: false);
-    final openedByIds = rows
-        .map((row) => row['opened_by']?.toString().trim())
-        .whereType<String>()
-        .where((id) => id.isNotEmpty)
-        .toSet()
-        .toList(growable: false);
-    final profileIds = {...waiterUserIds, ...openedByIds}.toList(growable: false);
-
-    final displayNameByUserId = <String, String>{};
-    if (profileIds.isNotEmpty) {
-      if (scopedBusinessId != null && scopedBusinessId.isNotEmpty) {
-        final employeeRows = List<Map<String, dynamic>>.from(
-          await sb
-              .from('v_employees_summary')
-              .select('user_id, first_name')
-              .eq('business_id', scopedBusinessId)
-              .inFilter('user_id', profileIds),
-        );
-        for (final employee in employeeRows) {
-          final userId = employee['user_id']?.toString().trim();
-          final firstName = employee['first_name']?.toString().trim();
-          if (userId == null || userId.isEmpty) continue;
-          if (firstName == null || firstName.isEmpty) continue;
-          displayNameByUserId[userId] = preferredDisplayName(firstName: firstName);
-        }
-      }
-
-      final missingProfileIds = profileIds
-          .where((id) => !displayNameByUserId.containsKey(id))
-          .toList(growable: false);
-      if (missingProfileIds.isNotEmpty) {
-        final profileRows = List<Map<String, dynamic>>.from(
-          await sb
-              .from('profiles')
-              .select('id, full_name')
-              .inFilter('id', missingProfileIds),
-        );
-        for (final profile in profileRows) {
-          final id = profile['id']?.toString().trim();
-          final fullName = profile['full_name']?.toString().trim();
-          if (id == null || id.isEmpty) continue;
-          if (fullName == null || fullName.isEmpty) continue;
-          displayNameByUserId[id] = preferredDisplayName(fullName: fullName);
-        }
-      }
-    }
-
-    for (final row in rows) {
-      final waiterUserId = row['waiter_user_id']?.toString().trim();
-      final openedBy = row['opened_by']?.toString().trim();
-      final ownerUserId = (waiterUserId != null && waiterUserId.isNotEmpty)
-          ? waiterUserId
-          : ((openedBy != null && openedBy.isNotEmpty) ? openedBy : null);
-      if (ownerUserId != null && ownerUserId.isNotEmpty) {
-        row['waiter_name'] =
-            displayNameByUserId[ownerUserId] ??
-            preferredDisplayName(fullName: row['waiter_name']?.toString());
-        row['is_own'] = currentUserId != null && currentUserId == ownerUserId;
-      } else {
-        row['is_own'] = false;
-      }
-    }
-
-    final sessionIds = rows
-        .map((row) => row['session_id']?.toString().trim())
-        .whereType<String>()
-        .where((sessionId) => sessionId.isNotEmpty)
-        .toSet()
-        .toList(growable: false);
-
-    final missingCustomerSessionIds = rows
-        .where(
-          (row) =>
-              (row['customer_name']?.toString().trim().isEmpty ?? true) &&
-              (row['session_id']?.toString().trim().isNotEmpty ?? false),
-        )
-        .map((row) => row['session_id'].toString())
-        .toSet()
-        .toList(growable: false);
-
-    if (missingCustomerSessionIds.isNotEmpty) {
-      var sessionQuery = sb
-          .from('table_sessions')
-          .select('id, customer_name')
-          .inFilter('id', missingCustomerSessionIds);
-
-      if (scopedBusinessId != null && scopedBusinessId.isNotEmpty) {
-        sessionQuery = sessionQuery.eq('business_id', scopedBusinessId);
-      }
-
-      final sessionRows = List<Map<String, dynamic>>.from(await sessionQuery);
-
-      final customerBySessionId = <String, String>{};
-      for (final session in sessionRows) {
-        final sessionId = session['id']?.toString();
-        final customerName = session['customer_name']?.toString().trim();
-        if (sessionId == null || sessionId.isEmpty) continue;
-        if (customerName == null || customerName.isEmpty) continue;
-        customerBySessionId[sessionId] = customerName;
-      }
-
-      for (final row in rows) {
-        final sessionId = row['session_id']?.toString();
-        if (sessionId == null || sessionId.isEmpty) continue;
-        row['customer_name'] ??= customerBySessionId[sessionId];
-        if ((row['customer_name']?.toString().trim().isEmpty ?? true) &&
-            customerBySessionId.containsKey(sessionId)) {
-          row['customer_name'] = customerBySessionId[sessionId];
-        }
-      }
-    }
-
-    // Multimesero: si la sesión tiene `opened_by_employee_id`, sobreescribir
-    // el `waiter_name` con el nombre del empleado (no del auth user del
-    // dispositivo). En modo single-mesero (sin opened_by_employee_id),
-    // mantiene el comportamiento legacy.
-    final openSessionIds = rows
-        .map((row) => row['session_id']?.toString().trim())
-        .whereType<String>()
-        .where((sessionId) => sessionId.isNotEmpty)
-        .toSet()
-        .toList(growable: false);
-
-    if (openSessionIds.isNotEmpty) {
-      try {
-        var sessionWaiterQuery = sb
-            .from('table_sessions')
-            .select('id, opened_by_employee_id')
-            .inFilter('id', openSessionIds)
-            .not('opened_by_employee_id', 'is', null);
-
-        if (scopedBusinessId != null && scopedBusinessId.isNotEmpty) {
-          sessionWaiterQuery =
-              sessionWaiterQuery.eq('business_id', scopedBusinessId);
-        }
-
-        final sessionWaiterRows =
-            List<Map<String, dynamic>>.from(await sessionWaiterQuery);
-
-        if (sessionWaiterRows.isNotEmpty) {
-          final employeeIds = sessionWaiterRows
-              .map((s) => s['opened_by_employee_id']?.toString().trim())
-              .whereType<String>()
-              .where((id) => id.isNotEmpty)
-              .toSet()
-              .toList(growable: false);
-
-          final employeeNameById = <String, String>{};
-          if (employeeIds.isNotEmpty) {
-            final employeeRows = List<Map<String, dynamic>>.from(
-              await sb
-                  .from('employees')
-                  .select('id, first_name, last_name')
-                  .inFilter('id', employeeIds),
-            );
-            for (final emp in employeeRows) {
-              final id = emp['id']?.toString().trim();
-              final first = emp['first_name']?.toString().trim();
-              final last = emp['last_name']?.toString().trim() ?? '';
-              if (id == null || id.isEmpty) continue;
-              if (first == null || first.isEmpty) continue;
-              employeeNameById[id] = last.isEmpty
-                  ? first
-                  : preferredDisplayName(firstName: first);
-            }
-          }
-
-          final employeeBySessionId = <String, String>{};
-          for (final s in sessionWaiterRows) {
-            final sessionId = s['id']?.toString();
-            final empId = s['opened_by_employee_id']?.toString();
-            if (sessionId == null || empId == null) continue;
-            final name = employeeNameById[empId];
-            if (name != null && name.isNotEmpty) {
-              employeeBySessionId[sessionId] = name;
-            }
-          }
-
-          if (employeeBySessionId.isNotEmpty) {
-            for (final row in rows) {
-              final sessionId = row['session_id']?.toString();
-              if (sessionId == null) continue;
-              final empName = employeeBySessionId[sessionId];
-              if (empName != null && empName.isNotEmpty) {
-                row['waiter_name'] = empName;
-              }
-            }
-          }
-        }
-      } catch (_) {
-        // Best-effort: si la query falla (columna missing en negocios sin
-        // la migration multimesero, RLS, etc.), no rompemos el flujo.
-      }
-    }
-
-    if (sessionIds.isNotEmpty) {
-      // Chunking de inFilter para evitar HTTP 414 URI Too Long. Zonas tipo
-      // CREDITOS acumulan items por dias en sesiones abiertas; con cientos
-      // de UUIDs (36 chars + coma c/u), la URL pasa los ~8KB que PostgREST
-      // acepta por default. Cada chunk genera una request independiente y
-      // mergeamos en memoria. 100 ids por lote deja margen comodo.
-      const inChunkSize = 100;
-
-      final orderRows = <Map<String, dynamic>>[];
-      for (var i = 0; i < sessionIds.length; i += inChunkSize) {
-        final end = (i + inChunkSize > sessionIds.length)
-            ? sessionIds.length
-            : i + inChunkSize;
-        final chunk = sessionIds.sublist(i, end);
-        final rows = await sb
-            .from('orders')
-            .select(
-              'id,session_id,status_ext,subtotal,tax,service_fee,discounts,total,created_at,closed_at',
-            )
-            .inFilter('session_id', chunk)
-            .isFilter('closed_at', null)
-            .not('status_ext', 'in', '(paid,void)');
-        orderRows.addAll(List<Map<String, dynamic>>.from(rows));
-      }
-      final orderIds = orderRows
-          .map((order) => order['id']?.toString().trim())
-          .whereType<String>()
-          .where((orderId) => orderId.isNotEmpty)
-          .toList(growable: false);
-      final totalBySessionId = <String, double>{};
-      final sessionIdByOrderId = <String, String>{};
-      final ordersById = <String, Order>{};
-
-      for (final order in orderRows) {
-        final orderId = order['id']?.toString().trim();
-        final sessionId = order['session_id']?.toString().trim();
-        if (orderId == null || orderId.isEmpty) continue;
-        if (sessionId == null || sessionId.isEmpty) continue;
-
-        sessionIdByOrderId[orderId] = sessionId;
-        // PRD 2 fix (2026-05-13): forzar serviceFee=0 igual que hace
-        // sales_viewmodel.dart:415. El "10% De Ley" vive en
-        // `oi.tax_lines` per ítem, así que `orders.service_fee` cached
-        // (calculado por triggers backend que a veces aplican 10% sobre
-        // subtotal completo aunque solo algunos items lo paguen) genera
-        // double-counting si se suma aparte. El detail screen lo
-        // ignoraba, el zone view no — por eso la card mostraba ~10%
-        // de más vs la pantalla de la mesa.
-        ordersById[orderId] =
-            Order.fromMap(order).copyWith(serviceFee: 0);
-      }
-
-      // Use items to calculate the real total using our harmonized logic.
-      // This ensures inclusive pricing is respected and matches the order screen.
-      //
-      // Excluimos 'paid' y 'void': los items pagados ya no representan deuda
-      // pendiente de la mesa. Si la mesa tenía dos productos de 275 y el
-      // cajero cobró uno via split bill (item → status='paid'), la card
-      // debe mostrar 275 (lo que queda por cobrar), no 550. Sin este
-      // filtro, items paid seguían sumando al total mostrado fuera de la
-      // mesa, creando la ilusión de un "lag" (en realidad era data stale).
-      final itemsMap = <String, List<OrderItem>>{};
-
-      final itemsRows = <Map<String, dynamic>>[];
-      for (var i = 0; i < orderIds.length; i += inChunkSize) {
-        final end = (i + inChunkSize > orderIds.length)
-            ? orderIds.length
-            : i + inChunkSize;
-        final chunk = orderIds.sublist(i, end);
-        final rows = await sb
-            .from('order_items')
-            .select()
-            .inFilter('order_id', chunk)
-            .not('status', 'in', '(paid,void)');
-        itemsRows.addAll(List<Map<String, dynamic>>.from(rows));
-      }
-
-      final itemIds = itemsRows.map((r) => r['id'] as String).toList();
-      final modifiersMap = <String, List<OrderItemModifier>>{};
-      // PRD 6: cargar también tax_lines (snapshot per-tax filtrado por
-      // takeout/origin) para que summarizeOrderPricing prefiera esa fuente
-      // sobre `oi.tax` que puede estar stale tras un toggle. Sin esto, el
-      // total del card de mesa quedaba inconsistente con la pantalla del
-      // pedido (afuera mostraba 64, adentro 59).
-      final taxLinesMap = <String, List<OrderItemTaxLine>>{};
-
-      if (itemIds.isNotEmpty) {
-        for (var i = 0; i < itemIds.length; i += inChunkSize) {
-          final end = (i + inChunkSize > itemIds.length)
-              ? itemIds.length
-              : i + inChunkSize;
-          final chunk = itemIds.sublist(i, end);
-          final modsRows = await sb
-              .from('order_item_modifiers')
-              .select()
-              .inFilter('item_id', chunk);
-
-          for (final row in List<Map<String, dynamic>>.from(modsRows)) {
-            final itemId = row['item_id'] as String;
-            final mod = OrderItemModifier.fromMap(row);
-            modifiersMap[itemId] = [...(modifiersMap[itemId] ?? []), mod];
-          }
-
-          final taxLinesRows = await sb
-              .from('order_item_tax_lines')
-              .select(
-                'id, order_item_id, tax_id, tax_name, tax_rate, amount, created_at',
-              )
-              .inFilter('order_item_id', chunk);
-          for (final row in List<Map<String, dynamic>>.from(taxLinesRows)) {
-            final line = OrderItemTaxLine.fromMap(row);
-            taxLinesMap
-                .putIfAbsent(line.orderItemId, () => <OrderItemTaxLine>[])
-                .add(line);
-          }
-        }
-      }
-
-      final taxDefsByName = <String, bool>{};
-      if (scopedBusinessId != null && scopedBusinessId.isNotEmpty) {
-        try {
-          final taxRows = await sb
-              .from('taxes')
-              .select('name, apply_on_takeout')
-              .eq('business_id', scopedBusinessId)
-              .eq('is_active', true);
-          for (final row in taxRows) {
-            final name = row['name']?.toString().toLowerCase().trim();
-            final applyOnTakeout = row['apply_on_takeout'] == true;
-            if (name != null) {
-              taxDefsByName[name] = applyOnTakeout;
-            }
-          }
-        } catch (_) {
-          // ignore
-        }
-      }
-
-      for (final row in itemsRows) {
-        final orderId = row['order_id'] as String;
-        final itemId = row['id'] as String;
-        var taxLines = taxLinesMap[itemId] ?? const <OrderItemTaxLine>[];
-        final isTakeout = row['is_takeout'] == true;
-
-        if (isTakeout && taxDefsByName.isNotEmpty && taxLines.isNotEmpty) {
-          final filtered = taxLines.where((line) {
-            final applies = taxDefsByName[line.taxName.toLowerCase().trim()] ?? true;
-            return applies;
-          }).toList();
-
-          if (filtered.length != taxLines.length) {
-            final newRate = filtered.fold<double>(0, (sum, l) => sum + l.taxRate);
-            final newTaxAmount = filtered.fold<double>(0, (sum, l) => sum + l.amount);
-            final item = OrderItem.fromMap(row).copyWith(
-              modifiers: modifiersMap[itemId] ?? [],
-              taxLines: filtered,
-              taxRate: newRate,
-              tax: newTaxAmount,
-            );
-            itemsMap[orderId] = [...(itemsMap[orderId] ?? []), item];
-            continue;
-          }
-        }
-
-        final item = OrderItem.fromMap(row).copyWith(
-          modifiers: modifiersMap[itemId] ?? [],
-          taxLines: taxLines,
-        );
-        itemsMap[orderId] = [...(itemsMap[orderId] ?? []), item];
-      }
-
-      for (final orderId in orderIds) {
-        final sessionId = sessionIdByOrderId[orderId];
-        if (sessionId == null || sessionId.isEmpty) continue;
-        final order = ordersById[orderId];
-        final items = itemsMap[orderId] ?? [];
-
-        // FIX 2026-05-01: usar summary.total directamente — ahora se
-        // ancla al gross catálogo para órdenes 100% inclusive (limpio,
-        // sin drift de centavos ni doble-cuenta de serviceFee legacy).
-        final summary = summarizeOrderPricing(
-          order,
-          items,
-          forcedOrigin: 'table',
-        );
-
-        totalBySessionId[sessionId] = _roundMoney(
-          (totalBySessionId[sessionId] ?? 0.0) + summary.total,
-        );
-      }
-
-      for (final row in rows) {
-        final sessionId = row['session_id']?.toString().trim();
-        if (sessionId == null || sessionId.isEmpty) continue;
-        row['total'] = totalBySessionId[sessionId] ?? 0.0;
-      }
-    }
+    // PERF (20260605_0007): la vista v_zone_table_status ya trae total,
+    // waiter_name, is_own y customer_name resueltos en el servidor → la
+    // carga de la zona es UNA sola consulta (antes ~10 viajes encadenados).
 
     // Persistir filas enriquecidas (con waiter_name / customer_name / total
     // calculado) para el cache offline. fetchByZoneWithCache las reusa.
@@ -597,6 +195,33 @@ class ZonesRepository {
     return (rows as List)
         .map((e) => DiningTable.fromMap(e as Map<String, dynamic>))
         .toList();
+  }
+
+  /// Floor map: persiste los campos de layout de UNA mesa (posición,
+  /// tamaño, rotación, forma, capacidad, label). Reusa
+  /// [DiningTable.toUpdateLayoutMap] — NO toca `state` ni sesiones, así
+  /// que es seguro llamarlo aunque la mesa esté ocupada (solo cambia su
+  /// representación visual en el plano).
+  Future<void> updateTableLayout(DiningTable table) async {
+    await sb
+        .from('dining_tables')
+        .update(table.toUpdateLayoutMap())
+        .eq('id', table.id);
+  }
+
+  /// Floor map: persiste el layout de varias mesas en serie. Usado por
+  /// "Guardar diseño" después de arrastrar/editar mesas en el editor.
+  ///
+  /// Updates secuenciales (igual que `reorderZones`): Supabase no soporta
+  /// batch update por id distinto en una sola llamada. Best-effort por
+  /// mesa — si una falla, propaga para que el caller muestre el error.
+  Future<void> bulkUpdateLayout(List<DiningTable> tables) async {
+    for (final t in tables) {
+      await sb
+          .from('dining_tables')
+          .update(t.toUpdateLayoutMap())
+          .eq('id', t.id);
+    }
   }
 
   /// PRD-12 F1: cambia la zona de una mesa sin tocar sesiones ni

@@ -122,6 +122,59 @@ class PromosRepository {
         );
   }
 
+  /// Edita una promoción existente. A diferencia de createPromotion, NO descarta
+  /// valores vacíos: envía todos los campos explícitos para permitir limpiar
+  /// (ej. quitar descripción, vaciar productos) y cambiar el estado activo.
+  Future<void> updatePromotion({
+    required String id,
+    required String name,
+    String? description,
+    required String discountType,
+    required String promoType,
+    required double discountValue,
+    required double minPurchase,
+    required String appliesTo,
+    required String targetScope,
+    required List<String> targetIds,
+    required List<int> daysOfWeek,
+    required bool autoApply,
+    required bool stackable,
+    required int priority,
+    int? buyQuantity,
+    int? payQuantity,
+    int? rewardQuantity,
+    required DateTime startDate,
+    required DateTime endDate,
+    required bool isActive,
+  }) async {
+    await _client
+        .from(PromosQueries.tablePromotions)
+        .update({
+          'name': name,
+          'description': (description == null || description.isEmpty)
+              ? null
+              : description,
+          'discount_type': discountType,
+          'promo_type': promoType,
+          'discount_value': discountValue,
+          'min_purchase': minPurchase,
+          'applies_to': appliesTo,
+          'target_scope': targetScope,
+          'target_ids': targetIds,
+          'days_of_week': daysOfWeek,
+          'auto_apply': autoApply,
+          'stackable': stackable,
+          'priority': priority,
+          'buy_quantity': buyQuantity,
+          'pay_quantity': payQuantity,
+          'reward_quantity': rewardQuantity,
+          'start_date': startDate.toUtc().toIso8601String(),
+          'end_date': endDate.toUtc().toIso8601String(),
+          'is_active': isActive,
+        })
+        .eq('id', id);
+  }
+
   Future<void> createCoupon({
     required String businessId,
     required String code,

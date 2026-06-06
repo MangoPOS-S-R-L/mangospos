@@ -9,6 +9,7 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/widgets/printer_configuration_dialog.dart';
@@ -99,19 +100,15 @@ class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
 
     if (confirmed != true) return;
     if (!context.mounted) return;
-    final messenger = ScaffoldMessenger.of(context);
     final ok = await onConfirm();
     if (!mounted) return;
     await _bootstrap(force: true);
     final state = ref.read(printingPrintersViewModelProvider);
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(
-          ok
-              ? 'Impresora desvinculada.'
-              : (state.errorMessage ?? 'No se pudo desvincular la impresora.'),
-        ),
-      ),
+    AppToast.info(
+      context,
+      ok
+          ? 'Impresora desvinculada.'
+          : (state.errorMessage ?? 'No se pudo desvincular la impresora.'),
     );
   }
 
@@ -217,21 +214,17 @@ class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
                             printer: printer,
                             usageSummary: summary,
                             onPrintSample: () async {
-                              final messenger = ScaffoldMessenger.of(context);
                               final ok = await vmCtrl.testPrint(printer.id);
                               if (!mounted) return;
                               final state = ref.read(
                                 printingPrintersViewModelProvider,
                               );
-                              messenger.showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    ok
-                                        ? 'Muestra enviada a ${printer.name}.'
-                                        : (state.errorMessage ??
-                                              'No se pudo imprimir la muestra.'),
-                                  ),
-                                ),
+                              AppToast.info(
+                                context,
+                                ok
+                                    ? 'Muestra enviada a ${printer.name}.'
+                                    : (state.errorMessage ??
+                                          'No se pudo imprimir la muestra.'),
                               );
                             },
                             onConfigure: () =>
@@ -521,9 +514,7 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
       onDone: _stopIntensive,
       onError: (_) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('No se pudo completar la búsqueda.')),
-          );
+          AppToast.error(context, 'No se pudo completar la búsqueda.');
         }
         _stopIntensive();
       },
@@ -624,9 +615,7 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
     } catch (e) {
       setState(() => _isSearching = false);
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error al buscar: $e')));
+        AppToast.error(context, 'Error al buscar: $e');
       }
     }
   }
@@ -656,9 +645,7 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
     } catch (e) {
       setState(() => _isSearching = false);
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error al buscar: $e')));
+        AppToast.error(context, 'Error al buscar: $e');
       }
     }
   }
@@ -821,12 +808,9 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
                         if (_selectedType == 'network' &&
                             _selectedPrinter == null &&
                             _foundPrinters.isNotEmpty) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'Por favor selecciona una impresora',
-                              ),
-                            ),
+                          AppToast.info(
+                            context,
+                            'Por favor selecciona una impresora',
                           );
                           return;
                         }
@@ -1393,35 +1377,25 @@ class _HardwareIdBannerState extends ConsumerState<_HardwareIdBanner> {
 
   Future<void> _adopt() async {
     setState(() => _adopting = true);
-    final messenger = ScaffoldMessenger.of(context);
     try {
       final businessId = await BusinessResolver.ensure('auto');
       final result = await DeviceIdentity.adoptHardwareId(businessId);
       if (!mounted) return;
       if (result == null) {
-        messenger.showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Este dispositivo no expone identidad de hardware o ya está adoptada.',
-            ),
-          ),
+        AppToast.info(
+          context,
+          'Este dispositivo no expone identidad de hardware o ya está adoptada.',
         );
       } else {
-        messenger.showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Identidad adoptada. Las impresoras siguen vinculadas tras reinstalaciones.',
-            ),
-            backgroundColor: Color(0xFF22C55E),
-          ),
+        AppToast.success(
+          context,
+          'Identidad adoptada. Las impresoras siguen vinculadas tras reinstalaciones.',
         );
         setState(() => _shouldShow = false);
       }
     } catch (e) {
       if (mounted) {
-        messenger.showSnackBar(
-          SnackBar(content: Text('No se pudo adoptar la identidad: $e')),
-        );
+        AppToast.error(context, 'No se pudo adoptar la identidad: $e');
       }
     } finally {
       if (mounted) setState(() => _adopting = false);

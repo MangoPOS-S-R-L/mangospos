@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/data/models/payment_models.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
@@ -121,22 +122,16 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
         .read(sessionProvider.notifier)
         .hasPermission('caja.movimientos_crear');
     if (!canCreate) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'No tenés permiso para registrar movimientos de caja.',
-          ),
-          backgroundColor: Color(0xFFEF4444),
-        ),
+      AppToast.error(
+        context,
+        'No tenés permiso para registrar movimientos de caja.',
       );
       return;
     }
 
     final amount = double.tryParse(_amountController.text.replaceAll(',', '.'));
     if (amount == null || amount <= 0) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Ingresa un monto válido')));
+      AppToast.info(context, 'Ingresa un monto válido');
       return;
     }
 
@@ -147,12 +142,7 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
 
     final reasonCode = _selectedReasonCode;
     if (reasonCode == null || reasonCode.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Selecciona una razón antes de continuar'),
-          backgroundColor: Color(0xFFEA580C),
-        ),
-      );
+      AppToast.warning(context, 'Selecciona una razón antes de continuar');
       return;
     }
 
@@ -196,25 +186,20 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
       await _refresh();
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            appliedOnline
-                ? '${_labelForType(_selectedType)} registrado correctamente'
-                : '${_labelForType(_selectedType)} guardado sin conexión. Se sincronizará al reconectar.',
-          ),
-          backgroundColor:
-              appliedOnline ? MangoColors.successGreen : const Color(0xFFEA580C),
-        ),
-      );
+      if (appliedOnline) {
+        AppToast.success(
+          context,
+          '${_labelForType(_selectedType)} registrado correctamente',
+        );
+      } else {
+        AppToast.warning(
+          context,
+          '${_labelForType(_selectedType)} guardado sin conexión. Se sincronizará al reconectar.',
+        );
+      }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('No se pudo registrar el movimiento: $e'),
-          backgroundColor: Colors.red[600],
-        ),
-      );
+      AppToast.error(context, 'No se pudo registrar el movimiento: $e');
     } finally {
       if (mounted) {
         setState(() {

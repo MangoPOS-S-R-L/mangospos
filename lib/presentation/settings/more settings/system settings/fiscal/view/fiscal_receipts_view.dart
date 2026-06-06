@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import '../viewmodel/fiscal_viewmodel.dart';
 import '../../../../../../data/models/fiscal_models.dart';
 
@@ -33,9 +34,7 @@ class _FiscalReceiptsViewState extends ConsumerState<FiscalReceiptsView> {
 
     ref.listen(fiscalVmProvider.select((s) => s.error), (prev, next) {
       if (next != null && next.isNotEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(next), backgroundColor: Colors.red),
-        );
+        AppToast.error(context, next);
       }
     });
 
@@ -157,9 +156,7 @@ class _FiscalReceiptsViewState extends ConsumerState<FiscalReceiptsView> {
                           rnc: _rncController.text,
                           name: _nameController.text,
                         );
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Configuración guardada')),
-                    );
+                    AppToast.success(context, 'Configuración guardada');
                   },
                   child: const Text('Guardar'),
                 ),

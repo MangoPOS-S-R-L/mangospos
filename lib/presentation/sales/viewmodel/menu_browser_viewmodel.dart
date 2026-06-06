@@ -59,6 +59,17 @@ class MenuProduct {
 
   final List<Map<String, dynamic>> associatedTaxes;
 
+  /// Cuando este tile es una OFERTA vendible (itemType == 'offer'): se vende
+  /// como UNA línea a precio original con el descuento del deal (el descuento se
+  /// ve abajo en los totales).
+  ///  - offerPromoId: id de la promoción (atribución).
+  ///  - offerLineQty: cantidad de la única línea (ej. 4 para un 4x3).
+  ///  - offerDiscount: descuento total del deal (ej. 250 para un 4x3 de 250).
+  /// En tiles normales son null.
+  final String? offerPromoId;
+  final int? offerLineQty;
+  final double? offerDiscount;
+
   const MenuProduct({
     required this.id,
     required this.name,
@@ -72,6 +83,9 @@ class MenuProduct {
     this.isInventoryTracked = false,
     this.allowNegativeSale = false,
     this.associatedTaxes = const [],
+    this.offerPromoId,
+    this.offerLineQty,
+    this.offerDiscount,
   });
 
   factory MenuProduct.fromMap(Map<String, dynamic> m) {
@@ -141,7 +155,7 @@ class MenuProduct {
   }
 }
 
-enum MenuProductsMode { none, category, menu, all, search, favorites }
+enum MenuProductsMode { none, category, menu, all, search, favorites, offers }
 
 @immutable
 class MenuBrowserState {
@@ -825,6 +839,138 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
       state = state.copyWith(
         loading: false,
         error: 'No se pudo cargar el menu: $e',
+      );
+    }
+  }
+
+  /// Carga las OFERTAS vendibles como tiles del catálogo (pestaña "Ofertas").
+  /// Cada oferta activa + auto-aplicar que apunta a producto(s) genera un tile
+  /// por producto; al tocarlo se agregan las líneas del producto (ver
+  /// SalesViewModel.addOfferDeal) y el motor aplica el descuento.
+  Future<void> loadOffers() async {
+    try {
+      state = state.copyWith(loading: true, error: null, selectedProduct: null);
+      final businessId = await _resolveBusinessId();
+
+      // Productos del negocio (para precio/impuestos del componente).
+      final snapshot = await _ensureCatalogSnapshot(businessId: businessId);
+      final byId = <String, MenuProduct>{
+        for (final p in _parseProducts(snapshot.allProducts())) p.id: p,
+      };
+
+      // Ofertas activas que apuntan a productos. NO se filtra por auto_apply:
+      // el tile aplica el descuento vía el precio de oferta, no el motor.
+      final promosRaw = await _client
+          .from('promotions')
+          .select(
+            'id,name,promo_type,discount_type,discount_value,'
+            'target_scope,applies_to,target_ids,buy_quantity,pay_quantity,'
+            'is_active',
+          )
+          .eq('business_id', businessId)
+          .eq('is_active', true);
+
+      final tiles = <MenuProduct>[];
+      for (final raw in List<Map<String, dynamic>>.from(promosRaw)) {
+        final scope =
+            (raw['target_scope'] ?? raw['applies_to'])?.toString() ?? 'all';
+        if (scope != 'product') continue;
+        final promoId = raw['id']?.toString();
+        if (promoId == null) continue;
+        final type =
+            (raw['promo_type'] ?? raw['discount_type'])?.toString() ??
+            'percentage';
+        final buyQty = (raw['buy_quantity'] as num?)?.toInt() ?? 2;
+        final payQty = (raw['pay_quantity'] as num?)?.toInt() ?? 1;
+        final value = (raw['discount_value'] as num?)?.toDouble() ?? 0;
+        final targetIds = (raw['target_ids'] as List?)
+                ?.map((e) => e?.toString() ?? '')
+                .where((e) => e.isNotEmpty)
+                .toList(growable: false) ??
+            const <String>[];
+
+        // Etiqueta del deal (badge en el nombre del tile/línea).
+        String dealPrefix() {
+          switch (type) {
+            case 'bogo':
+              return '${buyQty}x$payQty';
+            case 'fixed':
+              return '-RD\$${value.toStringAsFixed(0)}';
+            case 'bundle_price':
+              return 'RD\$${value.toStringAsFixed(0)}';
+            case 'percentage':
+            default:
+              return '${value.toStringAsFixed(0)}%';
+          }
+        }
+
+        for (final pid in targetIds) {
+          final base = byId[pid];
+          if (base == null) continue;
+
+          // UNA línea a precio original (cantidad N) con el descuento del deal.
+          // El descuento se ve abajo en los totales.
+          final int lineQty;
+          final double discount;
+          switch (type) {
+            case 'bogo':
+              // Ej. 4x3 de 250 → qty 4, descuento = 1×250 = 250.
+              lineQty = buyQty < 1 ? 1 : buyQty;
+              final pay = payQty < 1 ? 1 : payQty;
+              final free = (lineQty - pay).clamp(0, lineQty);
+              discount = free * base.price;
+              break;
+            case 'fixed':
+              lineQty = 1;
+              discount = value.clamp(0, base.price).toDouble();
+              break;
+            case 'bundle_price':
+              lineQty = 1;
+              discount = (base.price - value).clamp(0, base.price).toDouble();
+              break;
+            case 'percentage':
+            default:
+              lineQty = 1;
+              discount = (base.price * (value.clamp(0, 100) / 100.0))
+                  .clamp(0, base.price)
+                  .toDouble();
+          }
+
+          tiles.add(
+            MenuProduct(
+              id: base.id,
+              name: '${dealPrefix()} ${base.name}',
+              price: base.price,
+              taxMode: base.taxMode,
+              taxRate: base.taxRate,
+              categoryId: base.categoryId,
+              imageUrl: base.imageUrl,
+              menuId: base.menuId,
+              itemType: 'offer',
+              isInventoryTracked: base.isInventoryTracked,
+              allowNegativeSale: base.allowNegativeSale,
+              associatedTaxes: base.associatedTaxes,
+              offerPromoId: promoId,
+              offerLineQty: lineQty,
+              offerDiscount: double.parse(discount.toStringAsFixed(2)),
+            ),
+          );
+        }
+      }
+
+      state = state.copyWith(
+        loading: false,
+        error: null,
+        products: tiles,
+        productsMode: MenuProductsMode.offers,
+        clearLoadedCategoryId: true,
+        clearLoadedMenuId: true,
+        selectedProduct: null,
+      );
+    } catch (e) {
+      state = state.copyWith(
+        loading: false,
+        error: 'No se pudieron cargar las ofertas: $e',
       );
     }
   }

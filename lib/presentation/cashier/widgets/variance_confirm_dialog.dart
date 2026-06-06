@@ -18,6 +18,7 @@ import 'package:http/http.dart' show ClientException;
 
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 
 /// Marker que `closeSessionWithVarianceCheck` retorna cuando el cierre
@@ -161,11 +162,7 @@ Future<VarianceConfirmResult> showVarianceConfirmDialog(
             onPressed: () {
               final note = controller.text.trim();
               if (note.isEmpty) {
-                ScaffoldMessenger.of(ctx).showSnackBar(
-                  const SnackBar(
-                    content: Text('La nota es obligatoria.'),
-                  ),
-                );
+                AppToast.info(ctx, 'La nota es obligatoria.');
                 return;
               }
               Navigator.of(ctx).pop(

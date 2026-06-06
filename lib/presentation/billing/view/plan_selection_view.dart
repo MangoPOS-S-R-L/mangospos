@@ -13,6 +13,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../app/router/routes.dart';
 import '../../../app/theme/mango_colors.dart';
+import '../../../core/utils/app_toast.dart';
 import '../../../data/models/billing_plan.dart';
 import '../../../data/models/billing_state.dart';
 import '../../../data/repositories/billing_repository.dart';
@@ -122,14 +123,10 @@ class PlanSelectionView extends ConsumerWidget {
 
     // TODO(Fase 4): conectar con backend para cambiar plan + cobrar prorrateo.
     // Por ahora mostramos un mensaje claro de que esta acción quedará pendiente.
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'El cambio de plan se confirmará cuando habilitemos el cobro automático. '
-          'Por ahora, contáctanos para procesarlo manualmente.',
-        ),
-        duration: Duration(seconds: 5),
-      ),
+    AppToast.info(
+      context,
+      'El cambio de plan se confirmará cuando habilitemos el cobro automático. '
+      'Por ahora, contáctanos para procesarlo manualmente.',
     );
   }
 }

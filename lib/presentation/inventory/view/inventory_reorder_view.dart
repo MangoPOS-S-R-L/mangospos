@@ -11,6 +11,7 @@ import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/repositories/reorder_repository.dart';
 import 'package:mangopos/presentation/inventory/state/inventory_state.dart';
 import 'package:mangopos/presentation/inventory/viewmodel/inventory_viewmodel.dart';
@@ -118,9 +119,7 @@ class _InventoryReorderViewState extends ConsumerState<InventoryReorderView> {
         .where((s) => _selected.contains(s.inventoryItemId))
         .toList(growable: false);
     if (selectedItems.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Selecciona al menos un insumo.')),
-      );
+      AppToast.info(context, 'Selecciona al menos un insumo.');
       return;
     }
     if (supplierId == null) {
@@ -132,10 +131,9 @@ class _InventoryReorderViewState extends ConsumerState<InventoryReorderView> {
       supplierName = picked.$2;
     }
     if (_warehouses.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Tu negocio no tiene bodegas activas configuradas.'),
-        ),
+      AppToast.info(
+        context,
+        'Tu negocio no tiene bodegas activas configuradas.',
       );
       return;
     }
@@ -164,11 +162,7 @@ class _InventoryReorderViewState extends ConsumerState<InventoryReorderView> {
         );
       }
       if (draftItems.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Las cantidades deben ser mayores a 0.'),
-          ),
-        );
+        AppToast.info(context, 'Las cantidades deben ser mayores a 0.');
         return;
       }
 
@@ -185,15 +179,10 @@ class _InventoryReorderViewState extends ConsumerState<InventoryReorderView> {
           );
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'OC $orderNumber creada para ${supplierName ?? 'proveedor'} '
-            'con ${draftItems.length} líneas',
-          ),
-          backgroundColor: MangoColors.successGreen,
-          behavior: SnackBarBehavior.floating,
-        ),
+      AppToast.success(
+        context,
+        'OC $orderNumber creada para ${supplierName ?? 'proveedor'} '
+        'con ${draftItems.length} líneas',
       );
       // Limpiar selección de este grupo y recargar.
       setState(() {
@@ -204,9 +193,7 @@ class _InventoryReorderViewState extends ConsumerState<InventoryReorderView> {
       await _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo crear la OC: $e')),
-      );
+      AppToast.error(context, 'No se pudo crear la OC: $e');
     } finally {
       if (mounted) setState(() => _creatingForSupplier = null);
     }
@@ -225,12 +212,9 @@ class _InventoryReorderViewState extends ConsumerState<InventoryReorderView> {
         .where((s) => s.isActive)
         .toList(growable: false);
     if (suppliers.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'No tienes proveedores activos. Crea uno en Inventario → Proveedores.',
-          ),
-        ),
+      AppToast.info(
+        context,
+        'No tienes proveedores activos. Crea uno en Inventario → Proveedores.',
       );
       return null;
     }

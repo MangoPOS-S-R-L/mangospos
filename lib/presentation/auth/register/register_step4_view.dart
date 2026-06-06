@@ -26,6 +26,8 @@ import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'package:mangopos/core/utils/app_toast.dart';
+
 import '../../../app/router/routes.dart';
 import '../../../app/theme/mango_tokens.dart';
 import '../../../data/models/billing_payment_method.dart';
@@ -129,13 +131,7 @@ class _RegisterStep4ViewState extends ConsumerState<RegisterStep4View> {
   void _onCardArrived() {
     _timeoutTimer?.cancel();
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('¡Tarjeta verificada! Bienvenido a MangoPOS.'),
-        backgroundColor: MangoTokens.success,
-        duration: Duration(seconds: 3),
-      ),
-    );
+    AppToast.success(context, '¡Tarjeta verificada! Bienvenido a MangoPOS.');
     context.go(AppRoutes.dashboard);
   }
 

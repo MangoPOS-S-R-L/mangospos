@@ -3,6 +3,29 @@ import 'package:intl/intl.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
 
+/// Convierte las notas internas de un item en texto legible para el ticket:
+/// oculta los marcadores técnicos ([DEAL:...], [PROMO_AUTO:...], [CORTESIA:...])
+/// y, si era una línea de OFERTA, muestra una nota informativa limpia.
+String cleanOrderItemNote(String? raw) {
+  if (raw == null || raw.trim().isEmpty) return '';
+  var isDeal = false;
+  final visible = <String>[];
+  for (final line in raw.split('\n').map((l) => l.trim())) {
+    if (line.isEmpty) continue;
+    if (line.startsWith('[DEAL') && line.endsWith(']')) {
+      isDeal = true;
+      continue;
+    }
+    if ((line.startsWith('[PROMO_AUTO:') || line.startsWith('[CORTESIA:')) &&
+        line.endsWith(']')) {
+      continue;
+    }
+    visible.add(line);
+  }
+  if (isDeal && visible.isEmpty) return 'Oferta aplicada';
+  return visible.join(' · ');
+}
+
 /// 🛒 Lista de items de la orden actual.
 ///
 /// Renderiza items en estado `draft` (pendientes de enviar) y `pending/sent`
@@ -256,11 +279,11 @@ class _ItemRow extends StatelessWidget {
                           ),
                         ),
                       ),
-                    if (item.notes != null && item.notes!.isNotEmpty)
+                    if (cleanOrderItemNote(item.notes).isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(top: 2),
                         child: Text(
-                          item.notes!,
+                          cleanOrderItemNote(item.notes),
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(

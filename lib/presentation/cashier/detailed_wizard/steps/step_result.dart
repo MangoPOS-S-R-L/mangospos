@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/presentation/cashier/services/print_service.dart';
 import 'package:mangopos/presentation/cashier/state/blind_cash_close_models.dart';
@@ -92,13 +93,7 @@ class _StepResultState extends State<StepResult> {
       );
       if (!mounted) return;
       if (!silent) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Cierre reimpreso correctamente'),
-            backgroundColor: MangoColors.successGreen,
-            duration: Duration(seconds: 2),
-          ),
-        );
+        AppToast.success(context, 'Cierre reimpreso correctamente');
       }
     } catch (e) {
       if (!mounted) return;
@@ -106,12 +101,7 @@ class _StepResultState extends State<StepResult> {
         _lastPrintError = e.toString();
       });
       if (!silent) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('No se pudo imprimir: $e'),
-            backgroundColor: Colors.red.shade600,
-          ),
-        );
+        AppToast.error(context, 'No se pudo imprimir: $e');
       }
     } finally {
       if (mounted) setState(() => _printing = false);

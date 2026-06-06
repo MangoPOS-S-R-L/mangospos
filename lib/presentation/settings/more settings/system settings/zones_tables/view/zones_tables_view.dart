@@ -4,9 +4,11 @@ import 'package:go_router/go_router.dart';
 
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/models/dining_table.dart';
 import 'package:mangopos/data/models/zone.dart';
 import '../viewmodel/zones_tables_viewmodel.dart';
+import 'zone_floor_editor.dart';
 
 class ZonesTablesView extends ConsumerStatefulWidget {
   /// Puede venir 'auto' o un UUID real. El VM lo resuelve antes de consultar.
@@ -85,7 +87,6 @@ class _ZonesTablesViewState extends ConsumerState<ZonesTablesView> {
             padding: const EdgeInsets.only(right: 16),
             child: ElevatedButton.icon(
               onPressed: () async {
-                final messenger = ScaffoldMessenger.of(context);
                 final name = await _prompt(context, 'Nombre de la zona');
                 if (name != null && name.trim().isNotEmpty) {
                   try {
@@ -93,20 +94,10 @@ class _ZonesTablesViewState extends ConsumerState<ZonesTablesView> {
                         .read(zonesTablesVmProvider.notifier)
                         .addZone(widget.businessId, name.trim());
                     if (!context.mounted) return;
-                    messenger.showSnackBar(
-                      const SnackBar(
-                        content: Text('Zona creada'),
-                        backgroundColor: Color(0xFF22C55E),
-                      ),
-                    );
+                    AppToast.success(context, 'Zona creada');
                   } catch (e) {
                     if (!context.mounted) return;
-                    messenger.showSnackBar(
-                      SnackBar(
-                        content: Text('Error: $e'),
-                        backgroundColor: Colors.red,
-                      ),
-                    );
+                    AppToast.error(context, 'Error: $e');
                   }
                 }
               },
@@ -159,20 +150,15 @@ class _ZonesTablesViewState extends ConsumerState<ZonesTablesView> {
                       onChanged: vm.savingOpenTableConfig
                           ? null
                           : (value) async {
-                              final messenger = ScaffoldMessenger.of(context);
                               await ref
                                   .read(zonesTablesVmProvider.notifier)
                                   .setPromptPeopleCountOnOpen(value);
                               if (!context.mounted) return;
-                              messenger.showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    value
-                                        ? 'Se pedirá cantidad de personas al abrir mesa.'
-                                        : 'La mesa abrirá sin pedir cantidad de personas.',
-                                  ),
-                                  backgroundColor: const Color(0xFF22C55E),
-                                ),
+                              AppToast.success(
+                                context,
+                                value
+                                    ? 'Se pedirá cantidad de personas al abrir mesa.'
+                                    : 'La mesa abrirá sin pedir cantidad de personas.',
                               );
                             },
                       secondary: vm.savingOpenTableConfig
@@ -334,6 +320,15 @@ class _ZonesTablesViewState extends ConsumerState<ZonesTablesView> {
                                           Icons.delete_outline,
                                           size: 20,
                                           color: Colors.redAccent,
+                                        ),
+                                      ),
+                                      IconButton(
+                                        tooltip: 'Editar plano',
+                                        onPressed: () => _onEditFloorPlan(zone),
+                                        icon: const Icon(
+                                          Icons.space_dashboard_outlined,
+                                          size: 20,
+                                          color: Color(0xFF2563EB),
                                         ),
                                       ),
                                       const SizedBox(width: 8),
@@ -628,6 +623,21 @@ class _ZonesTablesViewState extends ConsumerState<ZonesTablesView> {
       if (!context.mounted) return;
       _showError(messenger, e.toString());
     }
+  }
+
+  /// Abre el editor visual del plano (floor map) de la zona. Reusa la
+  /// geometría ya cargada en `tablesByZone`; al guardar persiste el
+  /// layout y refresca la lista. Se navega con `Navigator.push` para no
+  /// tocar el router.
+  Future<void> _onEditFloorPlan(Zone zone) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ZoneFloorEditorView(
+          zoneId: zone.id,
+          zoneName: zone.name,
+        ),
+      ),
+    );
   }
 
   // ---------- Handlers de Mesa ----------

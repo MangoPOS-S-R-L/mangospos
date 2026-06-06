@@ -17,6 +17,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 
@@ -314,9 +315,7 @@ class _CashSessionsHealthViewState
     if (result != true || !mounted) return;
     final reason = reasonCtrl.text.trim();
     if (reason.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('La razón es obligatoria.')),
-      );
+      AppToast.info(context, 'La razón es obligatoria.');
       return;
     }
     final amount = double.tryParse(amountCtrl.text.replaceAll(',', '.'));
@@ -327,21 +326,11 @@ class _CashSessionsHealthViewState
             reason: reason,
           );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Sesión cerrada por fuerza.'),
-          backgroundColor: MangoColors.successGreen,
-        ),
-      );
+      AppToast.success(context, 'Sesión cerrada por fuerza.');
       _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('No se pudo cerrar: $e'),
-          backgroundColor: const Color(0xFFEF4444),
-        ),
-      );
+      AppToast.error(context, 'No se pudo cerrar: $e');
     }
   }
 }

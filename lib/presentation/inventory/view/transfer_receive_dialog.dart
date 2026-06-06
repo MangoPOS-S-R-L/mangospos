@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 
 import '../state/transfers_state.dart';
 import '../viewmodel/transfers_viewmodel.dart';
@@ -101,7 +102,6 @@ class _TransferReceiveDialogState
       _errorMessage = null;
     });
     final navigator = Navigator.of(context);
-    final messenger = ScaffoldMessenger.of(context);
     try {
       final payload = _items
           .map(
@@ -120,13 +120,10 @@ class _TransferReceiveDialogState
           );
       if (!mounted) return;
       navigator.pop();
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            'Transferencia ${widget.transfer.transferNumber} recibida'
-            '${_totalVariance > 0 ? ' (merma: ${_totalVariance.toStringAsFixed(2)})' : ''}',
-          ),
-        ),
+      AppToast.info(
+        context,
+        'Transferencia ${widget.transfer.transferNumber} recibida'
+        '${_totalVariance > 0 ? ' (merma: ${_totalVariance.toStringAsFixed(2)})' : ''}',
       );
     } catch (e) {
       if (!mounted) return;

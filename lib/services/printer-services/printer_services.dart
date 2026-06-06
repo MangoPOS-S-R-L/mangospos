@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
@@ -110,9 +111,7 @@ class _PrinterWidgetState extends State<PrinterWidget> {
 
   void _print() {
     if (selectedAgent == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('No hay agentes disponibles')));
+      AppToast.info(context, 'No hay agentes disponibles');
       return;
     }
 

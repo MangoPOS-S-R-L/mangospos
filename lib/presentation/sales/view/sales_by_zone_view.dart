@@ -10,27 +10,24 @@ import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/presentation/cashier/widgets/open_cash_dialog.dart';
 import 'package:mangopos/presentation/sales/state/sales_zoom_provider.dart';
+import 'package:mangopos/presentation/sales/state/sales_view_mode_provider.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
 import 'package:mangopos/presentation/sales/widgets/sales_zoom_control.dart';
+import 'package:mangopos/presentation/sales/widgets/zone_floor_map.dart';
+import 'package:mangopos/presentation/sales/view/theme/table_status_style.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
 import 'package:mangopos/presentation/sales/widgets/transfer_session_dialog.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/data/models/table_status.dart';
-import 'package:mangopos/domain/models/ventas_table.dart' as ventas;
 import 'package:mangopos/presentation/sales/view/theme/sales_theme.dart';
 import 'package:mangopos/presentation/sales/widgets/table_card.dart';
 import 'package:mangopos/app/widgets/skeleton_loading.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
 
-/// Una mesa con sesion abierta pero sin orders ni items abiertos esta
-/// "ocupada fantasma" — el cajero la abrio, no agrego productos y se
-/// salio. La consideramos disponible visualmente; el sweep del
-/// viewmodel cierra la sesion huerfana en background.
-bool _isEffectivelyEmpty(TableStatus ts) {
-  return ts.sessionId == null ||
-      (ts.itemsCount == 0 && ts.ordersCount == 0);
-}
+/// Delega al helper compartido [isTableEffectivelyEmpty] para que grid y
+/// floor map apliquen el mismo criterio de "ocupada fantasma".
+bool _isEffectivelyEmpty(TableStatus ts) => isTableEffectivelyEmpty(ts);
 
 class SalesByZoneView extends ConsumerStatefulWidget {
   final String businessId;
@@ -167,6 +164,7 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
     final isCashOpen = ref.watch(
       cashierViewModelProvider.select((vm) => vm.isCashOpen),
     );
+    final viewMode = ref.watch(salesViewModeProvider);
     final hasZones = zones.isNotEmpty;
 
     _updateTabController(zones);
@@ -219,7 +217,12 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
         controller: _tabController!,
         children: zones
             .map(
-              (zone) => _ZoneGrid(zoneId: zone.id, canOpenTables: isCashOpen),
+              (zone) => viewMode == SalesZoneViewMode.map
+                  ? _ZoneFloorMapView(
+                      zoneId: zone.id,
+                      canOpenTables: isCashOpen,
+                    )
+                  : _ZoneGrid(zoneId: zone.id, canOpenTables: isCashOpen),
             )
             .toList(),
       );
@@ -337,6 +340,27 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
             const SizedBox(width: 12),
           ] else
             const SizedBox(width: 8),
+          // Toggle cuadrícula ↔ floor map. Mantiene el grid histórico y
+          // permite ver las mesas en su posición física del salón.
+          IconButton(
+            onPressed: () =>
+                ref.read(salesViewModeProvider.notifier).toggle(),
+            icon: Icon(
+              viewMode == SalesZoneViewMode.map
+                  ? Icons.grid_view_rounded
+                  : Icons.map_outlined,
+              size: 20,
+              color: SalesTheme.mutedForeground,
+            ),
+            tooltip: viewMode == SalesZoneViewMode.map
+                ? 'Ver en cuadrícula'
+                : 'Ver plano del salón',
+            padding: const EdgeInsets.all(8),
+            constraints: const BoxConstraints(
+              minWidth: 36,
+              minHeight: 36,
+            ),
+          ),
           IconButton(
             onPressed: _loadData,
             icon: const Icon(
@@ -400,12 +424,12 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
           backgroundColor: SalesTheme.background,
           elevation: 0,
           automaticallyImplyLeading: false,
-          toolbarHeight: 96,
+          toolbarHeight: 80,
           titleSpacing: 0,
           title: Padding(
             padding: EdgeInsets.symmetric(
               horizontal: hPadding,
-              vertical: 12,
+              vertical: 8,
             ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.center,
@@ -681,10 +705,10 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
               final isCompactDesk = ResponsiveHelper.isCompactDesktop(context);
 
               final padding = isCompact
-                  ? const EdgeInsets.fromLTRB(12, 12, 12, 12)
+                  ? const EdgeInsets.fromLTRB(12, 6, 12, 12)
                   : isCompactDesk
-                      ? const EdgeInsets.all(14)
-                      : const EdgeInsets.all(24);
+                      ? const EdgeInsets.fromLTRB(14, 4, 14, 14)
+                      : const EdgeInsets.fromLTRB(24, 4, 24, 24);
               final horizontalPad = isCompact
                   ? 24.0
                   : isCompactDesk
@@ -734,7 +758,7 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
                         (s) => s.openingTables.contains(table.tableId),
                       ));
                   return TableCard(
-                    table: _convertTableStatusToVentasTable(table),
+                    table: ventasTableFromStatus(table),
                     isOpening: opening,
                     enabled: widget.canOpenTables,
                     onTap: widget.canOpenTables
@@ -745,7 +769,8 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
                     // tiene sesión abierta (sessionId != null).
                     onLongPress:
                         widget.canOpenTables && table.sessionId != null
-                        ? () => _handleMergeTable(context, ref, table)
+                        ? () =>
+                            _handleMergeTable(context, ref, table, widget.zoneId)
                         : null,
                   );
                 },
@@ -756,16 +781,175 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
       ],
     );
   }
+}
 
-  /// PRD-12 F3: long-press en mesa ocupada → abre dialog "Unir mesas"
-  /// en modo `mergeOnly`. Solo lista mesas también ocupadas como
-  /// destino. Tras un merge exitoso refresca la zona actual (mesa
-  /// origen quedó vacía) — la zona destino se refresca al volver.
-  Future<void> _handleMergeTable(
-    BuildContext context,
-    WidgetRef ref,
-    TableStatus ts,
-  ) async {
+/// Vista de floor map de una zona. Espejo de [_ZoneGrid] (mismo refresh
+/// de 10s, mismos handlers de cajero) pero dibujando las mesas en su
+/// posición física en vez de en cuadrícula. Reúsa la geometría que el
+/// viewmodel cargó en `layoutByZone` y la fusiona con el estado en vivo
+/// (`statusByZone`) por `tableId`.
+class _ZoneFloorMapView extends ConsumerStatefulWidget {
+  final String zoneId;
+  final bool canOpenTables;
+
+  /// Cuando es `true` (default) el mapa muestra el botón de expandir. En
+  /// la vista a pantalla completa se pasa `false` para no anidar otro.
+  final bool allowExpand;
+
+  const _ZoneFloorMapView({
+    required this.zoneId,
+    required this.canOpenTables,
+    this.allowExpand = true,
+  });
+
+  @override
+  ConsumerState<_ZoneFloorMapView> createState() => _ZoneFloorMapViewState();
+}
+
+class _ZoneFloorMapViewState extends ConsumerState<_ZoneFloorMapView> {
+  Timer? _zoneRefreshTimer;
+  static const Duration _zoneRefreshInterval = Duration(seconds: 10);
+
+  @override
+  void initState() {
+    super.initState();
+    // Geometría fresca al montar (refleja ediciones hechas en Ajustes).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref
+          .read(byZoneVmProvider.notifier)
+          .loadZoneLayout(widget.zoneId, force: true);
+    });
+    _startZoneRefresh();
+  }
+
+  void _startZoneRefresh() {
+    _zoneRefreshTimer?.cancel();
+    ref.read(byZoneVmProvider.notifier).loadZoneStatus(widget.zoneId);
+    _zoneRefreshTimer = Timer.periodic(_zoneRefreshInterval, (timer) {
+      if (mounted) {
+        ref.read(byZoneVmProvider.notifier).loadZoneStatus(widget.zoneId);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _zoneRefreshTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final status = ref.watch(
+      byZoneVmProvider.select((s) => s.statusByZone[widget.zoneId]),
+    );
+    final layout = ref.watch(
+      byZoneVmProvider.select((s) => s.layoutByZone[widget.zoneId]),
+    );
+    final openingTables = ref.watch(
+      byZoneVmProvider.select((s) => s.openingTables),
+    );
+
+    // Esperamos a tener la geometría (fuente de las posiciones). El
+    // estado puede llegar después; las mesas sin fila de estado se pintan
+    // como disponibles.
+    if (layout == null || status == null) {
+      return const ZoneTablesSkeleton();
+    }
+
+    if (layout.isEmpty) {
+      return const Center(child: Text('No hay mesas en esta zona'));
+    }
+
+    final statusByTableId = {for (final ts in status) ts.tableId: ts};
+
+    return Column(
+      children: [
+        if (!widget.canOpenTables)
+          Container(
+            margin: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.red.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.red.withValues(alpha: 0.2)),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.lock_outline, size: 16, color: Colors.red),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Caja cerrada. Abre caja para abrir mesas.',
+                    style: TextStyle(
+                      color: Colors.red,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        Expanded(
+          child: ZoneFloorMap(
+            tables: layout,
+            statusByTableId: statusByTableId,
+            openingTableIds: openingTables,
+            enabled: widget.canOpenTables,
+            onTapTable: (ts) => _handleTableAction(context, ref, ts),
+            onLongPressTable: (ts) =>
+                _handleMergeTable(context, ref, ts, widget.zoneId),
+            onExpand: widget.allowExpand ? () => _openFullscreen() : null,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Abre el plano a pantalla completa en una ruta nueva. Reusa la misma
+  /// vista (con su realtime y handlers) pero sin el botón de expandir.
+  void _openFullscreen() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+          backgroundColor: SalesTheme.background,
+          appBar: AppBar(
+            backgroundColor: SalesTheme.background,
+            elevation: 0,
+            title: const Text(
+              'Plano del salón',
+              style: TextStyle(
+                color: SalesTheme.foreground,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            iconTheme: const IconThemeData(color: SalesTheme.foreground),
+          ),
+          body: _ZoneFloorMapView(
+            zoneId: widget.zoneId,
+            canOpenTables: widget.canOpenTables,
+            allowExpand: false,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// PRD-12 F3: long-press en mesa ocupada → abre dialog "Unir mesas"
+/// en modo `mergeOnly`. Solo lista mesas también ocupadas como
+/// destino. Tras un merge exitoso refresca la zona [zoneId] (mesa
+/// origen quedó vacía) — la zona destino se refresca al volver.
+///
+/// Top-level para compartirse entre el grid ([_ZoneGrid]) y el floor
+/// map ([_ZoneFloorMapView]) sin duplicar el flujo de cajero.
+Future<void> _handleMergeTable(
+  BuildContext context,
+  WidgetRef ref,
+  TableStatus ts,
+  String zoneId,
+) async {
     final messenger = ScaffoldMessenger.of(context);
     final sessionId = ts.sessionId;
     if (sessionId == null || sessionId.isEmpty) {
@@ -813,7 +997,7 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
     // Refrescar la zona actual: la mesa origen ya no tiene cuenta.
     await ref
         .read(byZoneVmProvider.notifier)
-        .loadZoneStatus(widget.zoneId, emitError: false);
+        .loadZoneStatus(zoneId, emitError: false);
   }
 
   Future<void> _handleTableAction(
@@ -1087,47 +1271,6 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
     focusNode.dispose();
     return result;
   }
-
-  /// Convierte TableStatus a VentasTable para el  nuevo TableCard
-  ventas.VentasTable _convertTableStatusToVentasTable(TableStatus ts) {
-    // Determinar el estado basado en sessionId, items/orders, y status
-    ventas.TableStatus status;
-    if (_isEffectivelyEmpty(ts)) {
-      status = ventas.TableStatus.disponible;
-    } else {
-      final statusRaw = (ts.status ?? '').toLowerCase();
-      if (statusRaw == 'paying' ||
-          statusRaw == 'checkout' ||
-          statusRaw == 'payment') {
-        status = ventas.TableStatus.pagando;
-      } else {
-        status = ventas.TableStatus.ocupado;
-      }
-    }
-
-    // Formatear el tiempo
-    String? time;
-    if (ts.minutesOpen != null && ts.minutesOpen! > 0) {
-      final hours = ts.minutesOpen! ~/ 60;
-      final mins = ts.minutesOpen! % 60;
-      time =
-          '${hours.toString().padLeft(2, '0')}:${mins.toString().padLeft(2, '0')}';
-    }
-
-    return ventas.VentasTable(
-      id: ts.tableId,
-      code: ts.code,
-      status: status,
-      zone: ts.zoneId,
-      guests: ts.peopleCount > 0 ? ts.peopleCount : null,
-      time: time,
-      total: ts.total > 0 ? ts.total : null,
-      waiterId: ts.sessionId, // Usamos sessionId como waiterId temporalmente
-      waiterName: ts.waiterName,
-      customerName: ts.customerName,
-    );
-  }
-}
 
 class _OfflineBanner extends StatelessWidget {
   final DateTime? lastSyncAt;

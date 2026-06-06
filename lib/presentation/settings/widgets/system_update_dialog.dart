@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:io' show Platform;
 import 'package:auto_updater/auto_updater.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 
 class SystemUpdateDialog extends StatefulWidget {
   const SystemUpdateDialog({super.key});
@@ -67,12 +68,7 @@ class _SystemUpdateDialogState extends State<SystemUpdateDialog> {
         await autoUpdater.checkForUpdates();
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('No se pudo iniciar la actualización: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
+          AppToast.error(context, 'No se pudo iniciar la actualización: $e');
         }
       }
     }

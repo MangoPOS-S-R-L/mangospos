@@ -18,6 +18,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../app/router/routes.dart';
 import '../../app/theme/mango_colors.dart';
+import '../../core/utils/app_toast.dart';
 import '../../services/session/session_controller.dart';
 
 const String _kSupportEmail = 'soporte@mangopos.do';
@@ -263,15 +264,11 @@ class _PendingApprovalScreenState
 
   void _showSnack(BuildContext context, String message,
       {bool isError = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        backgroundColor:
-            isError ? const Color(0xFFDC2626) : const Color(0xFF059669),
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 5),
-        content: Text(message),
-      ),
-    );
+    if (isError) {
+      AppToast.error(context, message);
+    } else {
+      AppToast.success(context, message);
+    }
   }
 }
 

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 
 import '../state/inventory_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
@@ -222,7 +223,6 @@ class _AdjustDialogState extends ConsumerState<_AdjustDialog> {
       _errorMessage = null;
     });
     final navigator = Navigator.of(context);
-    final messenger = ScaffoldMessenger.of(context);
     try {
       await ref
           .read(inventoryViewModelProvider)
@@ -236,12 +236,9 @@ class _AdjustDialogState extends ConsumerState<_AdjustDialog> {
           );
       if (!mounted) return;
       navigator.pop();
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            'Ajuste registrado: ${_delta > 0 ? '+' : ''}${_delta.toStringAsFixed(2)} ${widget.item.unit}',
-          ),
-        ),
+      AppToast.info(
+        context,
+        'Ajuste registrado: ${_delta > 0 ? '+' : ''}${_delta.toStringAsFixed(2)} ${widget.item.unit}',
       );
     } catch (e) {
       if (!mounted) return;

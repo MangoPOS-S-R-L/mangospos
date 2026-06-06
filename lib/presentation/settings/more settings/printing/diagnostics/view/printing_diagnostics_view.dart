@@ -18,6 +18,7 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/core/printing/agent_discovery.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
 import 'package:mangopos/core/services/local_print_service.dart';
 import 'package:mangopos/data/models/printing_models.dart';
@@ -154,15 +155,11 @@ class _PrintingDiagnosticsViewState
       await LocalPrintService.publishAgentUrl(agent.baseUrl, _businessId!);
     }
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          publish
-              ? 'Hub activado y compartido con el negocio: ${agent.baseUrl}'
-              : 'Hub activado en este dispositivo: ${agent.baseUrl}',
-        ),
-        backgroundColor: const Color(0xFF22C55E),
-      ),
+    AppToast.success(
+      context,
+      publish
+          ? 'Hub activado y compartido con el negocio: ${agent.baseUrl}'
+          : 'Hub activado en este dispositivo: ${agent.baseUrl}',
     );
     await _load();
   }
@@ -238,9 +235,7 @@ class _PrintingDiagnosticsViewState
     final port = int.tryParse(portController.text.trim()) ?? 4000;
     if (ip.isEmpty) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('IP requerida.')),
-        );
+        AppToast.info(context, 'IP requerida.');
       }
       return;
     }
@@ -250,12 +245,7 @@ class _PrintingDiagnosticsViewState
       await LocalPrintService.publishAgentUrl(url, _businessId!);
     }
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Hub manual activado: $url'),
-        backgroundColor: const Color(0xFF22C55E),
-      ),
-    );
+    AppToast.success(context, 'Hub manual activado: $url');
     await _load();
   }
 

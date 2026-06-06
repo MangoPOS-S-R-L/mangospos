@@ -12,6 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/repositories/production_repository.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 
@@ -70,9 +71,7 @@ class _ProductionOrderDetailViewState
       await _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo iniciar: $e')),
-      );
+      AppToast.error(context, 'No se pudo iniciar: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -145,9 +144,7 @@ class _ProductionOrderDetailViewState
       await _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo cancelar: $e')),
-      );
+      AppToast.error(context, 'No se pudo cancelar: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }

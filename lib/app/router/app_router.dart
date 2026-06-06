@@ -753,7 +753,12 @@ class AppRouter {
           ),
           GoRoute(
             path: AppRoutes.promosCenter,
-            builder: (context, state) => const DiscountsView(),
+            // ?offers=1 abre el modo solo-ofertas (sin cupones ni gift cards),
+            // usado por la entrada "Ofertas y Promociones" de Ajustes. Sin el
+            // query param se muestra el hub completo (Fidelización).
+            builder: (context, state) => DiscountsView(
+              offersOnly: state.uri.queryParameters['offers'] == '1',
+            ),
           ),
 
           // ===================== GESTIÓN DE PRODUCTOS (MENÚ) =====================

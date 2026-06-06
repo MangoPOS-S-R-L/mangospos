@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/areas/viewmodel/print_areas_viewmodel.dart';
@@ -93,9 +94,7 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
   Future<void> _toggleOpenDrawerOnCash(bool enabled) async {
     final businessId = _resolvedBusinessId;
     if (businessId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo resolver el negocio activo.')),
-      );
+      AppToast.info(context, 'No se pudo resolver el negocio activo.');
       return;
     }
     setState(() {
@@ -111,14 +110,11 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
       ref.invalidate(openDrawerOnCashProvider(businessId));
       if (!mounted) return;
       setState(() => _busy = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            enabled
-                ? 'Se abrirá la gaveta automáticamente en pagos en efectivo.'
-                : 'La gaveta ya no se abrirá automáticamente.',
-          ),
-        ),
+      AppToast.info(
+        context,
+        enabled
+            ? 'Se abrirá la gaveta automáticamente en pagos en efectivo.'
+            : 'La gaveta ya no se abrirá automáticamente.',
       );
     } catch (_) {
       if (!mounted) return;
@@ -126,9 +122,7 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
         _busy = false;
         _openDrawerOnCash = !enabled;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo guardar el cambio.')),
-      );
+      AppToast.error(context, 'No se pudo guardar el cambio.');
     }
   }
 
@@ -148,13 +142,11 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
             enabled: enabled,
           );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(enabled
+      AppToast.info(
+          context,
+          enabled
               ? 'Multi-copia activada para ${kind == 'precheck' ? 'pre-cuentas' : 'recibos'}.'
-              : 'Multi-copia desactivada.'),
-        ),
-      );
+              : 'Multi-copia desactivada.');
     } catch (e) {
       // Revertir en caso de error.
       if (!mounted) return;
@@ -162,9 +154,7 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
         if (kind == 'precheck') _precheckMultiCopy = !enabled;
         if (kind == 'receipt') _receiptMultiCopy = !enabled;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo guardar el cambio: $e')),
-      );
+      AppToast.error(context, 'No se pudo guardar el cambio: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -195,12 +185,9 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
       await _bootstrap();
       if (!mounted) return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          ok ? 'Asignación guardada.' : 'No se pudo guardar la asignación.',
-        ),
-      ),
+    AppToast.info(
+      context,
+      ok ? 'Asignación guardada.' : 'No se pudo guardar la asignación.',
     );
   }
 
@@ -230,12 +217,9 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
       await _bootstrap();
       if (!mounted) return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          ok ? 'Asignación eliminada.' : 'No se pudo eliminar la asignación.',
-        ),
-      ),
+    AppToast.info(
+      context,
+      ok ? 'Asignación eliminada.' : 'No se pudo eliminar la asignación.',
     );
   }
 
@@ -254,9 +238,7 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
   Future<void> _updateReceiptItemDisplayMode(String mode) async {
     final businessId = _resolvedBusinessId;
     if (businessId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo resolver el negocio activo.')),
-      );
+      AppToast.info(context, 'No se pudo resolver el negocio activo.');
       return;
     }
 
@@ -267,14 +249,10 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
           .setReceiptItemDisplayMode(businessId: businessId, mode: mode);
       if (!mounted) return;
       setState(() => _receiptItemDisplayMode = mode);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Formato de artículos guardado.')),
-      );
+      AppToast.success(context, 'Formato de artículos guardado.');
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo guardar el formato.')),
-      );
+      AppToast.error(context, 'No se pudo guardar el formato.');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -283,9 +261,7 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
   Future<void> _updateDiscountDisplayMode(String mode) async {
     final businessId = _resolvedBusinessId;
     if (businessId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo resolver el negocio activo.')),
-      );
+      AppToast.info(context, 'No se pudo resolver el negocio activo.');
       return;
     }
 
@@ -301,16 +277,10 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
       ref.invalidate(discountDisplayModeProvider(businessId));
       if (!mounted) return;
       setState(() => _discountDisplayMode = mode);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Formato de descuento guardado.'),
-        ),
-      );
+      AppToast.success(context, 'Formato de descuento guardado.');
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo guardar el formato.')),
-      );
+      AppToast.error(context, 'No se pudo guardar el formato.');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -336,12 +306,9 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
           });
 
     if (available.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'No quedan impresoras disponibles para asignar a este comprobante.',
-          ),
-        ),
+      AppToast.info(
+        context,
+        'No quedan impresoras disponibles para asignar a este comprobante.',
       );
       return;
     }

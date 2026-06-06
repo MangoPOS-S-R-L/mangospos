@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 
 class CashCloseModeView extends ConsumerStatefulWidget {
@@ -71,15 +72,11 @@ class _CashCloseModeViewState extends ConsumerState<CashCloseModeView> {
           .setAllowRecount(businessId: _resolvedBusinessId!, enabled: enabled);
       if (!mounted) return;
       setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            enabled
-                ? 'Reconteo habilitado: el cajero verá el botón «Volver a contar».'
-                : 'Reconteo deshabilitado.',
-          ),
-          duration: const Duration(seconds: 2),
-        ),
+      AppToast.info(
+        context,
+        enabled
+            ? 'Reconteo habilitado: el cajero verá el botón «Volver a contar».'
+            : 'Reconteo deshabilitado.',
       );
     } catch (e) {
       if (!mounted) return;
@@ -112,15 +109,11 @@ class _CashCloseModeViewState extends ConsumerState<CashCloseModeView> {
           );
       if (!mounted) return;
       setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            enabled
-                ? 'El cierre de caja incluirá el desglose por área de producción.'
-                : 'Desglose por área de producción desactivado en el cierre.',
-          ),
-          duration: const Duration(seconds: 2),
-        ),
+      AppToast.info(
+        context,
+        enabled
+            ? 'El cierre de caja incluirá el desglose por área de producción.'
+            : 'Desglose por área de producción desactivado en el cierre.',
       );
     } catch (e) {
       if (!mounted) return;
@@ -146,15 +139,11 @@ class _CashCloseModeViewState extends ConsumerState<CashCloseModeView> {
           .setCashCloseMode(businessId: _resolvedBusinessId!, mode: mode);
       if (!mounted) return;
       setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            mode == PosSettingsRepository.cashCloseDetailed
-                ? 'Modo de cierre: detallado (3 pasos)'
-                : 'Modo de cierre: compacto (1 paso)',
-          ),
-          duration: const Duration(seconds: 2),
-        ),
+      AppToast.info(
+        context,
+        mode == PosSettingsRepository.cashCloseDetailed
+            ? 'Modo de cierre: detallado (3 pasos)'
+            : 'Modo de cierre: compacto (1 paso)',
       );
     } catch (e) {
       if (!mounted) return;

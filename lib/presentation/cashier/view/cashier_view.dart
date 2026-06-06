@@ -8,6 +8,7 @@ import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/core/network/supabase_config.dart';
 import 'package:mangopos/core/utils/app_time.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/utils/responsive_utils.dart';
 import 'package:mangopos/presentation/cashier/widgets/blind_cash_close_dialog.dart';
 import 'package:mangopos/presentation/cashier/widgets/open_cash_dialog.dart';
@@ -149,12 +150,7 @@ class _CashierViewState extends ConsumerState<CashierView>
   Future<void> _showCloseCashDialog() async {
     final session = ref.read(cashierViewModelProvider).lastSession;
     if (session == null || session['status'] != 'open') {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No hay una sesión de caja abierta'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      AppToast.error(context, 'No hay una sesión de caja abierta');
       return;
     }
 
@@ -162,13 +158,9 @@ class _CashierViewState extends ConsumerState<CashierView>
     final currentUserId = Supabase.instance.client.auth.currentUser?.id;
     if (currentUserId == null ||
         session['user_id']?.toString() != currentUserId) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Esta sesión de caja no te pertenece. Solo el cajero que la abrió puede cerrarla.',
-          ),
-          backgroundColor: Colors.red,
-        ),
+      AppToast.error(
+        context,
+        'Esta sesión de caja no te pertenece. Solo el cajero que la abrió puede cerrarla.',
       );
       return;
     }
@@ -357,14 +349,9 @@ class _CashierViewState extends ConsumerState<CashierView>
                 closeResponse[kCloseCashSessionEnqueuedKey] == true;
             if (enqueuedOffline) {
               if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text(
-                    'Sin conexión: cierre de caja encolado. Se aplicará al reconectar.',
-                  ),
-                  backgroundColor: Colors.orange,
-                  duration: Duration(seconds: 5),
-                ),
+              AppToast.warning(
+                context,
+                'Sin conexión: cierre de caja encolado. Se aplicará al reconectar.',
               );
               GoRouter.of(context).replace(AppRoutes.cashier);
               return;
@@ -427,12 +414,7 @@ class _CashierViewState extends ConsumerState<CashierView>
     final sessionId = session['id'].toString();
     final userId = Supabase.instance.client.auth.currentUser?.id;
     if (userId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No hay usuario autenticado.'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      AppToast.error(context, 'No hay usuario autenticado.');
       return;
     }
     final openedAt = DateTime.tryParse(
@@ -531,12 +513,7 @@ class _CashierViewState extends ConsumerState<CashierView>
         }
       }
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Caja cerrada correctamente'),
-          backgroundColor: MangoColors.successGreen,
-        ),
-      );
+      AppToast.success(context, 'Caja cerrada correctamente');
       GoRouter.of(context).replace(AppRoutes.cashier);
     }
   }

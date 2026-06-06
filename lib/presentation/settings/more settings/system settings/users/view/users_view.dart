@@ -6,6 +6,7 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/security/access_control_catalog.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/repositories/employee_repository.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
 import 'package:mangopos/services/session/session_controller.dart';
@@ -305,39 +306,28 @@ class _SettingsUsersViewState extends ConsumerState<SettingsUsersView> {
 
   Future<void> _deleteUser(Employee user) async {
     if (_isProtectedOwner(user)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Solo el mismo Owner puede modificar su perfil.'),
-        ),
-      );
+      AppToast.info(
+          context, 'Solo el mismo Owner puede modificar su perfil.');
       return;
     }
     try {
       await _repo.deleteEmployee(employeeId: user.id);
       if (mounted) {
         // ignore: use_build_context_synchronously
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('${user.fullName} eliminado.')));
+        AppToast.success(context, '${user.fullName} eliminado.');
         _load();
       }
     } catch (e) {
       if (mounted) {
         // ignore: use_build_context_synchronously
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error al eliminar: $e')));
+        AppToast.error(context, 'Error al eliminar: $e');
       }
     }
   }
 
   Future<void> _openUserDialog(BuildContext context, {Employee? user}) async {
     if (user != null && _isProtectedOwner(user)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Solo el mismo Owner puede editar su perfil.'),
-        ),
-      );
+      AppToast.info(context, 'Solo el mismo Owner puede editar su perfil.');
       return;
     }
     final session = ref.read(sessionProvider);
@@ -812,12 +802,9 @@ class _UserRow extends StatelessWidget {
                       '${AppRoutes.settingsRoles}/${user.userId}/${user.id}',
                     );
                   } else {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'Este empleado no tiene un usuario de acceso vinculado.',
-                        ),
-                      ),
+                    AppToast.info(
+                      context,
+                      'Este empleado no tiene un usuario de acceso vinculado.',
                     );
                   }
                   break;
@@ -906,12 +893,9 @@ class _UserRow extends StatelessWidget {
 
   void _showResetPasswordDialog(BuildContext context, Employee user) {
     if (user.userId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Este empleado no tiene un usuario de acceso vinculado.',
-          ),
-        ),
+      AppToast.info(
+        context,
+        'Este empleado no tiene un usuario de acceso vinculado.',
       );
       return;
     }
@@ -946,9 +930,7 @@ class _UserRow extends StatelessWidget {
             onPressed: () {
               // TODO: Implementar desactivación
               Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Usuario desactivado')),
-              );
+              AppToast.success(context, 'Usuario desactivado');
             },
             child: const Text('Desactivar'),
           ),
@@ -1071,12 +1053,9 @@ class _UserCardMobile extends StatelessWidget {
                               '${AppRoutes.settingsRoles}/${user.userId}/${user.id}',
                             );
                           } else {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  'Este empleado no tiene un usuario de acceso vinculado.',
-                                ),
-                              ),
+                            AppToast.info(
+                              context,
+                              'Este empleado no tiene un usuario de acceso vinculado.',
                             );
                           }
                           break;
@@ -2067,19 +2046,11 @@ class _UserDialogState extends State<_UserDialog> {
         _lastName.text.isEmpty ||
         _email.text.isEmpty ||
         _phone.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Completa nombre, apellido, email y teléfono.'),
-        ),
-      );
+      AppToast.info(context, 'Completa nombre, apellido, email y teléfono.');
       return;
     }
     if (_selectedRoles.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Selecciona al menos un cargo para el usuario.'),
-        ),
-      );
+      AppToast.info(context, 'Selecciona al menos un cargo para el usuario.');
       return;
     }
 
@@ -2089,20 +2060,12 @@ class _UserDialogState extends State<_UserDialog> {
     // estaba (no queremos forzar re-teclearlo cada vez que se modifica otro
     // campo). Solo exigimos PIN al crear un usuario nuevo.
     if (!isEditing && normalizedPin.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Debes asignar un PIN de 4 dígitos al usuario.'),
-        ),
-      );
+      AppToast.info(context, 'Debes asignar un PIN de 4 dígitos al usuario.');
       return;
     }
     if (normalizedPin.isNotEmpty &&
         !RegExp(r'^\d{4}$').hasMatch(normalizedPin)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('El PIN debe ser numérico y de 4 dígitos.'),
-        ),
-      );
+      AppToast.info(context, 'El PIN debe ser numérico y de 4 dígitos.');
       return;
     }
 
@@ -2146,11 +2109,8 @@ class _UserDialogState extends State<_UserDialog> {
           if (newPassword.length < 6) {
             setState(() => _saving = false);
             if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('La contraseña debe tener al menos 6 caracteres.'),
-                ),
-              );
+              AppToast.info(
+                  context, 'La contraseña debe tener al menos 6 caracteres.');
             }
             return;
           }
@@ -2176,9 +2136,7 @@ class _UserDialogState extends State<_UserDialog> {
 
         if (mounted) {
           Navigator.of(context).pop(true);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Usuario actualizado correctamente.')),
-          );
+          AppToast.success(context, 'Usuario actualizado correctamente.');
         }
       } else {
         // CREAR NUEVO USUARIO
@@ -2219,21 +2177,12 @@ class _UserDialogState extends State<_UserDialog> {
 
         if (mounted) {
           Navigator.of(context).pop(true);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Usuario creado correctamente.')),
-          );
+          AppToast.success(context, 'Usuario creado correctamente.');
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_friendlyUserSaveError(e)),
-            backgroundColor: const Color(0xFFEF4444),
-            behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 6),
-          ),
-        );
+        AppToast.error(context, _friendlyUserSaveError(e));
       }
     } finally {
       if (mounted) {
@@ -2914,11 +2863,8 @@ class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
   Future<void> _handleReset() async {
     final password = widget.passwordController.text.trim();
     if (password.isEmpty || password.length < 6) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('La contraseña debe tener al menos 6 caracteres.'),
-        ),
-      );
+      AppToast.info(
+          context, 'La contraseña debe tener al menos 6 caracteres.');
       return;
     }
 
@@ -2930,20 +2876,15 @@ class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
       );
       if (mounted) {
         Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Contraseña de ${widget.user.fullName} actualizada correctamente.',
-            ),
-          ),
+        AppToast.success(
+          context,
+          'Contraseña de ${widget.user.fullName} actualizada correctamente.',
         );
       }
     } catch (e) {
       if (mounted) {
         setState(() => _saving = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error al cambiar contraseña: $e')),
-        );
+        AppToast.error(context, 'Error al cambiar contraseña: $e');
       }
     }
   }

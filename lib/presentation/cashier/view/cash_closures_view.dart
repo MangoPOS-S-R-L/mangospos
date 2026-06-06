@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/utils/app_time.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/models/payment_models.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -380,12 +381,7 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('No se pudo cargar el resumen del cierre: $e'),
-          backgroundColor: Colors.red[600],
-        ),
-      );
+      AppToast.error(context, 'No se pudo cargar el resumen del cierre: $e');
     }
   }
 

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/presentation/settings/more settings/printing/areas/viewmodel/print_areas_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more settings/printing/printers/viewmodel/printers_viewmodel.dart';
@@ -203,7 +204,6 @@ class _PrintingAreaAssignmentsPageState
     if (selectedPrinter == null) return;
     if (!mounted) return;
 
-    final messenger = ScaffoldMessenger.of(context);
     final ok = await areasCtrl.linkAreaPrinter(
       areaId: area.id,
       printerId: selectedPrinter.id,
@@ -213,18 +213,15 @@ class _PrintingAreaAssignmentsPageState
 
     if (ok) {
       await _loadAssignedPrinters(area.id);
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            'Impresora ${selectedPrinter.name} asignada a ${area.name}.',
-          ),
-        ),
+      AppToast.success(
+        context,
+        'Impresora ${selectedPrinter.name} asignada a ${area.name}.',
       );
     } else {
       final message =
           ref.read(printingAreasViewModelProvider).errorMessage ??
           'No se pudo asignar la impresora.';
-      messenger.showSnackBar(SnackBar(content: Text(message)));
+      AppToast.error(context, message);
     }
 
     await printersCtrl.load(businessId: widget.businessId, force: true);
@@ -255,7 +252,6 @@ class _PrintingAreaAssignmentsPageState
     if (confirmed != true) return;
     if (!mounted) return;
 
-    final messenger = ScaffoldMessenger.of(context);
     final ok = await ref
         .read(printingAreasViewModelProvider.notifier)
         .unlinkAreaPrinter(
@@ -271,15 +267,12 @@ class _PrintingAreaAssignmentsPageState
       await _loadAssignedPrinters(area.id);
     }
 
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(
-          ok
-              ? 'Asignación eliminada.'
-              : (ref.read(printingAreasViewModelProvider).errorMessage ??
-                    'No se pudo eliminar la asignación.'),
-        ),
-      ),
+    AppToast.info(
+      context,
+      ok
+          ? 'Asignación eliminada.'
+          : (ref.read(printingAreasViewModelProvider).errorMessage ??
+                'No se pudo eliminar la asignación.'),
     );
   }
 
@@ -814,20 +807,15 @@ class _EditAreaDialogState extends State<_EditAreaDialog> {
   Future<void> _save() async {
     final name = _nameCtrl.text.trim();
     if (name.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('El nombre del área es obligatorio.')),
-      );
+      AppToast.info(context, 'El nombre del área es obligatorio.');
       return;
     }
 
     final orderText = _orderCtrl.text.trim();
     final order = orderText.isEmpty ? 0 : int.tryParse(orderText);
     if (order == null || order < 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('El orden debe ser un número positivo (0 o mayor).'),
-        ),
-      );
+      AppToast.info(
+          context, 'El orden debe ser un número positivo (0 o mayor).');
       return;
     }
 

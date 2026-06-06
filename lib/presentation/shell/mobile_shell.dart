@@ -13,6 +13,7 @@ import '../../app/router/routes.dart';
 import '../../app/theme/mango_colors.dart';
 import '../../core/business/business_features_provider.dart';
 import '../../core/offline/offline_queue_status_provider.dart';
+import '../../core/utils/app_toast.dart';
 import '../../data/repositories/pos_settings_repository.dart';
 import 'offline_logout_guard.dart';
 import '../../services/session/session_controller.dart';
@@ -143,11 +144,7 @@ class _MobileShellState extends ConsumerState<MobileShell> {
                     .read(sessionProvider.notifier)
                     .hasPermission(d.permission!);
                 if (!ok) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('No tienes permiso para acceder.'),
-                    ),
-                  );
+                  AppToast.info(context, 'No tienes permiso para acceder.');
                   return;
                 }
               }

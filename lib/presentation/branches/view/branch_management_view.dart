@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:mangopos/core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 
 final branchManagementProvider =
@@ -250,13 +251,9 @@ class _BranchManagementViewState extends ConsumerState<BranchManagementView> {
                                   .read(sessionProvider.notifier)
                                   .switchBusiness(branch.id);
                               if (!context.mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  behavior: SnackBarBehavior.floating,
-                                  content: Text(
-                                    'Ahora estás trabajando en ${branch.name}.',
-                                  ),
-                                ),
+                              AppToast.info(
+                                context,
+                                'Ahora estás trabajando en ${branch.name}.',
                               );
                             },
                       onDelete: (isActive || !canManage)
@@ -490,10 +487,9 @@ class _BranchManagementViewState extends ConsumerState<BranchManagementView> {
                             onPressed: () async {
                               if (companyCtrl.text.trim().isEmpty ||
                                   branchCtrl.text.trim().isEmpty) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('Completa negocio y sucursal.'),
-                                  ),
+                                AppToast.info(
+                                  context,
+                                  'Completa negocio y sucursal.',
                                 );
                                 return;
                               }
@@ -508,13 +504,9 @@ class _BranchManagementViewState extends ConsumerState<BranchManagementView> {
                               if (!context.mounted) return;
                               Navigator.of(dialogContext).pop();
                               if (copyProducts) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                      'Sucursal creada con productos copiados exitosamente.',
-                                    ),
-                                    backgroundColor: Color(0xFF16A34A),
-                                  ),
+                                AppToast.success(
+                                  context,
+                                  'Sucursal creada con productos copiados exitosamente.',
                                 );
                               }
                             },
@@ -563,14 +555,10 @@ class _BranchManagementViewState extends ConsumerState<BranchManagementView> {
       try {
         await ref.read(branchManagementProvider).deleteBranch(branch.id);
         if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Sucursal "${branch.name}" eliminada.')),
-        );
+        AppToast.success(context, 'Sucursal "${branch.name}" eliminada.');
       } catch (e) {
         if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
+        AppToast.error(context, 'Error: $e');
       }
     }
   }

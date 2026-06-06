@@ -313,6 +313,43 @@ class ZonesTablesViewModel extends Notifier<ZonesTablesState> {
     }
   }
 
+  // ---------------- LAYOUT / FLOOR MAP ----------------
+
+  /// Persiste la geometría de UNA mesa (posición/forma/tamaño/rotación/
+  /// capacidad/label) editada en el plano. No toca `state` ni sesiones;
+  /// es seguro aunque la mesa esté ocupada. Refresca la zona al terminar.
+  Future<void> updateTableLayout(DiningTable table, {String? zoneId}) async {
+    state = state.copyWith(error: null);
+    try {
+      final repo = ref.read(zonesRepoProvider);
+      await repo.updateTableLayout(table);
+      if (zoneId != null) await refreshTables(zoneId);
+    } catch (e) {
+      final msg = _friendlyError(e);
+      state = state.copyWith(error: msg);
+      throw ZonesTablesException(msg);
+    }
+  }
+
+  /// Persiste el layout de TODAS las mesas editadas en el plano (bulk),
+  /// usado por "Guardar diseño". Refresca la zona al terminar.
+  Future<void> saveLayout(String zoneId, List<DiningTable> tables) async {
+    state = state.copyWith(loading: true, error: null);
+    try {
+      final repo = ref.read(zonesRepoProvider);
+      await repo.bulkUpdateLayout(tables);
+      await refreshTables(zoneId);
+    } catch (e) {
+      final msg = _friendlyError(e);
+      state = state.copyWith(loading: false, error: msg);
+      throw ZonesTablesException(msg);
+    } finally {
+      if (state.loading) {
+        state = state.copyWith(loading: false);
+      }
+    }
+  }
+
   /// Borra una mesa. Pre-check: bloquea si tiene sesión abierta.
   ///
   /// Estrategia en cascada:

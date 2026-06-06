@@ -9,6 +9,7 @@ import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/app/widgets/date_range_modal.dart';
 import 'package:mangopos/core/printing/print_error_humanizer.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/data/models/sales_models.dart';
@@ -780,11 +781,7 @@ mixin _PaymentActionsMixin {
     if (!ref
         .read(sessionProvider.notifier)
         .hasPermission('pagos.reimprimir_recibo')) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No tienes permiso para reimprimir recibos.'),
-        ),
-      );
+      AppToast.info(context, 'No tienes permiso para reimprimir recibos.');
       return;
     }
     final orderId = payment['order_id']?.toString() ?? '';
@@ -800,10 +797,7 @@ mixin _PaymentActionsMixin {
     // específica en el mensaje de error humano (humanizePrintError).
     PrinterConfig? assignedPrinter;
     try {
-      final scaffold = ScaffoldMessenger.of(context);
-      scaffold.showSnackBar(
-        const SnackBar(content: Text('Generando impresión...')),
-      );
+      AppToast.info(context, 'Generando impresión...');
 
       final salesRepo = ref.read(salesRepositoryProvider);
       final businessId = ref.read(sessionProvider).activeBusinessId;
@@ -1094,9 +1088,7 @@ mixin _PaymentActionsMixin {
       );
 
       if (context.mounted) {
-        scaffold.showSnackBar(
-          const SnackBar(content: Text('Impresión enviada correctamente.')),
-        );
+        AppToast.success(context, 'Impresión enviada correctamente.');
       }
     } catch (e) {
       if (context.mounted) {
@@ -1170,11 +1162,7 @@ mixin _PaymentActionsMixin {
     if (!ref
         .read(sessionProvider.notifier)
         .hasPermission('pagos.anular_pago')) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No tienes permiso para anular pagos.'),
-        ),
-      );
+      AppToast.info(context, 'No tienes permiso para anular pagos.');
       return;
     }
 
@@ -1235,9 +1223,7 @@ mixin _PaymentActionsMixin {
     // 3. Ejecutar anulación
     try {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Anulando venta...')));
+      AppToast.info(context, 'Anulando venta...');
 
       final salesRepo = ref.read(salesRepositoryProvider);
       await salesRepo.annulPayment(
@@ -1248,12 +1234,7 @@ mixin _PaymentActionsMixin {
       );
 
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Venta anulada correctamente.'),
-          backgroundColor: Colors.green,
-        ),
-      );
+      AppToast.success(context, 'Venta anulada correctamente.');
 
       onRefresh();
     } catch (e) {

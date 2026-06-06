@@ -50,6 +50,8 @@ import 'package:mangopos/presentation/sales/widgets/transfer_session_dialog.dart
 import 'package:mangopos/data/models/table_status.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:mangopos/presentation/sales/view/widgets/order_screen/order_items_list.dart'
+    show cleanOrderItemNote;
 import 'package:mangopos/presentation/sales/view/widgets/product_detail_modal.dart';
 import 'package:mangopos/presentation/sales/view/table_selector_modal.dart';
 import 'payment_split_screen.dart';
@@ -698,6 +700,22 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     MenuProduct product,
   ) async {
     final vm = ref.read(currentOrderProvider.notifier);
+
+    // Tile de OFERTA vendible: UNA línea (cantidad N) a precio original con el
+    // descuento del deal (se ve abajo en los totales), optimista e instantánea.
+    if (product.itemType == 'offer') {
+      await vm.addOfferDeal(
+        menuItemId: product.id,
+        lineQty: product.offerLineQty ?? 1,
+        discount: product.offerDiscount ?? 0,
+        name: product.name,
+        originalPrice: product.price,
+        promotionId: product.offerPromoId,
+        productTaxMode: product.taxMode,
+        productTaxRate: product.taxRate,
+      );
+      return;
+    }
 
     List<SelectedModifierInput> selectedModifiers = const [];
     if (product.itemType == 'combo') {
@@ -5828,7 +5846,7 @@ class _CartLineItem extends ConsumerWidget {
     final dateFmt = DateFormat('dd-MM-yyyy HH:mm');
     final fechaHora = dateFmt.format(item.createdAt.toLocal());
     final mozo = item.createdByEmployeeName ?? 'Sin asignar';
-    final notes = item.notes?.trim() ?? '';
+    final notes = cleanOrderItemNote(item.notes);
     final origen = (orderOrigin == null || orderOrigin.isEmpty)
         ? '—'
         : orderOrigin;
@@ -6173,7 +6191,7 @@ class _SentLineItem extends StatelessWidget {
     final dateFmt = DateFormat('dd-MM-yyyy HH:mm');
     final fechaHora = dateFmt.format(item.createdAt.toLocal());
     final mozo = item.createdByEmployeeName ?? 'Sin asignar';
-    final notes = item.notes?.trim() ?? '';
+    final notes = cleanOrderItemNote(item.notes);
     final origen = (orderOrigin == null || orderOrigin.isEmpty)
         ? '—'
         : orderOrigin;
@@ -6356,8 +6374,8 @@ class _CatalogAreaState extends ConsumerState<_CatalogArea>
   @override
   void initState() {
     super.initState();
-    // Tabs: Categorias, Menu, Favoritos
-    _mainTabController = TabController(length: 3, vsync: this);
+    // Tabs: Categorias, Menu, Ofertas, Favoritos
+    _mainTabController = TabController(length: 4, vsync: this);
     _mainTabController.addListener(_handleTabChange);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(menuBrowserVmProvider.notifier).loadAll();
@@ -6400,6 +6418,12 @@ class _CatalogAreaState extends ConsumerState<_CatalogArea>
         }
         break;
       case 2:
+        if (menuState.productsMode != MenuProductsMode.offers ||
+            menuState.products.isEmpty) {
+          notifier.loadOffers();
+        }
+        break;
+      case 3:
         if (menuState.productsMode != MenuProductsMode.favorites ||
             menuState.products.isEmpty) {
           notifier.loadFavoriteProducts();
@@ -6433,11 +6457,17 @@ class _CatalogAreaState extends ConsumerState<_CatalogArea>
                     final menuState = ref.read(menuBrowserVmProvider);
                     final notifier = ref.read(menuBrowserVmProvider.notifier);
                     if (value.trim().isEmpty) {
-                      if (_mainTabController.index == 2) {
+                      if (_mainTabController.index == 3) {
                         if (menuState.productsMode !=
                                 MenuProductsMode.favorites ||
                             menuState.products.isEmpty) {
                           notifier.loadFavoriteProducts();
+                        }
+                      } else if (_mainTabController.index == 2) {
+                        if (menuState.productsMode !=
+                                MenuProductsMode.offers ||
+                            menuState.products.isEmpty) {
+                          notifier.loadOffers();
                         }
                       } else if (_mainTabController.index == 0) {
                         if (menuState.categories.isEmpty) {
@@ -6487,7 +6517,7 @@ class _CatalogAreaState extends ConsumerState<_CatalogArea>
           padding: EdgeInsets.symmetric(horizontal: hPad),
           child: _SegmentedTabs(
             controller: _mainTabController,
-            labels: const ['Categorias', 'Menu', 'Favoritos'],
+            labels: const ['Categorias', 'Menu', 'Ofertas', 'Favoritos'],
           ),
         ),
         SizedBox(height: isCompact ? 10 : 16),
@@ -6513,7 +6543,14 @@ class _CatalogAreaState extends ConsumerState<_CatalogArea>
                 ),
                 // 2. Grid Productos
                 _ProductsGrid(onProductTap: widget.onProductTap),
-                // 3. Favoritos
+                // 3. Ofertas vendibles
+                _ProductsGrid(
+                  onProductTap: widget.onProductTap,
+                  emptyText:
+                      'No tienes ofertas activas para vender.\n'
+                      'Crea una en Ajustes → Ofertas y Combos (auto-aplicar).',
+                ),
+                // 4. Favoritos
                 _ProductsGrid(
                   onProductTap: widget.onProductTap,
                   emptyText: 'Todavía no hay productos frecuentes',
@@ -8674,6 +8711,8 @@ class _ComboSelectionDialogState extends State<_ComboSelectionDialog> {
                   name: '$groupName: ${product['name'] ?? 'Opción'}',
                   qty: 1,
                   price: (selected['price_delta'] as num?)?.toDouble() ?? 0.0,
+                  // Identidad del componente para el descuento de inventario.
+                  menuItemId: selectedId,
                 ),
               );
             }

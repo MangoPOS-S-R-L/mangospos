@@ -8,6 +8,7 @@ import 'package:flutter_blue_plus_windows/flutter_blue_plus_windows.dart' as fbp
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import '../../../app/router/routes.dart';
 import '../../../data/repositories/printing_repository.dart';
 import '../../../data/models/printing_models.dart';
@@ -239,12 +240,7 @@ class _PrintersTabState extends State<_PrintersTab> {
         await widget.repo.enqueueTestPrint(printer.id);
       }
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Trabajo de prueba enviado'),
-            backgroundColor: Color(0xFF22C55E),
-          ),
-        );
+        AppToast.success(context, 'Trabajo de prueba enviado');
       }
     } catch (e) {
       if (mounted) {
@@ -278,9 +274,7 @@ class _PrintersTabState extends State<_PrintersTab> {
         await widget.repo.deletePrinter(printer.id);
         _loadPrinters();
         if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('Impresora eliminada')));
+          AppToast.success(context, 'Impresora eliminada');
         }
       } catch (e) {
         if (mounted) {
@@ -937,11 +931,8 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
     // que validamos aqui antes de persistir. printers.mac es lo que mantiene
     // BluetoothPrintService funcionando.
     if (_type == 'bluetooth' && (_btRemoteId == null || _btRemoteId!.isEmpty)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Selecciona un dispositivo Bluetooth antes de guardar.'),
-        ),
-      );
+      AppToast.info(
+          context, 'Selecciona un dispositivo Bluetooth antes de guardar.');
       return;
     }
 
@@ -978,15 +969,11 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
 
       if (mounted) {
         Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              _isEdit
-                  ? 'Impresora actualizada'
-                  : 'Impresora agregada exitosamente',
-            ),
-            backgroundColor: const Color(0xFF22C55E),
-          ),
+        AppToast.success(
+          context,
+          _isEdit
+              ? 'Impresora actualizada'
+              : 'Impresora agregada exitosamente',
         );
         widget.onSaved();
       }
@@ -1156,9 +1143,7 @@ class _AreasTabState extends State<_AreasTab> {
       await widget.repo.deleteArea(area.id);
       _loadAreas();
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Área eliminada')));
+        AppToast.success(context, 'Área eliminada');
       }
     } catch (e) {
       if (mounted) ErrorSnackBar.show(context, e);
@@ -1424,12 +1409,8 @@ class _AreaFormDialogState extends State<_AreaFormDialog> {
       }
       if (mounted) {
         Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_isEdit ? 'Área actualizada' : 'Área agregada'),
-            backgroundColor: const Color(0xFF22C55E),
-          ),
-        );
+        AppToast.success(
+          context, _isEdit ? 'Área actualizada' : 'Área agregada');
         widget.onSaved();
       }
     } catch (e) {

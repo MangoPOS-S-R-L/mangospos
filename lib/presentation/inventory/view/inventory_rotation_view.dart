@@ -7,6 +7,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
@@ -188,14 +189,11 @@ class _InventoryRotationViewState
       rows: data.rowsData,
     );
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          saved
-              ? 'CSV exportado'
-              : 'No se pudo descargar — copiado al portapapeles',
-        ),
-      ),
+    AppToast.info(
+      context,
+      saved
+          ? 'CSV exportado'
+          : 'No se pudo descargar — copiado al portapapeles',
     );
   }
 
@@ -211,14 +209,11 @@ class _InventoryRotationViewState
       rows: data.rowsData,
     );
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          saved
-              ? 'Excel exportado'
-              : 'No se pudo descargar — CSV copiado al portapapeles',
-        ),
-      ),
+    AppToast.info(
+      context,
+      saved
+          ? 'Excel exportado'
+          : 'No se pudo descargar — CSV copiado al portapapeles',
     );
   }
 

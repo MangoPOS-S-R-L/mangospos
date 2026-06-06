@@ -74,6 +74,60 @@ class SalesRepository {
     return grouped;
   }
 
+  /// Trae los modifiers de un conjunto de items en lotes (igual que
+  /// _loadTaxLinesByItem). Se usa cuando el bundle NO los embebe.
+  Future<Map<String, List<OrderItemModifier>>> _loadModifiersByItem(
+    List<String> itemIds,
+  ) async {
+    if (itemIds.isEmpty) return const {};
+
+    const inChunkSize = 100;
+    final grouped = <String, List<OrderItemModifier>>{};
+
+    for (var i = 0; i < itemIds.length; i += inChunkSize) {
+      final end = (i + inChunkSize > itemIds.length)
+          ? itemIds.length
+          : i + inChunkSize;
+      final chunk = itemIds.sublist(i, end);
+
+      final rawModifiers = await _client
+          .from('order_item_modifiers')
+          .select('id, item_id, name, qty, price')
+          .inFilter('item_id', chunk)
+          .order('id', ascending: true);
+
+      for (final row in (rawModifiers as List)) {
+        final modifier = OrderItemModifier.fromMap(
+          Map<String, dynamic>.from(row as Map),
+        );
+        grouped
+            .putIfAbsent(modifier.itemId, () => <OrderItemModifier>[])
+            .add(modifier);
+      }
+    }
+    return grouped;
+  }
+
+  /// Parsea los modifiers embebidos por el RPC en cada item del bundle
+  /// (clave 'modifiers'). Devuelve const [] si no hay o el formato no aplica.
+  List<OrderItemModifier> _parseEmbeddedModifiers(dynamic raw) {
+    if (raw is! List || raw.isEmpty) return const <OrderItemModifier>[];
+    return raw
+        .whereType<Map>()
+        .map((m) => OrderItemModifier.fromMap(Map<String, dynamic>.from(m)))
+        .toList(growable: false);
+  }
+
+  /// Parsea las tax_lines embebidas por el RPC en cada item del bundle
+  /// (clave 'tax_lines'). Devuelve const [] si no hay o el formato no aplica.
+  List<OrderItemTaxLine> _parseEmbeddedTaxLines(dynamic raw) {
+    if (raw is! List || raw.isEmpty) return const <OrderItemTaxLine>[];
+    return raw
+        .whereType<Map>()
+        .map((t) => OrderItemTaxLine.fromMap(Map<String, dynamic>.from(t)))
+        .toList(growable: false);
+  }
+
   Future<void> _assertOrderInBusinessScope(
     String orderId, {
     String? businessId,
@@ -729,6 +783,59 @@ class SalesRepository {
   // ============================================================
 
   /// Agregar producto del menú a la orden
+  /// Agrega una OFERTA como UNA línea a precio ORIGINAL (cantidad N) con el
+  /// [discount] del deal en `discounts`, en UN viaje vía `fn_add_offer_deal`.
+  /// Así el descuento se ve abajo en los totales. La línea lleva [DEAL:] (el
+  /// motor la ignora) + promotion_id. Si la RPC no está aplicada
+  /// (20260605_0005), inserta el producto y fija nombre/descuento con update
+  /// directo (los triggers recomputan los totales).
+  Future<void> addOfferDealItem({
+    required String orderId,
+    required String menuItemId,
+    double quantity = 1,
+    required double discount,
+    required String name,
+    String? promotionId,
+    int checkPosition = 1,
+  }) async {
+    try {
+      await _client.rpc(
+        'fn_add_offer_deal',
+        params: {
+          'p_order_id': orderId,
+          'p_menu_item_id': menuItemId,
+          'p_qty': quantity,
+          'p_discount': discount,
+          'p_name': name,
+          'p_promotion_id': promotionId,
+          'p_check_position': checkPosition,
+        },
+      );
+    } catch (_) {
+      // Degradado SIN la RPC: insertar y fijar nombre + descuento + marcador.
+      final id = await addItemFromMenu(
+        orderId: orderId,
+        menuItemId: menuItemId,
+        quantity: quantity,
+        checkPosition: checkPosition,
+      );
+      if (id.isEmpty) return;
+      final marker = promotionId != null ? '[DEAL:$promotionId]' : '[DEAL:]';
+      final payload = <String, dynamic>{
+        'product_name': name,
+        'discounts': discount,
+        'notes': marker,
+      };
+      if (promotionId != null) payload['promotion_id'] = promotionId;
+      try {
+        await _client.from('order_items').update(payload).eq('id', id);
+      } catch (_) {
+        payload.remove('promotion_id');
+        await _client.from('order_items').update(payload).eq('id', id);
+      }
+    }
+  }
+
   Future<String> addItemFromMenu({
     required String orderId,
     required String menuItemId,
@@ -822,23 +929,40 @@ class SalesRepository {
     required List<Map<String, dynamic>> modifiers,
   }) async {
     if (modifiers.isEmpty) return;
+    // Incluye menu_item_id (identidad del componente de combo) para que el
+    // inventario pueda descontar cada componente. Si la columna aún no existe
+    // (migración 20260605_0002 sin aplicar), reintenta sin ella para no romper
+    // el guardado de modifiers — el combo se sigue vendiendo, solo sin descuento
+    // de inventario por componente hasta que se aplique la migración.
+    List<Map<String, dynamic>> rows({required bool withMenuItem}) => modifiers
+        .map(
+          (modifier) => {
+            'item_id': itemId,
+            'name': modifier['name'],
+            'qty': modifier['qty'] ?? 1,
+            'price': modifier['price'] ?? 0,
+            if (withMenuItem && modifier['menu_item_id'] != null)
+              'menu_item_id': modifier['menu_item_id'],
+          },
+        )
+        .toList(growable: false);
+
+    final hasComponentId = modifiers.any((m) => m['menu_item_id'] != null);
     try {
       await _client
           .from('order_item_modifiers')
-          .insert(
-            modifiers
-                .map(
-                  (modifier) => {
-                    'item_id': itemId,
-                    'name': modifier['name'],
-                    'qty': modifier['qty'] ?? 1,
-                    'price': modifier['price'] ?? 0,
-                  },
-                )
-                .toList(growable: false),
-          );
+          .insert(rows(withMenuItem: true));
     } catch (e) {
-      throw Exception('Error al guardar modificadores del item: $e');
+      if (!hasComponentId) {
+        throw Exception('Error al guardar modificadores del item: $e');
+      }
+      try {
+        await _client
+            .from('order_item_modifiers')
+            .insert(rows(withMenuItem: false));
+      } catch (_) {
+        throw Exception('Error al guardar modificadores del item: $e');
+      }
     }
   }
 
@@ -1007,11 +1131,40 @@ class SalesRepository {
   }
 
   /// Actualiza descuento y notas del item en una sola escritura.
+  /// Actualiza descuento + notas de una línea.
+  ///
+  /// Cuando [writePromotion] es true, además escribe la atribución estructurada
+  /// `order_items.promotion_id` ([promotionId], o null al limpiar la promo) vía
+  /// la RPC de 4 args (migración 20260605_0001). Si esa RPC aún no está aplicada,
+  /// degrada al path legacy de 3 args (solo discount+notes) para NO romper la
+  /// aplicación del descuento — la atribución por marcador en `notes` sigue
+  /// funcionando hasta que la migración se aplique. Los callers no-promo
+  /// (cortesía, descuento manual) dejan [writePromotion] en false y conservan el
+  /// comportamiento exacto previo.
   Future<void> updateItemDiscountAndNotes({
     required String itemId,
     required double discounts,
     String? notes,
+    bool writePromotion = false,
+    String? promotionId,
   }) async {
+    if (writePromotion) {
+      try {
+        await _client.rpc(
+          SalesQueries.rpcUpdateItemDiscountAndNotes,
+          params: {
+            'p_item_id': itemId,
+            'p_discounts': discounts,
+            'p_notes': notes,
+            'p_promotion_id': promotionId,
+          },
+        );
+        return;
+      } catch (_) {
+        // RPC de 4 args no disponible aún (migración 20260605_0001 sin aplicar).
+        // Caemos al path legacy para no bloquear el descuento de la promo.
+      }
+    }
     try {
       await _client.rpc(
         SalesQueries.rpcUpdateItemDiscountAndNotes,
@@ -1173,58 +1326,61 @@ class SalesRepository {
                 : null);
 
       final itemsRaw = (payload['items'] as List?) ?? const [];
-      final baseItems = itemsRaw
-          .map(
-            (row) => OrderItem.fromMap(Map<String, dynamic>.from(row as Map)),
-          )
+      final itemMaps = itemsRaw
+          .whereType<Map>()
+          .map((row) => Map<String, dynamic>.from(row))
           .toList(growable: false);
 
-      final itemIds = baseItems
-          .map((item) => item.id)
-          .where((id) => id.isNotEmpty)
-          .toList(growable: false);
+      // Camino rápido: si el RPC (fn_get_order_bundle ≥ 20260605_0008) ya
+      // embebió modifiers/tax_lines en cada item, abrir/recargar el pedido es
+      // 1 solo viaje — los parseamos del propio item sin consultas extra.
+      final hasEmbeddedRelations =
+          itemMaps.isNotEmpty && itemMaps.first.containsKey('tax_lines');
 
-      Map<String, List<OrderItemModifier>> modifiersByItem = const {};
-      Map<String, List<OrderItemTaxLine>> taxLinesByItem = const {};
-      if (itemIds.isNotEmpty) {
-        // Chunking inFilter (ver _loadTaxLinesByItem) — protege contra 414.
-        const inChunkSize = 100;
-        final grouped = <String, List<OrderItemModifier>>{};
+      List<OrderItem> items;
+      if (hasEmbeddedRelations) {
+        items = itemMaps.map((itemMap) {
+          return OrderItem.fromMap(itemMap).copyWith(
+            modifiers: _parseEmbeddedModifiers(itemMap['modifiers']),
+            taxLines: _parseEmbeddedTaxLines(itemMap['tax_lines']),
+          );
+        }).toList(growable: false);
+      } else {
+        // Retrocompat: DB sin la migración del embed → traemos modifiers y
+        // tax_lines en lotes (ver _loadTaxLinesByItem) para evitar HTTP 414.
+        final baseItems = itemMaps
+            .map(OrderItem.fromMap)
+            .toList(growable: false);
 
-        for (var i = 0; i < itemIds.length; i += inChunkSize) {
-          final end = (i + inChunkSize > itemIds.length)
-              ? itemIds.length
-              : i + inChunkSize;
-          final chunk = itemIds.sublist(i, end);
+        final itemIds = baseItems
+            .map((item) => item.id)
+            .where((id) => id.isNotEmpty)
+            .toList(growable: false);
 
-          final rawModifiers = await _client
-              .from('order_item_modifiers')
-              .select('id, item_id, name, qty, price')
-              .inFilter('item_id', chunk)
-              .order('id', ascending: true);
-
-          for (final row in (rawModifiers as List)) {
-            final modifier = OrderItemModifier.fromMap(
-              Map<String, dynamic>.from(row as Map),
-            );
-            grouped
-                .putIfAbsent(modifier.itemId, () => <OrderItemModifier>[])
-                .add(modifier);
-          }
+        Map<String, List<OrderItemModifier>> modifiersByItem = const {};
+        Map<String, List<OrderItemTaxLine>> taxLinesByItem = const {};
+        if (itemIds.isNotEmpty) {
+          // modifiers y tax_lines en paralelo (independientes).
+          final relations = await Future.wait([
+            _loadModifiersByItem(itemIds),
+            _loadTaxLinesByItem(itemIds),
+          ]);
+          modifiersByItem =
+              relations[0] as Map<String, List<OrderItemModifier>>;
+          taxLinesByItem = relations[1] as Map<String, List<OrderItemTaxLine>>;
         }
-        modifiersByItem = grouped;
-        taxLinesByItem = await _loadTaxLinesByItem(itemIds);
-      }
 
-      final items = baseItems
-          .map(
-            (item) => item.copyWith(
-              modifiers:
-                  modifiersByItem[item.id] ?? const <OrderItemModifier>[],
-              taxLines: taxLinesByItem[item.id] ?? const <OrderItemTaxLine>[],
-            ),
-          )
-          .toList(growable: false);
+        items = baseItems
+            .map(
+              (item) => item.copyWith(
+                modifiers:
+                    modifiersByItem[item.id] ?? const <OrderItemModifier>[],
+                taxLines:
+                    taxLinesByItem[item.id] ?? const <OrderItemTaxLine>[],
+              ),
+            )
+            .toList(growable: false);
+      }
 
       final checksRaw = (payload['checks'] as List?) ?? const [];
       final checks = checksRaw
@@ -1315,33 +1471,16 @@ class SalesRepository {
         return items;
       }
 
-      // Chunking inFilter (ver _loadTaxLinesByItem) — protege contra 414.
-      const inChunkSize = 100;
-      final modifiersByItem = <String, List<OrderItemModifier>>{};
-
-      for (var i = 0; i < itemIds.length; i += inChunkSize) {
-        final end = (i + inChunkSize > itemIds.length)
-            ? itemIds.length
-            : i + inChunkSize;
-        final chunk = itemIds.sublist(i, end);
-
-        final rawModifiers = await _client
-            .from('order_item_modifiers')
-            .select('id, item_id, name, qty, price')
-            .inFilter('item_id', chunk)
-            .order('id', ascending: true);
-
-        for (final row in (rawModifiers as List)) {
-          final modifier = OrderItemModifier.fromMap(
-            Map<String, dynamic>.from(row as Map),
-          );
-          modifiersByItem
-              .putIfAbsent(modifier.itemId, () => <OrderItemModifier>[])
-              .add(modifier);
-        }
-      }
-
-      final taxLinesByItem = await _loadTaxLinesByItem(itemIds);
+      // modifiers y tax_lines son independientes → en paralelo (1 viaje en
+      // vez de 2 en serie). Cada uno se trae en lotes (ver _loadTaxLinesByItem).
+      final relations = await Future.wait([
+        _loadModifiersByItem(itemIds),
+        _loadTaxLinesByItem(itemIds),
+      ]);
+      final modifiersByItem =
+          relations[0] as Map<String, List<OrderItemModifier>>;
+      final taxLinesByItem =
+          relations[1] as Map<String, List<OrderItemTaxLine>>;
 
       return items
           .map(

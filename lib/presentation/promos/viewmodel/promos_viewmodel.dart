@@ -126,6 +126,71 @@ class PromosViewModel extends ChangeNotifier {
     }
   }
 
+  Future<void> updatePromotion({
+    required String id,
+    required String name,
+    String? description,
+    required String discountType,
+    required String promoType,
+    required double discountValue,
+    required double minPurchase,
+    required String appliesTo,
+    required String targetScope,
+    required List<String> targetIds,
+    required List<int> daysOfWeek,
+    required bool autoApply,
+    required bool stackable,
+    required int priority,
+    int? buyQuantity,
+    int? payQuantity,
+    int? rewardQuantity,
+    required DateTime startDate,
+    required DateTime endDate,
+    required bool isActive,
+  }) async {
+    final businessId = _state.businessId;
+    if (businessId == null) {
+      throw Exception('No hay negocio activo.');
+    }
+
+    _state = _state.copyWith(saving: true, clearError: true);
+    notifyListeners();
+
+    try {
+      await _repository.updatePromotion(
+        id: id,
+        name: name,
+        description: description,
+        discountType: discountType,
+        promoType: promoType,
+        discountValue: discountValue,
+        minPurchase: minPurchase,
+        appliesTo: appliesTo,
+        targetScope: targetScope,
+        targetIds: targetIds,
+        daysOfWeek: daysOfWeek,
+        autoApply: autoApply,
+        stackable: stackable,
+        priority: priority,
+        buyQuantity: buyQuantity,
+        payQuantity: payQuantity,
+        rewardQuantity: rewardQuantity,
+        startDate: startDate,
+        endDate: endDate,
+        isActive: isActive,
+      );
+      _state = _state.copyWith(saving: false);
+      await refresh();
+    } catch (e) {
+      _state = _state.copyWith(
+        saving: false,
+        error: 'Error actualizando promoción: $e',
+      );
+      notifyListeners();
+      rethrow;
+    }
+  }
+
   Future<void> createCoupon({
     required String code,
     required String discountType,

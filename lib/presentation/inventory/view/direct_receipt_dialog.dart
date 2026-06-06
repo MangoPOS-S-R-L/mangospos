@@ -7,6 +7,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
@@ -162,7 +163,6 @@ class _DirectReceiptDialogState extends ConsumerState<DirectReceiptDialog> {
       _errorMessage = null;
     });
     final navigator = Navigator.of(context);
-    final messenger = ScaffoldMessenger.of(context);
     try {
       await ref
           .read(directReceiptsViewModelProvider)
@@ -176,10 +176,9 @@ class _DirectReceiptDialogState extends ConsumerState<DirectReceiptDialog> {
           );
       if (!mounted) return;
       navigator.pop();
-      messenger.showSnackBar(
-        const SnackBar(
-          content: Text('Recepción directa registrada. Stock actualizado.'),
-        ),
+      AppToast.info(
+        context,
+        'Recepción directa registrada. Stock actualizado.',
       );
     } catch (e) {
       if (!mounted) return;

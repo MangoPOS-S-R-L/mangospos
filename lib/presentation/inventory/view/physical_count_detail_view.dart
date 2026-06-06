@@ -11,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/repositories/physical_count_repository.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 
@@ -102,9 +103,7 @@ class _PhysicalCountDetailViewState
       await _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo congelar: $e')),
-      );
+      AppToast.error(context, 'No se pudo congelar: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -137,9 +136,7 @@ class _PhysicalCountDetailViewState
       await _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo completar: $e')),
-      );
+      AppToast.error(context, 'No se pudo completar: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -199,9 +196,7 @@ class _PhysicalCountDetailViewState
       await _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo cancelar: $e')),
-      );
+      AppToast.error(context, 'No se pudo cancelar: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -219,9 +214,7 @@ class _PhysicalCountDetailViewState
       await _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo guardar el conteo: $e')),
-      );
+      AppToast.error(context, 'No se pudo guardar el conteo: $e');
     }
   }
 
@@ -827,12 +820,9 @@ class _LineRowState extends State<_LineRow> {
     if (raw.isEmpty) return;
     final v = double.tryParse(raw);
     if (v == null || v < 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Cantidad inválida en "${widget.line.itemName}".',
-          ),
-        ),
+      AppToast.info(
+        context,
+        'Cantidad inválida en "${widget.line.itemName}".',
       );
       return;
     }

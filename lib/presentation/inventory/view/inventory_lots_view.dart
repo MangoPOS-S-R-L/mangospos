@@ -8,6 +8,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
@@ -102,7 +103,6 @@ class _InventoryLotsViewState extends ConsumerState<InventoryLotsView> {
   Future<void> _confirmDispose(InventoryLot lot) async {
     Navigator.of(context).pop(); // cerrar el detail
     final reasonController = TextEditingController();
-    final messenger = ScaffoldMessenger.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -162,14 +162,10 @@ class _InventoryLotsViewState extends ConsumerState<InventoryLotsView> {
                 : reasonController.text.trim(),
           );
       if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('${lot.lotNumber} dispuesto')),
-      );
+      AppToast.info(context, '${lot.lotNumber} dispuesto');
     } catch (e) {
       if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
-      );
+      AppToast.error(context, 'Error: $e');
     }
   }
 }

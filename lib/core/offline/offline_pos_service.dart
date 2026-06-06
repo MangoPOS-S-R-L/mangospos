@@ -1445,7 +1445,7 @@ class OfflinePosService {
 
         // Re-aplicar modifiers seleccionados al item recién creado en el
         // server. La acción los lleva como snapshot en `selected_modifiers`
-        // (List<{name, qty, price}>). Antes esto se perdía: la orden offline
+        // (List<{name, qty, price, menu_item_id?}>). Antes esto se perdía: la orden offline
         // llegaba al server SIN modifiers, dejando totales inconsistentes.
         final rawModifiers = action['selected_modifiers'];
         if (rawModifiers is List && rawModifiers.isNotEmpty) {

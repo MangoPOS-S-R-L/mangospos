@@ -417,12 +417,17 @@ class OrderItemModifier extends Equatable {
   final double qty;
   final double price;
 
+  /// Producto-componente (menu_items.id) cuando este modifier es la selección
+  /// de un grupo de combo. NULL para modifiers normales (extras).
+  final String? menuItemId;
+
   const OrderItemModifier({
     required this.id,
     required this.itemId,
     required this.name,
     required this.qty,
     required this.price,
+    this.menuItemId,
   });
 
   factory OrderItemModifier.fromMap(Map<String, dynamic> map) {
@@ -432,11 +437,12 @@ class OrderItemModifier extends Equatable {
       name: map['name'] ?? '',
       qty: (map['qty'] ?? 1).toDouble(),
       price: (map['price'] ?? 0).toDouble(),
+      menuItemId: map['menu_item_id'] as String?,
     );
   }
 
   @override
-  List<Object?> get props => [id, itemId, name, qty, price];
+  List<Object?> get props => [id, itemId, name, qty, price, menuItemId];
 }
 
 /// 📄 Check (subcuenta)

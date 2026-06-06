@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import '../../../domain/models/ventas_table.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_text_styles.dart';
+import '../view/theme/table_status_style.dart';
 
 /// Card de mesa con diseño responsive
 ///
@@ -336,17 +337,9 @@ class _TableCardState extends State<TableCard> {
     );
   }
 
-  /// Obtiene el color de la barra izquierda según el estado
-  Color _getBorderColor() {
-    switch (widget.table.status) {
-      case TableStatus.disponible:
-        return AppColors.success; // Verde
-      case TableStatus.ocupado:
-        return AppColors.warning; // Naranja
-      case TableStatus.pagando:
-        return AppColors.info; // Azul
-    }
-  }
+  /// Obtiene el color de la barra izquierda según el estado.
+  /// Delega al helper compartido para no diverger del floor map.
+  Color _getBorderColor() => tableStatusColor(widget.table.status);
 
   /// Obtiene el color del texto de estado
   Color _getStatusColor() {

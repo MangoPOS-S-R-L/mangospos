@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 
 class PlanManagementView extends ConsumerWidget {
@@ -590,12 +591,9 @@ class _CommercialCallout extends StatelessWidget {
           ),
           FilledButton.icon(
             onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text(
-                    'Flujo comercial listo para integrar con tu proveedor de facturación o CRM.',
-                  ),
-                ),
+              AppToast.info(
+                context,
+                'Flujo comercial listo para integrar con tu proveedor de facturación o CRM.',
               );
             },
             icon: const Icon(Icons.rocket_launch_rounded),

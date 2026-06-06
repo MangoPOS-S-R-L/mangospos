@@ -5,6 +5,7 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/business/business_features_provider.dart';
 import 'package:mangopos/core/cache/cache_manager.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/presentation/settings/widgets/system_update_dialog.dart';
@@ -75,23 +76,15 @@ class SettingsView extends ConsumerWidget {
       if (!context.mounted) return;
 
       Navigator.of(context, rootNavigator: true).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Caché limpiado correctamente (${result.deletedCount} elementos).',
-          ),
-        ),
+      AppToast.success(
+        context,
+        'Caché limpiado correctamente (${result.deletedCount} elementos).',
       );
     } catch (e) {
       if (!context.mounted) return;
 
       Navigator.of(context, rootNavigator: true).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: const Color(0xFFB91C1C),
-          content: Text('No se pudo limpiar la caché: $e'),
-        ),
-      );
+      AppToast.error(context, 'No se pudo limpiar la caché: $e');
     }
   }
 
@@ -300,13 +293,6 @@ class SettingsView extends ConsumerWidget {
             route: AppRoutes.menuModifiers,
           ),
           _SettingsOption(
-            title: 'Combos',
-            subtitle: 'Paquetes y ofertas especiales',
-            icon: Icons.widgets_rounded,
-            color: const Color(0xFFE6F7EE),
-            route: AppRoutes.menuCombos,
-          ),
-          _SettingsOption(
             title: 'Menú',
             subtitle: 'Configuración de menús',
             icon: Icons.menu_book_rounded,
@@ -334,6 +320,25 @@ class SettingsView extends ConsumerWidget {
               color: const Color(0xFFFFEDED),
               route: AppRoutes.inventoryOutflow,
             ),
+        ],
+      ),
+      _SettingsSection(
+        title: 'Ofertas y Combos',
+        items: const [
+          _SettingsOption(
+            title: 'Ofertas y Promociones',
+            subtitle: 'Crear ofertas, BOGO (X paga Y) y descuentos',
+            icon: Icons.local_offer_rounded,
+            color: Color(0xFFE6F7EE),
+            route: '${AppRoutes.promosCenter}?offers=1',
+          ),
+          _SettingsOption(
+            title: 'Combos',
+            subtitle: 'Paquetes de productos vendidos como uno',
+            icon: Icons.widgets_rounded,
+            color: Color(0xFFFFF0D9),
+            route: AppRoutes.menuCombos,
+          ),
         ],
       ),
       _SettingsSection(

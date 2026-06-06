@@ -5,6 +5,7 @@ import 'package:mangopos/core/theme/app_breakpoints.dart' as mango_bp;
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_radius.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/viewmodel/taxes_viewmodel.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import '../viewmodel/products_viewmodel.dart';
@@ -449,6 +450,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
     ProductsViewModel viewModel,
     String id,
   ) {
+    final pageContext = context;
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -474,24 +476,16 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
           TextButton(
             onPressed: () async {
               // Cerramos el diálogo ANTES del await para no quedarnos con la
-              // modal trabada si el delete tarda. Capturamos el messenger
-              // con el `context` actual del builder antes del pop.
-              final messenger = ScaffoldMessenger.of(context);
+              // modal trabada si el delete tarda. Usamos el `context` de la
+              // página (no el del builder) para que sobreviva al pop.
               Navigator.pop(context);
               try {
                 await viewModel.deleteProduct(id);
-                messenger.showSnackBar(
-                  SnackBar(
-                    content: const Text('Producto eliminado.'),
-                    backgroundColor: AppColors.success,
-                  ),
-                );
+                AppToast.success(pageContext, 'Producto eliminado.');
               } catch (e) {
-                messenger.showSnackBar(
-                  SnackBar(
-                    content: Text('No se pudo eliminar el producto: $e'),
-                    backgroundColor: AppColors.destructive,
-                  ),
+                AppToast.error(
+                  pageContext,
+                  'No se pudo eliminar el producto: $e',
                 );
               }
             },
@@ -548,16 +542,12 @@ class _ProductsHeader extends ConsumerWidget {
             } else if (value == 'export') {
               await viewModel.exportProductsToExcel();
               if (context.mounted && viewModel.error != null) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(viewModel.error!)),
-                );
+                AppToast.info(context, viewModel.error!);
               }
             } else if (value == 'template') {
               await viewModel.downloadTemplate();
               if (context.mounted && viewModel.error != null) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(viewModel.error!)),
-                );
+                AppToast.info(context, viewModel.error!);
               }
             }
           },

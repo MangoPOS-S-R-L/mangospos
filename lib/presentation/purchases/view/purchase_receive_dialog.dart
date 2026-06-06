@@ -7,6 +7,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 
 import '../state/purchases_state.dart';
 import '../viewmodel/purchases_viewmodel.dart';
@@ -118,7 +119,6 @@ class _PurchaseReceiveDialogState extends ConsumerState<PurchaseReceiveDialog> {
       _submitError = null;
     });
     final navigator = Navigator.of(context);
-    final messenger = ScaffoldMessenger.of(context);
     try {
       final result = await ref
           .read(purchasesViewModelProvider)
@@ -131,16 +131,13 @@ class _PurchaseReceiveDialogState extends ConsumerState<PurchaseReceiveDialog> {
           );
       if (!mounted) return;
       final status = result['status']?.toString() ?? 'partial';
-      navigator.pop();
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            status == 'received'
-                ? 'Orden recibida completamente. Inventario actualizado.'
-                : 'Recepción parcial registrada. La orden queda en estado "parcial".',
-          ),
-        ),
+      AppToast.info(
+        context,
+        status == 'received'
+            ? 'Orden recibida completamente. Inventario actualizado.'
+            : 'Recepción parcial registrada. La orden queda en estado "parcial".',
       );
+      navigator.pop();
     } catch (e) {
       if (!mounted) return;
       setState(() {

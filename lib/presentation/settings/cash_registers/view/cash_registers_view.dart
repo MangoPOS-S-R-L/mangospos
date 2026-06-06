@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
 import 'package:mangopos/data/models/printing.dart' show PrinterConfig;
 import 'package:mangopos/data/utils/business_id_resolver.dart';
@@ -72,21 +73,11 @@ class _CashRegistersViewState extends ConsumerState<CashRegistersView> {
       );
       await _load();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Impresora asignada correctamente.'),
-            backgroundColor: MangoColors.successGreen,
-          ),
-        );
+        AppToast.success(context, 'Impresora asignada correctamente.');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al asignar impresora: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(context, 'Error al asignar impresora: $e');
       }
     }
   }

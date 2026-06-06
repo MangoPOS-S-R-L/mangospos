@@ -7,6 +7,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
@@ -145,7 +146,6 @@ class _InventoryDirectReceiptsViewState
 
   Future<void> _confirmCancel(DirectReceipt receipt) async {
     final reasonController = TextEditingController();
-    final messenger = ScaffoldMessenger.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -197,14 +197,10 @@ class _InventoryDirectReceiptsViewState
                 : reasonController.text.trim(),
           );
       if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('${receipt.receiptNumber} cancelada')),
-      );
+      AppToast.info(context, '${receipt.receiptNumber} cancelada');
     } catch (e) {
       if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
-      );
+      AppToast.error(context, 'Error: $e');
     }
   }
 }

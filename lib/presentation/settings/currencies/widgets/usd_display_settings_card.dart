@@ -13,6 +13,7 @@
 import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
@@ -132,12 +133,7 @@ class _UsdDisplaySettingsCardState
       if (!mounted) return;
       await _loadSettings(); // recarga para tomar el `usd_rate_updated_at`
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Configuración USD guardada.'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      AppToast.success(context, 'Configuración USD guardada.');
     } catch (e) {
       if (!mounted) return;
       setState(() {

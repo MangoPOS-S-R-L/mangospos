@@ -45,18 +45,32 @@ class SelectedModifierInput {
   final double qty;
   final double price;
 
+  /// Producto-componente (menu_items.id) cuando este modifier representa la
+  /// selección de un grupo de combo. NULL para modifiers normales (extras).
+  /// Es la identidad que el inventario usa para descontar cada componente.
+  final String? menuItemId;
+
   const SelectedModifierInput({
     required this.name,
     this.qty = 1,
     this.price = 0,
+    this.menuItemId,
   });
 
-  Map<String, dynamic> toMap() => {'name': name, 'qty': qty, 'price': price};
+  Map<String, dynamic> toMap() => {
+        'name': name,
+        'qty': qty,
+        'price': price,
+        if (menuItemId != null) 'menu_item_id': menuItemId,
+      };
 }
 
 class SalesViewModel extends Notifier<CurrentOrderState> {
   static const _courtesyPrefix = '[CORTESIA:';
   static const _promoPrefix = '[PROMO_AUTO:';
+  // Línea vendida como OFERTA (tile del catálogo): ya viene al precio final, el
+  // motor de auto-ofertas debe IGNORARLA para no volver a descontarla.
+  static const _dealPrefix = '[DEAL:';
   final Map<String, CurrentOrderState> _tableCache = {};
   // Retail: slotId del carrito de venta rápida actualmente activo. null en
   // restaurante o cuando no hay carritos retail. Es la clave del snapshot
@@ -1715,6 +1729,190 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
   }
 
+  /// Agrega una OFERTA vendible (tile "deal" del catálogo). Inserta [buyQty]
+  /// líneas separadas del producto (1 c/u) — NO una sola línea de cantidad N —
+  /// porque el motor BOGO descuenta por línea. Tras agregarlas, recarga la orden
+  /// y el motor auto-aplica el descuento (ej. 4x3 → cobra 3). Va por el repo
+  /// directo a propósito, saltando el anti-doble-clic de addItem.
+  Future<void> addOfferDeal({
+    required String menuItemId,
+    required int lineQty,
+    required double discount,
+    required String name,
+    required double originalPrice,
+    String? promotionId,
+    String productTaxMode = 'exclusive',
+    double? productTaxRate,
+    int checkPos = 1,
+  }) async {
+    if (!ref
+        .read(sessionProvider.notifier)
+        .hasPermission('ventas.orden.agregar_item')) {
+      state = state.copyWith(
+        error: 'No tienes permiso para agregar productos a la orden.',
+      );
+      return;
+    }
+    final orderId = state.order?.id;
+    if (orderId == null) {
+      state = state.copyWith(error: 'Orden no disponible. Reintenta.');
+      return;
+    }
+    final currentStatus = state.order?.status;
+    if (currentStatus == 'paid' || currentStatus == 'void') {
+      final origin = state.origin;
+      state = state.copyWith(
+        error: 'La orden anterior ya fue cerrada. Iniciando una nueva.',
+      );
+      if (origin == 'quick') {
+        await openQuick(forceRestart: true);
+      } else if (origin == 'manual') {
+        await openManual(forceRestart: true);
+      }
+      return;
+    }
+
+    // Respetar el check seleccionado si sigue abierto (igual que addItem).
+    int effectiveCheckPos = checkPos;
+    if (checkPos == 1 && state.selectedCheckId != null) {
+      try {
+        final check = state.checks.firstWhere(
+          (c) => c.id == state.selectedCheckId && !c.isClosed,
+        );
+        effectiveCheckPos = check.position;
+      } catch (_) {
+        state = state.copyWith(clearSelectedCheck: true);
+      }
+    }
+
+    final qty = (lineQty < 1 ? 1 : lineQty).toDouble();
+    state = state.copyWith(error: null);
+    final previousItems = state.items;
+    final previousOrder = state.order;
+
+    await _ensureBusinessTaxSettingsLoaded();
+    final resolvedTaxRate = productTaxRate ?? _cachedTaxRatePct;
+
+    // OPTIMISTA: subtotal NETO (bruto - descuento) + marcador [DEAL:], igual que
+    // lo guarda el backend, para que summarizeItemPricing aplique el override de
+    // oferta y se vea "Subtotal/Descuento/Total" correcto al INSTANTE.
+    final dealMarker = '[DEAL:${promotionId ?? ''}]';
+    OrderItem? optimisticItem;
+    if (previousOrder != null) {
+      final tempId = 'tmp_${DateTime.now().microsecondsSinceEpoch}';
+      final grossAmount =
+          (qty * originalPrice - discount).clamp(0, double.infinity).toDouble();
+      final taxRateDecimal = resolvedTaxRate / 100.0;
+      final optimisticAmounts = _estimateOptimisticItemAmounts(
+        grossAmount: grossAmount,
+        taxMode: productTaxMode,
+        taxRate: taxRateDecimal,
+        fullTaxRate: taxRateDecimal,
+        serviceRate: 0.0,
+        includeServiceInInclusivePrice: false,
+      );
+
+      final originForTaxes = parseSaleOrigin(state.origin);
+      final synthTimestamp = DateTime.now();
+      final taxBase = optimisticAmounts.subtotal;
+      final synthTaxLines = <OrderItemTaxLine>[];
+      for (var i = 0; i < _taxDefs.length; i++) {
+        final taxDef = _taxDefs[i];
+        if (!taxDef.isActive || taxDef.rate <= 0) continue;
+        final appliesToOrigin = switch (originForTaxes) {
+          SaleOrigin.zone => taxDef.applyOnZone,
+          SaleOrigin.manual => taxDef.applyOnManual,
+          SaleOrigin.quick => taxDef.applyOnQuick,
+          SaleOrigin.delivery => taxDef.applyOnDelivery,
+          SaleOrigin.unknown => true,
+        };
+        if (!appliesToOrigin) continue;
+        final amount = double.parse(
+          (taxBase * taxDef.rate / 100.0).toStringAsFixed(2),
+        );
+        if (amount <= 0.004) continue;
+        synthTaxLines.add(
+          OrderItemTaxLine(
+            id: 'tmp_tl_${synthTimestamp.microsecondsSinceEpoch}_$i',
+            orderItemId: tempId,
+            taxId: 'tmp_tax_${taxDef.name}',
+            taxName: taxDef.name,
+            taxRate: taxDef.rate,
+            amount: amount,
+            createdAt: synthTimestamp,
+          ),
+        );
+      }
+
+      final activeWaiter = ref.read(activeWaiterProvider);
+      optimisticItem = OrderItem(
+        id: tempId,
+        orderId: orderId,
+        productId: menuItemId,
+        productName: name,
+        sku: null,
+        quantity: qty,
+        unitPrice: originalPrice,
+        subtotal: optimisticAmounts.subtotal,
+        discounts: discount,
+        tax: optimisticAmounts.tax,
+        total: optimisticAmounts.total,
+        checkId: null,
+        isTakeout: false,
+        status: 'draft',
+        notes: dealMarker,
+        taxMode: productTaxMode,
+        taxRate: resolvedTaxRate,
+        originalTaxRate: resolvedTaxRate,
+        createdAt: DateTime.now(),
+        createdByEmployeeId: activeWaiter?.employeeId,
+        createdByEmployeeName: activeWaiter?.displayName,
+        modifiers: const [],
+        taxLines: synthTaxLines,
+      );
+
+      final optimisticItems = [...state.items, optimisticItem];
+      final updatedSummary = summarizeOrderPricing(
+        previousOrder.copyWith(serviceFee: 0),
+        optimisticItems,
+      );
+      final updatedOrder = previousOrder.copyWith(
+        subtotal: updatedSummary.subtotal,
+        tax: updatedSummary.tax,
+        serviceFee: 0,
+        total: updatedSummary.subtotal +
+            updatedSummary.tax -
+            updatedSummary.discounts,
+      );
+      state = state.copyWith(items: optimisticItems, order: updatedOrder);
+    }
+
+    // UN solo viaje: fn_add_offer_deal inserta la línea a precio original con el
+    // descuento del deal.
+    try {
+      await ref.read(salesRepositoryProvider).addOfferDealItem(
+            orderId: orderId,
+            menuItemId: menuItemId,
+            quantity: qty,
+            discount: discount,
+            name: name,
+            promotionId: promotionId,
+            checkPosition: effectiveCheckPos,
+          );
+      await _loadOrderDetail(orderId, caller: 'addOfferDeal');
+    } catch (e) {
+      if (optimisticItem != null) {
+        state = state.copyWith(
+          items: previousItems,
+          order: previousOrder,
+          error: 'No se pudo agregar la oferta: $e',
+        );
+      } else {
+        state = state.copyWith(error: 'No se pudo agregar la oferta: $e');
+      }
+    }
+  }
+
   ({double subtotal, double tax, double total}) _estimateOptimisticItemAmounts({
     required double grossAmount,
     required String taxMode,
@@ -3354,6 +3552,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         .any((line) => line.startsWith(_courtesyPrefix) && line.endsWith(']'));
   }
 
+  /// True si la línea es una OFERTA vendida desde el tile (marcador [DEAL:]).
+  /// El motor de auto-ofertas la ignora (ya viene al precio final).
+  bool _isDealNote(String? rawNotes) {
+    if (rawNotes == null || rawNotes.trim().isEmpty) return false;
+    return rawNotes
+        .split('\n')
+        .map((line) => line.trim())
+        .any((line) => line.startsWith(_dealPrefix) && line.endsWith(']'));
+  }
+
   String? _extractAutoPromoId(String? rawNotes) {
     if (rawNotes == null || rawNotes.trim().isEmpty) return null;
     for (final line in rawNotes.split('\n').map((line) => line.trim())) {
@@ -3374,7 +3582,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         .where(
           (line) =>
               !(line.startsWith(_courtesyPrefix) && line.endsWith(']')) &&
-              !(line.startsWith(_promoPrefix) && line.endsWith(']')),
+              !(line.startsWith(_promoPrefix) && line.endsWith(']')) &&
+              !(line.startsWith(_dealPrefix) && line.endsWith(']')),
         )
         .toList(growable: false);
 
@@ -3490,6 +3699,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
                 notes: _stripManagedNotes(item.notes).isEmpty
                     ? null
                     : _stripManagedNotes(item.notes),
+                writePromotion: true,
+                promotionId: null,
               ),
         ),
       );
@@ -3499,6 +3710,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     final eligibleBaseItems = openItems
         .where((item) {
           if (_hasCourtesyNote(item.notes)) return false;
+          if (_isDealNote(item.notes)) return false;
           final existingPromoId = _extractAutoPromoId(item.notes);
           if (existingPromoId != null) return true;
           return item.discounts <= 0.009;
@@ -3507,7 +3719,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
     if (eligibleBaseItems.isEmpty) return false;
 
-    final updates = <({String itemId, double discount, String? notes})>[];
+    final updates =
+        <({String itemId, double discount, String? notes, String promotionId})>[];
     final touchedItemIds = <String>{};
 
     List<OrderItem> itemsForPromo(Map<String, dynamic> promo) {
@@ -3578,6 +3791,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
               originalNotes: item.notes,
               promoId: promoId,
             ),
+            promotionId: promoId,
           ));
           touchedItemIds.add(item.id);
         }
@@ -3606,6 +3820,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             originalNotes: item.notes,
             promoId: promoId,
           ),
+          promotionId: promoId,
         ));
         touchedItemIds.add(item.id);
       }
@@ -3640,6 +3855,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             itemId: update.itemId,
             discounts: update.discount,
             notes: update.notes,
+            writePromotion: true,
+            promotionId: update.promotionId,
           );
       changed = true;
     }
@@ -3653,6 +3870,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             notes: _stripManagedNotes(item.notes).isEmpty
                 ? null
                 : _stripManagedNotes(item.notes),
+            writePromotion: true,
+            promotionId: null,
           );
       changed = true;
     }
