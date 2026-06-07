@@ -36,7 +36,14 @@
       "PowerShell(Set-Location \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\installer\\\\windows\"; powershell -ExecutionPolicy Bypass -File .\\\\build_inno.ps1 2>&1 | Tee-Object -FilePath \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\build\\\\installer\\\\build_inno_v1.2.1+7.log\")",
       "PowerShell(Set-Location \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\installer\\\\windows\"; powershell -ExecutionPolicy Bypass -File .\\\\build_inno.ps1 2>&1 | Tee-Object -FilePath \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\build\\\\installer\\\\build_inno_v1.2.1+8.log\")",
       "PowerShell(Set-Location \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\installer\\\\windows\"; powershell -ExecutionPolicy Bypass -File .\\\\build_inno.ps1 2>&1 | Tee-Object -FilePath \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\build\\\\installer\\\\build_inno_v1.2.1+9.log\")",
-      "Bash(grep -n \"origin: origin\\\\|copyWith\\(\\\\s*$\\\\|origin:\\\\|Future<void> _loadOrderDetail\\\\|Future<void> refreshOrder\\\\|_normalizeHydratedState\\(\" lib/presentation/sales/viewmodel/sales_viewmodel.dart)"
+      "Bash(grep -n \"origin: origin\\\\|copyWith\\(\\\\s*$\\\\|origin:\\\\|Future<void> _loadOrderDetail\\\\|Future<void> refreshOrder\\\\|_normalizeHydratedState\\(\" lib/presentation/sales/viewmodel/sales_viewmodel.dart)",
+      "Bash(grep -rn \"recordPayment\\\\|\\\\\\\\bPayment\\\\\\\\\\(\" d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\lib\\\\presentation\\\\sales --include=\"*.dart\")",
+      "Bash(wait)",
+      "PowerShell(taskkill /F /IM mangopos.exe /T 2>$null)",
+      "PowerShell(taskkill /F /IM mangopos-agent.exe /T 2>$null)",
+      "PowerShell(taskkill /F /IM mangopos-agent-service.exe /T 2>$null)",
+      "PowerShell(\"ok\")",
+      "PowerShell(powershell -NoProfile -ExecutionPolicy Bypass -File \"installer\\\\windows\\\\build_inno.ps1\")"
     ]
   }
 }
