@@ -36,7 +36,10 @@
       "PowerShell(Set-Location \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\installer\\\\windows\"; powershell -ExecutionPolicy Bypass -File .\\\\build_inno.ps1 2>&1 | Tee-Object -FilePath \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\build\\\\installer\\\\build_inno_v1.2.1+7.log\")",
       "PowerShell(Set-Location \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\installer\\\\windows\"; powershell -ExecutionPolicy Bypass -File .\\\\build_inno.ps1 2>&1 | Tee-Object -FilePath \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\build\\\\installer\\\\build_inno_v1.2.1+8.log\")",
       "PowerShell(Set-Location \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\installer\\\\windows\"; powershell -ExecutionPolicy Bypass -File .\\\\build_inno.ps1 2>&1 | Tee-Object -FilePath \"d:\\\\MangoPos\\\\Dev\\\\mangopos\\\\build\\\\installer\\\\build_inno_v1.2.1+9.log\")",
-      "Bash(grep -n \"origin: origin\\\\|copyWith\\(\\\\s*$\\\\|origin:\\\\|Future<void> _loadOrderDetail\\\\|Future<void> refreshOrder\\\\|_normalizeHydratedState\\(\" lib/presentation/sales/viewmodel/sales_viewmodel.dart)"
+      "Bash(grep -n \"origin: origin\\\\|copyWith\\(\\\\s*$\\\\|origin:\\\\|Future<void> _loadOrderDetail\\\\|Future<void> refreshOrder\\\\|_normalizeHydratedState\\(\" lib/presentation/sales/viewmodel/sales_viewmodel.dart)",
+      "Bash(awk '/CREATE TABLE public.menu_items|CREATE TABLE menu_items/{f=1} f{print} /\\\\\\);/{if\\(f\\)exit}' supabase/schema.sql)",
+      "Bash(grep -c \"true, NOW\\(\\)\\)$\" supabase/import_af2ec2e7_products.sql)",
+      "Bash(python3 scripts/gen_import_af2ec2e7.py f054fbc2-3fb7-4e34-a020-11341ff11d84)"
     ]
   }
 }
