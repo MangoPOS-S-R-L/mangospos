@@ -56,6 +56,10 @@ class LocalPrintService {
   }
 
   /// Fetch the agent URL from business_settings (cached 5 min).
+  ///
+  /// Resiliente offline: budget total de ~2.5s. Sin red Supabase falla con
+  /// SocketException casi inmediato; con red pero servidor lento, el timeout
+  /// corta antes de bloquear el `printJob` que está esperando este resolver.
   static Future<String?> _fetchDbAgentUrl() async {
     if (_dbAgentUrl != null &&
         _dbAgentUrlAt != null &&
@@ -71,7 +75,8 @@ class LocalPrintService {
           .select('business_id')
           .eq('user_id', user.id)
           .limit(1)
-          .maybeSingle();
+          .maybeSingle()
+          .timeout(const Duration(milliseconds: 1200));
       if (membership == null) return null;
       final businessId = membership['business_id']?.toString();
       if (businessId == null || businessId.isEmpty) return null;
@@ -80,7 +85,8 @@ class LocalPrintService {
           .from('business_settings')
           .select('agent_url')
           .eq('business_id', businessId)
-          .maybeSingle();
+          .maybeSingle()
+          .timeout(const Duration(milliseconds: 1200));
       final url = row?['agent_url']?.toString().trim();
       if (url != null && url.isNotEmpty) {
         _dbAgentUrl = url;
@@ -91,6 +97,43 @@ class LocalPrintService {
       debugPrint('[LocalPrintService] Failed to fetch agent URL from DB: $e');
     }
     return null;
+  }
+
+  /// Lee la URL del agente cacheada en SharedPrefs por `primeBaseUrl` /
+  /// `PrintAgentDetector`. Sobrevive al cierre del proceso — sin esto, un
+  /// reinicio offline pierde el cache in-memory y `_resolveBaseUrl` se va al
+  /// flujo lento (DB + escaneo localhost) en vez de reusar el último URL
+  /// conocido bueno.
+  static Future<String?> _loadPrefsCachedUrl() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final url = prefs.getString(_agentUrlPrefsKey)?.trim();
+      if (url == null || url.isEmpty) return null;
+      return url;
+    } catch (e) {
+      debugPrint('[LocalPrintService] _loadPrefsCachedUrl error: $e');
+      return null;
+    }
+  }
+
+  /// Escribe la URL resuelta al SharedPrefs (fire-and-forget). Mismo cache
+  /// key que `primeBaseUrl` — garantiza que cualquier resolución exitosa
+  /// (incluida la del DB-fetch) sobreviva al cierre del proceso.
+  static void _persistResolvedUrl(String baseUrl) {
+    final normalized = baseUrl.trim();
+    if (normalized.isEmpty) return;
+    unawaited(() async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(_agentUrlPrefsKey, normalized);
+        await prefs.setInt(
+          '$_agentUrlPrefsKey:ts',
+          DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        );
+      } catch (e) {
+        debugPrint('[LocalPrintService] _persistResolvedUrl error: $e');
+      }
+    }());
   }
 
   Map<String, String> _headers({bool auth = true}) {
@@ -250,6 +293,10 @@ class LocalPrintService {
     _resolvedBaseUrlAt = now;
     _sharedResolvedBaseUrl = baseUrl;
     _sharedResolvedBaseUrlAt = now;
+    // Persiste también al SharedPrefs para sobrevivir reinicios del proceso
+    // ofline. Sin esto, un crash o reinicio con la red caída obliga a pasar
+    // por el camino lento (DB fetch + escaneo) la próxima vez.
+    _persistResolvedUrl(baseUrl);
   }
 
   void _forgetResolvedBaseUrl(String? baseUrl) {
@@ -279,7 +326,17 @@ class LocalPrintService {
       return sharedCached;
     }
 
-    // Try DB-stored agent URL first (enables tablets to find remote agent)
+    // Cache persistente (SharedPrefs) — sobrevive reinicios del proceso. Se
+    // prueba ANTES de tocar Supabase para que offline no pague el timeout
+    // del fetch DB cuando ya tenemos un URL conocido bueno.
+    final prefsCached = await _loadPrefsCachedUrl();
+    if (prefsCached != null && await _isHealthy(prefsCached)) {
+      _rememberResolvedBaseUrl(prefsCached);
+      return prefsCached;
+    }
+
+    // Try DB-stored agent URL (enables tablets to find remote agent). En
+    // offline `_fetchDbAgentUrl` corta solo con timeout corto — no bloquea.
     final dbUrl = await _fetchDbAgentUrl();
 
     final candidates = <String>[
@@ -288,16 +345,23 @@ class LocalPrintService {
           sharedCached.isNotEmpty &&
           sharedCached != cached)
         sharedCached,
+      if (prefsCached != null &&
+          prefsCached.isNotEmpty &&
+          prefsCached != cached &&
+          prefsCached != sharedCached)
+        prefsCached,
       // DB URL before localhost — critical for tablets that aren't on the same machine
       if (dbUrl != null &&
           dbUrl.isNotEmpty &&
           dbUrl != cached &&
-          dbUrl != sharedCached)
+          dbUrl != sharedCached &&
+          dbUrl != prefsCached)
         dbUrl,
       ..._baseUrls.where(
         (candidate) =>
             candidate != cached &&
             candidate != sharedCached &&
+            candidate != prefsCached &&
             candidate != dbUrl,
       ),
     ];
