@@ -196,7 +196,9 @@ export function chargeWithToken(input: ChargeWithTokenInput) {
     PosInputMode: "E-Commerce",
     TrxType: "Sale",
     Amount: input.amountCents.toString(),
-    Itbis: input.itbisCents.toString(),
+    // Azul rechaza Itbis="0" con VALIDATION_ERROR:Itbis. Cuando no hay impuesto
+    // separado debe ir "000"; con impuesto, los centavos como entero.
+    Itbis: input.itbisCents > 0 ? input.itbisCents.toString() : "000",
     CurrencyPosCode: "$",
     OrderNumber: input.orderNumber,
     DataVaultToken: input.dataVaultToken,
@@ -220,7 +222,9 @@ export function refund(input: RefundInput) {
     PosInputMode: "E-Commerce",
     TrxType: "Refund",
     Amount: input.amountCents.toString(),
-    Itbis: input.itbisCents.toString(),
+    // Azul rechaza Itbis="0" con VALIDATION_ERROR:Itbis. Cuando no hay impuesto
+    // separado debe ir "000"; con impuesto, los centavos como entero.
+    Itbis: input.itbisCents > 0 ? input.itbisCents.toString() : "000",
     CurrencyPosCode: "$",
     OrderNumber: input.orderNumber,
     AzulOrderId: input.azulOrderId,

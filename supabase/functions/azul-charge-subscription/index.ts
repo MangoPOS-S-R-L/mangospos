@@ -151,7 +151,8 @@ Deno.serve(async (req) => {
   // 5. INSERT charge en estado pending. El UNIQUE (membership, período, intento) es
   //    el candado de idempotencia.
   const nowIso = new Date().toISOString();
-  const { data: charge, error: insErr } = await service
+  let chargeId: string;
+  const { data: inserted, error: insErr } = await service
     .from("azul_charges")
     .insert({
       business_id: membership.business_id,
@@ -172,27 +173,39 @@ Deno.serve(async (req) => {
 
   if (insErr) {
     // 23505 = unique_violation → ya existe una charge para (membership, período, intento).
-    if (insErr.code === "23505") {
-      const { data: existing } = await service
-        .from("azul_charges")
-        .select("id, status, iso_code, azul_order_id, response_message")
-        .eq("membership_id", membershipId)
-        .eq("billing_period_start", periodStart)
-        .eq("attempt_number", attempt)
-        .maybeSingle();
-      if (existing) {
-        return jsonResponse({
-          ok: existing.status === "approved",
-          idempotent: true,
-          charge_id: existing.id,
-          status: existing.status,
-          iso_code: existing.iso_code,
-          azul_order_id: existing.azul_order_id,
-          response_message: existing.response_message,
-        });
-      }
+    if (insErr.code !== "23505") {
+      return errorResponse(500, "db_error", "Could not create charge", insErr.message);
     }
-    return errorResponse(500, "db_error", "Could not create charge", insErr.message);
+    const { data: existing } = await service
+      .from("azul_charges")
+      .select("id, status, iso_code, azul_order_id, response_message")
+      .eq("membership_id", membershipId)
+      .eq("billing_period_start", periodStart)
+      .eq("attempt_number", attempt)
+      .maybeSingle();
+    if (!existing) {
+      return errorResponse(500, "db_error", "Could not create charge", insErr.message);
+    }
+    // Terminal (approved/declined) → idempotente: devolver sin recobrar.
+    if (existing.status === "approved" || existing.status === "declined") {
+      return jsonResponse({
+        ok: existing.status === "approved",
+        idempotent: true,
+        charge_id: existing.id,
+        status: existing.status,
+        iso_code: existing.iso_code,
+        azul_order_id: existing.azul_order_id,
+        response_message: existing.response_message,
+      });
+    }
+    // Transitoria (error/pending) → reintentar sobre la misma fila.
+    chargeId = existing.id;
+    await service
+      .from("azul_charges")
+      .update({ status: "pending", attempted_at: nowIso })
+      .eq("id", chargeId);
+  } else {
+    chargeId = inserted!.id;
   }
 
   // raw_request para auditoría — el token se redacta (vive en azul_payment_methods,
@@ -229,23 +242,29 @@ Deno.serve(async (req) => {
         raw_request: sanitizedRequest,
         completed_at: new Date().toISOString(),
       })
-      .eq("id", charge.id);
+      .eq("id", chargeId);
     await service.from("azul_webhook_events").insert({
       event_type: "webservice_response",
       http_method: "POST",
       raw_url: `${env.azulProxyUrl}/call (ProcessPayment Sale)`,
       raw_body: `EXCEPTION: ${msg}`.slice(0, 10000),
-      related_charge_id: charge.id,
+      related_charge_id: chargeId,
       processed: true,
       processing_error: msg.slice(0, 500),
     });
-    return errorResponse(502, "azul_unreachable", msg, { charge_id: charge.id });
+    return errorResponse(502, "azul_unreachable", msg, { charge_id: chargeId });
   }
 
   // 7. Clasificar resultado.
+  //   - approved: IsoCode "00".
+  //   - declined: el procesador (ISO8583) lo rechazó con IsoCode != "00"
+  //     (p.ej. 05/51/63). Cuenta como intento fallido (política D11).
+  //   - error: validación/técnico (ResponseCode "Error", IsoCode vacío) o no-200.
+  //     NO cuenta como intento — es nuestro/transitorio y se reintenta.
   const azul = result.body;
   const approved = result.httpStatus === 200 && azul.IsoCode === "00";
-  const declined = result.httpStatus === 200 && azul.IsoCode !== "00";
+  const declined = result.httpStatus === 200 && azul.IsoCode !== "00" &&
+    azul.ResponseCode === "ISO8583";
   const finalStatus = approved ? "approved" : declined ? "declined" : "error";
 
   // 8. Actualizar la charge con el resultado + log de auditoría.
@@ -264,14 +283,14 @@ Deno.serve(async (req) => {
       raw_response: azul,
       completed_at: new Date().toISOString(),
     })
-    .eq("id", charge.id);
+    .eq("id", chargeId);
 
   await service.from("azul_webhook_events").insert({
     event_type: "webservice_response",
     http_method: "POST",
     raw_url: `${env.azulProxyUrl}/call (ProcessPayment Sale)`,
     raw_body: JSON.stringify(azul).slice(0, 10000),
-    related_charge_id: charge.id,
+    related_charge_id: chargeId,
     processed: true,
     processing_error: approved ? null : (azul.ErrorDescription || azul.ResponseMessage || `iso_${azul.IsoCode}`),
   });
@@ -283,7 +302,7 @@ Deno.serve(async (req) => {
       .update({
         billing_status: "active",
         current_attempt_number: 0,
-        last_successful_charge_id: charge.id,
+        last_successful_charge_id: chargeId,
         current_period_start: periodStart,
         current_period_end: periodEnd,
         next_billing_date: periodEnd,
@@ -298,7 +317,7 @@ Deno.serve(async (req) => {
         .update({
           billing_status: "past_due",
           current_attempt_number: attempt,
-          last_failed_charge_id: charge.id,
+          last_failed_charge_id: chargeId,
           next_billing_date: addDaysIso(today, retryDays),
         })
         .eq("id", membershipId);
@@ -310,7 +329,7 @@ Deno.serve(async (req) => {
           billing_status: "suspended",
           suspended_at: new Date().toISOString(),
           current_attempt_number: 3,
-          last_failed_charge_id: charge.id,
+          last_failed_charge_id: chargeId,
         })
         .eq("id", membershipId);
     }
@@ -320,7 +339,7 @@ Deno.serve(async (req) => {
 
   return jsonResponse({
     ok: approved,
-    charge_id: charge.id,
+    charge_id: chargeId,
     status: finalStatus,
     iso_code: azul.IsoCode ?? null,
     azul_order_id: azul.AzulOrderId ?? null,
