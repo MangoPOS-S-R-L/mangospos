@@ -103,7 +103,12 @@ class InventoryItemSummary {
   final String sku;
   final String name;
   final String description;
-  final String unit;
+  final String unit; // unidad BASE de stock (ej. ml)
+  /// Conversión de empaque: unidad de COMPRA (ej. botella) y cuántas
+  /// unidades base contiene (ej. 750). packSize=1 / purchaseUnit vacío =
+  /// sin empaque (se compra en la unidad base).
+  final String purchaseUnit;
+  final double packSize;
   final double cost;
   final double minStock;
   final double? maxStock;
@@ -125,6 +130,8 @@ class InventoryItemSummary {
     required this.name,
     required this.description,
     required this.unit,
+    this.purchaseUnit = '',
+    this.packSize = 1,
     required this.cost,
     required this.minStock,
     required this.maxStock,
@@ -153,6 +160,8 @@ class InventoryItemSummary {
       name: map['name']?.toString() ?? 'Insumo',
       description: map['description']?.toString() ?? '',
       unit: map['unit']?.toString() ?? 'unidad',
+      purchaseUnit: map['purchase_unit']?.toString() ?? '',
+      packSize: map['pack_size'] == null ? 1 : toDouble(map['pack_size']),
       cost: toDouble(map['cost']),
       minStock: toDouble(map['min_stock']),
       maxStock: map['max_stock'] == null ? null : toDouble(map['max_stock']),

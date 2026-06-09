@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../../app/router/routes.dart';
+import '../../../core/inventory/pack_conversion.dart';
 import '../state/purchases_state.dart';
 import '../viewmodel/purchases_viewmodel.dart';
 
@@ -510,10 +511,22 @@ class _DraftItemCard extends StatelessWidget {
               }
               if (selected != null) {
                 controllers.description.text = selected.name;
+                controllers.purchaseUnit = selected.purchaseUnit;
+                controllers.packSize = selected.packSize;
+                controllers.baseUnit = selected.unit;
                 if (controllers.unitCost.text.trim() == '0' &&
                     selected.cost > 0) {
-                  controllers.unitCost.text = selected.cost.toStringAsFixed(2);
+                  // selected.cost es por unidad base; mostrar por empaque
+                  // si aplica (costo del empaque = cost × packSize).
+                  final shown = controllers.hasPack
+                      ? selected.cost * selected.packSize
+                      : selected.cost;
+                  controllers.unitCost.text = shown.toStringAsFixed(2);
                 }
+              } else {
+                controllers.purchaseUnit = '';
+                controllers.packSize = 1;
+                controllers.baseUnit = '';
               }
               onChanged();
             },
@@ -534,7 +547,11 @@ class _DraftItemCard extends StatelessWidget {
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
-                  decoration: const InputDecoration(labelText: 'Cantidad'),
+                  decoration: InputDecoration(
+                    labelText: controllers.hasPack
+                        ? 'Cantidad (${controllers.purchaseUnit})'
+                        : 'Cantidad',
+                  ),
                 ),
               ),
               const SizedBox(width: 12),
@@ -545,15 +562,46 @@ class _DraftItemCard extends StatelessWidget {
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
-                  decoration: const InputDecoration(labelText: 'Costo unitario'),
+                  decoration: InputDecoration(
+                    labelText: controllers.hasPack
+                        ? 'Costo por ${controllers.purchaseUnit}'
+                        : 'Costo unitario',
+                  ),
                 ),
               ),
             ],
           ),
+          if (controllers.hasPack) ...[
+            const SizedBox(height: 6),
+            Builder(
+              builder: (_) {
+                final qty =
+                    double.tryParse(controllers.quantity.text.trim()) ?? 0;
+                final base = packToBase(qty, controllers.packSize);
+                final u = controllers.baseUnit;
+                return Text(
+                  '= ${_trimNum(base)} $u '
+                  '(1 ${controllers.purchaseUnit} = '
+                  '${_trimNum(controllers.packSize)} $u)',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF64748B),
+                  ),
+                );
+              },
+            ),
+          ],
         ],
       ),
     );
   }
+}
+
+String _trimNum(double v) {
+  final s = v.toStringAsFixed(2);
+  if (s.endsWith('.00')) return s.substring(0, s.length - 3);
+  if (s.endsWith('0')) return s.substring(0, s.length - 1);
+  return s;
 }
 
 class _SummaryRow extends StatelessWidget {
@@ -594,14 +642,30 @@ class _DraftItemControllers {
   final quantity = TextEditingController(text: '1');
   final unitCost = TextEditingController(text: '0');
   String? inventoryItemId;
+  // Snapshot del empaque del insumo seleccionado. La cantidad/costo se
+  // digitan en la unidad de compra y se convierten a base al guardar.
+  String purchaseUnit = '';
+  double packSize = 1;
+  String baseUnit = '';
+
+  bool get hasPack => packSize > 1 && purchaseUnit.trim().isNotEmpty;
 
   PurchaseDraftItem toDraftItem() {
     double parse(String raw) => double.tryParse(raw.trim()) ?? 0;
+    final qtyEntered = parse(quantity.text);
+    final costEntered = parse(unitCost.text);
+    // Convertir a unidad base si hay empaque (ej. 6 botellas → 4500 ml;
+    // RD$1000/botella → RD$1.333/ml). Sin empaque, 1:1.
+    final qtyBase = hasPack ? packToBase(qtyEntered, packSize) : qtyEntered;
+    final costBase =
+        hasPack ? packCostToBaseCost(costEntered, packSize) : costEntered;
     return PurchaseDraftItem(
       inventoryItemId: inventoryItemId,
       description: description.text.trim(),
-      quantity: parse(quantity.text),
-      unitCost: parse(unitCost.text),
+      quantity: qtyBase,
+      unitCost: costBase,
+      purchaseUnit: hasPack ? purchaseUnit.trim() : '',
+      packSize: hasPack ? packSize : 1,
     );
   }
 

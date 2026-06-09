@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
+import 'package:mangopos/presentation/sales/widgets/presentation_tabs.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
 class MenuBrowserSheet extends ConsumerStatefulWidget {
@@ -168,6 +169,10 @@ class _CategoriesTab extends ConsumerWidget {
             onBack: () => notifier.loadAll(preselectCategoryId: null),
           ),
           const Divider(height: 1),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(12, 8, 12, 0),
+            child: PresentationTabs(),
+          ),
         ] else ...[
           const SizedBox(height: 8),
           Wrap(
@@ -401,8 +406,19 @@ class _ProductsGridTab extends ConsumerWidget {
     if (w >= 1500) cross = 7;
     if (w >= 1800) cross = 8;
 
+    // Filtro por sub-pestaña de presentación (solo en modo categoría).
+    final products =
+        (vm.productsMode == MenuProductsMode.category &&
+            vm.selectedPresentation != null)
+        ? vm.products
+              .where((p) => p.presentation == vm.selectedPresentation)
+              .toList()
+        : vm.products;
+
     // Key changes when product list changes -> triggers quick fade
-    final gridKey = ValueKey(vm.products.map((p) => p.id).join(','));
+    final gridKey = ValueKey(
+      '${vm.selectedPresentation ?? ''}|${products.map((p) => p.id).join(',')}',
+    );
 
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 180),
@@ -412,14 +428,14 @@ class _ProductsGridTab extends ConsumerWidget {
         key: gridKey,
         padding: const EdgeInsets.all(12),
         child: GridView.builder(
-          itemCount: vm.products.length,
+          itemCount: products.length,
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: cross,
             mainAxisSpacing: 12,
             crossAxisSpacing: 12,
             childAspectRatio: 1.15,
           ),
-          itemBuilder: (_, i) => _ProductCard(item: vm.products[i]),
+          itemBuilder: (_, i) => _ProductCard(item: products[i]),
         ),
       ),
     );

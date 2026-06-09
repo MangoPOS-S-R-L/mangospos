@@ -42,7 +42,7 @@ class PurchasesRepository {
   Future<List<PurchaseInventoryItem>> getInventoryItems(String businessId) async {
     final response = await _client
         .from(PurchasesQueries.tableInventoryItems)
-        .select('id, name, sku, unit, cost, is_active')
+        .select('id, name, sku, unit, cost, is_active, purchase_unit, pack_size')
         .eq('business_id', businessId)
         .eq('is_active', true)
         .order('name');
@@ -196,10 +196,16 @@ class PurchasesRepository {
               'purchase_order_id': orderId,
               'inventory_item_id': item.inventoryItemId,
               'description': item.description,
+              // quantity_ordered y unit_cost van en unidad BASE (la vista
+              // ya convirtió desde la unidad de compra). El snapshot de
+              // empaque permite mostrar/recibir en la unidad de compra.
               'quantity_ordered': item.quantity,
               'unit_cost': item.unitCost,
               'tax_rate': item.taxRate,
               'total': item.total,
+              'purchase_unit':
+                  item.purchaseUnit.trim().isEmpty ? null : item.purchaseUnit.trim(),
+              'pack_size': item.packSize,
             },
           )
           .toList(growable: false),
@@ -223,7 +229,8 @@ class PurchasesRepository {
         .from(PurchasesQueries.tablePurchaseOrderItems)
         .select(
           'id, inventory_item_id, description, quantity_ordered, quantity_received, '
-          'unit_cost, tax_rate, total, inventory_items(name, unit, sku, tracks_lots)',
+          'unit_cost, tax_rate, total, purchase_unit, pack_size, '
+          'inventory_items(name, unit, sku, tracks_lots, purchase_unit, pack_size)',
         )
         .eq('purchase_order_id', orderId)
         .order('id');

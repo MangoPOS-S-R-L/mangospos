@@ -181,6 +181,11 @@ class ProductsViewModel extends ChangeNotifier {
       _categories = catalog.categories;
       _menus = catalog.menus;
       _printAreasByProduct = areasByProduct;
+      // El RPC `get_products_catalog` puede no exponer `presentation`.
+      // Merge defensivo: traemos id+presentation aparte para que el editor
+      // prellene la etiqueta y NO la borre al re-guardar. Best-effort: si la
+      // columna aún no existe (migración no aplicada), se ignora.
+      await _mergePresentations(resolvedBusinessId, generation);
       if (businessChanged) {
         _searchQuery = '';
         _selectedCategoryFilterId = null;
@@ -239,6 +244,44 @@ class ProductsViewModel extends ChangeNotifier {
       _selectedCategoryFilterId != null ||
       _selectedMenuFilterId != null ||
       _selectedPrintAreaFilterId != null;
+
+  /// Trae `id, presentation` de menu_items y lo mergea en `_products`. El
+  /// RPC del catálogo no siempre expone la columna; sin esto, editar un
+  /// producto mostraría la etiqueta vacía y al re-guardar la borraría.
+  /// Best-effort: si la columna no existe (migración pendiente), se ignora.
+  Future<void> _mergePresentations(String businessId, int generation) async {
+    try {
+      final rows = await _supabase
+          .from('menu_items')
+          .select('id, presentation')
+          .eq('business_id', businessId);
+      if (generation != _loadGeneration) return;
+      final byId = <String, dynamic>{
+        for (final r in (rows as List))
+          (r as Map)['id'].toString(): r['presentation'],
+      };
+      for (final p in _products) {
+        final id = p['id']?.toString();
+        if (id != null && byId.containsKey(id)) {
+          p['presentation'] = byId[id];
+        }
+      }
+    } catch (_) {
+      // Columna inexistente o sin permisos: la etiqueta no es crítica.
+    }
+  }
+
+  /// Etiquetas de presentación distintas ya usadas (autocompletar para
+  /// mantener consistencia: "Botella" en vez de variantes sueltas).
+  List<String> get presentationOptions {
+    final set = <String>{};
+    for (final p in _products) {
+      final v = p['presentation']?.toString().trim();
+      if (v != null && v.isNotEmpty) set.add(v);
+    }
+    final list = set.toList()..sort();
+    return list;
+  }
 
   Future<void> _fetchProducts() async {
     if (_businessId == null) return;
@@ -302,6 +345,7 @@ class ProductsViewModel extends ChangeNotifier {
     bool isActive = true,
     String itemType = 'standard',
     String? printAreaCode,
+    String? presentation,
     // Printing v2 (Slice 4.B): N:M de áreas. Si no se provee, no se
     // toca la tabla menu_item_print_areas.
     List<String>? printAreaIds,
@@ -361,6 +405,7 @@ class ProductsViewModel extends ChangeNotifier {
         isActive: isActive,
         itemType: itemType,
         printAreaCode: printAreaCode,
+        presentation: presentation,
         imagePath: imagePath,
         imageUrl: imageUrl,
         taxIds: taxIds,
@@ -411,6 +456,7 @@ class ProductsViewModel extends ChangeNotifier {
     bool hasVariants = false,
     String itemType = 'standard',
     String? printAreaCode,
+    String? presentation,
     // Printing v2 (Slice 4.B): N:M de áreas. NULL = no tocar; lista vacía
     // = limpiar todas las asignaciones.
     List<String>? printAreaIds,
@@ -463,6 +509,7 @@ class ProductsViewModel extends ChangeNotifier {
         hasVariants: hasVariants,
         itemType: itemType,
         printAreaCode: printAreaCode,
+        presentation: presentation,
         imagePath: imagePath,
         imageUrl: imageUrl,
         taxIds: taxIds,

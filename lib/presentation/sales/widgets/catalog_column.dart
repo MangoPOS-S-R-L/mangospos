@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mangopos/presentation/sales/view/theme/sales_theme.dart';
 import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dart';
+import 'package:mangopos/presentation/sales/widgets/presentation_tabs.dart';
 
 class CatalogColumn extends ConsumerStatefulWidget {
   final String tableCode;
@@ -333,9 +334,12 @@ class _CategoriesView extends ConsumerWidget {
     final categories = state.categories;
 
     if (selectedCategoryId != null) {
-      // Products Grid
+      // Products Grid (filtrado por sub-pestaña de presentación si aplica)
       final products = state.products
           .where((p) => p.categoryId == selectedCategoryId)
+          .where((p) =>
+              state.selectedPresentation == null ||
+              p.presentation == state.selectedPresentation)
           .toList();
       // Should show category name? Spec says: Header has "Entradas" (h3) + "Ver todas" button.
       // We already have main header showing "Productos".
@@ -375,7 +379,9 @@ class _CategoriesView extends ConsumerWidget {
               ),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
+          const PresentationTabs(),
+          const SizedBox(height: 12),
           Expanded(
             child: GridView.builder(
               padding: const EdgeInsets.only(bottom: 80), // Space for scroll

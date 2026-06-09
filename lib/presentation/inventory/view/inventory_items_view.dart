@@ -16,6 +16,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../core/inventory/pack_conversion.dart';
 import '../../../core/theme/app_breakpoints.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
@@ -667,7 +668,13 @@ class _InventoryItemCardMobile extends StatelessWidget {
                       label: 'STOCK',
                       value: fmt.format(item.stock),
                       valueColor: low ? AppColors.warning : null,
-                      sublabel: 'mín ${fmt.format(item.minStock)} ${item.unit}',
+                      sublabel:
+                          packEquivalentLabel(
+                            item.stock,
+                            item.packSize,
+                            item.purchaseUnit,
+                          ) ??
+                          'mín ${fmt.format(item.minStock)} ${item.unit}',
                     ),
                   ),
                 ],
@@ -781,9 +788,19 @@ class _StockCell extends StatelessWidget {
           ),
         ),
         Text(
-          'min ${fmt.format(item.minStock)}',
+          'min ${fmt.format(item.minStock)} ${item.unit}',
           style: TextStyle(fontSize: 11, color: AppColors.mutedForeground),
         ),
+        if (packEquivalentLabel(item.stock, item.packSize, item.purchaseUnit)
+            case final eq?)
+          Text(
+            eq,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: AppColors.primary,
+            ),
+          ),
       ],
     );
   }
@@ -870,6 +887,8 @@ class _ItemFormDialogState extends State<_ItemFormDialog> {
   late final TextEditingController _barcodeCtrl;
   late final TextEditingController _descCtrl;
   late final TextEditingController _unitCtrl;
+  late final TextEditingController _purchaseUnitCtrl;
+  late final TextEditingController _packSizeCtrl;
   late final TextEditingController _costCtrl;
   late final TextEditingController _minStockCtrl;
   late final TextEditingController _maxStockCtrl;
@@ -892,6 +911,10 @@ class _ItemFormDialogState extends State<_ItemFormDialog> {
     _barcodeCtrl = TextEditingController(text: e?.barcode ?? '');
     _descCtrl = TextEditingController(text: e?.description ?? '');
     _unitCtrl = TextEditingController(text: e?.unit ?? 'unidad');
+    _purchaseUnitCtrl = TextEditingController(text: e?.purchaseUnit ?? '');
+    _packSizeCtrl = TextEditingController(
+      text: (e != null && e.packSize != 1) ? _trimNum(e.packSize) : '',
+    );
     _costCtrl = TextEditingController(text: e?.cost.toString() ?? '0');
     _minStockCtrl =
         TextEditingController(text: e?.minStock.toString() ?? '0');
@@ -915,6 +938,13 @@ class _ItemFormDialogState extends State<_ItemFormDialog> {
     final v = raw?.trim();
     if (v == null || v.isEmpty) return 'simple';
     return _classificationOptions.containsKey(v) ? v : 'simple';
+  }
+
+  static String _trimNum(double v) {
+    final s = v.toStringAsFixed(2);
+    if (s.endsWith('.00')) return s.substring(0, s.length - 3);
+    if (s.endsWith('0')) return s.substring(0, s.length - 1);
+    return s;
   }
 
   static String _classificationHint(String value) {
@@ -945,6 +975,8 @@ class _ItemFormDialogState extends State<_ItemFormDialog> {
     _barcodeCtrl.dispose();
     _descCtrl.dispose();
     _unitCtrl.dispose();
+    _purchaseUnitCtrl.dispose();
+    _packSizeCtrl.dispose();
     _costCtrl.dispose();
     _minStockCtrl.dispose();
     _maxStockCtrl.dispose();
@@ -957,6 +989,24 @@ class _ItemFormDialogState extends State<_ItemFormDialog> {
     final t = v.trim();
     if (t.isEmpty) return null;
     return double.tryParse(t.replaceAll(',', '.'));
+  }
+
+  /// Contenido por empaque a guardar. Vacío o inválido → 1 (sin empaque),
+  /// lo que también resetea un valor previo al editar.
+  double _packSizeForSave() {
+    final raw = _packSizeCtrl.text.trim();
+    if (raw.isEmpty) return 1;
+    final v = double.tryParse(raw.replaceAll(',', '.'));
+    return (v == null || v <= 0) ? 1 : v;
+  }
+
+  /// Texto de ayuda bajo el campo de empaque: "1 botella = 750 ml".
+  String? _packHelperText() {
+    final pu = _purchaseUnitCtrl.text.trim();
+    final base = _unitCtrl.text.trim();
+    final size = double.tryParse(_packSizeCtrl.text.trim().replaceAll(',', '.'));
+    if (pu.isEmpty || size == null || size <= 0) return null;
+    return '1 $pu = ${_trimNum(size)} ${base.isEmpty ? 'unidad' : base}';
   }
 
   Future<void> _save() async {
@@ -987,6 +1037,8 @@ class _ItemFormDialogState extends State<_ItemFormDialog> {
           barcode: _orNull(_barcodeCtrl.text) ?? '',
           tracksLots: _tracksLots,
           itemClassification: _itemClassification,
+          purchaseUnit: _purchaseUnitCtrl.text.trim(),
+          packSize: _packSizeForSave(),
         );
       } else {
         await widget.repo.createItem(
@@ -1005,6 +1057,8 @@ class _ItemFormDialogState extends State<_ItemFormDialog> {
           barcode: _orNull(_barcodeCtrl.text),
           tracksLots: _tracksLots,
           itemClassification: _itemClassification,
+          purchaseUnit: _orNull(_purchaseUnitCtrl.text),
+          packSize: _packSizeForSave(),
         );
       }
       if (mounted) Navigator.pop(context, true);
@@ -1065,12 +1119,12 @@ class _ItemFormDialogState extends State<_ItemFormDialog> {
               Row(
                 children: [
                   SizedBox(
-                    width: 140,
+                    width: 160,
                     child: TextField(
                       controller: _unitCtrl,
                       decoration: const InputDecoration(
-                        labelText: 'Unidad',
-                        hintText: 'unidad, kg, ml',
+                        labelText: 'Unidad base (stock)',
+                        hintText: 'ml, g, unidad',
                       ),
                     ),
                   ),
@@ -1085,6 +1139,43 @@ class _ItemFormDialogState extends State<_ItemFormDialog> {
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              // Conversión de empaque: comprar/recibir en otra unidad (ej.
+              // botella) que contiene N unidades base (ej. 750 ml). Vacío =
+              // se compra en la unidad base.
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _purchaseUnitCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Unidad de compra (opcional)',
+                        hintText: 'botella, caja',
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
+                      controller: _packSizeCtrl,
+                      decoration: InputDecoration(
+                        labelText: 'Contenido por empaque',
+                        hintText: '750',
+                        helperText: _packHelperText(),
+                        suffixText: _unitCtrl.text.trim().isEmpty
+                            ? null
+                            : _unitCtrl.text.trim(),
+                      ),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      onChanged: (_) => setState(() {}),
                     ),
                   ),
                 ],

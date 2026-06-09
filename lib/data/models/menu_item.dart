@@ -45,6 +45,10 @@ class MenuItem {
   final String? sku; // referencia
   final String? barcode; // 👈 NUEVO opcional
 
+  /// Etiqueta de presentación (ej. Botella/Trago/Shot). Texto libre
+  /// opcional; el catálogo la usa para sub-pestañas por categoría.
+  final String? presentation;
+
   final int prepMinutes;
   final bool hasVariants;
   final bool isActive;
@@ -88,6 +92,7 @@ class MenuItem {
     this.cost,
     this.sku,
     this.barcode,
+    this.presentation,
     required this.prepMinutes,
     required this.hasVariants,
     required this.isActive,
@@ -146,6 +151,7 @@ class MenuItem {
       cost: toDoubleOpt(m['cost']), // 👈
       sku: m['sku'] as String?,
       barcode: m['barcode'] as String?, // 👈
+      presentation: m['presentation'] as String?,
       prepMinutes: toInt(m['prep_minutes']),
       hasVariants: toBool(m['has_variants']),
       isActive: toBool(m['is_active']),
@@ -174,6 +180,7 @@ class MenuItem {
     double? cost,
     String? sku,
     String? barcode,
+    String? presentation,
     int? prepMinutes,
     bool? hasVariants,
     bool? isActive,
@@ -200,6 +207,7 @@ class MenuItem {
       cost: cost ?? this.cost,
       sku: sku ?? this.sku,
       barcode: barcode ?? this.barcode,
+      presentation: presentation ?? this.presentation,
       prepMinutes: prepMinutes ?? this.prepMinutes,
       hasVariants: hasVariants ?? this.hasVariants,
       isActive: isActive ?? this.isActive,
@@ -227,6 +235,7 @@ class MenuItem {
     'cost': cost,
     'sku': sku,
     'barcode': barcode,
+    'presentation': presentation,
     'prep_minutes': prepMinutes,
     'has_variants': hasVariants,
     'is_active': isActive,

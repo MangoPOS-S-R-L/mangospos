@@ -123,7 +123,8 @@ class InventoryRepository {
     // tracks_lots. PRD inventario avanzado: item_classification.
     const columns =
         'id, sku, name, description, unit, cost, min_stock, max_stock, '
-        'is_active, costing_method, barcode, tracks_lots, item_classification';
+        'is_active, costing_method, barcode, tracks_lots, item_classification, '
+        'purchase_unit, pack_size';
     final normalized = query?.trim();
     try {
       // SIEMPRE traemos el listado completo sin filtro y aplicamos el
@@ -699,6 +700,8 @@ class InventoryRepository {
     String? barcode,
     bool tracksLots = false,
     String? itemClassification,
+    String? purchaseUnit,
+    double? packSize,
   }) async {
     final response = await _client
         .from(InventoryQueries.tableInventoryItems)
@@ -717,6 +720,8 @@ class InventoryRepository {
             'barcode': barcode,
             'tracks_lots': tracksLots,
             'item_classification': itemClassification,
+            'purchase_unit': purchaseUnit,
+            'pack_size': packSize,
           }..removeWhere((key, value) => value == null),
         )
         .select()
@@ -739,6 +744,8 @@ class InventoryRepository {
     String? barcode,
     bool? tracksLots,
     String? itemClassification,
+    String? purchaseUnit,
+    double? packSize,
   }) async {
     final payload = <String, dynamic>{
       'name': name,
@@ -758,6 +765,13 @@ class InventoryRepository {
     if (itemClassification != null) {
       payload['item_classification'] = itemClassification;
     }
+    // Empaque: purchase_unit puede ser '' (limpiar); pack_size siempre número.
+    if (purchaseUnit != null) {
+      payload['purchase_unit'] = purchaseUnit.trim().isEmpty
+          ? null
+          : purchaseUnit.trim();
+    }
+    if (packSize != null) payload['pack_size'] = packSize;
     payload.removeWhere((key, value) => value == null);
     await _client
         .from(InventoryQueries.tableInventoryItems)

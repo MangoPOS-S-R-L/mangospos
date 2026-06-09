@@ -31,6 +31,11 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
   final Map<String, String> _tableToZoneIndex = <String, String>{};
   final Map<String, String> _sessionToZoneIndex = <String, String>{};
 
+  // Throttle del barrido de mesas fantasma: la vista llama load() cada ~30s,
+  // pero no queremos disparar el RPC tan seguido.
+  DateTime? _lastSweepAt;
+  static const _sweepThrottle = Duration(minutes: 3);
+
   static const _realtimeDebounce = Duration(milliseconds: 450);
 
   @override
@@ -106,10 +111,29 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
       // siguiente _loadData periodico re-suscribe.
       if (!result.fromCache) {
         _subscribeRealtime(bizId);
+        // Red de seguridad: barrer mesas fantasma del negocio (vacías y
+        // abandonadas) por si la limpieza al salir falló por crash/red.
+        // Throttled y fire-and-forget para no pegar el RPC en cada refresh.
+        _maybeSweepEmptyTables(bizId);
       }
     } catch (e) {
       state = state.copyWith(loading: false, error: '$e');
     }
+  }
+
+  void _maybeSweepEmptyTables(String businessId) {
+    final now = DateTime.now();
+    if (_lastSweepAt != null &&
+        now.difference(_lastSweepAt!) < _sweepThrottle) {
+      return;
+    }
+    _lastSweepAt = now;
+    unawaited(
+      ref
+          .read(zonesRepoProvider)
+          .releaseEmptyTables(businessId, graceMinutes: 15)
+          .catchError((_) {}),
+    );
   }
 
   Future<void> loadZoneStatus(String zoneId, {bool emitError = true}) async {

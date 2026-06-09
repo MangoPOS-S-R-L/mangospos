@@ -97,6 +97,7 @@ class MenuItemsVm extends Notifier<MenuItemsState> {
     List<String>? taxIds,
     double? cost,
     String? barcode,
+    String? presentation,
   }) async {
     try {
       String? imagePath;
@@ -142,6 +143,7 @@ class MenuItemsVm extends Notifier<MenuItemsState> {
         taxIds: taxIds,
         cost: cost,
         barcode: barcode,
+        presentation: presentation,
       );
 
       await refresh();
@@ -154,6 +156,25 @@ class MenuItemsVm extends Notifier<MenuItemsState> {
   Future<void> rename(String id, String newName) async {
     await _repo.update(id, {'name': newName});
     await refresh();
+  }
+
+  /// Etiqueta de presentación (Botella/Trago/Shot…). `null`/vacío la limpia.
+  Future<void> setPresentation(String id, String? value) async {
+    final v = value?.trim();
+    await _repo.update(id, {'presentation': (v == null || v.isEmpty) ? null : v});
+    await refresh();
+  }
+
+  /// Etiquetas de presentación distintas ya usadas (para autocompletar y
+  /// mantenerlas consistentes). Ordenadas alfabéticamente.
+  List<String> get presentationOptions {
+    final set = <String>{};
+    for (final it in state.list) {
+      final p = it.presentation?.trim();
+      if (p != null && p.isNotEmpty) set.add(p);
+    }
+    final list = set.toList()..sort();
+    return list;
   }
 
   Future<void> updatePrice(String id, double price) async {

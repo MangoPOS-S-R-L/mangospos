@@ -302,6 +302,16 @@ class _ItemsTable extends ConsumerWidget {
                                   color: MangoColors.muted,
                                 ),
                               ),
+                            const SizedBox(height: 4),
+                            _PresentationChip(
+                              value: it.presentation,
+                              onTap: () => _editPresentation(
+                                context,
+                                ref,
+                                id: it.id,
+                                current: it.presentation,
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -497,6 +507,227 @@ class _ThumbBox extends StatelessWidget {
 }
 
 /// -------- Diálogo flotante crear --------
+/// Chip de etiqueta de presentación (Botella/Trago/Shot…) en la fila del
+/// producto. Tap → editar. Si no hay etiqueta muestra un prompt neutro.
+class _PresentationChip extends StatelessWidget {
+  final String? value;
+  final VoidCallback onTap;
+  const _PresentationChip({required this.value, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final has = value != null && value!.trim().isNotEmpty;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: has ? const Color(0xFFFFEDD5) : const Color(0xFFF3F4F6),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: has
+                ? MangoColors.primaryOrange.withValues(alpha: 0.4)
+                : MangoColors.cardBorder,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.sell_outlined,
+              size: 12,
+              color: has ? MangoColors.primaryOrange : MangoColors.muted,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              has ? value!.trim() : 'Etiqueta',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: has ? MangoColors.primaryOrange : MangoColors.muted,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Abre el diálogo de edición de presentación y persiste el cambio.
+/// Retorno del diálogo: null = cancelar, '' = quitar, texto = guardar.
+Future<void> _editPresentation(
+  BuildContext context,
+  WidgetRef ref, {
+  required String id,
+  required String? current,
+}) async {
+  final options = ref.read(menuItemsVmProvider.notifier).presentationOptions;
+  final result = await showDialog<String?>(
+    context: context,
+    builder: (_) => _PresentationDialog(initial: current, options: options),
+  );
+  if (result == null) return; // cancelado
+  await ref.read(menuItemsVmProvider.notifier).setPresentation(id, result);
+}
+
+/// Diálogo para capturar/editar la etiqueta de presentación, con chips de
+/// las etiquetas ya usadas para reutilizarlas (consistencia).
+class _PresentationDialog extends StatefulWidget {
+  final String? initial;
+  final List<String> options;
+  const _PresentationDialog({this.initial, required this.options});
+
+  @override
+  State<_PresentationDialog> createState() => _PresentationDialogState();
+}
+
+class _PresentationDialogState extends State<_PresentationDialog> {
+  late final TextEditingController _c =
+      TextEditingController(text: widget.initial ?? '');
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hadValue = (widget.initial ?? '').trim().isNotEmpty;
+    return AlertDialog(
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.white,
+      title: const Text(
+        'Presentación',
+        style: TextStyle(fontWeight: FontWeight.bold),
+      ),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _c,
+              autofocus: true,
+              textCapitalization: TextCapitalization.words,
+              decoration: InputDecoration(
+                hintText: 'Ej: Botella, Trago, Shot',
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              onSubmitted: (v) => Navigator.pop(context, v.trim()),
+            ),
+            if (widget.options.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              const Text(
+                'Etiquetas usadas',
+                style: TextStyle(fontSize: 12, color: MangoColors.muted),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: widget.options
+                    .map(
+                      (o) => ActionChip(
+                        label: Text(o),
+                        onPressed: () => setState(() {
+                          _c.text = o;
+                          _c.selection = TextSelection.collapsed(
+                            offset: o.length,
+                          );
+                        }),
+                      ),
+                    )
+                    .toList(),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        if (hadValue)
+          TextButton(
+            onPressed: () => Navigator.pop(context, ''),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Quitar'),
+          ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _c.text.trim()),
+          child: const Text('Guardar'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Campo de "Presentación" para el formulario de creación de producto:
+/// TextField libre + chips de las etiquetas ya usadas (reutilización).
+class _PresentationFormField extends ConsumerWidget {
+  final TextEditingController controller;
+  const _PresentationFormField({required this.controller});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final items = ref.watch(menuItemsVmProvider).list;
+    final options = <String>{
+      for (final it in items)
+        if ((it.presentation ?? '').trim().isNotEmpty)
+          it.presentation!.trim(),
+    }.toList()
+      ..sort();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextField(
+          controller: controller,
+          textCapitalization: TextCapitalization.words,
+          decoration: InputDecoration(
+            labelText: 'Presentación (opcional)',
+            hintText: 'Ej: Botella, Trago, Shot',
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: MangoColors.cardBorder),
+            ),
+          ),
+        ),
+        if (options.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: options
+                .map(
+                  (o) => ActionChip(
+                    label: Text(o),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () {
+                      controller.text = o;
+                      controller.selection =
+                          TextSelection.collapsed(offset: o.length);
+                    },
+                  ),
+                )
+                .toList(),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
 class _NewItemDialog extends ConsumerStatefulWidget {
   const _NewItemDialog();
 
@@ -509,6 +740,7 @@ class _NewItemDialogState extends ConsumerState<_NewItemDialog> {
   final _desc = TextEditingController();
   final _sku = TextEditingController();
   final _barcode = TextEditingController();
+  final _presentation = TextEditingController();
   final _price = TextEditingController(text: '0');
   final _cost = TextEditingController();
 
@@ -759,6 +991,9 @@ class _NewItemDialogState extends ConsumerState<_NewItemDialog> {
                     ),
                     const SizedBox(height: 12),
 
+                    _PresentationFormField(controller: _presentation),
+                    const SizedBox(height: 12),
+
                     SwitchListTile(
                       value: _hasVariants,
                       onChanged: (v) {
@@ -940,6 +1175,9 @@ class _NewItemDialogState extends ConsumerState<_NewItemDialog> {
                             taxIds: _selectedTaxIds.toList(),
                             cost: cost,
                             barcode: barcode,
+                            presentation: _presentation.text.trim().isEmpty
+                                ? null
+                                : _presentation.text.trim(),
                           );
                       if (mounted) Navigator.pop(context, true);
                     },

@@ -22,6 +22,10 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
   final Map<String, dynamic>? product;
   final List<Map<String, dynamic>> categories;
   final List<Map<String, dynamic>> menus;
+
+  /// Etiquetas de presentación ya usadas en el negocio (Botella/Trago/Shot…),
+  /// para sugerirlas como chips y mantenerlas consistentes.
+  final List<String> existingPresentations;
   final Future<Map<String, dynamic>> Function(String name)? onCreateCategory;
   final Function({
     required String name,
@@ -37,6 +41,7 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     bool isActive,
     String itemType,
     String? printAreaCode,
+    String? presentation,
     List<String>? printAreaIds,
     File? imageFile,
     Uint8List? imageBytes,
@@ -62,6 +67,7 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     bool hasVariants,
     String itemType,
     String? printAreaCode,
+    String? presentation,
     List<String>? printAreaIds,
     File? imageFile,
     Uint8List? imageBytes,
@@ -77,6 +83,7 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     this.product,
     required this.categories,
     required this.menus,
+    this.existingPresentations = const [],
     this.onCreateCategory,
     required this.onAdd,
     required this.onUpdate,
@@ -95,6 +102,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
   late TextEditingController _costController;
   late TextEditingController _skuController;
   late TextEditingController _barcodeController;
+  late TextEditingController _presentationController;
 
   String? _selectedCategoryId;
   String? _selectedMenuId;
@@ -163,6 +171,8 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     _costController = TextEditingController(text: p?['cost']?.toString() ?? '');
     _skuController = TextEditingController(text: p?['sku'] ?? '');
     _barcodeController = TextEditingController(text: p?['barcode'] ?? '');
+    _presentationController =
+        TextEditingController(text: p?['presentation']?.toString() ?? '');
 
     _selectedCategoryId = p?['category_id']?.toString();
 
@@ -313,6 +323,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     _costController.dispose();
     _skuController.dispose();
     _barcodeController.dispose();
+    _presentationController.dispose();
     _initialStockController.dispose();
     super.dispose();
   }
@@ -626,6 +637,33 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
             ),
           ],
         ),
+        const SizedBox(height: AppSpacing.lg),
+        _fieldLabel('Presentaci\u00f3n'),
+        _buildTextField(
+          controller: _presentationController,
+          hintText: 'Ej: Botella, Trago, Shot',
+        ),
+        if (widget.existingPresentations.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: AppSpacing.sm),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: widget.existingPresentations.map((p) {
+                return ActionChip(
+                  label: Text(p),
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () {
+                    setState(() {
+                      _presentationController.text = p;
+                      _presentationController.selection =
+                          TextSelection.collapsed(offset: p.length);
+                    });
+                  },
+                );
+              }).toList(),
+            ),
+          ),
         const SizedBox(height: AppSpacing.lg),
         _fieldLabel('Imagen del Producto'),
         _ImagePickerArea(
@@ -1427,6 +1465,9 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     final barcode = _barcodeController.text.trim().isEmpty
         ? null
         : _barcodeController.text.trim();
+    final presentation = _presentationController.text.trim().isEmpty
+        ? null
+        : _presentationController.text.trim();
     final desc = _descController.text.trim().isEmpty
         ? null
         : _descController.text.trim();
@@ -1465,6 +1506,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         hasVariants: _hasVariants,
         itemType: _itemType,
         printAreaCode: _printAreaCode,
+        presentation: presentation,
         printAreaIds: printAreaIds,
         imageFile: _pickedImageFile,
         imageBytes: _pickedImageBytes,
@@ -1488,6 +1530,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         isActive: _isActive,
         itemType: _itemType,
         printAreaCode: _printAreaCode,
+        presentation: presentation,
         printAreaIds: printAreaIds,
         imageFile: _pickedImageFile,
         imageBytes: _pickedImageBytes,

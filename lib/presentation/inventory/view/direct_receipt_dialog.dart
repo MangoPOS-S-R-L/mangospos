@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 
+import '../../../core/inventory/pack_conversion.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../state/inventory_state.dart';
@@ -498,17 +499,29 @@ class _ItemRowState extends State<_ItemRow> {
   late TextEditingController _lotController;
   DateTime? _expiryDate;
 
+  // Conversión de empaque: input/display en unidad de compra (botellas),
+  // draft/movimiento en unidad base (ml).
+  bool get _hasPack =>
+      widget.item.packSize > 1 && widget.item.purchaseUnit.trim().isNotEmpty;
+  String get _displayUnit =>
+      _hasPack ? widget.item.purchaseUnit.trim() : widget.item.unit;
+  double get _packSize => widget.item.packSize;
+
   @override
   void initState() {
     super.initState();
+    final draftQty = widget.draft?.quantity ?? 0;
     _qtyController = TextEditingController(
-      text: (widget.draft?.quantity ?? 0) > 0
-          ? _formatQty(widget.draft!.quantity)
+      text: draftQty > 0
+          ? _formatQty(_hasPack ? baseToPack(draftQty, _packSize) : draftQty)
           : '',
     );
     _costController = TextEditingController(
       text: widget.draft?.unitCost != null
-          ? widget.draft!.unitCost!.toStringAsFixed(2)
+          ? (_hasPack
+                  ? widget.draft!.unitCost! * _packSize
+                  : widget.draft!.unitCost!)
+              .toStringAsFixed(2)
           : '',
     );
     _lotController = TextEditingController(text: widget.draft?.lotNumber ?? '');
@@ -518,8 +531,9 @@ class _ItemRowState extends State<_ItemRow> {
   @override
   void didUpdateWidget(_ItemRow old) {
     super.didUpdateWidget(old);
-    final expectedQty = (widget.draft?.quantity ?? 0) > 0
-        ? _formatQty(widget.draft!.quantity)
+    final draftQty = widget.draft?.quantity ?? 0;
+    final expectedQty = draftQty > 0
+        ? _formatQty(_hasPack ? baseToPack(draftQty, _packSize) : draftQty)
         : '';
     if (_qtyController.text != expectedQty) {
       _qtyController.text = expectedQty;
@@ -540,14 +554,20 @@ class _ItemRowState extends State<_ItemRow> {
   }
 
   void _emit() {
-    final qty = double.tryParse(_qtyController.text.replaceAll(',', '.')) ?? 0;
-    if (qty <= 0) {
+    final entered =
+        double.tryParse(_qtyController.text.replaceAll(',', '.')) ?? 0;
+    if (entered <= 0) {
       widget.onChange(null);
       return;
     }
-    final cost = _costController.text.trim().isEmpty
+    // Entrada en unidad de compra → base.
+    final qty = _hasPack ? packToBase(entered, _packSize) : entered;
+    final enteredCost = _costController.text.trim().isEmpty
         ? null
         : double.tryParse(_costController.text.replaceAll(',', '.'));
+    final cost = enteredCost == null
+        ? null
+        : (_hasPack ? packCostToBaseCost(enteredCost, _packSize) : enteredCost);
     final lot = _lotController.text.trim().isEmpty
         ? null
         : _lotController.text.trim();
@@ -657,7 +677,7 @@ class _ItemRowState extends State<_ItemRow> {
                   textAlign: TextAlign.right,
                   decoration: InputDecoration(
                     hintText: '0',
-                    suffixText: widget.item.unit,
+                    suffixText: _displayUnit,
                     border: const OutlineInputBorder(),
                     isDense: true,
                     contentPadding: const EdgeInsets.symmetric(
@@ -665,7 +685,7 @@ class _ItemRowState extends State<_ItemRow> {
                       vertical: 8,
                     ),
                   ),
-                  onChanged: (_) => _emit(),
+                  onChanged: (_) => setState(_emit),
                 ),
               ),
               const SizedBox(width: 8),
@@ -678,9 +698,11 @@ class _ItemRowState extends State<_ItemRow> {
                   ),
                   textAlign: TextAlign.right,
                   decoration: InputDecoration(
-                    hintText: widget.item.cost > 0
-                        ? widget.item.cost.toStringAsFixed(2)
-                        : 'Costo',
+                    hintText: _hasPack
+                        ? 'Costo/${widget.item.purchaseUnit.trim()}'
+                        : (widget.item.cost > 0
+                              ? widget.item.cost.toStringAsFixed(2)
+                              : 'Costo'),
                     prefixText: 'RD\$',
                     border: const OutlineInputBorder(),
                     isDense: true,
@@ -694,6 +716,17 @@ class _ItemRowState extends State<_ItemRow> {
               ),
             ],
           ),
+          if (_hasPack && (widget.draft?.quantity ?? 0) > 0)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                '= ${_formatQty(widget.draft!.quantity)} ${widget.item.unit}',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: AppColors.mutedForeground,
+                ),
+              ),
+            ),
           if (tracksLots && selected) ...[
             const SizedBox(height: 8),
             Row(

@@ -327,6 +327,25 @@ class ZonesRepository {
     }
   }
 
+  /// Barrido de mesas fantasma acotado al negocio: cierra órdenes/sesiones
+  /// vacías y viejas (> [graceMinutes]) y libera la mesa, vía
+  /// `fn_release_empty_tables`. Red de seguridad para cuando la limpieza al
+  /// salir falló (crash/recarga/red). Solo toca casos seguros (sin items
+  /// pendientes); las mesas con productos nunca se tocan. Best-effort: el
+  /// caller lo envuelve en try/catch + unawaited.
+  Future<void> releaseEmptyTables(
+    String businessId, {
+    int graceMinutes = 15,
+  }) async {
+    await sb.rpc(
+      'fn_release_empty_tables',
+      params: {
+        'p_older_than_minutes': graceMinutes,
+        'p_business_id': businessId,
+      },
+    );
+  }
+
   /// Lista todas las mesas activas de un negocio (todas las zonas)
   /// junto con el estado actual y la zona a la que pertenecen. Usado
   /// por el dialog de transferencia para que el cajero elija destino.

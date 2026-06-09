@@ -587,14 +587,20 @@ class _RecipeFormDialogState extends State<_RecipeFormDialog> {
               child: TextField(
                 controller: row.quantity,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: 'Cantidad'),
+                decoration: const InputDecoration(
+                  labelText: 'Cantidad',
+                  // La cantidad SIEMPRE va en la unidad base del insumo (ej.
+                  // ml), no en la unidad de compra (botella).
+                  helperText: 'en unidad base del insumo',
+                  helperMaxLines: 2,
+                ),
               ),
             ),
             const SizedBox(width: 8),
             Expanded(
               child: TextField(
                 controller: row.unit,
-                decoration: const InputDecoration(labelText: 'Unidad'),
+                decoration: const InputDecoration(labelText: 'Unidad base'),
               ),
             ),
             const SizedBox(width: 8),

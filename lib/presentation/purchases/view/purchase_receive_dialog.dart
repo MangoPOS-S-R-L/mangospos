@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 
+import '../../../core/inventory/pack_conversion.dart';
 import '../state/purchases_state.dart';
 import '../viewmodel/purchases_viewmodel.dart';
 
@@ -361,13 +362,22 @@ class _LineRowState extends State<_LineRow> {
   late final TextEditingController _lotController;
   DateTime? _expiryDate;
 
-  double get _qty => widget.draft?.quantity ?? 0;
+  double get _qty => widget.draft?.quantity ?? 0; // siempre en unidad BASE
+
+  // Conversión de empaque: si la línea tiene empaque, el input/display van
+  // en unidad de compra (botellas) y el draft/validación en base (ml).
+  bool get _hasPack =>
+      widget.line.packSize > 1 && widget.line.purchaseUnit.trim().isNotEmpty;
+  String get _displayUnit =>
+      _hasPack ? widget.line.purchaseUnit.trim() : widget.line.unit;
+  double get _qtyDisplay =>
+      _hasPack ? baseToPack(_qty, widget.line.packSize) : _qty;
 
   @override
   void initState() {
     super.initState();
     _controller = TextEditingController(
-      text: _qty > 0 ? _formatQty(_qty) : '',
+      text: _qtyDisplay > 0 ? _formatQty(_qtyDisplay) : '',
     );
     _lotController = TextEditingController(text: widget.draft?.lotNumber ?? '');
     _expiryDate = widget.draft?.expiryDate;
@@ -376,7 +386,7 @@ class _LineRowState extends State<_LineRow> {
   @override
   void didUpdateWidget(_LineRow old) {
     super.didUpdateWidget(old);
-    final expected = _qty > 0 ? _formatQty(_qty) : '';
+    final expected = _qtyDisplay > 0 ? _formatQty(_qtyDisplay) : '';
     if (_controller.text != expected) {
       _controller.text = expected;
       _controller.selection = TextSelection.collapsed(offset: expected.length);
@@ -501,9 +511,14 @@ class _LineRowState extends State<_LineRow> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      'Pedido: ${l.quantityOrdered.toStringAsFixed(2)} ${l.unit}   ·   '
-                      'Recibido: ${l.quantityReceived.toStringAsFixed(2)}   ·   '
-                      'Pendiente: ${l.pending.toStringAsFixed(2)}',
+                      _hasPack
+                          ? 'Pedido: ${_formatQty(baseToPack(l.quantityOrdered, l.packSize))} ${l.purchaseUnit.trim()}   ·   '
+                                'Recibido: ${_formatQty(baseToPack(l.quantityReceived, l.packSize))}   ·   '
+                                'Pendiente: ${_formatQty(baseToPack(l.pending, l.packSize))} '
+                                '(${l.pending.toStringAsFixed(0)} ${l.unit})'
+                          : 'Pedido: ${l.quantityOrdered.toStringAsFixed(2)} ${l.unit}   ·   '
+                                'Recibido: ${l.quantityReceived.toStringAsFixed(2)}   ·   '
+                                'Pendiente: ${l.pending.toStringAsFixed(2)}',
                       style: TextStyle(
                         fontSize: 12,
                         color: fulfilled
@@ -528,7 +543,7 @@ class _LineRowState extends State<_LineRow> {
                   textAlign: TextAlign.right,
                   decoration: InputDecoration(
                     hintText: fulfilled ? '—' : '0',
-                    suffixText: l.unit,
+                    suffixText: _displayUnit,
                     border: OutlineInputBorder(
                       borderSide: BorderSide(
                         color: exceeds
@@ -550,9 +565,13 @@ class _LineRowState extends State<_LineRow> {
                     ),
                   ),
                   onChanged: (text) {
-                    final v =
+                    final entered =
                         double.tryParse(text.replaceAll(',', '.')) ?? 0;
-                    _emit(v);
+                    // El input está en unidad de compra; convertir a base.
+                    final base = _hasPack
+                        ? packToBase(entered, widget.line.packSize)
+                        : entered;
+                    _emit(base);
                   },
                 ),
               ),

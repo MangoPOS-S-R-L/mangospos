@@ -52,6 +52,7 @@ class MenuItemRepository {
     List<String>? taxIds, // ids de impuestos a vincular
     double? cost, // (si decides guardar costo)
     String? barcode, // código de barras
+    String? presentation, // etiqueta Botella/Trago/Shot…
 
     // 👇 Sprint inventario por producto
     bool isInventoryTracked = false,
@@ -79,6 +80,7 @@ class MenuItemRepository {
       'sold_by': soldBy, // text
       'cost': cost, // numeric
       'barcode': barcode, // text
+      'presentation': presentation, // text
     }..removeWhere((k, v) => v == null);
 
     final row = await _sp.from(_tableItems).insert(insert).select().single();

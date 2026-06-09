@@ -48,6 +48,10 @@ class MenuProduct {
   final String? menuId;
   final String itemType;
 
+  /// Etiqueta de presentación (Botella/Trago/Shot…). El catálogo genera
+  /// sub-pestañas por categoría a partir de las etiquetas distintas.
+  final String? presentation;
+
   /// Si true, este producto descuenta inventario al venderse. Para
   /// productos sin tracking (false), el grid permite agregar siempre.
   final bool isInventoryTracked;
@@ -80,6 +84,7 @@ class MenuProduct {
     this.imageUrl,
     this.menuId,
     this.itemType = 'standard',
+    this.presentation,
     this.isInventoryTracked = false,
     this.allowNegativeSale = false,
     this.associatedTaxes = const [],
@@ -127,6 +132,9 @@ class MenuProduct {
       imageUrl: m['image_url'] as String?,
       menuId: m['menu_id'] as String?,
       itemType: m['item_type']?.toString() ?? 'standard',
+      presentation: (m['presentation'] as String?)?.trim().isEmpty == true
+          ? null
+          : m['presentation'] as String?,
       isInventoryTracked: toBool(m['is_inventory_tracked']),
       allowNegativeSale: toBool(m['allow_negative_sale']),
       associatedTaxes: taxList,
@@ -177,6 +185,10 @@ class MenuBrowserState {
   // mapa — la UI no muestra badge.
   final Map<String, num> stockByProductId;
 
+  /// Etiqueta de presentación filtrada en la categoría actual (sub-pestaña
+  /// activa). null = "Todas". Se resetea al cambiar de categoría.
+  final String? selectedPresentation;
+
   const MenuBrowserState({
     this.loading = false,
     this.error,
@@ -191,7 +203,20 @@ class MenuBrowserState {
     this.search = '',
     this.selectedProduct,
     this.stockByProductId = const {},
+    this.selectedPresentation,
   });
+
+  /// Etiquetas de presentación distintas en los productos cargados,
+  /// ordenadas. Usado por la UI para construir las sub-pestañas.
+  List<String> get presentationTabs {
+    final set = <String>{};
+    for (final p in products) {
+      final v = p.presentation?.trim();
+      if (v != null && v.isNotEmpty) set.add(v);
+    }
+    final list = set.toList()..sort();
+    return list;
+  }
 
   MenuBrowserState copyWith({
     bool? loading,
@@ -209,6 +234,8 @@ class MenuBrowserState {
     String? search,
     MenuProduct? selectedProduct,
     Map<String, num>? stockByProductId,
+    String? selectedPresentation,
+    bool clearSelectedPresentation = false,
   }) {
     return MenuBrowserState(
       loading: loading ?? this.loading,
@@ -228,6 +255,9 @@ class MenuBrowserState {
       search: search ?? this.search,
       selectedProduct: selectedProduct ?? this.selectedProduct,
       stockByProductId: stockByProductId ?? this.stockByProductId,
+      selectedPresentation: clearSelectedPresentation
+          ? null
+          : (selectedPresentation ?? this.selectedPresentation),
     );
   }
 }
@@ -340,9 +370,9 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
   }
 
   static const _menuItemsSelect =
-      'id,name,price,image_url,category_id,is_active,position,tax_mode,item_type,is_inventory_tracked,allow_negative_sale,barcode,sku,menu_item_taxes(tax_id,taxes(name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery))';
+      'id,name,price,image_url,category_id,is_active,position,tax_mode,item_type,presentation,is_inventory_tracked,allow_negative_sale,barcode,sku,menu_item_taxes(tax_id,taxes(name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery))';
   static const _menuListSelect =
-      'id,name,price,image_url,category_id,menu_id,is_active,position,tax_mode,item_type,is_inventory_tracked,allow_negative_sale,effective_tax_rate,barcode,sku,menu_item_taxes(tax_id,taxes(name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery))';
+      'id,name,price,image_url,category_id,menu_id,is_active,position,tax_mode,item_type,presentation,is_inventory_tracked,allow_negative_sale,effective_tax_rate,barcode,sku,menu_item_taxes(tax_id,taxes(name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery))';
 
   Future<String> _resolveBusinessId() async {
     final sessionBusinessId = ref.read(sessionProvider).activeBusinessId;
@@ -1092,6 +1122,8 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
         selectedCategoryId: categoryId,
         clearLoadedMenuId: true,
         selectedProduct: null,
+        // Resetear sub-pestaña al cambiar de categoría (evita filtro pegado).
+        clearSelectedPresentation: true,
       );
 
       final snapshot = await _ensureCatalogSnapshot(businessId: businessId);
@@ -1205,5 +1237,15 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
 
   void cancelAddProduct() {
     state = state.copyWith(selectedProduct: null);
+  }
+
+  /// Filtra el grid de la categoría actual por etiqueta de presentación.
+  /// `null` = "Todas".
+  void setSelectedPresentation(String? presentation) {
+    if (presentation == null) {
+      state = state.copyWith(clearSelectedPresentation: true);
+    } else {
+      state = state.copyWith(selectedPresentation: presentation);
+    }
   }
 }

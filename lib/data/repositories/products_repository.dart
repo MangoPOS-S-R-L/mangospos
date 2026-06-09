@@ -158,6 +158,7 @@ class ProductsRepository {
     bool isActive = true,
     String itemType = 'standard',
     String? printAreaCode,
+    String? presentation,
     String? imagePath,
     String? imageUrl,
     List<String> taxIds = const [],
@@ -183,6 +184,7 @@ class ProductsRepository {
             'has_variants': hasVariants,
             'item_type': itemType,
             'print_area_code': printAreaCode,
+            'presentation': presentation,
             'image_path': imagePath,
             'image_url': imageUrl,
             'allow_negative_sale': allowNegativeSale,
@@ -260,6 +262,9 @@ class ProductsRepository {
     bool hasVariants = false,
     String itemType = 'standard',
     String? printAreaCode,
+    // Etiqueta de presentación. Se setea SIEMPRE (incluso null) para poder
+    // limpiarla; el dialog manda el valor actual del campo (vacío = null).
+    String? presentation,
     String? imagePath,
     String? imageUrl,
     List<String> taxIds = const [],
@@ -291,6 +296,16 @@ class ProductsRepository {
     }
 
     updates.removeWhere((key, value) => value == null);
+
+    // Presentación: solo se manda cuando hay valor. NO siempre-set para no
+    // romper la edición de productos si la columna aún no existe (migración
+    // 20260608_0001 sin aplicar). Limitación conocida: para "quitar" una
+    // etiqueta hay que dejarla vacía y requiere la columna presente — por
+    // ahora priorizamos no romper ediciones normales pre-migración.
+    final pres = presentation?.trim();
+    if (pres != null && pres.isNotEmpty) {
+      updates['presentation'] = pres;
+    }
 
     await _client
         .from(ProductsQueries.tableMenuItems)

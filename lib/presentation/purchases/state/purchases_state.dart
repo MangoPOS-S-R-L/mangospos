@@ -51,9 +51,13 @@ class PurchaseInventoryItem {
   final String id;
   final String name;
   final String sku;
-  final String unit;
+  final String unit; // unidad BASE de stock
   final double cost;
   final bool isActive;
+  // Conversión de empaque: se compra en purchaseUnit (ej. botella) que
+  // contiene packSize unidades base (ej. 750 ml). '' / 1 = sin empaque.
+  final String purchaseUnit;
+  final double packSize;
 
   const PurchaseInventoryItem({
     required this.id,
@@ -62,6 +66,8 @@ class PurchaseInventoryItem {
     required this.unit,
     required this.cost,
     required this.isActive,
+    this.purchaseUnit = '',
+    this.packSize = 1,
   });
 
   factory PurchaseInventoryItem.fromMap(Map<String, dynamic> map) {
@@ -77,6 +83,11 @@ class PurchaseInventoryItem {
       unit: map['unit']?.toString() ?? 'unidad',
       cost: toDouble(map['cost']),
       isActive: map['is_active'] != false,
+      purchaseUnit: map['purchase_unit']?.toString() ?? '',
+      packSize: () {
+        final v = toDouble(map['pack_size']);
+        return v <= 0 ? 1.0 : v;
+      }(),
     );
   }
 }
@@ -150,7 +161,7 @@ class PurchaseOrderLine {
   final String? inventoryItemId;
   final String description;
   final String itemName;
-  final String unit;
+  final String unit; // unidad BASE (las cantidades de la línea están en base)
   final String sku;
   final bool tracksLots;
   final double quantityOrdered;
@@ -158,6 +169,10 @@ class PurchaseOrderLine {
   final double unitCost;
   final double taxRate;
   final double total;
+  // Snapshot de empaque al crear la orden (para mostrar/recibir en la
+  // unidad de compra). purchaseUnit vacío / packSize 1 = sin empaque.
+  final String purchaseUnit;
+  final double packSize;
 
   const PurchaseOrderLine({
     required this.id,
@@ -172,6 +187,8 @@ class PurchaseOrderLine {
     required this.unitCost,
     required this.taxRate,
     required this.total,
+    this.purchaseUnit = '',
+    this.packSize = 1,
   });
 
   double get pending =>
@@ -212,6 +229,17 @@ class PurchaseOrderLine {
       unitCost: toDouble(map['unit_cost']),
       taxRate: toDouble(map['tax_rate']),
       total: toDouble(map['total']),
+      // Snapshot guardado en la línea; si falta, cae al del insumo vinculado.
+      purchaseUnit: (map['purchase_unit'] ??
+              (itemRel is Map ? itemRel['purchase_unit'] : null))
+          ?.toString() ??
+          '',
+      packSize: () {
+        final raw = map['pack_size'] ??
+            (itemRel is Map ? itemRel['pack_size'] : null);
+        final v = toDouble(raw);
+        return v <= 0 ? 1.0 : v;
+      }(),
     );
   }
 }
@@ -219,9 +247,14 @@ class PurchaseOrderLine {
 class PurchaseDraftItem {
   final String? inventoryItemId;
   final String description;
+  /// Cantidad y costo YA en unidad BASE (la vista convirtió desde la unidad
+  /// de compra antes de crear el draft).
   final double quantity;
   final double unitCost;
   final double taxRate;
+  // Snapshot de empaque para guardar en la línea (display/recepción).
+  final String purchaseUnit;
+  final double packSize;
 
   const PurchaseDraftItem({
     this.inventoryItemId,
@@ -229,6 +262,8 @@ class PurchaseDraftItem {
     required this.quantity,
     required this.unitCost,
     this.taxRate = 18,
+    this.purchaseUnit = '',
+    this.packSize = 1,
   });
 
   double get total => quantity * unitCost;
