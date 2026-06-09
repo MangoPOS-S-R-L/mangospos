@@ -544,19 +544,24 @@ class _Card extends StatelessWidget {
         // Hairline accent en el borde izquierdo cuando hay color de énfasis.
       ),
       child: accentColor != null
-          ? Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Container(
-                  width: 3,
-                  margin: const EdgeInsets.only(right: 12),
-                  decoration: BoxDecoration(
-                    color: accentColor,
-                    borderRadius: BorderRadius.circular(2),
+          // IntrinsicHeight acota la altura del Row para que la barra de acento
+          // (CrossAxisAlignment.stretch) iguale el alto del contenido en vez de
+          // pedir altura infinita (que crashea en contexto no acotado).
+          ? IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(
+                    width: 3,
+                    margin: const EdgeInsets.only(right: 12),
+                    decoration: BoxDecoration(
+                      color: accentColor,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
                   ),
-                ),
-                Expanded(child: child),
-              ],
+                  Expanded(child: child),
+                ],
+              ),
             )
           : child,
     );
