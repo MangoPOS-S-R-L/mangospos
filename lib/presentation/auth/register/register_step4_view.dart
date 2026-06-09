@@ -18,22 +18,17 @@
 //     puede cerrar el browser y volver, pero el dashboard no se desbloquea
 //     hasta que tenga payment_method verified.
 
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import 'package:mangopos/core/utils/app_toast.dart';
 
 import '../../../app/router/routes.dart';
 import '../../../app/theme/mango_tokens.dart';
-import '../../../data/models/billing_payment_method.dart';
-import '../../../data/repositories/billing_repository.dart';
 import '../../../services/session/session_controller.dart';
-import '../../billing/providers/billing_providers.dart';
+import '../../billing/widgets/azul_card_form_sheet.dart';
 import '../widgets/auth_shell.dart';
 
 class RegisterStep4View extends ConsumerStatefulWidget {
@@ -44,12 +39,7 @@ class RegisterStep4View extends ConsumerStatefulWidget {
 }
 
 class _RegisterStep4ViewState extends ConsumerState<RegisterStep4View> {
-  bool _starting = false;
-  bool _waitingForCallback = false;
   String? _error;
-  DateTime? _sessionExpiresAt;
-  BillingPaymentMethod? _baselineMethod;
-  Timer? _timeoutTimer;
 
   static const _steps = <AuthShellStep>[
     AuthShellStep(title: 'Crear cuenta', complete: true),
@@ -58,99 +48,22 @@ class _RegisterStep4ViewState extends ConsumerState<RegisterStep4View> {
     AuthShellStep(title: 'Método de pago'),
   ];
 
-  @override
-  void dispose() {
-    _timeoutTimer?.cancel();
-    super.dispose();
-  }
-
   Future<void> _onRegisterCard() async {
     final businessId = ref.read(sessionProvider).activeBusinessId;
     if (businessId == null) {
       setState(() => _error = 'Sesión no disponible. Reinicia el registro.');
       return;
     }
-    setState(() {
-      _starting = true;
-      _error = null;
-    });
-    try {
-      final repo = ref.read(billingRepositoryProvider);
-      _baselineMethod =
-          ref.read(defaultPaymentMethodProvider(businessId)).valueOrNull;
-
-      final result = await repo.createTokenizationSession(
-        businessId: businessId,
-      );
-      final launched = await launchUrl(
-        Uri.parse(result.paymentPageUrl),
-        mode: LaunchMode.externalApplication,
-      );
-      if (!launched) {
-        throw BillingRepositoryException(
-          'No se pudo abrir la pasarela. Verifica que tengas un navegador.',
-        );
-      }
-      if (!mounted) return;
-      setState(() {
-        _starting = false;
-        _waitingForCallback = true;
-        _sessionExpiresAt = result.expiresAt;
-      });
-      _startTimeoutTimer();
-    } on BillingRepositoryException catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _starting = false;
-        _error = e.message;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _starting = false;
-        _error = e.toString();
-      });
-    }
-  }
-
-  void _startTimeoutTimer() {
-    _timeoutTimer?.cancel();
-    final expiresAt = _sessionExpiresAt;
-    if (expiresAt == null) return;
-    final remaining = expiresAt.difference(DateTime.now());
-    if (remaining.isNegative) return;
-    _timeoutTimer = Timer(remaining, () {
-      if (!mounted) return;
-      setState(() {
-        _waitingForCallback = false;
-        _error = 'La sesión expiró. Intenta nuevamente.';
-      });
-    });
-  }
-
-  void _onCardArrived() {
-    _timeoutTimer?.cancel();
-    if (!mounted) return;
-    AppToast.success(context, '¡Tarjeta verificada! Bienvenido a MangoPOS.');
+    setState(() => _error = null);
+    final result =
+        await AzulCardFormSheet.show(context, businessId: businessId);
+    if (!mounted || result == null) return;
+    AppToast.success(context, '¡Tarjeta registrada! Bienvenido a MangoPOS.');
     context.go(AppRoutes.dashboard);
   }
 
   @override
   Widget build(BuildContext context) {
-    final businessId = ref.watch(sessionProvider).activeBusinessId;
-
-    // Listener Realtime: cuando llega la tarjeta verificada, redirigir.
-    if (businessId != null && _waitingForCallback) {
-      ref.listen(defaultPaymentMethodProvider(businessId), (prev, next) {
-        final pm = next.valueOrNull;
-        if (pm == null) return;
-        if (_baselineMethod?.id != pm.id &&
-            pm.status == BillingPaymentMethodStatus.verified) {
-          _onCardArrived();
-        }
-      });
-    }
-
     return AuthShell(
       brandSubtitle: 'Método de pago',
       steps: _steps,
@@ -187,8 +100,8 @@ class _RegisterStep4ViewState extends ConsumerState<RegisterStep4View> {
               const SizedBox(height: 12),
               Text(
                 'No haremos ningún cargo durante el período de prueba. '
-                'Validamos tu tarjeta con un cobro temporal de RD\$1.00 '
-                'que será reembolsado automáticamente.',
+                'Guardamos tu tarjeta de forma segura para cobrar el plan '
+                'cuando termine la prueba.',
                 textAlign: TextAlign.center,
                 style: GoogleFonts.plusJakartaSans(
                   fontSize: 15,
@@ -197,7 +110,7 @@ class _RegisterStep4ViewState extends ConsumerState<RegisterStep4View> {
                 ),
               ),
               const SizedBox(height: 28),
-              if (_waitingForCallback) _waitingPanel() else _bullets(),
+              _bullets(),
               if (_error != null) ...[
                 const SizedBox(height: 16),
                 _errorBanner(_error!),
@@ -214,25 +127,10 @@ class _RegisterStep4ViewState extends ConsumerState<RegisterStep4View> {
                       borderRadius: BorderRadius.circular(14),
                     ),
                   ),
-                  onPressed: _starting || _waitingForCallback
-                      ? null
-                      : _onRegisterCard,
-                  icon: _starting
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Icon(Icons.lock_rounded, size: 20),
+                  onPressed: _onRegisterCard,
+                  icon: const Icon(Icons.lock_rounded, size: 20),
                   label: Text(
-                    _starting
-                        ? 'Abriendo Azul…'
-                        : _waitingForCallback
-                            ? 'Esperando confirmación…'
-                            : 'Registrar tarjeta ahora',
+                    'Registrar tarjeta ahora',
                     style: GoogleFonts.plusJakartaSans(
                       fontSize: 16,
                       fontWeight: FontWeight.w800,
@@ -270,7 +168,7 @@ class _RegisterStep4ViewState extends ConsumerState<RegisterStep4View> {
 
   Widget _bullets() {
     final items = [
-      ('Verificación de RD\$1.00', 'Se reembolsa al instante.'),
+      ('Tarjeta guardada con seguridad', 'Tokenizada por Azul; no guardamos el número.'),
       ('Sin cargos durante 14 días', 'Cobramos al terminar la prueba.'),
       ('Cancela cuando quieras', 'Desde Configuración → Suscripción.'),
     ];
@@ -311,55 +209,6 @@ class _RegisterStep4ViewState extends ConsumerState<RegisterStep4View> {
           ),
         );
       }).toList(),
-    );
-  }
-
-  Widget _waitingPanel() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFE6F0FE),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF93C5FD)),
-      ),
-      child: Row(
-        children: [
-          const SizedBox(
-            width: 22,
-            height: 22,
-            child: CircularProgressIndicator(
-              strokeWidth: 2.5,
-              color: Color(0xFF1D4ED8),
-            ),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Esperando confirmación de Azul…',
-                  style: GoogleFonts.plusJakartaSans(
-                    fontWeight: FontWeight.w800,
-                    color: const Color(0xFF1D4ED8),
-                    fontSize: 14,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Completa el pago en el navegador y regresa aquí. '
-                  'Esta página se actualizará automáticamente.',
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 12,
-                    color: const Color(0xFF1E3A8A),
-                    height: 1.4,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -420,10 +269,10 @@ class _RegisterStep4ViewState extends ConsumerState<RegisterStep4View> {
             ),
             const SizedBox(height: 10),
             Text(
-              'Los datos de tu tarjeta nunca pasan por MangoPOS. Se manejan '
-              'directamente con Azul, el procesador local certificado de '
-              'República Dominicana. Solo guardamos un token cifrado y los '
-              'últimos 4 dígitos para identificarla.',
+              'Tus datos viajan cifrados a Azul, el procesador local '
+              'certificado de República Dominicana, para tokenizar tu tarjeta. '
+              'Guardamos solo un token cifrado y los últimos 4 dígitos — '
+              'nunca el número completo ni el código de seguridad.',
               style: GoogleFonts.plusJakartaSans(
                 fontSize: 12,
                 color: MangoTokens.mutedForeground,

@@ -160,6 +160,66 @@ class BillingRepository {
     );
   }
 
+  /// Tokeniza una tarjeta in-app vía la Edge Function `azul-tokenize-card`
+  /// (ProcessDataVault). La app NUNCA persiste el PAN/CVV: los manda a la
+  /// función, que guarda solo el token. Devuelve el método de pago creado.
+  Future<TokenizedCardResult> tokenizeCard({
+    required String businessId,
+    required String cardNumber,
+    required String expiration, // AAAAMM
+    required String cvc,
+    bool makeDefault = true,
+  }) async {
+    final dynamic data;
+    try {
+      final response = await _client.functions.invoke(
+        'azul-tokenize-card',
+        body: {
+          'business_id': businessId,
+          'card_number': cardNumber.replaceAll(RegExp(r'\s+'), ''),
+          'expiration': expiration,
+          'cvc': cvc,
+          'make_default': makeDefault,
+        },
+      );
+      data = response.data;
+    } on FunctionException catch (e) {
+      throw _tokenizeError(e.details);
+    }
+
+    if (data is! Map<String, dynamic>) {
+      throw BillingRepositoryException('Respuesta inválida al tokenizar la tarjeta');
+    }
+    if (data['ok'] != true || data.containsKey('error')) {
+      throw _tokenizeError(data);
+    }
+    return TokenizedCardResult(
+      paymentMethodId: data['payment_method_id'] as String,
+      brand: data['brand']?.toString() ?? '',
+      cardNumberMasked: data['card_number_masked']?.toString() ?? '',
+      expiration: data['expiration']?.toString() ?? expiration,
+      isDefault: (data['is_default'] as bool?) ?? makeDefault,
+    );
+  }
+
+  BillingRepositoryException _tokenizeError(dynamic details) {
+    if (details is Map) {
+      final err = details['error'];
+      if (err is Map) {
+        return BillingRepositoryException(
+          err['message']?.toString() ?? 'No se pudo tokenizar la tarjeta',
+          code: err['code']?.toString(),
+        );
+      }
+      final detail = details['detail'];
+      final m = (detail is Map)
+          ? (detail['response_message'] ?? detail['error_description'])
+          : (details['response_message'] ?? details['error_description']);
+      if (m != null) return BillingRepositoryException(m.toString());
+    }
+    return BillingRepositoryException('No se pudo tokenizar la tarjeta');
+  }
+
   // -------------------------------------------------------------------------
   // Cálculos client-side (preview UI, no son fuente de verdad)
   // -------------------------------------------------------------------------
@@ -227,6 +287,28 @@ class TokenizationSessionResult {
     required this.expiresAt,
     required this.reused,
   });
+}
+
+class TokenizedCardResult {
+  final String paymentMethodId;
+  final String brand;
+  final String cardNumberMasked;
+  final String expiration; // AAAAMM
+  final bool isDefault;
+
+  const TokenizedCardResult({
+    required this.paymentMethodId,
+    required this.brand,
+    required this.cardNumberMasked,
+    required this.expiration,
+    required this.isDefault,
+  });
+
+  /// Últimos 4 dígitos a partir del enmascarado que devuelve Azul.
+  String get last4 {
+    final digits = cardNumberMasked.replaceAll(RegExp(r'[^0-9]'), '');
+    return digits.length >= 4 ? digits.substring(digits.length - 4) : digits;
+  }
 }
 
 enum ProrationKind { upgrade, downgrade, same }

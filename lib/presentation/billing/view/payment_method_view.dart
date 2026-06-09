@@ -13,21 +13,18 @@
 // (Safari/Chrome/Edge según OS). No usamos WebView interno porque la cobertura
 // cross-platform es heterogénea (no funciona limpio en desktop sin más deps).
 
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/router/routes.dart';
 import '../../../app/theme/mango_colors.dart';
 import '../../../core/utils/app_toast.dart';
 import '../../../data/models/billing_payment_method.dart';
-import '../../../data/repositories/billing_repository.dart';
 import '../../../services/session/session_controller.dart';
 import '../providers/billing_providers.dart';
+import '../widgets/azul_card_form_sheet.dart';
 
 class PaymentMethodView extends ConsumerStatefulWidget {
   const PaymentMethodView({super.key});
@@ -37,96 +34,16 @@ class PaymentMethodView extends ConsumerStatefulWidget {
 }
 
 class _PaymentMethodViewState extends ConsumerState<PaymentMethodView> {
-  bool _starting = false;
-  bool _waitingForCallback = false;
   String? _lastError;
-  DateTime? _sessionExpiresAt;
-  BillingPaymentMethod? _baselineMethod;
-  Timer? _timeoutTimer;
-
-  @override
-  void dispose() {
-    _timeoutTimer?.cancel();
-    super.dispose();
-  }
 
   Future<void> _onChangeCard() async {
-    final session = ref.read(sessionProvider);
-    final businessId = session.activeBusinessId;
+    final businessId = ref.read(sessionProvider).activeBusinessId;
     if (businessId == null) return;
-
-    final repo = ref.read(billingRepositoryProvider);
-
-    setState(() {
-      _starting = true;
-      _lastError = null;
-    });
-
-    try {
-      // Snapshot del método actual para detectar cambios via stream.
-      _baselineMethod = ref.read(defaultPaymentMethodProvider(businessId)).valueOrNull;
-
-      final result = await repo.createTokenizationSession(
-        businessId: businessId,
-        intentType: _baselineMethod == null ? 'tokenize_and_verify' : 'replace_card',
-      );
-
-      final uri = Uri.parse(result.paymentPageUrl);
-      final launched = await launchUrl(
-        uri,
-        mode: LaunchMode.externalApplication,
-      );
-      if (!launched) {
-        throw BillingRepositoryException(
-          'No se pudo abrir la pasarela de pagos. Verifica que tu dispositivo '
-          'tenga un navegador instalado.',
-        );
-      }
-      if (!mounted) return;
-      setState(() {
-        _starting = false;
-        _waitingForCallback = true;
-        _sessionExpiresAt = result.expiresAt;
-      });
-      _startTimeoutTimer();
-    } on BillingRepositoryException catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _starting = false;
-        _lastError = e.message;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _starting = false;
-        _lastError = e.toString();
-      });
-    }
-  }
-
-  void _startTimeoutTimer() {
-    _timeoutTimer?.cancel();
-    final expiresAt = _sessionExpiresAt;
-    if (expiresAt == null) return;
-    final remaining = expiresAt.difference(DateTime.now());
-    if (remaining.isNegative) return;
-    _timeoutTimer = Timer(remaining, () {
-      if (!mounted) return;
-      setState(() {
-        _waitingForCallback = false;
-        _lastError = 'La sesión expiró. Intenta nuevamente.';
-      });
-    });
-  }
-
-  void _onCardArrived() {
-    _timeoutTimer?.cancel();
-    if (!mounted) return;
-    setState(() {
-      _waitingForCallback = false;
-      _lastError = null;
-    });
-    AppToast.success(context, 'Tarjeta verificada y guardada correctamente.');
+    setState(() => _lastError = null);
+    final result =
+        await AzulCardFormSheet.show(context, businessId: businessId);
+    if (!mounted || result == null) return;
+    AppToast.success(context, 'Tarjeta guardada correctamente.');
   }
 
   @override
@@ -141,17 +58,6 @@ class _PaymentMethodViewState extends ConsumerState<PaymentMethodView> {
     }
 
     final pmAsync = ref.watch(defaultPaymentMethodProvider(businessId));
-
-    // Detecta arribo de nueva tarjeta mientras estamos esperando callback.
-    ref.listen(defaultPaymentMethodProvider(businessId), (prev, next) {
-      if (!_waitingForCallback) return;
-      final newMethod = next.valueOrNull;
-      if (newMethod == null) return;
-      if (_baselineMethod?.id != newMethod.id &&
-          newMethod.status == BillingPaymentMethodStatus.verified) {
-        _onCardArrived();
-      }
-    });
 
     return Scaffold(
       backgroundColor: const Color(0xFFF7F7F7),
@@ -182,14 +88,11 @@ class _PaymentMethodViewState extends ConsumerState<PaymentMethodView> {
             if (pm != null) _CardDisplay(method: pm),
             if (pm == null) const _NoCardPlaceholder(),
             const SizedBox(height: 16),
-            if (_waitingForCallback)
-              _WaitingPanel(expiresAt: _sessionExpiresAt)
-            else if (_lastError != null)
-              _ErrorBanner(message: _lastError!),
+            if (_lastError != null) _ErrorBanner(message: _lastError!),
             const SizedBox(height: 12),
             _ChangeCardButton(
-              isLoading: _starting,
-              isWaiting: _waitingForCallback,
+              isLoading: false,
+              isWaiting: false,
               hasCard: pm != null,
               onTap: _onChangeCard,
             ),
@@ -376,54 +279,6 @@ class _NoCardPlaceholder extends StatelessWidget {
 // ---------------------------------------------------------------------------
 // Panel "esperando confirmación de Azul"
 // ---------------------------------------------------------------------------
-
-class _WaitingPanel extends StatelessWidget {
-  final DateTime? expiresAt;
-  const _WaitingPanel({required this.expiresAt});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFE6F0FE),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF93C5FD)),
-      ),
-      child: Row(
-        children: [
-          const SizedBox(
-            width: 22,
-            height: 22,
-            child: CircularProgressIndicator(strokeWidth: 2.5, color: Color(0xFF1D4ED8)),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Esperando confirmación de Azul…',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    color: Color(0xFF1D4ED8),
-                    fontSize: 14,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Completa el pago en el navegador y regresa aquí. '
-                  '${expiresAt != null ? "Tienes hasta ${DateFormat('HH:mm', 'es').format(expiresAt!)} para terminar." : ""}',
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF1E3A8A), height: 1.4),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 class _ErrorBanner extends StatelessWidget {
   final String message;

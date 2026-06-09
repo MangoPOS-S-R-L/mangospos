@@ -340,6 +340,12 @@ verify_jwt = false
 verify_jwt = false
 # Server-to-server (cron / invocación manual). Valida el bearer service_role internamente.
 
+[functions.azul-tokenize-card]
+verify_jwt = true
+# Tokenización in-app (ProcessDataVault). La app manda el JWT del usuario;
+# la función valida que sea owner/admin del business. Recibe PAN/CVV (PCI SAQ D),
+# guarda SOLO el token.
+
 [analytics]
 enabled = true
 port = 54327
