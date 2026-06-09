@@ -138,7 +138,14 @@ function readBody(req) {
 function postToAzul(method, payload) {
   const t0 = Date.now();
   return new Promise((resolve, reject) => {
-    const target = new url.URL(`${AZUL_API_URL.replace(/\/$/, '')}?Method=${method}`);
+    // El Web Service JSON de Azul selecciona la operación con un flag de query
+    // string SIN valor (p.ej. `?VerifyPayment`), NO con `Method=...`. Pasar
+    // `?Method=VerifyPayment` hace que el JSONProcessor responda
+    // NotImplementedException ("función no implementada o no existe"), porque
+    // busca una clave con el nombre de la operación y solo encuentra `Method`.
+    // (Hipótesis derivada del 500 reportado por Azul, hilo 2026-05/06 — validar
+    // con el primer VerifyPayment que pase Incapsula.)
+    const target = new url.URL(`${AZUL_API_URL.replace(/\/$/, '')}?${method}`);
     const bodyStr = JSON.stringify(payload);
     const opts = {
       hostname: target.hostname,

@@ -336,6 +336,10 @@ verify_jwt = false
 verify_jwt = false
 # Validación interna: la propia función chequea el bearer service_role.
 
+[functions.azul-charge-subscription]
+verify_jwt = false
+# Server-to-server (cron / invocación manual). Valida el bearer service_role internamente.
+
 [analytics]
 enabled = true
 port = 54327

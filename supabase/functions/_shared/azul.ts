@@ -136,29 +136,36 @@ export function responseFieldsToOrdered(f: ResponseFields): string[] {
 // 3. OrderNumber generators (PRD §4 D6 — idempotencia determinística)
 // ---------------------------------------------------------------------------
 
+// IMPORTANTE: Azul valida OrderNumber como ALFANUMÉRICO y de longitud ≤15.
+// Guiones bajos o más de 15 caracteres → `VALIDATION_ERROR:OrderNumber`
+// (confirmado en pruebas contra pruebas.azul.com.do, 2026-06-09). Por eso aquí
+// solo se usan [A-Z0-9] y exactamente 15 chars.
+
 /**
- * Tokenización: `mp_tok_{base32(uuid)}`. Cross-business único, legible en logs.
- * Base32 sin guiones para que sea seguro en URLs y nombre de orden.
+ * Tokenización: `MT{13 hex}` (15 chars, [A-Z0-9]). Aleatorio — único cross-business
+ * (respaldado por el UNIQUE de azul_payment_sessions.order_number).
  */
 export function generateTokenizeOrderNumber(): string {
-  const uuid = crypto.randomUUID().replaceAll("-", "");
-  return `mp_tok_${uuid.toUpperCase().slice(0, 16)}`;
+  const hex = crypto.randomUUID().replaceAll("-", "").toUpperCase();
+  return `MT${hex.slice(0, 13)}`;
 }
 
 /**
- * Cobro mensual: `mp_chg_{membership_id_base32}_{YYYYMM}_{attempt}`.
+ * Cobro mensual: `MP{8 hex del membershipId}{YY}{MM}{attempt}` = 15 chars [A-Z0-9].
  * Determinístico: dado el mismo (membership, período, intento), siempre el mismo
- * order_number. Hace que el cron sea idempotente — segunda corrida choca con
- * el UNIQUE de azul_charges.
+ * order_number. Hace que el cron sea idempotente — segunda corrida choca con el
+ * UNIQUE de azul_charges. La unicidad fuerte la garantiza igualmente el índice
+ * único (membership_id, billing_period_start, attempt_number).
  */
 export function generateChargeOrderNumber(
   membershipId: string,
   billingPeriodStart: Date,
   attemptNumber: number,
 ): string {
-  const yyyymm = `${billingPeriodStart.getUTCFullYear()}${(billingPeriodStart.getUTCMonth() + 1).toString().padStart(2, "0")}`;
-  const compactId = membershipId.replaceAll("-", "").slice(0, 12).toUpperCase();
-  return `mp_chg_${compactId}_${yyyymm}_${attemptNumber}`;
+  const yy = billingPeriodStart.getUTCFullYear().toString().slice(-2);
+  const mm = (billingPeriodStart.getUTCMonth() + 1).toString().padStart(2, "0");
+  const compactId = membershipId.replaceAll("-", "").slice(0, 8).toUpperCase();
+  return `MP${compactId}${yy}${mm}${attemptNumber}`;
 }
 
 // ---------------------------------------------------------------------------

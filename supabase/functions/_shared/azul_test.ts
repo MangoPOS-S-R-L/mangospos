@@ -11,6 +11,8 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   computeAuthHash,
   constantTimeEquals,
+  generateChargeOrderNumber,
+  generateTokenizeOrderNumber,
   paymentPageFieldsToOrdered,
 } from "./azul.ts";
 
@@ -84,4 +86,44 @@ Deno.test("constantTimeEquals — largos distintos no lanza", () => {
 
 Deno.test("constantTimeEquals — vacíos iguales", () => {
   assertEquals(constantTimeEquals("", ""), true);
+});
+
+// --- OrderNumber: Azul exige alfanumérico ≤15 (sin guiones bajos) ---
+
+const ORDER_RE = /^[A-Z0-9]{1,15}$/;
+
+Deno.test("generateChargeOrderNumber: alfanumérico y exactamente 15 chars", () => {
+  const on = generateChargeOrderNumber(
+    "4d068df7-a5bf-4f55-bea1-70a84d08d662",
+    new Date(Date.UTC(2026, 5, 1)), // junio 2026
+    1,
+  );
+  assertEquals(on.length <= 15, true);
+  assertEquals(ORDER_RE.test(on), true);
+  assertEquals(on, "MP4D068DF726061"); // MP + 4D068DF7 + 26 + 06 + 1
+});
+
+Deno.test("generateChargeOrderNumber: determinístico por (membership, período, intento)", () => {
+  const id = "4d068df7-a5bf-4f55-bea1-70a84d08d662";
+  const d = new Date(Date.UTC(2026, 5, 1));
+  assertEquals(generateChargeOrderNumber(id, d, 1), generateChargeOrderNumber(id, d, 1));
+  // distinto intento → distinto número
+  assertEquals(
+    generateChargeOrderNumber(id, d, 1) === generateChargeOrderNumber(id, d, 2),
+    false,
+  );
+  // distinto mes → distinto número
+  const d2 = new Date(Date.UTC(2026, 6, 1));
+  assertEquals(
+    generateChargeOrderNumber(id, d, 1) === generateChargeOrderNumber(id, d2, 1),
+    false,
+  );
+});
+
+Deno.test("generateTokenizeOrderNumber: alfanumérico, 15 chars y único", () => {
+  const a = generateTokenizeOrderNumber();
+  const b = generateTokenizeOrderNumber();
+  assertEquals(a.length, 15);
+  assertEquals(ORDER_RE.test(a), true);
+  assertEquals(a === b, false); // aleatorio
 });
