@@ -203,6 +203,13 @@ export function chargeWithToken(input: ChargeWithTokenInput) {
     OrderNumber: input.orderNumber,
     DataVaultToken: input.dataVaultToken,
     AcquirerRefData: "1",
+    // Cobro recurrente iniciado por el comercio (MIT). El doc de Azul v1.2
+    // eliminó el "método de recurrencia" dedicado: las suscripciones se cobran
+    // con el token + este indicador (STANDING_ORDER = orden permanente),
+    // respaldado por la transacción CIT original (la tokenización).
+    merchantInitiatedIndicator: "STANDING_ORDER",
+    // MIT no lleva 3D Secure: no hay tarjetahabiente presente para el desafío.
+    ForceNo3DS: "1",
     ...(input.customerEmail ? { CustomerServiceEmail: input.customerEmail } : {}),
   });
 }
