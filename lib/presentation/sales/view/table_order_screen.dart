@@ -747,13 +747,13 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       selectedModifiers = [...selectedModifiers, ...result];
     }
 
-    // Propagar el flag takeout actual de la orden. Sin esto, items
-    // nuevos se agregaban siempre con is_takeout=false aunque la orden
-    // estuviera marcada "para llevar" — el tax_rate se resolvía
-    // incluyendo la propina y `calculate_order_totals` sumaba el 10%
-    // de servicio sobre ellos. El cajero tenía que volver a tocar
-    // "Marcar todo para llevar" después de CADA item nuevo.
-    final orderTakeout = ref.read(currentOrderProvider).takeout;
+    // Ítem nuevo: default de "para llevar" por ORIGEN (mesa → consumo en mesa),
+    // NO heredado de otros ítems. Antes se propagaba state.takeout (derivado de
+    // "todos los ítems son takeout"), lo que contagiaba: al marcar 1-2 ítems
+    // para llevar, los siguientes entraban para llevar solos. El cajero marca
+    // cada ítem con el toggle por-ítem cuando aplique.
+    final orderTakeout =
+        ref.read(currentOrderProvider.notifier).defaultTakeoutForNewItem();
     await vm.addItem(
       menuItemId: product.id,
       productName: product.name,

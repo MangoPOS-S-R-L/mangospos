@@ -490,6 +490,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
   }
 
+  /// Default de "para llevar" para un ítem NUEVO: según el ORIGEN de la orden
+  /// (mesa → consumo en mesa = false; delivery/rápida/manual → su default). NO
+  /// se hereda de `state.takeout` ni de otros ítems: marcar ítems sueltos
+  /// "para llevar" ya NO contagia a los productos que se agreguen después. El
+  /// cajero marca cada ítem con toggleItemTakeout cuando aplique.
+  bool defaultTakeoutForNewItem() => _defaultTakeoutFor(state.origin);
+
   Future<void> _ensureBusinessTaxSettingsLoaded() async {
     final businessId = _activeBusinessId;
     if (businessId == null || businessId.isEmpty) {
@@ -3823,26 +3830,47 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     final touchedItemIds = <String>{};
 
     List<OrderItem> itemsForPromo(Map<String, dynamic> promo) {
-      final scope =
-          promo['target_scope']?.toString() ??
-          promo['applies_to']?.toString() ??
-          'all';
+      // Regla: una auto-promo NUNCA debe descontar productos que no están en su
+      // oferta. Antes, scope vacío/'all'/'category' hacía `return true` para
+      // TODOS los ítems → una promo mal configurada (p.ej. "3x2 cerveza" con
+      // target_scope='all' y target_ids=null) se pegaba a agua, soda, etc.
+      final rawScope =
+          (promo['target_scope']?.toString().trim().isNotEmpty ?? false)
+          ? promo['target_scope'].toString().trim().toLowerCase()
+          : (promo['applies_to']?.toString().trim().toLowerCase() ?? '');
+      final type =
+          (promo['promo_type']?.toString() ??
+                  promo['discount_type']?.toString() ??
+                  'percentage')
+              .toLowerCase();
       final targetIds =
           (promo['target_ids'] as List?)
               ?.map((value) => value?.toString() ?? '')
               .where((value) => value.isNotEmpty)
               .toSet() ??
           <String>{};
+
+      // Tipos ESPECÍFICOS de producto (bogo / bundle): no existe un "3x2 de
+      // todo" — SIEMPRE requieren target_ids con los productos en oferta.
+      final isProductSpecific = type == 'bogo' || type == 'bundle_price';
+      // 'all' solo aplica globalmente para descuentos lineales (porcentaje /
+      // monto fijo), donde "toda la carta" sí es una oferta legítima.
+      final appliesToAll = rawScope == 'all' && !isProductSpecific;
+
+      // Sin scope global y sin target_ids → no aplica a nada (fail-safe).
+      // 'category' tampoco aplica: OrderItem no trae la categoría, así que no
+      // podemos validar por categoría; mejor no descontar que descontar de más.
+      if (!appliesToAll && targetIds.isEmpty) {
+        return const <OrderItem>[];
+      }
       return eligibleBaseItems
           .where((item) {
             if (touchedItemIds.contains(item.id)) return false;
-            if (scope == 'product') {
-              final productId = item.productId?.trim();
-              return productId != null &&
-                  productId.isNotEmpty &&
-                  targetIds.contains(productId);
-            }
-            return true;
+            if (appliesToAll) return true;
+            final productId = item.productId?.trim();
+            return productId != null &&
+                productId.isNotEmpty &&
+                targetIds.contains(productId);
           })
           .toList(growable: false);
     }

@@ -408,9 +408,11 @@ class _ProductCard extends ConsumerWidget {
       borderRadius: BorderRadius.circular(16),
       onTap: () async {
         try {
-          // Propaga el takeout actual de la orden (ver comentario en
-          // table_order_screen.dart:_handleAddProduct).
-          final orderTakeout = ref.read(currentOrderProvider).takeout;
+          // Ítem nuevo: default de "para llevar" por ORIGEN, no heredado de
+          // otros ítems (ver comentario en table_order_screen.dart).
+          final orderTakeout = ref
+              .read(currentOrderProvider.notifier)
+              .defaultTakeoutForNewItem();
           await ref.read(currentOrderProvider.notifier).addItem(
                 menuItemId: item.id,
                 qty: 1,
