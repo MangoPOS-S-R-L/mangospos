@@ -214,6 +214,39 @@ export function chargeWithToken(input: ChargeWithTokenInput) {
   });
 }
 
+export interface HoldWithTokenInput {
+  dataVaultToken: string;
+  amountCents: number;
+  itbisCents: number;
+  orderNumber: string;
+}
+
+/**
+ * Pre-autorización (Hold) con token: reserva fondos sin liquidar. Se usa para
+ * verificar la tarjeta al registrarla (Hold de RD$1, luego Void). A diferencia
+ * de chargeWithToken (cobro recurrente MIT), este Hold es CIT — el
+ * tarjetahabiente está presente y acaba de digitar su tarjeta; este Hold es la
+ * transacción CIT original que respalda los cobros MIT futuros. Va sin
+ * merchantInitiatedIndicator y con ForceNo3DS=1 (verificación rápida, sin
+ * desafío que no podemos manejar in-app).
+ */
+export function holdWithToken(input: HoldWithTokenInput) {
+  const env = getAzulEnv();
+  return callAzul("ProcessPayment", {
+    Channel: "EC",
+    Store: env.azulMerchantId,
+    PosInputMode: "E-Commerce",
+    TrxType: "Hold",
+    Amount: input.amountCents.toString(),
+    Itbis: input.itbisCents > 0 ? input.itbisCents.toString() : "000",
+    CurrencyPosCode: "$",
+    OrderNumber: input.orderNumber,
+    DataVaultToken: input.dataVaultToken,
+    AcquirerRefData: "1",
+    ForceNo3DS: "1",
+  });
+}
+
 export interface RefundInput {
   azulOrderId: string;
   amountCents: number;

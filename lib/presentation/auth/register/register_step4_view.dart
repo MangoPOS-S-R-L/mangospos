@@ -58,7 +58,7 @@ class _RegisterStep4ViewState extends ConsumerState<RegisterStep4View> {
     final result =
         await AzulCardFormSheet.show(context, businessId: businessId);
     if (!mounted || result == null) return;
-    AppToast.success(context, '¡Tarjeta registrada! Bienvenido a MangoPOS.');
+    AppToast.success(context, 'Tarjeta verificada. Tu cuenta está en revisión.');
     context.go(AppRoutes.dashboard);
   }
 

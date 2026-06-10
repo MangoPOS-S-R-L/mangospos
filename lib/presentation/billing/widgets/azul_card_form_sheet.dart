@@ -163,7 +163,7 @@ class _AzulCardFormSheetState extends ConsumerState<AzulCardFormSheet> {
                     ?.copyWith(fontWeight: FontWeight.bold)),
             const SizedBox(height: 4),
             Text(
-              'Tus datos viajan cifrados directo a Azul. MangoPOS guarda solo un token, nunca tu número de tarjeta.',
+              'Verificaremos tu tarjeta con una autorización temporal de RD\$1 que se libera al instante. Tus datos viajan cifrados a Azul; guardamos solo un token, nunca tu número.',
               style: theme.textTheme.bodySmall
                   ?.copyWith(color: theme.hintColor),
             ),
