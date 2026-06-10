@@ -48,3 +48,8 @@ app.*.map.json
 winsparkle_keys/
 sparkle_keys/
 *.pem
+
+# Herramientas OSINT clonadas dentro del repo (no son parte de MangoPOS)
+/Osintgram/
+/SoIG/
+/sherlock/
