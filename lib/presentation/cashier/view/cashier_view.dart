@@ -265,9 +265,15 @@ class _CashierViewState extends ConsumerState<CashierView>
     );
 
     CashCloseInput input;
+    var loadFailed = false;
     try {
       input = await _buildCloseInput(session);
     } catch (_) {
+      // No pudimos cargar ventas/esperados del turno. NO abrimos el cierre con
+      // ceros: eso producía un ticket con esperados en 0 y un "Sobrante" falso
+      // (todo lo contado se veía como sobrante). Avisamos y abortamos para que
+      // el cajero reintente.
+      loadFailed = true;
       input = _emptyCloseInput();
     } finally {
       if (rootNavigator.canPop()) {
@@ -276,6 +282,28 @@ class _CashierViewState extends ConsumerState<CashierView>
     }
 
     if (!mounted) return;
+
+    if (loadFailed) {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          icon: const Icon(Icons.cloud_off_rounded,
+              color: Colors.red, size: 40),
+          title: const Text('No se pudo cargar el turno'),
+          content: const Text(
+            'No pudimos obtener las ventas y montos esperados de este turno. '
+            'Verifica tu conexión e intenta cerrar la caja de nuevo.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Entendido'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
 
     // Sub-fase H · router strangler-fig: lee cash_close_mode del business y
     // monta el modo correcto. compact = dialog modal único existente;
@@ -568,33 +596,43 @@ class _CashierViewState extends ConsumerState<CashierView>
     // Sprint Caja Pro — listado detallado de movimientos manuales
     // (deposit/withdrawal/expense) + razón resuelta. Se renderiza en
     // la hoja de cierre y en el ticket impreso para auditoría.
-    final allTx = await repository.getSessionTransactions(sessionId);
-    final reasonsCatalog =
-        await repository.getCashTransactionReasons(businessId: vm.businessId ?? '');
-    final reasonByCode = <String, String>{
-      for (final r in reasonsCatalog) (r['code'] as String): (r['label'] as String),
-    };
-    final movements = allTx
-        .where((tx) =>
-            tx.type == 'deposit' ||
-            tx.type == 'withdrawal' ||
-            tx.type == 'expense')
-        .map((tx) {
-          // Resolver el label de la razón desde el catálogo cuando exista
-          // un reason_code; si no, caer al texto libre (description).
-          final code = tx.reasonCode;
-          final label = (code != null && reasonByCode[code] != null)
-              ? reasonByCode[code]
-              : tx.description;
-          return CashMovementEntry(
-            type: tx.type,
-            amount: tx.amount,
-            reasonLabel: label,
-            description: tx.description,
-            createdAt: tx.createdAt,
-          );
-        })
-        .toList(growable: false);
+    //
+    // NO CRÍTICO: si falla la carga de movimientos o del catálogo de razones,
+    // NO descartamos los esperados/ventas ya obtenidos arriba. Antes, un fallo
+    // acá hacía throw → el caller caía a _emptyCloseInput() (todo en cero) y el
+    // cierre se imprimía con "Sobrante" falso. Ahora degradamos a lista vacía.
+    List<CashMovementEntry> movements = const <CashMovementEntry>[];
+    try {
+      final allTx = await repository.getSessionTransactions(sessionId);
+      final reasonsCatalog = await repository.getCashTransactionReasons(
+          businessId: vm.businessId ?? '');
+      final reasonByCode = <String, String>{
+        for (final r in reasonsCatalog) (r['code'] as String): (r['label'] as String),
+      };
+      movements = allTx
+          .where((tx) =>
+              tx.type == 'deposit' ||
+              tx.type == 'withdrawal' ||
+              tx.type == 'expense')
+          .map((tx) {
+            // Resolver el label de la razón desde el catálogo cuando exista
+            // un reason_code; si no, caer al texto libre (description).
+            final code = tx.reasonCode;
+            final label = (code != null && reasonByCode[code] != null)
+                ? reasonByCode[code]
+                : tx.description;
+            return CashMovementEntry(
+              type: tx.type,
+              amount: tx.amount,
+              reasonLabel: label,
+              description: tx.description,
+              createdAt: tx.createdAt,
+            );
+          })
+          .toList(growable: false);
+    } catch (e) {
+      debugPrint('[CashClose] movimientos no disponibles (no crítico): $e');
+    }
 
     return CashCloseInput(
       expectedCash: expectedCash,

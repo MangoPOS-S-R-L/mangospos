@@ -41,6 +41,12 @@ class _FinanceReportBody extends StatelessWidget {
         closures.where((row) => row['is_balanced'] == true).length;
     final reviewedClosures =
         closures.where((row) => row['status']?.toString() == 'closed').length;
+    // El "Detalle de cierre y cuadre" es solo para sesiones CERRADAS: una
+    // sesión abierta aún no tiene reportado → saldría "Reportado: 0" con un
+    // cuadre engañoso. Las abiertas se cuentan en el resumen, no en el detalle.
+    final closedDetails = closures
+        .where((row) => row['status']?.toString() == 'closed')
+        .toList(growable: false);
 
     return ListView(
       padding: reportBodyPadding(context),
@@ -137,7 +143,7 @@ class _FinanceReportBody extends StatelessWidget {
               'Comparación clara entre lo esperado por el sistema y lo reportado en el cierre.',
         ),
         const SizedBox(height: AppSpacing.itemGap),
-        if (closures.isEmpty)
+        if (closedDetails.isEmpty)
           const ReportSurfaceCard(
             child: ReportEmptyPlaceholder(
               icon: Icons.point_of_sale_outlined,
@@ -146,7 +152,7 @@ class _FinanceReportBody extends StatelessWidget {
             ),
           )
         else
-          ...closures.take(12).map(
+          ...closedDetails.take(12).map(
                 (closure) => Padding(
                   padding: const EdgeInsets.only(bottom: AppSpacing.itemGap),
                   child:
@@ -175,9 +181,10 @@ class _CashClosureCard extends StatelessWidget {
         DateTime.tryParse(closure['opened_at']?.toString() ?? '');
     final closedAt =
         DateTime.tryParse(closure['closed_at']?.toString() ?? '');
-    final diffColor = difference.abs() < 0.009
-        ? MangoColors.successGreen
-        : AppColors.destructive;
+    // Color por signo: faltante (negativo) → rojo; cuadrado o sobrante → verde.
+    final diffColor = difference < -0.009
+        ? AppColors.destructive
+        : MangoColors.successGreen;
 
     return ReportSurfaceCard(
       child: Column(

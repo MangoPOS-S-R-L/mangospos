@@ -59,7 +59,9 @@
       "Bash(tee /tmp/flutter_run2.log)",
       "Bash(cd /Users/cristiangomez/dev/mangospos; flutter run -d macos > /tmp/flutter_run3.log 2>&1)",
       "Bash(curl -s 'https://supabase.mangopos.do/rest/v1/plans?select=code,name,price_cents_monthly,trial_days,is_active,display_order&order=display_order' -H 'apikey: __TRACKED_VAR__' -H 'Authorization: Bearer __TRACKED_VAR__')",
-      "Bash(curl -s 'https://supabase.mangopos.do/rest/v1/plan_catalog?select=code,name,price_monthly,is_active,archived_at&order=code' -H 'apikey: __TRACKED_VAR__' -H 'Authorization: Bearer __TRACKED_VAR__')"
+      "Bash(curl -s 'https://supabase.mangopos.do/rest/v1/plan_catalog?select=code,name,price_monthly,is_active,archived_at&order=code' -H 'apikey: __TRACKED_VAR__' -H 'Authorization: Bearer __TRACKED_VAR__')",
+      "Bash(git rm *)",
+      "Bash(curl -s 'https://supabase.mangopos.do/rest/v1/cash_register_sessions?select=id,status,start_amount,end_amount,difference,opened_at,closed_at,notes&order=opened_at.desc&limit=6' -H 'apikey: __TRACKED_VAR__' -H 'Authorization: Bearer __TRACKED_VAR__')"
     ],
     "additionalDirectories": [
       "/tmp"

@@ -296,12 +296,12 @@ class ReportsRepository {
     for (final session in sessionRows) {
       final startAmount = session['start_amount'];
       final endAmount = session['end_amount'];
-      final difference = session['difference'];
       final status = session['status']?.toString();
 
       if (startAmount is num) openingsTotal += startAmount.toDouble();
       if (endAmount is num) closingsTotal += endAmount.toDouble();
-      if (difference is num) differencesTotal += difference.toDouble();
+      // differencesTotal se calcula abajo como suma de las diferencias NETAS
+      // (todos los métodos), no de session.difference (solo efectivo).
       if (status == 'open') {
         openSessions += 1;
       } else {
@@ -478,6 +478,13 @@ class ReportsRepository {
             : (endAmount > 0
                   ? endAmount
                   : reportedCash + reportedCard + reportedTransfer);
+        // Diferencia NETA (todos los métodos) = reportado − esperado, coherente
+        // con la app. session['difference'] es solo de EFECTIVO. Si no hay
+        // resumen (RPC falló) o no se pudo parsear el reportado, caemos a la de
+        // efectivo para no mostrar un neto falso.
+        final netDifference = (summary.isNotEmpty && reportedTotal > 0)
+            ? reportedTotal - expectedTotal
+            : difference;
         final totalSalesAllMethods = _toDouble(
           summary['total_sales_all_methods'],
         );
@@ -503,7 +510,8 @@ class ReportsRepository {
           'closed_at': session['closed_at'],
           'start_amount': startAmount,
           'end_amount': endAmount,
-          'difference': difference,
+          'difference': netDifference,
+          'difference_cash': difference,
           'expected_cash': expectedCash,
           'expected_card': expectedCard,
           'expected_transfer': expectedTransfer,
@@ -522,7 +530,7 @@ class ReportsRepository {
           'transaction_count':
               (summary['transaction_count'] as num?)?.toInt() ?? 0,
           'notes': notes,
-          'is_balanced': difference.abs() < 0.009,
+          'is_balanced': netDifference.abs() < 0.009,
         };
       }),
     );
@@ -535,6 +543,13 @@ class ReportsRepository {
       if (bDate == null) return -1;
       return bDate.compareTo(aDate);
     });
+
+    // Diferencia acumulada = suma de las diferencias NETAS (todos los métodos),
+    // coherente con lo que muestra cada tarjeta de cierre.
+    differencesTotal = closureDetails.fold<double>(
+      0.0,
+      (sum, c) => sum + _toDouble(c['difference']),
+    );
 
     final typeRows = byType.values.toList(
       growable: false,

@@ -20,6 +20,10 @@ class CashClosuresView extends ConsumerStatefulWidget {
 class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
   late Future<List<CashRegisterSession>> _future;
   Map<String, String> _cashierNames = const {};
+  // Diferencia NETA (reportado − esperado total) por sesión, precargada vía el
+  // RPC de resumen. La lista sola no tiene el esperado total (solo la de
+  // efectivo en session.difference), así que la traemos aparte.
+  Map<String, double> _netDiffById = const {};
 
   ({double cash, double card, double transfer, double total})
   _reportedBreakdown(CashRegisterSession session) {
@@ -69,7 +73,49 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
     if (mounted) {
       setState(() => _cashierNames = names);
     }
+    // Esperado total por sesión (para la diferencia NETA de la lista). Se
+    // calcula ANTES de devolver, para que la lista pinte el valor correcto de
+    // una vez en vez de mostrar primero la diferencia de efectivo.
+    _netDiffById = await _computeNetDifferences(sessions);
     return sessions;
+  }
+
+  /// Diferencia NETA (reportado − esperado total) de cada sesión cerrada vía
+  /// `fn_get_cash_session_summary`. La lista no tiene el esperado total
+  /// (session.difference es solo de efectivo), por eso lo traemos aquí para
+  /// mostrar la diferencia real. Tolerante a fallos por sesión: si el RPC falla
+  /// o no hay reportado parseable, esa sesión cae a session.difference.
+  Future<Map<String, double>> _computeNetDifferences(
+    List<CashRegisterSession> sessions,
+  ) async {
+    final repo = ref.read(cashierRepositoryProvider);
+    final closed = sessions.where((s) => !s.isOpen).toList(growable: false);
+    if (closed.isEmpty) return const {};
+
+    double num2(dynamic v) => (v as num?)?.toDouble() ?? 0;
+
+    final entries = await Future.wait(
+      closed.map((s) async {
+        try {
+          final summary = await repo.getSessionSummary(s.id);
+          final expectedTotal = summary['expected_total'] != null
+              ? num2(summary['expected_total'])
+              : num2(summary['expected_cash']) +
+                  num2(summary['expected_card']) +
+                  num2(summary['expected_transfer']);
+          final reportedTotal = _reportedBreakdown(s).total;
+          if (reportedTotal <= 0) return null; // sin reportado parseable
+          return MapEntry(s.id, reportedTotal - expectedTotal);
+        } catch (_) {
+          return null;
+        }
+      }),
+    );
+
+    return {
+      for (final e in entries)
+        if (e != null) e.key: e.value,
+    };
   }
 
   Future<Map<String, String>> _loadCashierNames(
@@ -151,7 +197,18 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
       showDialog<void>(
         context: context,
         builder: (context) {
-          final difference = session.difference;
+          // Diferencia NETA de todos los métodos (reportado − esperado), para
+          // ser consistente con "Total Esperado"/"Total Reportado" mostrados
+          // abajo. NO usamos session.difference porque esa es solo la
+          // diferencia de EFECTIVO (la guarda fn_close_cash_session); mostrarla
+          // junto a totales de todos los métodos confundía (p.ej. +2,700
+          // efectivo mientras la neta real era +150).
+          // Guard: si no se pudo parsear el total reportado de las notas
+          // (sesiones viejas/malformadas), reported.total queda 0 → caemos a
+          // session.difference para no mostrar un neto negativo falso.
+          final difference = reported.total > 0
+              ? reported.total - expectedAmount
+              : session.difference;
           final diffColor = difference == 0
               ? Colors.grey[700]
               : (difference > 0 ? Colors.green[700] : Colors.red[700]);
@@ -486,14 +543,28 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
                             'Efectivo: RD\$ ${reported.cash.toStringAsFixed(2)} · Tarjeta: RD\$ ${reported.card.toStringAsFixed(2)} · Transferencia: RD\$ ${reported.transfer.toStringAsFixed(2)}',
                           ),
                         if (!isOpen)
-                          Text(
-                            'Diferencia: RD\$ ${session.difference.toStringAsFixed(2)}',
-                            style: TextStyle(
-                              color: session.difference == 0
+                          Builder(
+                            builder: (_) {
+                              // Diferencia NETA (reportado − esperado total),
+                              // precargada por _loadNetDifferences. Mientras
+                              // carga o si el RPC falla, cae a session.difference
+                              // (solo efectivo), etiquetada como tal.
+                              final net = _netDiffById[session.id];
+                              final diff = net ?? session.difference;
+                              final color = diff == 0
                                   ? Colors.grey[700]
-                                  : Colors.red[700],
-                              fontWeight: FontWeight.w600,
-                            ),
+                                  : (diff > 0
+                                      ? Colors.green[700]
+                                      : Colors.red[700]);
+                              return Text(
+                                '${net != null ? 'Diferencia' : 'Dif. efectivo'}: '
+                                'RD\$ ${diff.toStringAsFixed(2)}',
+                                style: TextStyle(
+                                  color: color,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              );
+                            },
                           ),
                       ],
                     ),
