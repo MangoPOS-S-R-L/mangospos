@@ -7,7 +7,10 @@
 // session, cobrar, void) las ejecuta el backend vía Edge Functions o cron.
 // Acá invocamos las funciones — no hay UPDATE/INSERT directos desde el cliente.
 
+import 'dart:convert';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/billing_charge.dart';
@@ -18,6 +21,12 @@ import '../models/billing_state.dart';
 final billingRepositoryProvider = Provider<BillingRepository>(
   (ref) => BillingRepository(Supabase.instance.client),
 );
+
+/// DEBUG (solo pruebas): si se compila con `--dart-define=AZUL_LOCAL_FN=...`,
+/// la tokenización se enruta a la Edge Function corriendo en local (deno run)
+/// en vez del VPS, para evitar el bloqueo de Incapsula a la IP del VPS en el
+/// ambiente de pruebas de Azul. Vacío en builds normales → ruta de producción.
+const String _kAzulLocalFnBase = String.fromEnvironment('AZUL_LOCAL_FN');
 
 class BillingRepository {
   final SupabaseClient _client;
@@ -170,6 +179,15 @@ class BillingRepository {
     required String cvc,
     bool makeDefault = true,
   }) async {
+    if (_kAzulLocalFnBase.isNotEmpty) {
+      return _tokenizeViaLocal(
+        businessId: businessId,
+        cardNumber: cardNumber,
+        expiration: expiration,
+        cvc: cvc,
+        makeDefault: makeDefault,
+      );
+    }
     final dynamic data;
     try {
       final response = await _client.functions.invoke(
@@ -191,6 +209,55 @@ class BillingRepository {
       throw BillingRepositoryException('Respuesta inválida al tokenizar la tarjeta');
     }
     if (data['ok'] != true || data.containsKey('error')) {
+      throw _tokenizeError(data);
+    }
+    return TokenizedCardResult(
+      paymentMethodId: data['payment_method_id'] as String,
+      brand: data['brand']?.toString() ?? '',
+      cardNumberMasked: data['card_number_masked']?.toString() ?? '',
+      expiration: data['expiration']?.toString() ?? expiration,
+      isDefault: (data['is_default'] as bool?) ?? makeDefault,
+    );
+  }
+
+  /// DEBUG: tokeniza llamando directamente a la función local (ver
+  /// [_kAzulLocalFnBase]). Manda el JWT del usuario como Bearer; la función
+  /// local valida el token contra el auth server real (SUPABASE_URL de prod).
+  /// El path `/azul-tokenize-card` lo ignora `Deno.serve` (responde a cualquier
+  /// path), solo importa el método POST.
+  Future<TokenizedCardResult> _tokenizeViaLocal({
+    required String businessId,
+    required String cardNumber,
+    required String expiration,
+    required String cvc,
+    required bool makeDefault,
+  }) async {
+    final token = _client.auth.currentSession?.accessToken;
+    if (token == null) {
+      throw BillingRepositoryException('Sesión no disponible para tokenizar');
+    }
+    final uri = Uri.parse('$_kAzulLocalFnBase/azul-tokenize-card');
+    http.Response resp;
+    try {
+      resp = await http.post(
+        uri,
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'business_id': businessId,
+          'card_number': cardNumber.replaceAll(RegExp(r'\s+'), ''),
+          'expiration': expiration,
+          'cvc': cvc,
+          'make_default': makeDefault,
+        }),
+      );
+    } catch (e) {
+      throw BillingRepositoryException('No se pudo contactar la función local: $e');
+    }
+    final dynamic data = resp.body.isNotEmpty ? jsonDecode(resp.body) : null;
+    if (resp.statusCode != 200 || data is! Map<String, dynamic> || data['ok'] != true) {
       throw _tokenizeError(data);
     }
     return TokenizedCardResult(

@@ -216,6 +216,19 @@ class AppRouter {
       // Autenticado:
       // - rutas auth -> selector interno de negocio
       // - raíz -> selector interno si tiene varios; dashboard si ya quedó negocio activo
+
+      // EXCEPCIÓN onboarding: el Step 3 (activación) y Step 4 (método de pago)
+      // del registro corren con el usuario YA autenticado — la cuenta se crea y
+      // se firma la sesión DENTRO del Step 3 (submitAll). Sin esta excepción, al
+      // firmarse la sesión el refresh del router rebota el Step 3 a
+      // selectBusiness y el paso de pago (Step 4) nunca se muestra. Son parte
+      // del onboarding del negocio recién creado (status 'pending'); Step 3
+      // navega a Step 4, y Step 4 al dashboard al terminar (→ PendingApproval).
+      if (path == AppRoutes.registerSetup ||
+          path == AppRoutes.registerPaymentMethod) {
+        return null;
+      }
+
       if (isAuthRoute || path == '/') {
         return AppRoutes.selectBusiness;
       }
