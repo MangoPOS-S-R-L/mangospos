@@ -1,17 +1,9 @@
 // Pantalla de método de pago.
 //
-// Flujo de "Cambiar tarjeta" (PRD §8.4):
-//   1. Click → invoca azul-create-tokenization-session (Edge Fn).
-//   2. Recibe payment_page_url y abre en browser externo (url_launcher).
-//   3. Mientras tanto, mostramos pantalla "Esperando confirmación..." con
-//      indicación de qué pasar en Azul.
-//   4. El stream Realtime de azul_payment_methods detecta cuando el callback
-//      del backend inserta la nueva tarjeta y la UI se actualiza sola.
-//   5. El usuario regresa a la app y ve la nueva tarjeta como default.
-//
-// Cross-platform: url_launcher abre el browser nativo de cada plataforma
-// (Safari/Chrome/Edge según OS). No usamos WebView interno porque la cobertura
-// cross-platform es heterogénea (no funciona limpio en desktop sin más deps).
+// Registro/cambio de tarjeta vía la Payment Page de Azul (form hospedado por
+// Azul, que con 3DS habilitado en el MID corre la autenticación en su página).
+// Toda la mecánica de abrir el navegador + esperar la confirmación por Realtime
+// vive en [AzulPaymentPageLauncher] (reusado también en el onboarding).
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -20,34 +12,16 @@ import 'package:intl/intl.dart';
 
 import '../../../app/router/routes.dart';
 import '../../../app/theme/mango_colors.dart';
-import '../../../core/utils/app_toast.dart';
 import '../../../data/models/billing_payment_method.dart';
 import '../../../services/session/session_controller.dart';
 import '../providers/billing_providers.dart';
-import '../widgets/azul_card_form_sheet.dart';
+import '../widgets/azul_payment_page_launcher.dart';
 
-class PaymentMethodView extends ConsumerStatefulWidget {
+class PaymentMethodView extends ConsumerWidget {
   const PaymentMethodView({super.key});
 
   @override
-  ConsumerState<PaymentMethodView> createState() => _PaymentMethodViewState();
-}
-
-class _PaymentMethodViewState extends ConsumerState<PaymentMethodView> {
-  String? _lastError;
-
-  Future<void> _onChangeCard() async {
-    final businessId = ref.read(sessionProvider).activeBusinessId;
-    if (businessId == null) return;
-    setState(() => _lastError = null);
-    final result =
-        await AzulCardFormSheet.show(context, businessId: businessId);
-    if (!mounted || result == null) return;
-    AppToast.success(context, 'Tarjeta guardada correctamente.');
-  }
-
-  @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final session = ref.watch(sessionProvider);
     final businessId = session.activeBusinessId;
     if (businessId == null) {
@@ -88,13 +62,9 @@ class _PaymentMethodViewState extends ConsumerState<PaymentMethodView> {
             if (pm != null) _CardDisplay(method: pm),
             if (pm == null) const _NoCardPlaceholder(),
             const SizedBox(height: 16),
-            if (_lastError != null) _ErrorBanner(message: _lastError!),
-            const SizedBox(height: 12),
-            _ChangeCardButton(
-              isLoading: false,
-              isWaiting: false,
-              hasCard: pm != null,
-              onTap: _onChangeCard,
+            AzulPaymentPageLauncher(
+              businessId: businessId,
+              idleLabel: pm != null ? 'Cambiar tarjeta' : 'Agregar tarjeta',
             ),
             const SizedBox(height: 18),
             const _SecurityNote(),
@@ -276,91 +246,6 @@ class _NoCardPlaceholder extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Panel "esperando confirmación de Azul"
-// ---------------------------------------------------------------------------
-
-class _ErrorBanner extends StatelessWidget {
-  final String message;
-  const _ErrorBanner({required this.message});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFEE2E2),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFFCA5A5)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(Icons.error_outline, color: Color(0xFFB91C1C), size: 22),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              message,
-              style: const TextStyle(fontSize: 13, color: Color(0xFFB91C1C), height: 1.4),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// CTA
-// ---------------------------------------------------------------------------
-
-class _ChangeCardButton extends StatelessWidget {
-  final bool isLoading;
-  final bool isWaiting;
-  final bool hasCard;
-  final VoidCallback onTap;
-
-  const _ChangeCardButton({
-    required this.isLoading,
-    required this.isWaiting,
-    required this.hasCard,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final disabled = isLoading || isWaiting;
-    final label = isLoading
-        ? 'Preparando pasarela…'
-        : isWaiting
-            ? 'Esperando confirmación…'
-            : (hasCard ? 'Cambiar tarjeta' : 'Agregar tarjeta');
-
-    return SizedBox(
-      width: double.infinity,
-      child: FilledButton.icon(
-        onPressed: disabled ? null : onTap,
-        style: FilledButton.styleFrom(
-          backgroundColor: MangoColors.primaryOrange,
-          foregroundColor: MangoColors.white,
-          disabledBackgroundColor: MangoColors.cardBorder,
-          disabledForegroundColor: MangoColors.muted,
-          minimumSize: const Size.fromHeight(48),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        ),
-        icon: isLoading
-            ? const SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-              )
-            : const Icon(Icons.lock_rounded, size: 18),
-        label: Text(label, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
-      ),
-    );
-  }
-}
-
 class _SecurityNote extends StatelessWidget {
   const _SecurityNote();
 
@@ -388,9 +273,9 @@ class _SecurityNote extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Tus datos de tarjeta se manejan exclusivamente en los servidores '
-                  'de Azul (procesador local certificado). MangoPOS solo guarda el '
-                  'token y los últimos 4 dígitos.',
+                  'Tus datos de tarjeta se ingresan y procesan en la página segura '
+                  'de Azul (procesador local certificado), con autenticación 3D '
+                  'Secure. MangoPOS solo guarda el token y los últimos 4 dígitos.',
                   style: TextStyle(
                     fontSize: 11,
                     color: MangoColors.darkGray.withValues(alpha: 0.7),

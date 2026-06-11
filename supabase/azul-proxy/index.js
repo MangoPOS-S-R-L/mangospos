@@ -18,7 +18,8 @@
 //       content-type: application/json
 //       x-proxy-auth: <AZUL_PROXY_AUTH_TOKEN>
 //     body:
-//       { "method": "ProcessPayment"|"ProcessDataVault"|"VerifyPayment", "body": {...} }
+//       { "method": "ProcessPayment"|"ProcessDataVault"|"VerifyPayment"
+//                  |"ProcessThreeDSMethod"|"ProcessThreeDSChallenge", "body": {...} }
 //     response 200:
 //       { "ok": bool, "httpStatus": number, "durationMs": number, "body": {...} }
 //     response 4xx/5xx:
@@ -45,12 +46,22 @@ const AZUL_API_URL = required('AZUL_API_URL');
 const AUTH1 = required('AZUL_AUTH1');
 const AUTH2 = required('AZUL_AUTH2');
 const MAX_BODY_BYTES = 64 * 1024;
-const UPSTREAM_TIMEOUT_MS = 30_000;
+// El flujo 3DS espera hasta ~10s la notificación del ACS al MethodForm y el doc
+// WS de Azul recomienda timeout de 120s. Con 30s el sidecar cortaba a media
+// autenticación. Configurable por env para no recompilar.
+const UPSTREAM_TIMEOUT_MS = parseInt(process.env.AZUL_PROXY_TIMEOUT_MS || '120000', 10);
 
-const ALLOWED_METHODS = new Set([
-  'ProcessPayment',
-  'ProcessDataVault',
-  'VerifyPayment',
+// Mapa método canónico → flag de query string que espera el JSON WS de Azul.
+// Azul selecciona la operación con un flag SIN valor (`?ProcessPayment`), no con
+// `Method=...`. Los métodos 3DS de continuación van en MINÚSCULA en el doc
+// (`?processthreedsmethod`, `?processthreedschallenge`); los demás conservan su
+// nombre. El casing del flag importa — validar contra pruebas en 3DS.2.
+const METHOD_QUERY_FLAG = new Map([
+  ['ProcessPayment', 'ProcessPayment'],
+  ['ProcessDataVault', 'ProcessDataVault'],
+  ['VerifyPayment', 'VerifyPayment'],
+  ['ProcessThreeDSMethod', 'processthreedsmethod'],
+  ['ProcessThreeDSChallenge', 'processthreedschallenge'],
 ]);
 
 function required(name) {
@@ -145,7 +156,8 @@ function postToAzul(method, payload) {
     // busca una clave con el nombre de la operación y solo encuentra `Method`.
     // (Hipótesis derivada del 500 reportado por Azul, hilo 2026-05/06 — validar
     // con el primer VerifyPayment que pase Incapsula.)
-    const target = new url.URL(`${AZUL_API_URL.replace(/\/$/, '')}?${method}`);
+    const flag = METHOD_QUERY_FLAG.get(method);
+    const target = new url.URL(`${AZUL_API_URL.replace(/\/$/, '')}?${flag}`);
     const bodyStr = JSON.stringify(payload);
     const opts = {
       hostname: target.hostname,
@@ -279,7 +291,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     const { method, body } = payload;
-    if (!ALLOWED_METHODS.has(method)) {
+    if (!METHOD_QUERY_FLAG.has(method)) {
       return sendError(res, 400, 'bad_method', `Unknown Azul method: ${method}`);
     }
     if (!body || typeof body !== 'object') {

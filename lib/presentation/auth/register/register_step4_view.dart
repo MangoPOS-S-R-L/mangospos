@@ -25,7 +25,7 @@ import '../../../app/router/routes.dart';
 import '../../../app/theme/mango_tokens.dart';
 import '../../../data/models/billing_plan.dart';
 import '../../../presentation/billing/providers/billing_providers.dart';
-import '../../../presentation/billing/widgets/azul_card_form.dart';
+import '../../../presentation/billing/widgets/azul_payment_page_launcher.dart';
 import '../../../services/session/session_controller.dart';
 import '../widgets/auth_shell.dart';
 import 'register_step1_viewmodel.dart';
@@ -175,10 +175,11 @@ class _PaymentColumn extends StatelessWidget {
                     padding: EdgeInsets.symmetric(vertical: 18),
                     child: Divider(height: 1, color: MangoTokens.border),
                   ),
-                  AzulCardForm(
+                  AzulPaymentPageLauncher(
                     businessId: businessId,
-                    submitLabel: 'Verificar tarjeta · RD\$1',
-                    onSuccess: (_) => onSuccess(),
+                    idleLabel: 'Verificar tarjeta · RD\$1',
+                    onSuccess: onSuccess,
+                    showSuccessToast: false,
                   ),
                 ],
               ),

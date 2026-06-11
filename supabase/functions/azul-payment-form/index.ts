@@ -39,6 +39,14 @@ Deno.serve(async (req) => {
   }
 
   const env = getAzulEnv();
+  const authKey = env.azulAuthKey;
+  const paymentPageUrl = env.azulPaymentPageUrl;
+  if (!authKey || !paymentPageUrl) {
+    return htmlResponse(
+      errorPage("Configuración de pago incompleta en el servidor."),
+      500,
+    );
+  }
   const service = getServiceClient();
 
   const { data: session, error } = await service
@@ -55,8 +63,13 @@ Deno.serve(async (req) => {
     return htmlResponse(errorPage("Sesión no encontrada"), 404);
   }
   if (session.status !== "pending") {
+    // Ventana reabierta/vuelta-atrás: ya se sirvió o ya se procesó. No es un
+    // error — solo está vieja. Mensaje calmado + auto-cierre.
     return htmlResponse(
-      errorPage(`Esta sesión ya fue procesada (estado: ${session.status})`),
+      stalePage(
+        "Ya completaste o cerraste este registro. Vuelve a la app de MangoPOS "
+          + "para ver tu tarjeta o intentar de nuevo.",
+      ),
       410,
     );
   }
@@ -66,7 +79,10 @@ Deno.serve(async (req) => {
       .from("azul_payment_sessions")
       .update({ status: "timeout", updated_at: new Date().toISOString() })
       .eq("id", session.id);
-    return htmlResponse(errorPage("La sesión expiró. Inicia de nuevo."), 410);
+    return htmlResponse(
+      stalePage("La sesión expiró. Vuelve a la app e intenta de nuevo."),
+      410,
+    );
   }
 
   // Reconstruir los mismos campos para que el AuthHash coincida byte-exacto.
@@ -94,7 +110,7 @@ Deno.serve(async (req) => {
 
   const recomputedHash = await computeAuthHash(
     paymentPageFieldsToOrdered(fields),
-    env.azulAuthKey,
+    authKey,
   );
   if (recomputedHash !== session.auth_hash_sent) {
     console.error("[azul-payment-form] auth_hash mismatch — session may be corrupted", {
@@ -121,7 +137,7 @@ Deno.serve(async (req) => {
     return htmlResponse(errorPage("No se pudo iniciar la sesión"), 500);
   }
 
-  return htmlResponse(renderForm(env.azulPaymentPageUrl, fields, recomputedHash));
+  return htmlResponse(renderForm(paymentPageUrl, fields, recomputedHash));
 });
 
 function renderForm(
@@ -200,14 +216,49 @@ function renderForm(
 </html>`;
 }
 
-function errorPage(message: string): string {
+function noticePage(
+  opts: { title: string; message: string; color: string; autoClose: boolean },
+): string {
   const e = escapeHtmlAttr;
+  const auto = opts.autoClose
+    ? `<script>setTimeout(function(){try{window.close();}catch(e){}},2200);</script>`
+    : "";
   return `<!DOCTYPE html>
-<html lang="es"><head><meta charset="utf-8"><title>Error</title>
-<style>body{font-family:-apple-system,sans-serif;background:#f5f5f7;color:#333;
-display:flex;align-items:center;justify-content:center;height:100vh;margin:0;
-padding:20px;text-align:center}.box{background:#fff;border-radius:12px;padding:32px;
-max-width:420px;box-shadow:0 2px 20px rgba(0,0,0,.05)}h1{margin:0 0 12px;font-size:18px;color:#b00}
-p{margin:0;font-size:14px;color:#666}</style></head>
-<body><div class="box"><h1>No pudimos continuar</h1><p>${e(message)}</p></div></body></html>`;
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${e(opts.title)}</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+background:#f5f5f7;color:#222;display:flex;align-items:center;justify-content:center;
+min-height:100vh;margin:0;padding:20px}
+.box{background:#fff;border-radius:16px;padding:36px 28px;max-width:420px;width:100%;
+box-shadow:0 2px 24px rgba(0,0,0,.06);text-align:center}
+h1{margin:0 0 10px;font-size:20px;color:${opts.color}}
+p{margin:0;font-size:14px;color:#666;line-height:1.55}
+button{margin-top:22px;background:#FF7A00;color:#fff;border:0;padding:13px 22px;
+border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;width:100%}
+.hint{margin-top:12px;font-size:12px;color:#9aa0a6}</style></head>
+<body><div class="box"><h1>${e(opts.title)}</h1><p>${e(opts.message)}</p>
+<button onclick="try{window.close();}catch(e){}">Volver a MangoPOS</button>
+<p class="hint">Si no se cierra sola, cierra esta ventana y vuelve a la app.</p>
+</div>${auto}</body></html>`;
+}
+
+/** Ventana ya consumida o expirada: el registro ya pasó o ya no aplica. Calma + auto-cierre. */
+function stalePage(message: string): string {
+  return noticePage({
+    title: "Esta ventana ya no está activa",
+    message,
+    color: "#B45309",
+    autoClose: true,
+  });
+}
+
+/** Error genuino (no se autocierra, para que el usuario lo lea). */
+function errorPage(message: string): string {
+  return noticePage({
+    title: "No pudimos continuar",
+    message,
+    color: "#B91C1C",
+    autoClose: false,
+  });
 }

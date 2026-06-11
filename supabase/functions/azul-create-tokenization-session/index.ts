@@ -87,15 +87,29 @@ Deno.serve(async (req) => {
   }
 
   const env = getAzulEnv();
+  // Sin la AuthKey no se puede firmar el form de la Payment Page. Validar acá
+  // para devolver un error legible en vez de un 500 críptico ("Key length is
+  // zero" al importar el HMAC). Setear AZUL_AUTH_KEY en el env de las functions.
+  if (!env.azulAuthKey) {
+    return errorResponse(
+      500,
+      "config_error",
+      "El servidor no tiene configurada la llave de Azul (AZUL_AUTH_KEY). " +
+        "Configúrala en el entorno de las Edge Functions y vuelve a desplegar.",
+    );
+  }
   const service = getServiceClient();
 
-  // 2. Idempotencia suave: si ya hay sesión pending no expirada, devolverla.
+  // 2. Idempotencia suave: si ya hay sesión PENDING no expirada, devolverla
+  //    (evita duplicar en doble-click). NO reutilizamos 'redirected': esa ya
+  //    sirvió el form una vez; reusarla muestra "sesión ya procesada" y bloquea
+  //    al usuario. Un intento incompleto debe poder reintentar con sesión nueva.
   const { data: existing, error: existingErr } = await service
     .from("azul_payment_sessions")
     .select("id, order_number, expires_at, status")
     .eq("business_id", businessId)
     .eq("intent_type", intentType)
-    .in("status", ["pending", "redirected"])
+    .eq("status", "pending")
     .gt("expires_at", new Date().toISOString())
     .order("created_at", { ascending: false })
     .limit(1)

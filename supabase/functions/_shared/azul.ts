@@ -45,6 +45,45 @@ function bytesToHex(bytes: Uint8Array): string {
   return out.join("");
 }
 
+/** Codifica un string a bytes UTF-16LE (necesario para el hash de respuesta). */
+function utf16leBytes(s: string) {
+  const buf = new Uint8Array(s.length * 2);
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    buf[i * 2] = c & 0xff;
+    buf[i * 2 + 1] = (c >> 8) & 0xff;
+  }
+  return buf;
+}
+
+/**
+ * AuthHash de la RESPUESTA del Payment Page (validación del callback).
+ *
+ * CRÍTICO: a diferencia del request (que Azul acepta en UTF-8 o UTF-16LE), Azul
+ * GENERA el hash de respuesta en **UTF-16LE** (doc "Página de Pago" pág. 9,
+ * ejemplo PHP: `mb_convert_encoding($s, 'UTF-16LE', 'ASCII')`). Si validamos con
+ * UTF-8 nunca coincide y el callback se marca 'tampered'. Verificado byte-exacto
+ * contra un callback real de Azul (azul_test.ts).
+ *
+ * El AuthKey va concatenado al final del mensaje (que se codifica UTF-16LE) y
+ * además como clave HMAC (bytes crudos del string, igual que el request).
+ */
+export async function computeResponseAuthHash(
+  orderedFields: string[],
+  authKey: string,
+): Promise<string> {
+  const message = orderedFields.join("") + authKey;
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(authKey),
+    { name: "HMAC", hash: "SHA-512" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign("HMAC", cryptoKey, utf16leBytes(message));
+  return bytesToHex(new Uint8Array(signature));
+}
+
 /**
  * Comparación constant-time de dos hashes hex (PRD §7.3 — anti timing attack).
  * Falla rápido en longitudes distintas (no es secreto), pero el loop sobre bytes
@@ -203,7 +242,9 @@ export function parseCallbackQuery(url: URL): AzulCallbackParams {
     authorizationCode: q("AuthorizationCode"),
     dateTime: q("DateTime"),
     responseCode: q("ResponseCode"),
-    isoCode: q("ISOCode"),
+    // Azul manda el param como "IsoCode" en el callback (no "ISOCode"). El
+    // casing importa: leerlo mal deja isoCode="" y rompe el hash de respuesta.
+    isoCode: q("IsoCode") || q("ISOCode"),
     responseMessage: q("ResponseMessage"),
     errorDescription: q("ErrorDescription"),
     rrn: q("RRN"),
@@ -224,7 +265,7 @@ export async function validateCallbackHash(
   callback: AzulCallbackParams,
   authKey: string,
 ): Promise<boolean> {
-  const expected = await computeAuthHash(
+  const expected = await computeResponseAuthHash(
     responseFieldsToOrdered({
       orderNumber: callback.orderNumber,
       amount: callback.amount,

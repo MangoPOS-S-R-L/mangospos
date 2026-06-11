@@ -10,10 +10,14 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   computeAuthHash,
+  computeResponseAuthHash,
   constantTimeEquals,
   generateChargeOrderNumber,
   generateTokenizeOrderNumber,
+  parseCallbackQuery,
   paymentPageFieldsToOrdered,
+  responseFieldsToOrdered,
+  validateCallbackHash,
 } from "./azul.ts";
 
 const GOLDEN_AUTH_KEY =
@@ -126,4 +130,53 @@ Deno.test("generateTokenizeOrderNumber: alfanumérico, 15 chars y único", () =>
   assertEquals(a.length, 15);
   assertEquals(ORDER_RE.test(a), true);
   assertEquals(a === b, false); // aleatorio
+});
+
+// --- Hash de RESPUESTA del callback — UTF-16LE (doc Página de Pago pág. 9) ---
+// Golden byte-exacto contra un callback REAL aprobado de Azul (2026-06-11).
+// Si este test pasa, validateCallbackHash valida los callbacks reales y NO los
+// marca 'tampered' por error (el bug que teníamos: usaba UTF-8).
+
+const REAL_CALLBACK_FIELDS = {
+  orderNumber: "MTCDCBBEC0C45A4",
+  amount: "100",
+  authorizationCode: "OK7978",
+  dateTime: "20260611150359",
+  responseCode: "ISO8583",
+  isoCode: "00",
+  responseMessage: "APROBADA",
+  errorDescription: "",
+  rrn: "2026061115040244918003",
+};
+const REAL_CALLBACK_HASH =
+  "851b86a09188613c794dd7d71cfccced782ec26200299a8da89c3f40191a4fd5" +
+  "5599a3316ee25549871dc8def64e553a3eaea7b467cbc847e6d5c1f1b4b77abf";
+
+Deno.test("golden respuesta: computeResponseAuthHash (UTF-16LE) byte-exacto vs callback real", async () => {
+  const h = await computeResponseAuthHash(
+    responseFieldsToOrdered(REAL_CALLBACK_FIELDS),
+    GOLDEN_AUTH_KEY,
+  );
+  assertEquals(h, REAL_CALLBACK_HASH);
+});
+
+Deno.test("regresión del bug: el hash de respuesta en UTF-8 NO coincide (por eso era UTF-16LE)", async () => {
+  const ordered = responseFieldsToOrdered(REAL_CALLBACK_FIELDS);
+  const utf16 = await computeResponseAuthHash(ordered, GOLDEN_AUTH_KEY);
+  const utf8 = await computeAuthHash(ordered, GOLDEN_AUTH_KEY);
+  assertEquals(utf16, REAL_CALLBACK_HASH);
+  assertEquals(utf16 === utf8, false);
+});
+
+Deno.test("parseCallbackQuery lee IsoCode (no ISOCode) y validateCallbackHash aprueba el callback real", async () => {
+  const u = new URL(
+    "https://x/azul-callback?status=approved" +
+      "&OrderNumber=MTCDCBBEC0C45A4&Amount=100&AuthorizationCode=OK7978" +
+      "&DateTime=20260611150359&ResponseCode=ISO8583&IsoCode=00" +
+      "&ResponseMessage=APROBADA&ErrorDescription=&RRN=2026061115040244918003" +
+      "&AuthHash=" + REAL_CALLBACK_HASH,
+  );
+  const cb = parseCallbackQuery(u);
+  assertEquals(cb.isoCode, "00"); // antes leía "" por el casing del param
+  assertEquals(await validateCallbackHash(cb, GOLDEN_AUTH_KEY), true);
 });

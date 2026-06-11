@@ -13,7 +13,12 @@
 //     solo incrementa callback_count y redirige al estado final.
 //   - Final: redirige al cliente a PUBLIC_RETURN_BASE_URL con result en query.
 
-import { corsPreflight, redirect } from "../_shared/responses.ts";
+import {
+  corsPreflight,
+  escapeHtmlAttr,
+  htmlResponse,
+  redirect,
+} from "../_shared/responses.ts";
 import { getAzulEnv } from "../_shared/env.ts";
 import { getServiceClient } from "../_shared/supabase.ts";
 import {
@@ -26,6 +31,18 @@ Deno.serve(async (req) => {
   if (pre) return pre;
 
   const url = new URL(req.url);
+
+  // Vista de resultado: a donde el propio callback redirige al cliente tras
+  // procesar (aprobado/declinado/cancelado/error). Se sirve desde acá porque
+  // azul-callback ya es público — así no dependemos de mangopos.do (que daba 404)
+  // ni de una función nueva con verify_jwt.
+  if (url.searchParams.get("view") === "result") {
+    return renderResultPage(
+      url.searchParams.get("result") ?? "error",
+      url.searchParams.get("reason") ?? "",
+    );
+  }
+
   const env = getAzulEnv();
   const service = getServiceClient();
 
@@ -67,7 +84,7 @@ Deno.serve(async (req) => {
 
   if (statusParam !== "approved" && statusParam !== "declined") {
     await markEventProcessed(eventId, "unknown_status_param");
-    return redirect(buildReturnUrl(env.publicReturnBaseUrl, "error"));
+    return redirect(buildReturnUrl("error"));
   }
 
   // ----- 3. Buscar la sesión por OrderNumber. -----
@@ -80,13 +97,13 @@ Deno.serve(async (req) => {
   if (sessErr) {
     console.error("[azul-callback] db error fetching session", sessErr);
     await markEventProcessed(eventId, "db_error_session_lookup");
-    return redirect(buildReturnUrl(env.publicReturnBaseUrl, "error"));
+    return redirect(buildReturnUrl("error"));
   }
 
   if (!session) {
     console.warn("[azul-callback] no session for OrderNumber", callback.orderNumber);
     await markEventProcessed(eventId, "session_not_found");
-    return redirect(buildReturnUrl(env.publicReturnBaseUrl, "error"));
+    return redirect(buildReturnUrl("error"));
   }
 
   // Asociar el evento a la sesión.
@@ -107,10 +124,15 @@ Deno.serve(async (req) => {
       })
       .eq("id", session.id);
     await markEventProcessed(eventId, "duplicate_callback_ignored");
-    return redirect(buildReturnUrl(env.publicReturnBaseUrl, terminalToResult(session.status)));
+    return redirect(buildReturnUrl(terminalToResult(session.status)));
   }
 
   // ----- 5. Validar AuthHash. -----
+  if (!env.azulAuthKey) {
+    console.error("[azul-callback] AZUL_AUTH_KEY no configurado");
+    await markEventProcessed(eventId, "no_auth_key");
+    return redirect(buildReturnUrl("error"));
+  }
   const hashValid = await validateCallbackHash(callback, env.azulAuthKey);
   if (!hashValid) {
     console.error("[azul-callback] AuthHash MISMATCH — possible tampering", {
@@ -134,7 +156,7 @@ Deno.serve(async (req) => {
         .eq("id", eventId);
     }
     // TODO: alertar admins (Resend/Slack) — agregar en F6.
-    return redirect(buildReturnUrl(env.publicReturnBaseUrl, "error"));
+    return redirect(buildReturnUrl("error"));
   }
 
   // ----- 6. Hash válido. Procesar approved / declined. -----
@@ -180,7 +202,7 @@ async function handleCancelled(
       }
     }
   }
-  return redirect(buildReturnUrl(env.publicReturnBaseUrl, "cancelled"));
+  return redirect(buildReturnUrl("cancelled"));
 }
 
 async function handleApproved(
@@ -208,7 +230,7 @@ async function handleApproved(
       })
       .eq("id", session.id);
     await markEventProcessed(eventId, "approved_without_token");
-    return redirect(buildReturnUrl(env.publicReturnBaseUrl, "error"));
+    return redirect(buildReturnUrl("error"));
   }
 
   // Si es replace_card, desmarcar default actual antes de insertar nueva.
@@ -256,7 +278,7 @@ async function handleApproved(
       })
       .eq("id", session.id);
     await markEventProcessed(eventId, "pm_insert_failed");
-    return redirect(buildReturnUrl(env.publicReturnBaseUrl, "error"));
+    return redirect(buildReturnUrl("error"));
   }
 
   // UPDATE session approved con todos los datos.
@@ -296,7 +318,7 @@ async function handleApproved(
     console.error("[azul-callback] void-hold invocation failed (will retry)", err);
   });
 
-  return redirect(buildReturnUrl(env.publicReturnBaseUrl, "approved"));
+  return redirect(buildReturnUrl("approved"));
 }
 
 async function handleDeclined(
@@ -333,16 +355,18 @@ async function handleDeclined(
   }
 
   const reason = encodeURIComponent(callback.responseMessage || "declined");
-  return redirect(`${buildReturnUrl(env.publicReturnBaseUrl, "declined")}&reason=${reason}`);
+  return redirect(`${buildReturnUrl("declined")}&reason=${reason}`);
 }
 
 // ---------------------------------------------------------------------------
 // Utilidades
 // ---------------------------------------------------------------------------
 
-function buildReturnUrl(base: string, result: string): string {
-  const root = base.replace(/\/+$/, "");
-  return `${root}/onboarding/payment-result?result=${result}`;
+// Redirige a la vista de resultado del PROPIO azul-callback (?view=result), no a
+// mangopos.do/onboarding/payment-result (esa página del front no existe → 404).
+function buildReturnUrl(result: string): string {
+  const root = getAzulEnv().publicCallbackBaseUrl.replace(/\/+$/, "");
+  return `${root}/azul-callback?view=result&result=${result}`;
 }
 
 function terminalToResult(sessionStatus: string): string {
@@ -385,4 +409,84 @@ async function invokeVoidHold(sessionId: string, azulOrderId: string): Promise<v
   if (!resp.ok) {
     throw new Error(`void-hold returned ${resp.status}`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Vista de resultado (HTML servida en el navegador tras procesar el pago)
+// ---------------------------------------------------------------------------
+
+interface ResultView {
+  icon: string;
+  color: string;
+  title: string;
+  body: string;
+}
+
+const RESULT_VIEWS: Record<string, ResultView> = {
+  approved: {
+    icon: "✅",
+    color: "#16A34A",
+    title: "¡Tarjeta registrada!",
+    body: "Tu tarjeta quedó verificada. Vuelve a la app de MangoPOS — aparecerá automáticamente.",
+  },
+  declined: {
+    icon: "⚠️",
+    color: "#B91C1C",
+    title: "Tarjeta declinada",
+    body: "Tu banco no autorizó la verificación. Vuelve a la app e intenta con otra tarjeta.",
+  },
+  cancelled: {
+    icon: "↩️",
+    color: "#B45309",
+    title: "Registro cancelado",
+    body: "No se registró ninguna tarjeta. Puedes intentarlo de nuevo desde la app.",
+  },
+  error: {
+    icon: "⚠️",
+    color: "#B91C1C",
+    title: "No pudimos completar",
+    body: "Ocurrió un problema procesando tu tarjeta. Vuelve a la app e inténtalo de nuevo.",
+  },
+};
+
+function renderResultPage(result: string, reason: string): Response {
+  const v = RESULT_VIEWS[result] ?? RESULT_VIEWS.error;
+  const e = escapeHtmlAttr;
+  const reasonLine = reason
+    ? `<p class="reason">${e(decodeURIComponent(reason))}</p>`
+    : "";
+  // En éxito cerramos la pestaña sola (vuelve a la app). Funciona si fue abierta
+  // por la app (window.open en web). Si el navegador lo bloquea, queda el botón;
+  // en el navegador in-app de móvil el usuario toca "Listo".
+  const autoClose = result === "approved"
+    ? `<script>setTimeout(function(){try{window.close();}catch(e){}},1800);</script>`
+    : "";
+  const html = `<!DOCTYPE html>
+<html lang="es"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${e(v.title)}</title>
+<style>
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+       background:#f5f5f7;color:#222;display:flex;align-items:center;
+       justify-content:center;min-height:100vh;margin:0;padding:20px}
+  .box{background:#fff;border-radius:16px;padding:36px 28px;max-width:420px;
+       width:100%;box-shadow:0 2px 24px rgba(0,0,0,.06);text-align:center}
+  .ico{font-size:52px;margin-bottom:10px}
+  h1{margin:0 0 10px;font-size:21px;color:${v.color}}
+  p{margin:0;font-size:14px;color:#666;line-height:1.55}
+  .reason{margin-top:10px;font-size:12px;color:#999}
+  button{margin-top:22px;background:#FF7A00;color:#fff;border:0;padding:13px 22px;
+         border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;width:100%}
+  .hint{margin-top:12px;font-size:12px;color:#9aa0a6}
+</style></head>
+<body><div class="box">
+  <div class="ico">${v.icon}</div>
+  <h1>${e(v.title)}</h1>
+  <p>${e(v.body)}</p>
+  ${reasonLine}
+  <button onclick="try{window.close();}catch(e){}">Volver a MangoPOS</button>
+  <p class="hint">Si no se cierra sola, cierra esta ventana y vuelve a la app.</p>
+</div>${autoClose}</body></html>`;
+  return htmlResponse(html);
 }
