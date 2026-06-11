@@ -1290,7 +1290,6 @@ class ReportsRepository {
       final total = _toDouble(doc['total']);
       final ncfType = doc['ncf_type']?.toString() ?? 'B02';
       final oid = doc['order_id']?.toString() ?? '';
-      final docTaxes = taxBreakdownByOrder[oid] ?? const [];
 
       // --- Desglose config-driven (ITBIS vs LEY/servicio) ---
       // El split sale de lo que REALMENTE se cobró por línea (order_items.tax)
@@ -1377,10 +1376,25 @@ class ReportsRepository {
         bucket['count'] = (bucket['count'] as int) + 1;
       }
 
+      // El DETALLE por comprobante refleja los valores GUARDADOS en la DB (que
+      // cuadran: subtotal + itbis_amount + service_fee = total). NO recalcular
+      // el ITBIS desde items —daba un split distinto al guardado y descuadraba
+      // la vista (136.72 + 26.69 + 13.67 = 177 vs total 175). La DB es la fuente
+      // de verdad (corregida por la migración + backfill).
+      final storedRate = configuredTaxOnlyRate > 0 ? configuredTaxOnlyRate : 18.0;
       enrichedDocs.add({
-        ...doc,
-        'service_fee': serviceFee,
-        'tax_breakdown': docTaxes,
+        ...doc, // conserva subtotal, itbis_amount, service_fee y total guardados
+        'tax_breakdown': itbis.abs() > 0.005
+            ? <Map<String, dynamic>>[
+                {
+                  'rate_key': storedRate.toStringAsFixed(4),
+                  'label': taxNameByRate[storedRate.toStringAsFixed(4)] ?? 'ITBIS',
+                  'rate': storedRate,
+                  'tax_amount': itbis,
+                  'base': subtotal,
+                }
+              ]
+            : const <Map<String, dynamic>>[],
       });
     }
 

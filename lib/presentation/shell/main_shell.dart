@@ -181,11 +181,6 @@ class _MainShellState extends ConsumerState<MainShell> {
 
                       const SizedBox(width: 12),
 
-                      // Badge de vencimientos
-                      const _ExpiringLotsBadgeButton(),
-
-                      const SizedBox(width: 8),
-
                       // Badge de operaciones offline pendientes
                       const _OfflineQueueBadge(),
 
@@ -196,10 +191,8 @@ class _MainShellState extends ConsumerState<MainShell> {
                       // = aún sondeando o sin impresoras configuradas.
                       const _PrinterHeartbeatBadge(),
 
-                      const SizedBox(width: 8),
-
-                      // Badge de alertas de stock bajo
-                      const _NotificationButton(),
+                      // Vencimientos y stock bajo se movieron al menú del
+                      // usuario (avatar) para aligerar el header.
 
                       const SizedBox(width: 16),
 
@@ -774,88 +767,6 @@ class _FullscreenButtonState extends State<_FullscreenButton> {
   }
 }
 
-// ===== NOTIFICATION BUTTON =====
-// Hoy = badge global de alertas de stock bajo. Cuando agreguemos otros tipos
-// de notificación (transferencias entrantes, OC parcial, etc.) podemos
-// agregar fuentes adicionales al provider y mostrar un menú desplegable.
-class _NotificationButton extends ConsumerWidget {
-  const _NotificationButton();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final async = ref.watch(lowStockBadgeCountProvider);
-    final count = async.maybeWhen(data: (v) => v, orElse: () => 0);
-    final hasAlerts = count > 0;
-    final badgeText = count > 99 ? '99+' : '$count';
-
-    return Tooltip(
-      message: hasAlerts
-          ? '$count alerta(s) de stock bajo'
-          : 'Sin alertas activas',
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: GestureDetector(
-          onTap: () => context.go(AppRoutes.inventoryLowStock),
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: hasAlerts
-                      ? const Color(0xFFFFE9E0)
-                      : Colors.grey[100],
-                  shape: BoxShape.circle,
-                ),
-                alignment: Alignment.center,
-                child: Icon(
-                  hasAlerts
-                      ? Icons.notifications_active_rounded
-                      : Icons.notifications_none,
-                  color: hasAlerts
-                      ? const Color(0xFFDC2626)
-                      : Colors.grey[600],
-                ),
-              ),
-              if (hasAlerts)
-                Positioned(
-                  top: -2,
-                  right: -2,
-                  child: Container(
-                    constraints: const BoxConstraints(
-                      minWidth: 18,
-                      minHeight: 18,
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 5,
-                      vertical: 2,
-                    ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFDC2626),
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: Colors.white, width: 1.5),
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(
-                      badgeText,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w800,
-                        height: 1,
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 // ===== Caja cuadrada para el icono =====
 class _SquareIconBox extends StatelessWidget {
   final Widget child;
@@ -966,6 +877,16 @@ class _UserInfo extends ConsumerWidget {
         ? session.activeBusinessName!.trim()
         : 'Negocio';
 
+    // Alertas de inventario (antes badges del header): se muestran dentro del
+    // menú del usuario. El avatar lleva un punto rojo si hay alguna activa.
+    final lowStockCount = ref
+        .watch(lowStockBadgeCountProvider)
+        .maybeWhen(data: (v) => v, orElse: () => 0);
+    final expiringLotsCount = ref
+        .watch(expiringLotsBadgeCountProvider)
+        .maybeWhen(data: (v) => v, orElse: () => 0);
+    final hasInventoryAlerts = lowStockCount > 0 || expiringLotsCount > 0;
+
     return Row(
       children: [
         Column(
@@ -1073,6 +994,12 @@ class _UserInfo extends ConsumerWidget {
               case _UserMenuAction.settings:
                 context.go(AppRoutes.settings);
                 break;
+              case _UserMenuAction.lowStock:
+                context.go(AppRoutes.inventoryLowStock);
+                break;
+              case _UserMenuAction.expiringLots:
+                context.go(AppRoutes.inventoryLots);
+                break;
               case _UserMenuAction.logout:
                 final proceed = await confirmLogoutDiscardingOffline(
                     context, session.activeBusinessId);
@@ -1144,6 +1071,37 @@ class _UserInfo extends ConsumerWidget {
                       ),
                     ],
                   ),
+                ),
+              ),
+              const PopupMenuDivider(height: 1),
+              PopupMenuItem<_UserMenuAction>(
+                value: _UserMenuAction.lowStock,
+                padding: EdgeInsets.zero,
+                height: 56,
+                child: _UserMenuTile(
+                  icon: lowStockCount > 0
+                      ? Icons.notifications_active_rounded
+                      : Icons.notifications_none,
+                  label: 'Alertas de stock bajo',
+                  accent: const Color(0xFFFFE9E0),
+                  iconColor: const Color(0xFFDC2626),
+                  badgeCount: lowStockCount,
+                  badgeColor: const Color(0xFFDC2626),
+                ),
+              ),
+              PopupMenuItem<_UserMenuAction>(
+                value: _UserMenuAction.expiringLots,
+                padding: EdgeInsets.zero,
+                height: 56,
+                child: _UserMenuTile(
+                  icon: expiringLotsCount > 0
+                      ? Icons.event_busy_rounded
+                      : Icons.event_note_outlined,
+                  label: 'Lotes por vencer',
+                  accent: const Color(0xFFFFEAD9),
+                  iconColor: const Color(0xFFC2410C),
+                  badgeCount: expiringLotsCount,
+                  badgeColor: const Color(0xFFC2410C),
                 ),
               ),
               const PopupMenuDivider(height: 1),
@@ -1225,25 +1183,46 @@ class _UserInfo extends ConsumerWidget {
               ),
             ];
           },
-          child: Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: const LinearGradient(
-                colors: [Color(0xFFF97316), Color(0xFFFFB74D)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0x1FF97316),
-                  blurRadius: 12,
-                  offset: Offset(0, 4),
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFFF97316), Color(0xFFFFB74D)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x1FF97316),
+                      blurRadius: 12,
+                      offset: Offset(0, 4),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-            child: const Icon(Icons.person, color: Colors.white, size: 20),
+                child: const Icon(Icons.person, color: Colors.white, size: 20),
+              ),
+              // Punto rojo: hay alertas de inventario (stock bajo o
+              // vencimientos) sin revisar; el detalle vive en el menú.
+              if (hasInventoryAlerts)
+                Positioned(
+                  top: -1,
+                  right: -1,
+                  child: Container(
+                    width: 13,
+                    height: 13,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFDC2626),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 2),
+                    ),
+                  ),
+                ),
+            ],
           ),
         ),
       ],
@@ -1369,7 +1348,15 @@ Future<SessionBusiness?> _showBranchPicker(
   );
 }
 
-enum _UserMenuAction { switchBranch, manageBranches, plan, settings, logout }
+enum _UserMenuAction {
+  switchBranch,
+  manageBranches,
+  plan,
+  settings,
+  lowStock,
+  expiringLots,
+  logout,
+}
 
 class _UserMenuTile extends StatelessWidget {
   const _UserMenuTile({
@@ -1378,6 +1365,8 @@ class _UserMenuTile extends StatelessWidget {
     required this.accent,
     required this.iconColor,
     this.textColor,
+    this.badgeCount,
+    this.badgeColor,
   });
 
   final IconData icon;
@@ -1385,6 +1374,8 @@ class _UserMenuTile extends StatelessWidget {
   final Color accent;
   final Color iconColor;
   final Color? textColor;
+  final int? badgeCount;
+  final Color? badgeColor;
 
   @override
   Widget build(BuildContext context) {
@@ -1412,6 +1403,27 @@ class _UserMenuTile extends StatelessWidget {
               ),
             ),
           ),
+          if ((badgeCount ?? 0) > 0) ...[
+            Container(
+              constraints: const BoxConstraints(minWidth: 20, minHeight: 20),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: badgeColor ?? const Color(0xFFDC2626),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                badgeCount! > 99 ? '99+' : '$badgeCount',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  height: 1,
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+          ],
           Icon(
             Icons.chevron_right_rounded,
             size: 18,
@@ -1420,86 +1432,6 @@ class _UserMenuTile extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-// ===== BADGE DE VENCIMIENTOS =====
-// Cuenta lotes vencidos + críticos (≤7 días). Tap → vista de Lotes.
-class _ExpiringLotsBadgeButton extends ConsumerWidget {
-  const _ExpiringLotsBadgeButton();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final async = ref.watch(expiringLotsBadgeCountProvider);
-    final count = async.maybeWhen(data: (v) => v, orElse: () => 0);
-    final hasAlerts = count > 0;
-    final badgeText = count > 99 ? '99+' : '$count';
-
-    return Tooltip(
-      message: hasAlerts
-          ? '$count lote(s) vencido(s) o por vencer'
-          : 'Sin lotes próximos a vencer',
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: GestureDetector(
-          onTap: () => context.go(AppRoutes.inventoryLots),
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: hasAlerts
-                      ? const Color(0xFFFFE9E0)
-                      : Colors.grey[100],
-                  shape: BoxShape.circle,
-                ),
-                alignment: Alignment.center,
-                child: Icon(
-                  hasAlerts
-                      ? Icons.event_busy_rounded
-                      : Icons.event_note_outlined,
-                  color: hasAlerts
-                      ? const Color(0xFFC2410C)
-                      : Colors.grey[600],
-                ),
-              ),
-              if (hasAlerts)
-                Positioned(
-                  top: -2,
-                  right: -2,
-                  child: Container(
-                    constraints: const BoxConstraints(
-                      minWidth: 18,
-                      minHeight: 18,
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 5,
-                      vertical: 2,
-                    ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFC2410C),
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: Colors.white, width: 1.5),
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(
-                      badgeText,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w800,
-                        height: 1,
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
       ),
     );
   }

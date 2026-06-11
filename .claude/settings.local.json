@@ -61,7 +61,9 @@
       "Bash(curl -s 'https://supabase.mangopos.do/rest/v1/plans?select=code,name,price_cents_monthly,trial_days,is_active,display_order&order=display_order' -H 'apikey: __TRACKED_VAR__' -H 'Authorization: Bearer __TRACKED_VAR__')",
       "Bash(curl -s 'https://supabase.mangopos.do/rest/v1/plan_catalog?select=code,name,price_monthly,is_active,archived_at&order=code' -H 'apikey: __TRACKED_VAR__' -H 'Authorization: Bearer __TRACKED_VAR__')",
       "Bash(git rm *)",
-      "Bash(curl -s 'https://supabase.mangopos.do/rest/v1/cash_register_sessions?select=id,status,start_amount,end_amount,difference,opened_at,closed_at,notes&order=opened_at.desc&limit=6' -H 'apikey: __TRACKED_VAR__' -H 'Authorization: Bearer __TRACKED_VAR__')"
+      "Bash(curl -s 'https://supabase.mangopos.do/rest/v1/cash_register_sessions?select=id,status,start_amount,end_amount,difference,opened_at,closed_at,notes&order=opened_at.desc&limit=6' -H 'apikey: __TRACKED_VAR__' -H 'Authorization: Bearer __TRACKED_VAR__')",
+      "Bash(sed -n '408,420p' lib/presentation/sales/view/widgets/menu_browser_tabs.dart)",
+      "Bash(sed -n '536,552p' lib/presentation/sales/view/menu_browser_sheet.dart)"
     ],
     "additionalDirectories": [
       "/tmp"

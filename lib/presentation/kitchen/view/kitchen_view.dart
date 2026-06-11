@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/presentation/kitchen/viewmodel/kitchen_viewmodel.dart';
@@ -38,12 +40,47 @@ class _KitchenViewState extends ConsumerState<KitchenView>
   String orderFilter = 'Mostrar Todo Pedidos';
   String waiterFilter = 'Mostrar Todo Mesero';
 
+  /// Poll periódico del tablero. El KDS depende de Realtime sobre
+  /// `order_items`, pero esa tabla puede no estar en la publicación
+  /// `supabase_realtime` (o el evento llegar filtrado por RLS). Este timer
+  /// es el fallback que garantiza que el tablero se refresque solo aunque
+  /// Realtime no entregue nada. Se controla con el switch "Auto-refresh".
+  Timer? _pollTimer;
+  static const Duration _pollInterval = Duration(seconds: 10);
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(kitchenViewModelProvider).init();
     });
+    if (autoUpdate) _startPolling();
+  }
+
+  void _startPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(_pollInterval, (_) {
+      if (mounted && autoUpdate) {
+        ref.read(kitchenViewModelProvider).refresh();
+      }
+    });
+  }
+
+  void _stopPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+  }
+
+  /// Maneja el switch "Auto-refresh": arranca/para el poll y, al encender,
+  /// hace un refresh inmediato para no esperar el primer tick.
+  void _setAutoUpdate(bool val) {
+    setState(() => autoUpdate = val);
+    if (val) {
+      _startPolling();
+      ref.read(kitchenViewModelProvider).refresh();
+    } else {
+      _stopPolling();
+    }
   }
 
   @override
@@ -182,6 +219,7 @@ class _KitchenViewState extends ConsumerState<KitchenView>
 
   @override
   void dispose() {
+    _stopPolling();
     _mobileTabController?.dispose();
     super.dispose();
   }
@@ -222,7 +260,7 @@ class _KitchenViewState extends ConsumerState<KitchenView>
         if (isMobile) ...[
           Switch(
             value: autoUpdate,
-            onChanged: (val) => setState(() => autoUpdate = val),
+            onChanged: _setAutoUpdate,
             activeThumbColor: Colors.white,
             activeTrackColor: AppColors.primary,
             inactiveThumbColor: Colors.white,
@@ -255,7 +293,7 @@ class _KitchenViewState extends ConsumerState<KitchenView>
                   scale: 0.85,
                   child: Switch(
                     value: autoUpdate,
-                    onChanged: (val) => setState(() => autoUpdate = val),
+                    onChanged: _setAutoUpdate,
                     activeThumbColor: AppColors.primary,
                     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
