@@ -92,7 +92,9 @@
       "Bash(git commit *)",
       "Bash(git merge-base *)",
       "Bash(git branch *)",
-      "Bash(awk '{print \" local-adelante=\"$1\" remoto-adelante=\"$2}')"
+      "Bash(awk '{print \" local-adelante=\"$1\" remoto-adelante=\"$2}')",
+      "Bash(perl -0777 -i -pe 's{\\\\n?</content>\\\\s*\\\\z}{\\\\n}' lib/app/theme/ui_scale.dart)",
+      "Bash(dart format *)"
     ],
     "additionalDirectories": [
       "/tmp"

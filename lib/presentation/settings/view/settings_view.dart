@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/app/theme/ui_scale.dart';
 import 'package:mangopos/core/business/business_features_provider.dart';
 import 'package:mangopos/core/cache/cache_manager.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
@@ -86,6 +87,71 @@ class SettingsView extends ConsumerWidget {
       Navigator.of(context, rootNavigator: true).pop();
       AppToast.error(context, 'No se pudo limpiar la caché: $e');
     }
+  }
+
+  /// Selector del tamaño global de la interfaz. Aplica en vivo al seleccionar
+  /// (se ve el reescalado al instante) y se guarda por dispositivo.
+  Future<void> _showUiScaleDialog(BuildContext context, WidgetRef ref) async {
+    UiScaleOption selected = ref.read(uiScaleProvider);
+    await showDialog<void>(
+      context: context,
+      builder: (dialogCtx) {
+        return StatefulBuilder(
+          builder: (ctx, setSt) {
+            return AlertDialog(
+              title: const Text('Tamaño de interfaz'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Agranda toda la interfaz. Útil en pantallas de alta '
+                      'densidad como la Toast Flex (14", 1920×1080). Se guarda '
+                      'solo en este equipo.',
+                      style: TextStyle(fontSize: 13, color: Color(0xFF78716C)),
+                    ),
+                    const SizedBox(height: 8),
+                    ...UiScaleOption.values.map((opt) {
+                      final pct = (opt.factor * 100).round();
+                      final isSel = selected == opt;
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        onTap: () {
+                          setSt(() => selected = opt);
+                          // Aplica en vivo + persiste.
+                          ref.read(uiScaleProvider.notifier).set(opt);
+                        },
+                        leading: Icon(
+                          isSel
+                              ? Icons.radio_button_checked
+                              : Icons.radio_button_unchecked,
+                          color: isSel
+                              ? MangoColors.primaryOrange
+                              : const Color(0xFF9CA3AF),
+                        ),
+                        title: Text(opt.label),
+                        subtitle: Text(
+                          opt == UiScaleOption.normal
+                              ? 'Sin cambios (100%)'
+                              : 'Interfaz al $pct%',
+                        ),
+                      );
+                    }),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogCtx).pop(),
+                  child: const Text('Listo'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   @override
@@ -416,6 +482,14 @@ class SettingsView extends ConsumerWidget {
             icon: Icons.view_quilt_rounded,
             color: Color(0xFFFFE6D5),
             route: AppRoutes.settingsHeaderPersonalize,
+          ),
+          _SettingsOption(
+            title: 'Tamaño de interfaz',
+            subtitle:
+                'Agranda la UI para pantallas de alta densidad (Toast Flex, etc.)',
+            icon: Icons.format_size_rounded,
+            color: const Color(0xFFEAF0FF),
+            onTap: () => _showUiScaleDialog(context, ref),
           ),
           if (ref.watch(sessionProvider).isOwner)
             const _SettingsOption(

@@ -33,6 +33,7 @@ import 'package:window_manager/window_manager.dart';
 import 'app/router/app_router.dart';
 import 'app/router/routes.dart';
 import 'app/theme/mango_theme.dart';
+import 'app/theme/ui_scale.dart';
 import 'services/session/session_controller.dart';
 import 'core/cache/cache_manager.dart';
 import 'core/network/supabase_config.dart';
@@ -942,11 +943,17 @@ class MyApp extends ConsumerWidget {
       }
     });
 
+    // Escala global de UI (Configuración → Pantalla). 1.0 = sin cambios.
+    final uiScale = ref.watch(uiScaleProvider).factor;
     return MaterialApp.router(
       title: 'MangoPOS',
       debugShowCheckedModeBanner: false,
       routerConfig: AppRouter.router,
       theme: buildMangoTheme(),
+      builder: (context, child) => UiScaleWrapper(
+        factor: uiScale,
+        child: child ?? const SizedBox.shrink(),
+      ),
     );
   }
 }
