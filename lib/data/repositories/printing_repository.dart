@@ -29,6 +29,18 @@ enum PrintOutcome {
   escalatedToCloud,
 }
 
+/// Los bytes ya se enviaron a la impresora (flush OK) y muy probablemente
+/// imprimió, pero la impresora cerró la conexión después (RST/EPIPE post-flush
+/// — comportamiento normal en muchas térmicas). NO se debe reintentar ni
+/// escalar este caso: hacerlo re-imprime la MISMA comanda (doble print). El
+/// reintento solo es seguro cuando los bytes NO llegaron a enviarse.
+class PrintLikelyDeliveredException implements Exception {
+  final Object cause;
+  PrintLikelyDeliveredException(this.cause);
+  @override
+  String toString() => 'PrintLikelyDeliveredException(post-flush): $cause';
+}
+
 /// 🖨️ Repositorio de Impresión
 class PrintingRepository {
   final SupabaseClient _client;
@@ -1342,6 +1354,10 @@ class PrintingRepository {
           timeout: timeout,
         );
         return;
+      } on PrintLikelyDeliveredException {
+        // Los bytes se enviaron (RST post-flush). NO reintentar: re-imprimiría
+        // la misma comanda. Propagar para que el caller tampoco escale.
+        rethrow;
       } catch (e, st) {
         lastError = e;
         lastStack = st;
@@ -1393,9 +1409,13 @@ class PrintingRepository {
       await Future.delayed(const Duration(milliseconds: 80));
 
       if (asyncError != null) {
-        // RST/EPIPE post-flush — propagar para que el caller (o el
-        // retry de arriba) lo trate como fallo, no como éxito.
-        throw asyncError!;
+        // RST/EPIPE post-flush: los bytes YA se enviaron (flush OK) y la
+        // impresora muy probablemente imprimió antes de cerrar la conexión
+        // (normal en térmicas). Lo marcamos como "probablemente entregado"
+        // para que el retry de abajo y el fallback al agente NO re-impriman
+        // (eso causaba la comanda duplicada). Reintentar solo es seguro
+        // cuando los bytes NO llegaron a enviarse (fallo de connect/flush).
+        throw PrintLikelyDeliveredException(asyncError!);
       }
     } finally {
       try {
@@ -1576,6 +1596,15 @@ class PrintingRepository {
           // Print directo OK. Si no tenemos MAC para esta impresora, intentar
           // capturarlo en background — sirve para auto-recovery futuro si la
           // IP cambia por DHCP.
+          _captureMacIfMissing(printer);
+        } on PrintLikelyDeliveredException catch (e) {
+          // Bytes enviados (RST post-flush): el ticket muy probablemente ya
+          // imprimió. NO hacer recovery por MAC ni fallback al agente — eso
+          // re-imprimiría el MISMO ticket (doble impresión). Tratamos como OK.
+          debugPrint(
+            'ℹ️ ${printer.name}: conexión cerrada tras enviar (post-flush); '
+            'ticket probablemente impreso, no se reintenta: $e',
+          );
           _captureMacIfMissing(printer);
         } catch (originalError) {
           // Recovery por MAC ANTES del fallback al agente: si la impresora
@@ -2699,6 +2728,10 @@ finally {
           );
         }
         return;
+      } on PrintLikelyDeliveredException {
+        // Los bytes se enviaron (RST post-flush). NO reintentar: re-imprimiría
+        // el mismo ticket. Propagar para que el caller lo trate como entregado.
+        rethrow;
       } catch (e, st) {
         lastError = e;
         lastStack = st;

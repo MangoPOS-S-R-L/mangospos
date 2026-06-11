@@ -379,6 +379,14 @@ class PrintingService {
               port: printer.port ?? 9100,
               data: bytes,
             );
+          } on PrintLikelyDeliveredException catch (e) {
+            // Los bytes se enviaron (RST post-flush, normal en térmicas): la
+            // comanda muy probablemente ya imprimió. NO usar el agente como
+            // fallback — re-imprimiría la MISMA comanda (era el doble print).
+            debugPrint(
+              'ℹ️ ${printer.name}: conexión cerrada tras enviar (post-flush); '
+              'no se reintenta para evitar comanda duplicada: $e',
+            );
           } catch (e) {
             debugPrint(
               '⚠️ Direct TCP failed for ${printer.name}, using LAN agent fallback: $e',
