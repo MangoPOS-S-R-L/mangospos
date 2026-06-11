@@ -157,11 +157,21 @@ class CashierRepository {
 
   /// Inserta el desglose firmado del cierre detallado.
   ///
-  /// La tabla tiene UNIQUE en `cash_register_session_id` y un trigger de
-  /// inmutabilidad post-firma. Si la sesión ya tiene un row firmado con
-  /// el mismo attempt_number, PostgreSQL rechaza con violation. Para el
-  /// reconteo el caller pasa `attemptNumber: 2` y se inserta como fila
-  /// nueva (la anterior queda intacta como evidencia).
+  /// La tabla tiene UNIQUE en `(cash_register_session_id, attempt_number)`
+  /// y un trigger de inmutabilidad post-firma. Para el reconteo el caller
+  /// pasa `attemptNumber: 2` y se inserta como fila nueva (la anterior
+  /// queda intacta como evidencia).
+  ///
+  /// IDEMPOTENCIA: el cierre detallado escribe este row ANTES de cerrar la
+  /// sesión (ver `onCloseConfirmed` en cashier_view). Si el close posterior
+  /// falla (varianza cancelada, error de negocio del RPC, etc.), este row
+  /// queda huérfano: el conteo a ciegas firmado ya está, pero la sesión
+  /// sigue abierta. Al reintentar, el INSERT chocaría con el UNIQUE y
+  /// dejaría al cajero PERMANENTEMENTE bloqueado (no puede cerrar nunca).
+  /// Por eso tragamos el duplicate (23505) de esta constraint: el conteo
+  /// ya quedó registrado como evidencia inmutable, así que tratamos el
+  /// insert como no-op exitoso y dejamos que el flujo proceda a cerrar la
+  /// sesión. Cualquier otro error de Postgres sí propaga.
   Future<void> recordDetailedCashClose({
     required String sessionId,
     required String businessId,
@@ -174,18 +184,28 @@ class CashierRepository {
     String? supervisorNote,
     int attemptNumber = 1,
   }) async {
-    await _client.from('cash_count_blind').insert({
-      'cash_register_session_id': sessionId,
-      'business_id': businessId,
-      'cash_amount': cashAmount,
-      'card_amount': cardAmount,
-      'transfer_amount': transferAmount,
-      'denominations': denominations,
-      'opening_float': openingFloat,
-      'supervisor_note': supervisorNote,
-      'signed_by_user_id': userId,
-      'attempt_number': attemptNumber,
-    });
+    try {
+      await _client.from('cash_count_blind').insert({
+        'cash_register_session_id': sessionId,
+        'business_id': businessId,
+        'cash_amount': cashAmount,
+        'card_amount': cardAmount,
+        'transfer_amount': transferAmount,
+        'denominations': denominations,
+        'opening_float': openingFloat,
+        'supervisor_note': supervisorNote,
+        'signed_by_user_id': userId,
+        'attempt_number': attemptNumber,
+      });
+    } on PostgrestException catch (e) {
+      // 23505 = unique_violation. Solo lo tragamos para esta constraint
+      // (row de este attempt ya existe = conteo ya registrado). Otros
+      // unique/errores propagan sin enmascarar.
+      final isDuplicateAttempt = e.code == '23505' &&
+          (e.message.contains('cash_count_blind_session_attempt_unique') ||
+              e.message.contains('cash_count_blind_session_unique'));
+      if (!isDuplicateAttempt) rethrow;
+    }
   }
 
   /// Cuántos conteos firmados existen para la sesión (1 o 2). 0 si la
