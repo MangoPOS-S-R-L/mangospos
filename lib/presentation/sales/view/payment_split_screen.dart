@@ -31,7 +31,11 @@ class PaymentSplitDialog extends ConsumerStatefulWidget {
   /// dialog desaparecer y reaparecer. Cuando el Future resuelve, el
   /// dialog hace pop con la lista de payments para que el caller
   /// continúe el flujo normal.
-  final Future<void> Function(List<Payment> payments)? onConfirmed;
+  /// [offlineNcf]: F4 — si el cobro se hizo offline y el Hub asignó un NCF de
+  /// papel, llega aquí para que el caller imprima el comprobante con ese
+  /// número en el acto (en vez de la precuenta). Null = sin NCF offline.
+  final Future<void> Function(List<Payment> payments, {String? offlineNcf})?
+      onConfirmed;
 
   const PaymentSplitDialog({
     super.key,
@@ -67,18 +71,19 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
   Future<void> _finishWithPayments(List<Payment> payments) async {
     final hook = widget.onConfirmed;
     if (hook != null) {
-      final vm = ref.read(
-        paymentSplitProvider((
-          widget.orderId,
-          widget.totalAmount,
-          widget.checkId,
-          widget.customerId,
-          widget.fiscalType,
-        )).notifier,
+      final key = (
+        widget.orderId,
+        widget.totalAmount,
+        widget.checkId,
+        widget.customerId,
+        widget.fiscalType,
       );
+      final vm = ref.read(paymentSplitProvider(key).notifier);
+      // F4: NCF asignado offline (si lo hubo) para imprimir el comprobante.
+      final offlineNcf = ref.read(paymentSplitProvider(key)).offlineNcf;
       vm.setPrinting(true);
       try {
-        await hook(payments);
+        await hook(payments, offlineNcf: offlineNcf);
       } finally {
         if (mounted) vm.setPrinting(false);
       }

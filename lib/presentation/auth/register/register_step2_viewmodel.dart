@@ -112,82 +112,113 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
         signUpResp = null;
       }
 
-      if (signUpResp != null) {
-        // Path normal: signUp exitoso
-        session = signUpResp.session ?? supabase.auth.currentSession;
-        final user =
-            signUpResp.user ?? session?.user ?? supabase.auth.currentUser;
-        if (user == null) {
-          throw Exception(
-            'No se pudo crear la cuenta. Verifica tu correo y contraseña e intenta de nuevo.',
-          );
-        }
-        userId = user.id;
+      // ¿Quedó una sesión activa tras el signUp? Es lo que decide si podemos
+      // hacer los writes con RLS (profiles/business/membership exigen rol
+      // `authenticated` con `id = auth.uid()`).
+      //
+      // Bug del fake-success: GoTrue con autoconfirm NO lanza
+      // `user_already_exists` para un correo que ya existe — devuelve un
+      // "fake success" (user con `identities` vacío y SIN session,
+      // anti-enumeración). Sin sesión, el upsert de profiles corre como `anon`
+      // y RLS lo rechaza con 42501 → "Error creando tu perfil: No tienes
+      // permisos para esta operación." Por eso aquí exigimos sesión: si no la
+      // hay (correo existente, huérfano de un intento previo, o correo sin
+      // confirmar), caemos al flujo de recovery por OTP de abajo, que prueba la
+      // titularidad del correo y tiene el guard de `existingBiz`.
+      session = signUpResp?.session ?? supabase.auth.currentSession;
+      final signedUpUser =
+          signUpResp?.user ?? session?.user ?? supabase.auth.currentUser;
+
+      if (signUpResp != null && session != null && signedUpUser != null) {
+        // Path normal: signUp con sesión activa.
+        userId = signedUpUser.id;
       } else {
-        // Path recovery: usuario ya existe. En vez de pedir el password
-        // (que el usuario probablemente no recuerda), enviamos un OTP al
-        // email para confirmar que es realmente el dueño del correo.
+        // Sin sesión tras el signUp: el correo ya existe. Dos sub-casos:
+        //   (a) HUÉRFANO de un intento previo del MISMO usuario (auth.users
+        //       creado, pero el business falló) reintentando con su MISMA
+        //       contraseña → lo recuperamos con signInWithPassword, SIN OTP ni
+        //       correo. Esto es clave: el límite de envío es 2 correos/hora y
+        //       el OTP tiene cooldown de 60s ("security purposes"), así que
+        //       mandar OTP en cada reintento choca con el rate limit enseguida.
+        //   (b) Correo de OTRA persona / el usuario olvidó su clave → la
+        //       contraseña no coincide → recién ahí pedimos OTP para probar la
+        //       titularidad del correo (sin esto, secuestro de cuenta trivial).
         //
-        // Sin esto, un usuario que olvidó su password pero quiere crear
-        // un negocio nuevo quedaba bloqueado con "contraseña no coincide".
-        // Y si simplemente saltáramos la verificación, cualquiera podría
-        // crear un business bajo el email de otra persona conociendo
-        // solo el correo — secuestro de cuenta trivial.
-        if (requestOtp == null) {
-          throw Exception(
-            'Ese correo ya tiene una cuenta. Vuelve a intentarlo o inicia '
-            'sesión desde la pantalla principal.',
-          );
-        }
-
-        // 1) Disparar envío del OTP. `shouldCreateUser: false` evita que
-        //    Supabase cree un user nuevo si por alguna razón el email
-        //    desapareció — queremos solo recovery, no signup encubierto.
+        // Primero (a): probar la contraseña recién ingresada.
+        bool needsOtp = false;
         try {
-          await supabase.auth.signInWithOtp(
+          final pwResp = await supabase.auth.signInWithPassword(
             email: step1.email!,
-            shouldCreateUser: false,
+            password: step1.password!,
           );
+          session = pwResp.session ?? supabase.auth.currentSession;
         } on AuthException catch (e) {
-          throw Exception(
-            'No pudimos enviar el código de verificación: ${_friendlyAuthError(e)}',
-          );
+          if (_isRateLimitError(e)) {
+            // No cascadear a OTP: también envía correo y agrava el rate limit.
+            throw Exception(_friendlyAuthError(e));
+          }
+          // Credenciales inválidas o correo sin confirmar → vamos a (b) OTP.
+          needsOtp = true;
         }
 
-        // 2) Esperar a que la UI muestre el modal y devuelva el código.
-        final code = (await requestOtp(step1.email!))?.trim();
-        if (code == null || code.isEmpty) {
-          throw Exception('Verificación de correo cancelada.');
+        if (needsOtp || session == null) {
+          // (b) Recovery por OTP — probar titularidad del correo.
+          if (requestOtp == null) {
+            throw Exception(
+              'Ese correo ya tiene una cuenta. Vuelve a intentarlo o inicia '
+              'sesión desde la pantalla principal.',
+            );
+          }
+
+          // 1) Disparar envío del OTP. `shouldCreateUser: false` evita crear un
+          //    user nuevo — queremos solo recovery, no signup encubierto.
+          try {
+            await supabase.auth.signInWithOtp(
+              email: step1.email!,
+              shouldCreateUser: false,
+            );
+          } on AuthException catch (e) {
+            throw Exception(
+              'No pudimos enviar el código de verificación: ${_friendlyAuthError(e)}',
+            );
+          }
+
+          // 2) Esperar a que la UI muestre el modal y devuelva el código.
+          final code = (await requestOtp(step1.email!))?.trim();
+          if (code == null || code.isEmpty) {
+            throw Exception('Verificación de correo cancelada.');
+          }
+
+          // 3) Verificar el OTP → autentica como el usuario existente.
+          final AuthResponse otpResp;
+          try {
+            otpResp = await supabase.auth.verifyOTP(
+              type: OtpType.email,
+              token: code,
+              email: step1.email!,
+            );
+          } on AuthException catch (e) {
+            throw Exception(
+              'Código inválido o expirado: ${_friendlyAuthError(e)}',
+            );
+          }
+          session = otpResp.session ?? supabase.auth.currentSession;
         }
 
-        // 3) Verificar el OTP → autentica como el usuario existente.
-        final AuthResponse otpResp;
-        try {
-          otpResp = await supabase.auth.verifyOTP(
-            type: OtpType.email,
-            token: code,
-            email: step1.email!,
-          );
-        } on AuthException catch (e) {
-          throw Exception(
-            'Código inválido o expirado: ${_friendlyAuthError(e)}',
-          );
-        }
-
-        session = otpResp.session ?? supabase.auth.currentSession;
-        final user = otpResp.user ?? session?.user;
+        // Sesión obtenida (por contraseña o por OTP). Derivar userId.
+        final user = session?.user ?? supabase.auth.currentUser;
         if (user == null) {
           throw Exception(
-            'No se pudo recuperar la cuenta tras verificar el código. '
+            'No se pudo recuperar la cuenta. '
             'Intenta iniciar sesión desde la pantalla principal.',
           );
         }
         userId = user.id;
 
-        // Validar si la cuenta ya está completa (tiene business).
-        // Si sí → no estamos recuperando un huérfano, el usuario
-        // simplemente está intentando registrarse con un email que ya
-        // tiene cuenta activa.
+        // ¿La cuenta ya está completa (tiene business)? Entonces no es un
+        // huérfano: el usuario intenta registrarse con un correo que ya tiene
+        // cuenta activa → cerrar la sesión recién abierta y mandarlo al login
+        // (no crear un business duplicado).
         try {
           final existingBiz = await supabase
               .from('businesses')
@@ -196,7 +227,6 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
               .limit(1)
               .maybeSingle();
           if (existingBiz != null) {
-            // Cerrar la sesión que acabamos de abrir — no es nuestro flow.
             await supabase.auth.signOut();
             throw Exception(
               'Esta cuenta ya está registrada y activa. '
@@ -425,6 +455,23 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
         msg.contains('user_already_exists');
   }
 
+  /// `true` si el AuthException es un rate limit de GoTrue (HTTP 429): el
+  /// cooldown de 60s del OTP ("for security purposes... after N seconds"), el
+  /// tope de envío de correos (`email_sent`/`over_email_send_rate_limit`) o el
+  /// de requests. Cuando lo es, NO cascadeamos a otra llamada que también
+  /// consuma cuota (p.ej. mandar OTP), porque solo agrava el bloqueo.
+  bool _isRateLimitError(AuthException e) {
+    final msg = e.message.toLowerCase();
+    return '${e.statusCode}' == '429' ||
+        msg.contains('rate limit') ||
+        msg.contains('rate_limit') ||
+        msg.contains('over_email_send') ||
+        msg.contains('over_request_rate') ||
+        msg.contains('too many') ||
+        msg.contains('security purposes') ||
+        (msg.contains('after') && msg.contains('seconds'));
+  }
+
   String _friendlyAuthError(AuthException e) {
     final msg = e.message.toLowerCase();
     if (_isAlreadyRegisteredError(e)) {
@@ -436,8 +483,7 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
     if (msg.contains('weak') || msg.contains('password')) {
       return 'La contraseña es muy débil. Usa al menos 8 caracteres con una mayúscula y un número.';
     }
-    if (msg.contains('security purposes') ||
-        (msg.contains('after') && msg.contains('seconds'))) {
+    if (_isRateLimitError(e)) {
       return 'Demasiados intentos. Espera unos segundos antes de intentar de nuevo.';
     }
     if (msg.contains('network') ||

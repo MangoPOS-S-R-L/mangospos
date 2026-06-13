@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/network/connectivity_service.dart';
+import '../../../core/offline/offline_ncf_service.dart';
 import '../../../core/offline/offline_pos_service.dart';
 import '../../../data/models/bank_account.dart';
 import '../../../data/models/sales_models.dart';
@@ -84,6 +85,11 @@ class PaymentSplitState {
   /// (NCF se emite al sincronizar, no antes).
   final bool offlineQueued;
 
+  /// F4: NCF de papel asignado offline (Hub) para este cobro. Cuando viene,
+  /// el caller imprime el COMPROBANTE con este número en el acto en vez de la
+  /// precuenta. Null = sin NCF offline (provisional / online).
+  final String? offlineNcf;
+
   const PaymentSplitState({
     this.totalAmount = 0,
     this.transactions = const [],
@@ -97,6 +103,7 @@ class PaymentSplitState {
     this.orderItems = const [],
     this.selectedBankAccount,
     this.offlineQueued = false,
+    this.offlineNcf,
   });
 
   PaymentSplitState copyWith({
@@ -112,6 +119,7 @@ class PaymentSplitState {
     List<OrderItem>? orderItems,
     Object? selectedBankAccount = _bankSentinel,
     bool? offlineQueued,
+    String? offlineNcf,
   }) {
     return PaymentSplitState(
       totalAmount: totalAmount ?? this.totalAmount,
@@ -130,6 +138,7 @@ class PaymentSplitState {
           ? this.selectedBankAccount
           : selectedBankAccount as BankAccount?,
       offlineQueued: offlineQueued ?? this.offlineQueued,
+      offlineNcf: offlineNcf ?? this.offlineNcf,
     );
   }
 
@@ -468,6 +477,18 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       final paidAtOffline = DateTime.now().toUtc();
       final paidAtIso = paidAtOffline.toIso8601String();
       final customerRnc = _ref.read(currentOrderProvider).customerTaxId;
+      final ncfType = _ref.read(currentOrderProvider).fiscalType;
+
+      // F4 (gated): un comprobante por cobro → asignamos el NCF UNA vez y lo
+      // adjuntamos a la PRIMERA transacción. El trigger emite el fiscal_document
+      // con ese número; las demás transacciones se enlazan por idempotencia.
+      // Si no hay NCF (no papel / sin Hub / agotado) → recibo provisional.
+      final offlineNcf = await allocateOfflineNcfPaper(
+        client: Supabase.instance.client,
+        businessId: businessId,
+        ncfType: ncfType,
+        isConnected: () => ConnectivityService().isConnected,
+      );
 
       final localPayments = <Payment>[];
       for (int i = 0; i < state.transactions.length; i++) {
@@ -509,6 +530,10 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
             'change_amount': isLast ? state.change : 0,
             'split_sequence': i,
             'paid_at': paidAtIso,
+            // F4: el NCF asignado offline viaja SOLO en la primera transacción
+            // (un comprobante por cobro). El server lo usa al sincronizar.
+            if (i == 0 && offlineNcf != null) 'offline_ncf': offlineNcf.ncf,
+            if (i == 0 && offlineNcf != null) 'requested_ncf_type': ncfType,
             // Bank account se asocia post-RPC en el flujo online vía un
             // UPDATE puntual. Offline guardamos solo el id; el replay
             // queda pendiente de hacer ese UPDATE — para esta primera
@@ -535,6 +560,11 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
             bankAccountId: tx.bankAccount?.id,
           ),
         );
+      }
+      // F4: dejamos el NCF en el estado para que el caller imprima el
+      // comprobante con su número en el acto (en vez de la precuenta).
+      if (offlineNcf != null) {
+        state = state.copyWith(offlineNcf: offlineNcf.ncf);
       }
       return localPayments;
     } catch (e, s) {

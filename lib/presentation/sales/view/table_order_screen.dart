@@ -2139,7 +2139,7 @@ class _CartView extends ConsumerWidget {
         // encima — así el cajero ve el modal de pago detrás, en lugar
         // de un fondo vacío. Cuando este Future resuelve, el modal de
         // pago hace pop y el .then() de abajo dispara onFinish.
-        onConfirmed: (payments) async {
+        onConfirmed: (payments, {offlineNcf}) async {
           if (!context.mounted) return;
 
           final items = List<OrderItem>.from(prePaymentItems);
@@ -2228,6 +2228,53 @@ class _CartView extends ConsumerWidget {
           // la factura. Reusamos el destination picker de precuenta para
           // que respete la impresora fijada del device.
           if (isOfflineQueued) {
+            // F4: si el Hub asignó un NCF de papel, imprimimos el COMPROBANTE
+            // con ese número en el acto (no la precuenta). _handlePrintFlow es
+            // offline-seguro: el fetch del fd remoto da null (no hay QR en
+            // papel) y el NCF sale de data['ncf'].
+            if (offlineNcf != null) {
+              final fiscalInvoiceData = Map<String, dynamic>.from(invoiceData);
+              fiscalInvoiceData['ncf'] = offlineNcf;
+              try {
+                await _runLockedAction(ref, invoicePrintLockKey, () async {
+                  await _handlePrintFlow(
+                    context,
+                    ref,
+                    'invoice',
+                    fiscalInvoiceData,
+                    orderObj: printOrder,
+                    orderItems: items,
+                    payments: payments,
+                    tableName: tableName,
+                    waiterName: waiterName,
+                    showSnackBar: false,
+                  );
+                });
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      backgroundColor: const Color(0xFF10B981),
+                      behavior: SnackBarBehavior.floating,
+                      content: Text(
+                        'Comprobante emitido offline · NCF $offlineNcf. '
+                        'Pendiente de sincronizar.',
+                      ),
+                    ),
+                  );
+                }
+              } catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      backgroundColor: const Color(0xFFEF4444),
+                      content: Text('No se pudo imprimir el comprobante: $e'),
+                    ),
+                  );
+                }
+              }
+              return;
+            }
+
             final preCheckData = <String, dynamic>{
               'restaurantName': businessProfile.name,
               'businessName': businessProfile.businessName,

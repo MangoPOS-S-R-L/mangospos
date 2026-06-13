@@ -9,6 +9,8 @@ import 'package:decimal/decimal.dart';
 
 import '../../../core/currency/usd_conversion.dart';
 import '../../../core/network/connectivity_service.dart';
+import '../../../core/offline/ncf_offline_allocator.dart' show NcfAssignment;
+import '../../../core/offline/offline_ncf_service.dart';
 import '../../../core/offline/offline_pos_service.dart';
 import '../../../core/tax/tax_exceptions.dart';
 import '../../../data/models/bank_account.dart';
@@ -610,6 +612,14 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         // en la venta real, no en el sync.
         final paidAtOffline = DateTime.now().toUtc();
 
+        // F4 (gated): si es serie de PAPEL y hay Hub alcanzable, asignamos el
+        // NCF ahora para imprimir el comprobante en el acto. Si no, recibo
+        // provisional (NCF al sincronizar) — comportamiento de hoy.
+        final offlineNcf = await _allocateOfflineNcf(
+          businessId: businessId,
+          ncfType: state.selectedNcfType,
+        );
+
         await _offlinePos.enqueueAction(
           businessId: businessId,
           action: {
@@ -629,6 +639,11 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
             'cashier_session_id': state.cashSession?.id,
             'change_amount': state.change,
             'paid_at': paidAtOffline.toIso8601String(),
+            // F4: el NCF asignado offline (y su tipo) viajan para que el
+            // server registre el fiscal_document con ESE número al sincronizar.
+            if (offlineNcf != null) 'offline_ncf': offlineNcf.ncf,
+            if (offlineNcf != null)
+              'requested_ncf_type': state.selectedNcfType,
           },
         );
 
@@ -650,13 +665,41 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
           createdAt: paidAtOffline.toLocal(),
         );
 
+        // F4: si se asignó NCF offline, construimos un FiscalDocument local
+        // para que el caller imprima el comprobante con su NCF en el acto. Los
+        // montos definitivos los recompone el server al sincronizar; aquí el
+        // número/tipo es lo que importa (la impresión toma los montos del
+        // pedido, no de este documento).
+        final localFiscalDoc = offlineNcf == null
+            ? null
+            : FiscalDocument(
+                id: 'local-fd-$businessPaymentId',
+                businessId: businessId,
+                orderId: orderId,
+                paymentId: businessPaymentId,
+                ncfType: offlineNcf.ncfType,
+                ncfNumber: offlineNcf.ncf,
+                customerRnc: customerRnc,
+                customerName: 'Consumidor Final',
+                subtotal: amount,
+                taxableAmount: amount,
+                itbisAmount: 0,
+                total: amount,
+                status: 'active',
+                issuedAt: paidAtOffline.toLocal(),
+                isElectronic: false,
+              );
+
         state = state.copyWith(
           processingPayment: false,
           paymentProcessed: true,
           processedPayment: localPayment,
-          fiscalDocument: null,
+          fiscalDocument: localFiscalDoc,
           offlineQueued: true,
-          error: 'Pago guardado en local. Pendiente de sincronizar.',
+          error: offlineNcf != null
+              ? 'Comprobante emitido offline · NCF ${offlineNcf.ncf}. '
+                  'Pendiente de sincronizar.'
+              : 'Pago guardado en local. Pendiente de sincronizar.',
         );
       } catch (offlineError) {
         state = state.copyWith(
@@ -667,6 +710,21 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
     } finally {
       _processingLocal = false;
     }
+  }
+
+  /// F4 (gated): intenta asignar un NCF de **papel** offline para este cobro.
+  /// Delega en [allocateOfflineNcfPaper] (composición modelo b: serie central
+  /// + Hub asignador). Null → recibo provisional.
+  Future<NcfAssignment?> _allocateOfflineNcf({
+    required String businessId,
+    required String? ncfType,
+  }) {
+    return allocateOfflineNcfPaper(
+      client: Supabase.instance.client,
+      businessId: businessId,
+      ncfType: ncfType,
+      isConnected: () => _connectivity.isConnected,
+    );
   }
 
   // ============================================================

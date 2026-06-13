@@ -2043,6 +2043,10 @@ class SalesRepository {
     bool closeOrder = true,
     int splitSequence = 0,
     DateTime? paidAt,
+    // F4: NCF asignado offline (Hub/allocator). Solo se envía al sincronizar
+    // un cobro offline que YA imprimió su comprobante; el RPC lo usa en vez de
+    // generar uno nuevo. Null en cobros online (el servidor emite el NCF).
+    String? offlineNcf,
   }) async {
     try {
       final response = await _client.rpc(
@@ -2061,6 +2065,8 @@ class SalesRepository {
           'p_close_order': closeOrder,
           'p_split_sequence': splitSequence,
           if (paidAt != null) 'p_paid_at': paidAt.toUtc().toIso8601String(),
+          if (offlineNcf != null && offlineNcf.isNotEmpty)
+            'p_offline_ncf': offlineNcf,
         },
       );
 

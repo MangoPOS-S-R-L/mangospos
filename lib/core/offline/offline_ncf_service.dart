@@ -1,4 +1,9 @@
+import 'package:flutter/foundation.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import 'hub/hub_client.dart';
 import 'ncf_offline_allocator.dart';
+import 'ncf_range_service.dart';
 
 typedef NcfRangeResolver = Future<NcfRange?> Function();
 typedef NcfAllocateFn = Future<NcfAssignment?> Function(NcfRange range);
@@ -57,5 +62,44 @@ class OfflineNcfService {
     if (viaHub != null) return viaHub; // Hub asignó (sin huecos)
 
     return allocateLocal(range); // caja aislada → sub-rango local (o null si agotado)
+  }
+}
+
+/// Composición lista-para-usar del [OfflineNcfService] para el modelo (b):
+/// serie central + Hub como asignador único en la LAN. Centraliza el armado
+/// para que los viewmodels de cobro (single y split) no lo dupliquen.
+///
+/// Devuelve el NCF asignado, o null (→ el caller entrega recibo PROVISIONAL)
+/// cuando: F4 está apagado, el tipo no es de PAPEL (B0x; e-CF se difiere al
+/// sync), no hay serie/rango, o no hay Hub alcanzable (caja aislada). NO asigna
+/// localmente sin Hub: sin coordinador habría riesgo de huecos/duplicados.
+Future<NcfAssignment?> allocateOfflineNcfPaper({
+  required SupabaseClient client,
+  required String businessId,
+  required String? ncfType,
+  required bool Function() isConnected,
+}) async {
+  if (!kOfflineNcfEnabled) return null;
+  if (ncfType == null || !ncfType.toUpperCase().startsWith('B')) return null;
+
+  final hubClient = HubClient();
+  try {
+    final svc = OfflineNcfService(
+      isConnected: isConnected,
+      resolveRange: () => NcfRangeService(client)
+          .resolveBusinessSeries(businessId: businessId, ncfType: ncfType),
+      allocateViaHub: (range) async {
+        final url = await hubClient.findReachableHub(businessId: businessId);
+        if (url == null) return null;
+        return hubClient.allocateNcf(url, businessId: businessId, range: range);
+      },
+      allocateLocal: (_) async => null,
+    );
+    return await svc.allocate();
+  } catch (e) {
+    debugPrint('F4: no se pudo asignar NCF offline: $e');
+    return null;
+  } finally {
+    hubClient.dispose();
   }
 }

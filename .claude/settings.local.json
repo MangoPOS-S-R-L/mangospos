@@ -94,7 +94,15 @@
       "Bash(git branch *)",
       "Bash(awk '{print \" local-adelante=\"$1\" remoto-adelante=\"$2}')",
       "Bash(perl -0777 -i -pe 's{\\\\n?</content>\\\\s*\\\\z}{\\\\n}' lib/app/theme/ui_scale.dart)",
-      "Bash(dart format *)"
+      "Bash(dart format *)",
+      "Bash(node --check scripts/azul_proof_recurrence.mjs)",
+      "Bash(node -e \"console.log\\('node', process.version\\)\")",
+      "Bash(node scripts/azul_proof_recurrence.mjs FDC81A42-BA24-4E34-9C63-2D131F546321)",
+      "Bash(sed -n '2508,2530p' supabase/schema.sql)",
+      "Bash(sed -n '3247,3274p' supabase/schema.sql)",
+      "Bash(awk '/CREATE TABLE IF NOT EXISTS \"public\".\"products\"/{f=1} f{print} /\\\\\\);/{if\\(f\\)exit}' supabase/schema.sql)",
+      "Bash(sed -n '2321,2360p' supabase/schema.sql)",
+      "Bash(sed -n '2875,2935p' supabase/schema.sql)"
     ],
     "additionalDirectories": [
       "/tmp"

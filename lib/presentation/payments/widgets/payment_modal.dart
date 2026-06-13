@@ -33,12 +33,21 @@ class PaymentModal extends ConsumerStatefulWidget {
   /// el método de pago. Si es null, no se hace nada extra.
   final Future<void> Function()? onOfflineQueued;
 
+  /// Hook que imprime el COMPROBANTE con el resultado del pago, ANTES de que
+  /// el modal haga pop (cuando el estado aún tiene el payment + el
+  /// fiscal_document). Recibe el pago procesado y el fiscal_document — que
+  /// trae el NCF del server (online) o el NCF asignado offline por el Hub
+  /// (F4). Si es null, no se imprime. Usado por venta rápida.
+  final Future<void> Function(Payment payment, FiscalDocument? fiscalDoc)?
+      onComprobante;
+
   const PaymentModal({
     super.key,
     required this.order,
     this.check,
     required this.onPaymentSuccess,
     this.onOfflineQueued,
+    this.onComprobante,
   });
 
   @override
@@ -130,6 +139,15 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
       HapticFeedback.mediumImpact();
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
+        // Venta rápida (F4): imprimir el COMPROBANTE con el resultado. Se
+        // dispara fire-and-forget — el print usa el ref/context del CALLER
+        // (que sigue montado tras el pop) y los datos ya capturados (payment
+        // + fiscal_document con su NCF, online u offline), no el context del
+        // modal. Un fallo de impresión no traba el cierre.
+        final printCb = widget.onComprobante;
+        if (printCb != null && state.processedPayment != null) {
+          unawaited(printCb(state.processedPayment!, state.fiscalDocument));
+        }
         // Si el pago se encoló offline, disparamos el hook ANTES del pop
         // para que el caller imprima la precuenta con el modal todavía
         // montado (igual patrón que table_order_screen con onConfirmed).

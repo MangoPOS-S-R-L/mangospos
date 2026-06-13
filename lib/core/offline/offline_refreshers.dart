@@ -8,6 +8,8 @@ import 'package:mangopos/data/repositories/zones_repository.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 
 import 'catalog_refresh_service.dart';
+import 'ncf_offline_allocator.dart' show kOfflineNcfEnabled;
+import 'ncf_range_service.dart';
 import 'offline_sync_coordinator.dart';
 
 /// Resuelve el negocio activo en el momento de correr (no al construir).
@@ -37,6 +39,7 @@ List<Future<void> Function()> buildOfflineRefreshers({
   Future<void> Function(String businessId)? refreshZones,
   Future<void> Function(String businessId)? refreshInventory,
   Future<void> Function(String businessId)? refreshConfig,
+  Future<void> Function(String businessId)? refreshNcfSeed,
 }) {
   // Resuelto perezosamente: solo se toca Supabase.instance si de verdad corre
   // un refresher por defecto (en test se inyectan todos y no se toca).
@@ -61,7 +64,23 @@ List<Future<void> Function()> buildOfflineRefreshers({
     };
   }
 
-  return [guard(catalog), guard(zones), guard(inventory), guard(config)];
+  final refreshers = [
+    guard(catalog),
+    guard(zones),
+    guard(inventory),
+    guard(config),
+  ];
+
+  // Semilla NCF (F4): cachea la serie central offline para que el Hub conozca
+  // current_number al caer la red. Solo se agrega con F4 encendido (o si el
+  // test lo inyecta), así no añade tráfico cuando la emisión offline está off.
+  if (kOfflineNcfEnabled || refreshNcfSeed != null) {
+    final ncfSeed = refreshNcfSeed ??
+        (String b) => NcfRangeService(resolveClient()).refreshAllSeries(b);
+    refreshers.add(guard(ncfSeed));
+  }
+
+  return refreshers;
 }
 
 /// Refresca el inventario de la bodega principal (la primera que devuelve

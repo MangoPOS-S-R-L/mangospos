@@ -1726,6 +1726,11 @@ class OfflinePosService {
           }
           cashierSessionId = remote;
         }
+        // F4: si el cobro se emitió offline con un NCF asignado por el Hub,
+        // viaja en la acción. Se reenvía al RPC (p_offline_ncf) para que el
+        // fiscal_document se registre con ESE número sin regenerarlo, junto
+        // con su tipo (para que fd.ncf_type coincida con el NCF impreso).
+        final offlineNcf = action['offline_ncf']?.toString();
         await salesRepository.processPayment(
           orderId: resolvedOrderId,
           checkId: action['check_id']?.toString(),
@@ -1734,9 +1739,13 @@ class OfflinePosService {
           reference: action['reference']?.toString(),
           customerId: action['customer_id']?.toString(),
           customerRnc: action['customer_rnc']?.toString(),
+          fiscalType: action['requested_ncf_type']?.toString(),
           cashierSessionId: cashierSessionId,
           changeAmount: ((action['change_amount'] ?? 0) as num).toDouble(),
           paidAt: paidAt,
+          offlineNcf: (offlineNcf != null && offlineNcf.isNotEmpty)
+              ? offlineNcf
+              : null,
         );
         return resolvedOrderId;
       default:
