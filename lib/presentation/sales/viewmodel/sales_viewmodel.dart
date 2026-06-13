@@ -102,6 +102,15 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   String? _queuedRefreshOrderId;
   bool _queuedClearIfPaid = false;
   bool _refreshOrderInFlight = false;
+  // Guarda anti-parpadeo al BORRAR: ids de items eliminados optimistamente
+  // cuyo borrado el server aún no confirmó. Mientras estén aquí, cualquier
+  // recarga (refreshOrder/Realtime) los FILTRA → no reaparecen. Se limpian
+  // cuando una recarga ya no los trae (server confirmó) o al cambiar de orden.
+  final Set<String> _pendingDeletedItemIds = {};
+  // Guarda anti-parpadeo al CAMBIAR CANTIDAD: itemId → qty esperada del cambio
+  // optimista en vuelo. Mientras el server no confirme esa qty, una recarga
+  // stale (qty vieja) NO revierte la línea — se mantiene la optimista.
+  final Map<String, double> _pendingItemQty = {};
   bool _syncInFlight = false;
   String? _taxSettingsBusinessId;
   DateTime? _lastTaxLoad;
@@ -255,7 +264,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     );
   }
 
-  static const _refreshOrderDebounce = Duration(milliseconds: 250);
+  // Debounce de la recarga de orden. Una acción (agregar/quitar/cantidad)
+  // dispara el refresh explícito + los ecos de Realtime (order_items, orders).
+  // Una ventana de 400ms colapsa esa ráfaga en UNA sola recarga del bundle en
+  // vez de 2-3 → menos re-render del carrito = menos lag. El update optimista
+  // ya hace que la acción se sienta instantánea, así que la reconciliación
+  // puede esperar 400ms sin que el cajero lo note.
+  static const _refreshOrderDebounce = Duration(milliseconds: 400);
 
   static const _cashierClosedMessage =
       'Debes abrir la caja antes de iniciar una venta.';
@@ -2126,7 +2141,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     final previousItems = state.items;
     final previousOrder = state.order;
 
-    // 2. Optimistic Local Update
+    // 2. Optimistic Local Update — marcamos el id como borrado pendiente para
+    // que ninguna recarga stale (refreshOrder/Realtime) lo resucite.
+    _pendingDeletedItemIds.add(itemId);
     final updatedItems = state.items.where((i) => i.id != itemId).toList();
 
     final updatedSummary = summarizeOrderPricing(state.order, updatedItems);
@@ -2183,6 +2200,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         return;
       }
 
+      // El borrado falló → soltamos la guarda para no ocultar el item.
+      _pendingDeletedItemIds.remove(itemId);
       state = state.copyWith(
         items: previousItems,
         order: previousOrder,
@@ -2256,6 +2275,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       );
     }
 
+    // Guarda: el cambio de cantidad queda pendiente hasta que el server lo
+    // confirme; así una recarga stale (qty vieja) no revierte la línea.
+    _pendingItemQty[itemId] = quantity;
+
     try {
       await ref
           .read(salesRepositoryProvider)
@@ -2323,6 +2346,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         return;
       }
 
+      // El cambio falló → soltamos la guarda para no fijar una qty inexistente.
+      _pendingItemQty.remove(itemId);
       // Rollback optimistic update on online error
       state = state.copyWith(
         items: previousItems,
@@ -3069,6 +3094,29 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     _scheduleOrderRefresh(orderId, clearIfPaid: clearIfPaid);
   }
 
+  /// Recarga la orden actual desde el server de forma INMEDIATA y awaiteada
+  /// (sin el debounce de [refreshOrder]). Se llama justo antes de imprimir la
+  /// precuenta/factura para que el papel refleje el estado autoritativo del
+  /// server, sin depender de que Realtime haya entregado cada evento — el
+  /// canal puede perder cambios si se cayó/reconectó o si otra caja agregó
+  /// ítems (caso real: precuenta sin los ítems agregados después).
+  ///
+  /// No-op si no hay orden, es una orden local (sin server todavía) o no hay
+  /// internet: offline en una sola caja ya es fresco; la frescura multi-caja
+  /// sin internet la da el Hub/LAN (F3). Tolerante: un fallo de recarga no
+  /// debe trabar la impresión (el caller decide), así que captura y sigue.
+  Future<void> reloadOrderNow() async {
+    final orderId = state.order?.id;
+    if (orderId == null || orderId.startsWith('local-order-')) return;
+    if (!_connectivity.isConnected) return;
+    _refreshOrderDebounceTimer?.cancel();
+    try {
+      await _loadOrderDetail(orderId, caller: 'reloadOrderNow');
+    } catch (e) {
+      debugPrint('reloadOrderNow falló (se imprime con el estado actual): $e');
+    }
+  }
+
   /// Tick del timer de respaldo. Barato: sale temprano si no hay conexión,
   /// ya hay un sync corriendo, no hay business activo o la cola no tiene
   /// pendientes. Solo entonces dispara el sync real.
@@ -3218,7 +3266,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     _refreshOrderInFlight = true;
 
     try {
-      while (_queuedRefreshOrderId != null) {
+      // Una sola recarga por flush. Si llegan ecos de Realtime DURANTE la
+      // recarga, el `finally` los re-agenda con debounce (colapsa la ráfaga en
+      // UNA recarga de cola) en vez de re-bajar el bundle inmediato otra vez.
+      if (_queuedRefreshOrderId != null) {
         final orderId = _queuedRefreshOrderId!;
         final clearIfPaid = _queuedClearIfPaid;
 
@@ -3248,7 +3299,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     } finally {
       _refreshOrderInFlight = false;
       if (_queuedRefreshOrderId != null) {
-        unawaited(_flushQueuedOrderRefresh());
+        // Re-agendar con DEBOUNCE (no inmediato) para colapsar los ecos que
+        // llegaron durante la recarga en una sola recarga de cola.
+        _scheduleOrderRefresh(
+          _queuedRefreshOrderId!,
+          clearIfPaid: _queuedClearIfPaid,
+        );
       }
     }
   }
@@ -3469,6 +3525,43 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       state,
       fiscalSequences,
     );
+
+    // Guardas anti-parpadeo. Al cambiar de orden no aplican (se limpian).
+    if (previousOrderId != orderId) {
+      _pendingDeletedItemIds.clear();
+      _pendingItemQty.clear();
+    } else {
+      // BORRADOS: los ids que el server YA NO trae están confirmados → salen
+      // de la guarda; los que el server AÚN trae (recarga stale antes del
+      // commit) se filtran para que el item borrado no reaparezca.
+      if (_pendingDeletedItemIds.isNotEmpty) {
+        final serverIds = items.map((i) => i.id).toSet();
+        _pendingDeletedItemIds.removeWhere((id) => !serverIds.contains(id));
+        if (_pendingDeletedItemIds.isNotEmpty) {
+          items = items
+              .where((i) => !_pendingDeletedItemIds.contains(i.id))
+              .toList();
+        }
+      }
+      // CANTIDAD: si el server trae una qty vieja para un item con cambio
+      // optimista en vuelo, conservamos la línea optimista (no revertimos)
+      // hasta que el server confirme la qty esperada.
+      if (_pendingItemQty.isNotEmpty) {
+        final currentById = {for (final i in state.items) i.id: i};
+        items = items.map((srv) {
+          final expected = _pendingItemQty[srv.id];
+          if (expected == null) return srv;
+          if ((srv.quantity - expected).abs() < 0.0001) {
+            _pendingItemQty.remove(srv.id); // server confirmó
+            return srv;
+          }
+          return currentById[srv.id] ?? srv; // stale → mantener optimista
+        }).toList();
+        // Soltar guardas de items que el server ya no trae (borrados).
+        final serverIds = items.map((i) => i.id).toSet();
+        _pendingItemQty.removeWhere((id, _) => !serverIds.contains(id));
+      }
+    }
 
     state = _normalizeHydratedState(
       state.copyWith(

@@ -38,6 +38,8 @@ import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/services/printing/print_destination.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
 import 'package:mangopos/services/printing/qr_esc_pos_builder.dart';
+import 'package:flutter_animate/flutter_animate.dart';
+import 'package:mangopos/app/widgets/skeleton_loading.dart';
 import 'package:mangopos/presentation/sales/widgets/precheck/pre_check_dialog.dart';
 import 'package:mangopos/presentation/sales/widgets/precheck/print_destination_picker.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
@@ -1972,6 +1974,13 @@ class _CartView extends ConsumerWidget {
       }
     }
 
+    // FRESH antes de cobrar: recargamos la orden del server para no cobrar /
+    // imprimir factura/precuenta con ítems stale (Realtime pudo perder
+    // eventos, u otra caja agregó ítems). No-op offline o en orden local; el
+    // estado se re-lee abajo, así prePaymentItems queda fresco.
+    await ref.read(currentOrderProvider.notifier).reloadOrderNow();
+    if (!context.mounted) return;
+
     var currentOrderState = ref.read(currentOrderProvider);
     final fiscalConfigError = _buildFiscalConfigError(currentOrderState);
     if (fiscalConfigError != null) {
@@ -2807,11 +2816,6 @@ class _CartView extends ConsumerWidget {
       displayDiscounts = pricingSummary.discounts;
     }
 
-    final displayTaxTotal = reconciledBreakdown.fold<double>(
-      0,
-      (sum, e) => sum + e.amount,
-    );
-
     final pendingOrderItems = openItems.where((i) {
       final checkIsClosed = allChecks.any(
         (c) => c.id == i.checkId && c.isClosed,
@@ -3637,8 +3641,8 @@ class _CartView extends ConsumerWidget {
                         ),
                       ),
                       const SizedBox(height: 6),
-                      ...draftItems.map(
-                        (item) => _CartLineItem(
+                      ...draftItems.map((item) {
+                        final line = _CartLineItem(
                           item: item,
                           isDraft: true,
                           onTap: () =>
@@ -3658,8 +3662,28 @@ class _CartView extends ConsumerWidget {
                                 .read(currentOrderProvider.notifier)
                                 .deleteItem(item.id);
                           },
-                        ),
-                      ),
+                        );
+                        // Animar SOLO el item optimista (tmp) al aparecer →
+                        // feedback inmediato. El real reconciliado (y los items
+                        // al abrir la mesa) entran SEAMLESS, sin re-flash. La
+                        // key estable mantiene la reconciliación correcta.
+                        return item.id.startsWith('tmp_')
+                            ? line
+                                  .animate(
+                                    key: ValueKey('cart_anim_${item.id}'),
+                                  )
+                                  .fadeIn(duration: 160.ms)
+                                  .slideX(
+                                    begin: -0.04,
+                                    end: 0,
+                                    duration: 160.ms,
+                                    curve: Curves.easeOut,
+                                  )
+                            : KeyedSubtree(
+                                key: ValueKey('cart_${item.id}'),
+                                child: line,
+                              );
+                      }),
                     ],
                   ],
                 ),
@@ -4030,12 +4054,49 @@ class _CartView extends ConsumerWidget {
                                 precheckLockKey,
                                 () async {
                                   if (orderState.order == null) return;
+                                  // FRESH: recargar la orden del server antes
+                                  // de imprimir, para no sacar una precuenta
+                                  // con ítems stale (Realtime pudo perder
+                                  // eventos / otra caja agregó ítems). No-op
+                                  // offline o en orden local.
+                                  await ref
+                                      .read(currentOrderProvider.notifier)
+                                      .reloadOrderNow();
+                                  if (!context.mounted) return;
+                                  final freshState =
+                                      ref.read(currentOrderProvider);
+                                  final freshOrder = freshState.order;
+                                  if (freshOrder == null) return;
+                                  // Recomputamos items/totales desde el estado
+                                  // recién recargado (mismo filtro que la vista
+                                  // del carrito).
+                                  final freshOpen = freshState.items
+                                      .where(_isOpenItem)
+                                      .toList();
+                                  final freshItems = selectedCheckId != null
+                                      ? freshOpen
+                                            .where(
+                                              (i) =>
+                                                  i.checkId == selectedCheckId,
+                                            )
+                                            .toList()
+                                      : freshOpen.where((i) {
+                                          return !freshState.checks.any(
+                                            (c) =>
+                                                c.id == i.checkId && c.isClosed,
+                                          );
+                                        }).toList();
+                                  final freshSummary = summarizeOrderPricing(
+                                    freshOrder,
+                                    freshItems,
+                                    forcedOrigin: freshState.origin,
+                                  );
                                   final businessProfile =
                                       await _loadBusinessReceiptProfile(ref);
                                   final waiterName =
                                       await _loadWaiterName(
                                         ref,
-                                        orderState.order!.id,
+                                        freshOrder.id,
                                       ) ??
                                       ref.read(sessionProvider).userName;
                                   if (!context.mounted) return;
@@ -4050,22 +4111,24 @@ class _CartView extends ConsumerWidget {
                                     'tableName':
                                         '$tableCode ${selectedCheckId != null ? "(Cuentas Separadas)" : ""}',
                                     'waiterName': waiterName,
-                                    'customerName': orderState.customerName,
-                                    'items': displayedItems
+                                    'customerName': freshState.customerName,
+                                    'items': freshItems
                                         .map(
                                           (i) => {
                                             'quantity': i.quantity,
                                             'name': i.productName,
                                             'price': itemDisplayTotal(
-                                              orderState.order,
+                                              freshOrder,
                                               i,
                                             ),
                                           },
                                         )
                                         .toList(),
-                                    'subtotal': displaySubtotal,
-                                    'tax': displayTaxTotal,
-                                    'total': displayTotal,
+                                    'subtotal': freshSummary.subtotal,
+                                    'tax':
+                                        freshSummary.tax +
+                                        freshSummary.serviceFee,
+                                    'total': freshSummary.total,
                                   };
 
                                   try {
@@ -4073,8 +4136,8 @@ class _CartView extends ConsumerWidget {
                                       context,
                                       ref,
                                       preCheckData: preCheckData,
-                                      orderObj: orderState.order!,
-                                      orderItems: displayedItems,
+                                      orderObj: freshOrder,
+                                      orderItems: freshItems,
                                       forcePicker: forcePicker,
                                     );
                                   } catch (e) {
@@ -4087,8 +4150,8 @@ class _CartView extends ConsumerWidget {
                                           ref: ref,
                                           type: 'precheck',
                                           data: preCheckData,
-                                          orderObj: orderState.order!,
-                                          orderItems: displayedItems,
+                                          orderObj: freshOrder,
+                                          orderItems: freshItems,
                                           tableName:
                                               preCheckData['tableName']
                                                   as String?,
@@ -8132,6 +8195,37 @@ class _CategoriesPane extends ConsumerWidget {
   }
 }
 
+/// Grid shimmer para el catálogo (categorías/productos) mientras carga, en
+/// vez de un spinner — da sensación de velocidad y mantiene el layout estable.
+class _CatalogGridSkeleton extends StatelessWidget {
+  const _CatalogGridSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    final isCompact = ResponsiveHelper.isMobile(context);
+    return GridView.builder(
+      padding: EdgeInsets.all(isCompact ? 12 : 16),
+      physics: const NeverScrollableScrollPhysics(),
+      gridDelegate: isCompact
+          ? const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              mainAxisExtent: 116,
+              crossAxisSpacing: 8,
+              mainAxisSpacing: 8,
+            )
+          : const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 220,
+              mainAxisExtent: 150,
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
+            ),
+      itemCount: 12,
+      itemBuilder: (_, _) =>
+          const SkeletonBox(height: double.infinity, borderRadius: 14),
+    );
+  }
+}
+
 class _CategoriesGrid extends ConsumerWidget {
   final Function(String) onCategoryTap;
   const _CategoriesGrid({required this.onCategoryTap});
@@ -8142,7 +8236,7 @@ class _CategoriesGrid extends ConsumerWidget {
     final categories = state.categories;
 
     if (categories.isEmpty && state.loading) {
-      return const Center(child: CircularProgressIndicator());
+      return const _CatalogGridSkeleton();
     }
     if (categories.isEmpty) {
       return const Center(
@@ -8379,9 +8473,7 @@ class _ProductsGrid extends ConsumerWidget {
     final products = state.products;
 
     if (products.isEmpty && state.loading) {
-      return const Center(
-        child: CircularProgressIndicator(color: _salesTotalColor),
-      );
+      return const _CatalogGridSkeleton();
     }
     if (products.isEmpty) {
       return Center(child: Text(emptyText));

@@ -102,7 +102,9 @@
       "Bash(sed -n '3247,3274p' supabase/schema.sql)",
       "Bash(awk '/CREATE TABLE IF NOT EXISTS \"public\".\"products\"/{f=1} f{print} /\\\\\\);/{if\\(f\\)exit}' supabase/schema.sql)",
       "Bash(sed -n '2321,2360p' supabase/schema.sql)",
-      "Bash(sed -n '2875,2935p' supabase/schema.sql)"
+      "Bash(sed -n '2875,2935p' supabase/schema.sql)",
+      "Bash(awk '/create or replace function public.fn_menu_item_set_inventory_tracked/,/\\\\$\\\\$;/' supabase/migrations/20260514_0011_product_inventory_tracking.sql)",
+      "Bash(awk -F: '$1>=8380 && $1<=8480')"
     ],
     "additionalDirectories": [
       "/tmp"
