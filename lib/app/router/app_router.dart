@@ -90,6 +90,7 @@ import '../../presentation/reports/view/reports_view.dart';
 import '../../presentation/reports/view/sales_by_waiter_view.dart';
 import '../../presentation/reports/view/sales_report_view.dart';
 import '../../presentation/reports/view/finance_report_view.dart';
+import '../../presentation/reports/view/offers_report_view.dart';
 import '../../presentation/reports/view/inventory_report_view.dart';
 import '../../presentation/reports/view/purchases_report_view.dart';
 import '../../presentation/reports/view/tax_report_view.dart';
@@ -542,6 +543,10 @@ class AppRouter {
             builder: (context, state) => const SalesReportView(),
           ),
           GoRoute(
+            path: AppRoutes.reportsOffers,
+            builder: (context, state) => const OffersReportView(),
+          ),
+          GoRoute(
             path: AppRoutes.reportsSalesByWaiter,
             builder: (context, state) => const SalesByWaiterView(),
           ),
@@ -933,6 +938,8 @@ ReportCategory? _reportCategoryFromQuery(String? value) {
   switch (value) {
     case 'sales':
       return ReportCategory.sales;
+    case 'offers':
+      return ReportCategory.offers;
     case 'purchases':
       return ReportCategory.purchases;
     case 'finances':

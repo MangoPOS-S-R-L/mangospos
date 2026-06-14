@@ -104,7 +104,11 @@
       "Bash(sed -n '2321,2360p' supabase/schema.sql)",
       "Bash(sed -n '2875,2935p' supabase/schema.sql)",
       "Bash(awk '/create or replace function public.fn_menu_item_set_inventory_tracked/,/\\\\$\\\\$;/' supabase/migrations/20260514_0011_product_inventory_tracking.sql)",
-      "Bash(awk -F: '$1>=8380 && $1<=8480')"
+      "Bash(awk -F: '$1>=8380 && $1<=8480')",
+      "PowerShell(Set-Location 'd:\\\\MangoPos\\\\Dev\\\\mangopos'; powershell -ExecutionPolicy Bypass -File '.\\\\installer\\\\windows\\\\build_inno.ps1')",
+      "PowerShell($f = Get-Item 'd:\\\\MangoPos\\\\Dev\\\\mangopos\\\\build\\\\installer\\\\MangoPOS-Setup-1.2.1.25-x64.exe' -ErrorAction SilentlyContinue; if \\($f\\) { \"{0}  |  {1:N1} MB  |  {2}\" -f $f.Name, \\($f.Length/1MB\\), $f.LastWriteTime } else { Get-Content 'C:\\\\Users\\\\crist\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--MangoPos-Dev-mangopos\\\\14c803a0-855f-4233-b7c8-703f83dda744\\\\tasks\\\\bu3kezrru.output' -Tail 5 })",
+      "Bash(awk '/create table.*order_items/,/^\\\\\\);/' supabase/schema.sql)",
+      "PowerShell($f = Get-Item 'd:\\\\MangoPos\\\\Dev\\\\mangopos\\\\build\\\\installer\\\\MangoPOS-Setup-1.2.1.26-x64.exe' -ErrorAction SilentlyContinue; if \\($f\\) { \"{0}  |  {1:N1} MB  |  {2}\" -f $f.Name, \\($f.Length/1MB\\), $f.LastWriteTime } else { Get-Content 'C:\\\\Users\\\\crist\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--MangoPos-Dev-mangopos\\\\14c803a0-855f-4233-b7c8-703f83dda744\\\\tasks\\\\bufj4z91o.output' -Tail 6 })"
     ],
     "additionalDirectories": [
       "/tmp"

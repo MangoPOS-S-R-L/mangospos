@@ -55,6 +55,8 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
     switch (category) {
       case ReportCategory.sales:
         context.go(AppRoutes.reportsSales);
+      case ReportCategory.offers:
+        context.go(AppRoutes.reportsOffers);
       case ReportCategory.finances:
         context.go(AppRoutes.reportsFinances);
       case ReportCategory.inventory:
@@ -268,6 +270,17 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
         quickStat: currency.format(salesNet),
         quickStatLabel: '$salesCount transacciones',
         onTap: () => context.go(AppRoutes.reportsSales),
+      ),
+      _ReportHubCardData(
+        title: 'Ventas por oferta',
+        description:
+            'Ventas y cantidad de productos despachados por cada oferta o '
+            'promoción aplicada.',
+        icon: Icons.local_offer_outlined,
+        color: const Color(0xFFD946A6),
+        quickStat: '—',
+        quickStatLabel: 'Detalle por promoción',
+        onTap: () => context.go(AppRoutes.reportsOffers),
       ),
       _ReportHubCardData(
         title: 'Ventas por mesero',
