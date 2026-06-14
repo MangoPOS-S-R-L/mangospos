@@ -106,6 +106,13 @@ bool isDestinationActive(ShellDestination d, String currentLocation) {
   if (excluded) return false;
   if (currentLocation == d.route) return true;
   if (d.route != '/' && currentLocation.startsWith(d.route)) return true;
+  // Ventas vive en DOS rutas: '/sales' (+ subrutas) y '/ventas' (salesReact),
+  // que es el shell por defecto al que '/sales' redirige. Sin esto, al entrar
+  // a Ventas la ubicación queda en '/ventas' y el item no se marcaba activo.
+  if (d.route == AppRoutes.sales &&
+      currentLocation.startsWith(AppRoutes.salesReact)) {
+    return true;
+  }
   if (d.route == AppRoutes.settings &&
       currentLocation.startsWith(AppRoutes.menu)) {
     return true;

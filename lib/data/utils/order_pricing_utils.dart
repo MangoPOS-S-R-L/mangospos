@@ -249,13 +249,20 @@ OrderItemPricingSummary summarizeItemPricing(Order? order, OrderItem item, {Stri
       ? _r((orderServiceFee / orderSubtotal) * dbSubtotal)
       : 0.0;
 
+  // RED DE SEGURIDAD (anti-sobre-descuento): el descuento de una línea NUNCA
+  // puede exceder su monto (subtotal + impuesto + service fee legacy). Aunque
+  // una promo —auto o tile— escriba un descuento malo, el total jamás queda
+  // negativo ni sub-cobra. Cap defensivo: en el caso correcto es no-op.
+  final lineGross = dbSubtotal + dbTax + legacyServiceFee;
+  final cappedDiscounts = _r(dbDiscounts.clamp(0, lineGross).toDouble());
+
   return OrderItemPricingSummary(
     subtotal: dbSubtotal,
     tax: dbTax,
-    discounts: dbDiscounts,
+    discounts: cappedDiscounts,
     serviceFee: legacyServiceFee,
     extraServiceFee: 0,
-    total: _r(dbSubtotal + dbTax + legacyServiceFee - dbDiscounts),
+    total: _r(dbSubtotal + dbTax + legacyServiceFee - cappedDiscounts),
   );
 }
 

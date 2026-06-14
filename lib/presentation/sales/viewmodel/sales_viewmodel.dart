@@ -3995,25 +3995,55 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             : ((promo['reward_quantity'] as num?)?.toInt() ?? 1);
         if (buyQty <= 1 || freeQty <= 0) continue;
 
-        final sorted = [...targetItems]
-          ..sort((a, b) => grossAmount(a).compareTo(grossAmount(b)));
-        final groups = sorted.length ~/ buyQty;
-        final freeItemsCount = groups * freeQty;
-        for (var i = 0; i < freeItemsCount && i < sorted.length; i++) {
-          final item = sorted[i];
-          final discount = grossAmount(
-            item,
-          ).clamp(0, double.infinity).toDouble();
-          updates.add((
-            itemId: item.id,
-            discount: double.parse(discount.toStringAsFixed(2)),
-            notes: _buildAutoPromoNotes(
-              originalNotes: item.notes,
-              promoId: promoId,
-            ),
-            promotionId: promoId,
-          ));
-          touchedItemIds.add(item.id);
+        // El BOGO se calcula DENTRO de cada cuenta (split bill) y por UNIDADES
+        // (no por filas): una fila qty=3 cuenta como 3, no como 1. Cada cuenta
+        // libera (unidades ~/ buyQty) * freeQty unidades, asignadas a las más
+        // baratas (por unidad), y se descuenta SOLO esas unidades. Así un check
+        // con 4 cervezas (sean 4 filas o una qty=3 + qty=1) libera exactamente
+        // 1 = el precio de UNA unidad (275), no la fila completa (825). Orden
+        // determinista (por-unidad, luego id) → mismo resultado en cada recarga,
+        // sin churn ni contaminación entre cuentas.
+        double perUnitGross(OrderItem it) => it.quantity > 0
+            ? grossAmount(it) / it.quantity
+            : grossAmount(it);
+
+        final byCheck = <String?, List<OrderItem>>{};
+        for (final item in targetItems) {
+          byCheck.putIfAbsent(item.checkId, () => <OrderItem>[]).add(item);
+        }
+        for (final group in byCheck.values) {
+          final totalUnits = group.fold<int>(
+            0,
+            (sum, it) => sum + it.quantity.round(),
+          );
+          var freeUnits = (totalUnits ~/ buyQty) * freeQty;
+          if (freeUnits <= 0) continue;
+
+          final sorted = [...group]
+            ..sort((a, b) {
+              final byUnit = perUnitGross(a).compareTo(perUnitGross(b));
+              return byUnit != 0 ? byUnit : a.id.compareTo(b.id);
+            });
+          for (final item in sorted) {
+            if (freeUnits <= 0) break;
+            final qty = item.quantity.round();
+            if (qty <= 0) continue;
+            final unitsFree = freeUnits < qty ? freeUnits : qty;
+            final discount = (perUnitGross(item) * unitsFree)
+                .clamp(0, double.infinity)
+                .toDouble();
+            updates.add((
+              itemId: item.id,
+              discount: double.parse(discount.toStringAsFixed(2)),
+              notes: _buildAutoPromoNotes(
+                originalNotes: item.notes,
+                promoId: promoId,
+              ),
+              promotionId: promoId,
+            ));
+            touchedItemIds.add(item.id);
+            freeUnits -= unitsFree;
+          }
         }
         continue;
       }

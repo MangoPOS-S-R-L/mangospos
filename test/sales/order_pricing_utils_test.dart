@@ -218,4 +218,39 @@ void main() {
       expect(summary.subtotal + summary.tax + summary.serviceFee, 300.00);
     });
   });
+
+  group('red de seguridad de descuento (anti sobre-descuento)', () {
+    test('descuento > monto de línea se capa → total nunca negativo', () {
+      final order = _order(subtotal: 825);
+      final item = _item(
+        id: 'overdisc',
+        quantity: 3,
+        unitPrice: 275,
+        subtotal: 825,
+        tax: 0,
+        total: 825,
+        discounts: 900, // promo mal: descuento mayor que el gross de la línea
+      );
+      final summary = summarizeOrderPricing(order, [item]);
+      expect(summary.discounts, 825); // capado al gross
+      expect(summary.total, 0); // nunca negativo / sub-cobro
+    });
+
+    test('descuento correcto (1 de 3 unidades gratis) no se toca', () {
+      // 4x3 sobre fila qty=3 @ 275 = gross 825; 1 unidad gratis = -275.
+      final order = _order(subtotal: 825);
+      final item = _item(
+        id: 'partial',
+        quantity: 3,
+        unitPrice: 275,
+        subtotal: 825,
+        tax: 0,
+        total: 550,
+        discounts: 275,
+      );
+      final summary = summarizeOrderPricing(order, [item]);
+      expect(summary.discounts, 275);
+      expect(summary.total, 550);
+    });
+  });
 }
