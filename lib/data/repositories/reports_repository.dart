@@ -1310,7 +1310,14 @@ class ReportsRepository {
         // Los items cargan el impuesto: usar el split derivado de la config.
         // Refleja exactamente lo cobrado; nada se imputa.
         pureItbis = derivedItbis;
-        serviceFee = orderLevelServiceFee + derivedSvc;
+        // La LEY ya viene en los ítems (derivedSvc). NO sumar TAMBIÉN la
+        // guardada en fiscal_documents.service_fee: desde el backfill v5
+        // (fn_recompute_fd_for_scope, mig 20260610_0001) esa columna trae la
+        // MISMA LEY derivada de los mismos ítems → sumarlas contaba la LEY dos
+        // veces y el reporte la mostraba al doble (~21% en vez de 10%). Cuando
+        // los ítems traen solo ITBIS (derivedSvc = 0), caemos al service fee a
+        // nivel orden/documento como fallback legacy.
+        serviceFee = derivedSvc > 0 ? derivedSvc : orderLevelServiceFee;
       } else if (configuredServiceFeeRate > 0 &&
           configuredTaxOnlyRate > 0 &&
           subtotal > 0 &&

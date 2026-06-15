@@ -104,7 +104,15 @@
       "Bash(sed -n '2321,2360p' supabase/schema.sql)",
       "Bash(sed -n '2875,2935p' supabase/schema.sql)",
       "Bash(awk '/create or replace function public.fn_menu_item_set_inventory_tracked/,/\\\\$\\\\$;/' supabase/migrations/20260514_0011_product_inventory_tracking.sql)",
-      "Bash(awk -F: '$1>=8380 && $1<=8480')"
+      "Bash(awk -F: '$1>=8380 && $1<=8480')",
+      "Bash(adb devices *)",
+      "Bash(adb version *)",
+      "Bash(printenv)",
+      "Bash(sed -E 's/\\(=.{6}\\).*/\\\\1…<redacted>/')",
+      "Bash(supabase projects *)",
+      "Bash(nslookup supabase.mangopos.do)",
+      "Bash(awk '/CREATE TABLE IF NOT EXISTS \"public\".\"tables\"/,/\\\\\\);/' supabase/schema.sql)",
+      "Bash(awk '/CREATE TABLE IF NOT EXISTS \"public\".\"fiscal_documents\"/,/\\\\\\);/' supabase/schema.sql)"
     ],
     "additionalDirectories": [
       "/tmp"
