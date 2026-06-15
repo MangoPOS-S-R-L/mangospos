@@ -12,6 +12,7 @@ import 'package:mangopos/app/theme/breakpoints.dart';
 import 'package:mangopos/app/theme/sizes.dart';
 import 'package:mangopos/core/business/business_features_provider.dart';
 import 'package:mangopos/core/business/business_model.dart';
+import 'package:mangopos/core/printing/cloud_print_queue_worker.dart';
 import 'package:mangopos/core/printing/printer_heartbeat_scheduler.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/presentation/cashier/widgets/open_cash_dialog.dart';
@@ -49,6 +50,11 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
       // El provider se queda activo mientras el shell de ventas esté montado;
       // se autodestruye al hacer dispose (ver onDispose en el provider).
       ref.read(printerHeartbeatSchedulerProvider).start();
+      // Drenador de la cola de impresión: red de seguridad para comandas que
+      // fallaron en todos los caminos directos (clave en setups solo-tablets
+      // donde no hay agente Node que drene la cloud queue). Mismo ciclo de
+      // vida que el heartbeat.
+      ref.read(cloudPrintQueueWorkerProvider).start();
     });
   }
 

@@ -26,6 +26,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../data/models/printing.dart';
 import '../../services/print_agent_detector.dart';
+import '../network/android_net_lock.dart';
 import 'device_identity.dart';
 import 'package:mangopos/presentation/settings/more settings/printing/printers/viewmodel/printers_viewmodel.dart';
 
@@ -45,6 +46,13 @@ class PrinterHeartbeatScheduler {
   void start() {
     if (_timer != null) return;
     _timer = Timer.periodic(_interval, (_) => _safeTick());
+    // WifiLock de alto rendimiento durante toda la sesión POS: evita que el
+    // radio WiFi entre en power-save al atenuarse la pantalla y que el primer
+    // cobro tras inactividad falle/tarde al abrir el socket a la térmica.
+    // El scheduler ya representa "sesión activa" (start al login, stop al
+    // logout), así que es el punto natural para gobernar el lock. No-op fuera
+    // de Android. Fire-and-forget: el lock es best-effort.
+    unawaited(AndroidNetLock.acquireWifiLock());
     // Disparo inmediato para no esperar 30s al arrancar.
     Future.microtask(_safeTick);
   }
@@ -52,6 +60,7 @@ class PrinterHeartbeatScheduler {
   void stop() {
     _timer?.cancel();
     _timer = null;
+    unawaited(AndroidNetLock.releaseWifiLock());
   }
 
   Future<void> _safeTick() async {
