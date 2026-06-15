@@ -20,6 +20,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:multicast_dns/multicast_dns.dart';
 
+import 'package:mangopos/core/network/android_net_lock.dart';
+
 class DiscoveredAgent {
   /// Nombre legible (`AGENT_NAME` o derivado de `AGENT_ID`).
   final String name;
@@ -99,6 +101,10 @@ class AgentDiscovery {
       },
     );
 
+    // Android descarta multicast entrante sin un MulticastLock activo: sin
+    // esto el anuncio `_mangoprint._tcp` del hub no llega y el caller cae a
+    // IP manual aunque el agente esté en la misma LAN.
+    await AndroidNetLock.acquireMulticastLock();
     try {
       await client.start();
 
@@ -187,6 +193,7 @@ class AgentDiscovery {
       debugPrint('[AgentDiscovery] mDNS falló: $e');
     } finally {
       client.stop();
+      await AndroidNetLock.releaseMulticastLock();
     }
 
     return results.values.toList(growable: false);

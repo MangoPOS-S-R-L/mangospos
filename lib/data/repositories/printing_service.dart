@@ -374,10 +374,17 @@ class PrintingService {
             return KitchenPrintOutcome.directSuccess;
           }
           try {
+            // attempts:4 (vs 2 por defecto) — en un setup multi-tablet a una
+            // impresora de cocina COMPARTIDA, el puerto 9100 puede estar
+            // ocupado varios segundos por otra tablet. Con jitter + lock por
+            // IP (ver printRawDirectTcp), 4 intentos dan margen para ganar el
+            // puerto y que la comanda NO se pierda antes de caer al fallback
+            // de agente/cloud (que en solo-tablets no existe / no se drena).
             await _printingRepo.printRawDirectTcp(
               ip: ip,
               port: printer.port ?? 9100,
               data: bytes,
+              attempts: 4,
             );
           } on PrintLikelyDeliveredException catch (e) {
             // Los bytes se enviaron (RST post-flush, normal en térmicas): la

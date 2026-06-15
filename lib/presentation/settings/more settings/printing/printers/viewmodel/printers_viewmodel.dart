@@ -19,6 +19,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_usb_printer/flutter_usb_printer.dart';
 
 import 'package:mangopos/core/business/business_resolver.dart';
+import 'package:mangopos/core/network/android_net_lock.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
 import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
@@ -696,6 +697,9 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
     final out = <DiscoveredPrinter>[];
     final seenIps = <String>{};
     final client = MDnsClient();
+    // Android descarta multicast entrante sin un MulticastLock activo: sin
+    // esto el lookup mDNS regresa vacío aunque la impresora esté en la LAN.
+    await AndroidNetLock.acquireMulticastLock();
     try {
       await client.start();
 
@@ -751,6 +755,7 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       _log('scanViaMulticastDns() global error: $e');
     } finally {
       client.stop();
+      await AndroidNetLock.releaseMulticastLock();
     }
     return out;
   }
@@ -813,6 +818,11 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         '_ipp._tcp.local',
         '_printer._tcp.local',
       ];
+      // Un solo MulticastLock para toda la ventana del scan intensivo: el loop
+      // re-lanza lookups continuamente y en Android sin el lock no llegaría
+      // ningún anuncio multicast entrante.
+      await AndroidNetLock.acquireMulticastLock();
+      try {
       while (timeLeft()) {
         final remaining = deadline.difference(DateTime.now());
         if (remaining <= Duration.zero) break;
@@ -870,6 +880,9 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         if (timeLeft()) {
           await Future.delayed(const Duration(seconds: 2));
         }
+      }
+      } finally {
+        await AndroidNetLock.releaseMulticastLock();
       }
     }
 

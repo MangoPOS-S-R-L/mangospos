@@ -39,6 +39,15 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+    <!-- Impresión por red (subredes): permite recibir paquetes multicast
+         (mDNS/Bonjour) para descubrir impresoras y print agents. Sin este
+         permiso + un MulticastLock activo, el driver WiFi de Android descarta
+         el tráfico multicast por ahorro de energía y el descubrimiento mDNS
+         queda vacío. CHANGE_WIFI_MULTICAST_STATE habilita el MulticastLock;
+         el WifiLock de alto rendimiento (que mantenemos durante la sesión POS
+         para evitar que el primer cobro tras inactividad falle por power-save)
+         NO requiere permiso. Ver android_net_lock.dart + MainActivity.kt. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
 
     <!-- Bluetooth (classic + BLE) -->
     <uses-permission android:name="android.permission.BLUETOOTH"/>

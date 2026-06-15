@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:io';
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 
 import 'package:mangopos/core/printing/bluetooth_print_service.dart';
@@ -1217,6 +1218,43 @@ class PrintingRepository {
   // Local Print Service
   final _localService = LocalPrintService();
 
+  // ── Serialización por impresora dentro de ESTE device ────────────────────
+  // Una térmica de red atiende UNA conexión TCP al puerto 9100 a la vez. Si la
+  // misma tablet abre dos sockets concurrentes a la misma impresora (ej.
+  // comanda + precuenta disparando juntas, o re-disparos rápidos), el segundo
+  // recibe refused/timeout o, peor, se mezcla el ticket. Encadenamos los prints
+  // por `ip:port` para que esperen en fila en vez de chocar. NOTA: esto
+  // serializa solo DENTRO de esta tablet; entre las 4 tablets no hay lock
+  // compartido (eso requeriría un host/cola) — para eso está el jitter del
+  // backoff, que desincroniza los reintentos de tablets distintas.
+  // ESTÁTICO a propósito: el lock representa el socket físico device→impresora,
+  // que es global al dispositivo. Si fuera por-instancia, la ruta de cocina
+  // (su propia instancia de PrintingRepository) y el drenador de cola (otra
+  // instancia) NO se serializarían entre sí y podrían chocar contra la misma
+  // térmica en la misma tablet. Compartir el mapa por clase lo evita.
+  static final Map<String, Future<void>> _printerChainByKey = {};
+  static final Random _backoffRng = Random();
+
+  static Future<void> _serializedByPrinter(
+    String key,
+    Future<void> Function() action,
+  ) {
+    final prior = _printerChainByKey[key] ?? Future<void>.value();
+    final run = prior.then((_) => action(), onError: (_) => action());
+    // El tail ignora resultado/errores para no romper la cadena.
+    _printerChainByKey[key] = run.then((_) {}, onError: (_) {});
+    return run;
+  }
+
+  /// Backoff con jitter: [baseMs] más un componente aleatorio, en el rango
+  /// aprox. [0.5×, 1.5×] de la base. El jitter evita que varias tablets que
+  /// chocan contra la misma impresora reintenten en lockstep y vuelvan a
+  /// chocar exactamente en el mismo instante.
+  static Duration _jitteredBackoff(int baseMs) {
+    final half = baseMs ~/ 2;
+    return Duration(milliseconds: half + _backoffRng.nextInt(baseMs + 1));
+  }
+
   /// Verificar si agent (Mango Local Agent) está activo
   Future<bool> isAgentUp() async {
     return await _localService.isAgentAvailable();
@@ -1338,13 +1376,39 @@ class PrintingRepository {
     required List<int> data,
     Duration timeout = const Duration(seconds: 5),
     int attempts = 2,
+  }) {
+    // Serializamos por impresora dentro de este device: dos prints simultáneos
+    // de ESTA tablet a la misma térmica esperan en fila en vez de abrir dos
+    // sockets que el puerto 9100 no puede atender a la vez.
+    return _serializedByPrinter(
+      '$ip:$port',
+      () => _printRawDirectTcpUnlocked(
+        ip: ip,
+        port: port,
+        data: data,
+        timeout: timeout,
+        attempts: attempts,
+      ),
+    );
+  }
+
+  Future<void> _printRawDirectTcpUnlocked({
+    required String ip,
+    int port = 9100,
+    required List<int> data,
+    Duration timeout = const Duration(seconds: 5),
+    int attempts = 2,
   }) async {
     final totalAttempts = attempts < 1 ? 1 : attempts;
     Object? lastError;
     StackTrace? lastStack;
     for (var attempt = 0; attempt < totalAttempts; attempt++) {
       if (attempt > 0) {
-        await Future.delayed(const Duration(milliseconds: 300));
+        // Backoff creciente con jitter (~300ms × intento ± jitter): separa los
+        // reintentos de esta tablet y los desincroniza de los de las otras 3,
+        // para que no vuelvan a chocar en el mismo instante contra el puerto
+        // 9100 compartido.
+        await Future.delayed(_jitteredBackoff(300 * attempt));
       }
       try {
         await _sendRawTcpOnce(
@@ -2739,13 +2803,16 @@ finally {
         if (!transient || attempt == maxAttempts) {
           break;
         }
-        // Backoff: 1s, 2s, 4s... entre intentos.
-        final waitMs = 500 * (1 << attempt); // 1000, 2000, 4000
+        // Backoff exponencial CON jitter: base 1s/2s/4s ± jitter, para que
+        // varias tablets que chocan contra la misma impresora compartida no
+        // reintenten en lockstep y vuelvan a chocar.
+        final base = 500 * (1 << attempt); // 1000, 2000, 4000
+        final wait = _jitteredBackoff(base);
         debugPrint(
           '[PrintRetry] $ip:$port intento $attempt fallo: $e — '
-          'reintentando en ${waitMs}ms',
+          'reintentando en ${wait.inMilliseconds}ms',
         );
-        await Future.delayed(Duration(milliseconds: waitMs));
+        await Future.delayed(wait);
       }
     }
     Error.throwWithStackTrace(
