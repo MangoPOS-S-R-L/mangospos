@@ -164,6 +164,8 @@ class _ReportScaffoldState extends ConsumerState<ReportScaffold> {
     switch (widget.category) {
       case ReportCategory.sales:
         return state.salesSummary == null;
+      case ReportCategory.offers:
+        return state.offersSummary == null;
       case ReportCategory.finances:
         return state.cashSummary == null;
       case ReportCategory.purchases:

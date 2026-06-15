@@ -135,6 +135,12 @@ class ReportsExportService {
           pw.SizedBox(height: 12),
           ..._breakdownTable('Ventas por hora', viewModel.getHourlyRows()),
         ];
+      case ReportCategory.offers:
+        return [
+          _metricsTable(viewModel.getOffersMetricCards()),
+          pw.SizedBox(height: 16),
+          ..._offersTable(viewModel),
+        ];
       case ReportCategory.finances:
         return [
           _metricsTable(viewModel.getFinanceMetricCards()),
@@ -219,6 +225,42 @@ class ReportsExportService {
           .map((m) => [m.title, m.value, m.subtitle])
           .toList(growable: false),
     );
+  }
+
+  static List<pw.Widget> _offersTable(ReportsViewModel viewModel) {
+    final rows = viewModel.getOfferSalesRows();
+    if (rows.isEmpty) return [];
+    final qtyFormat = NumberFormat('#,##0.##', 'en_US');
+    final moneyFormat = NumberFormat('#,##0.00', 'en_US');
+    return [
+      pw.Text(
+        'Ventas por oferta',
+        style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
+      ),
+      pw.SizedBox(height: 6),
+      pw.TableHelper.fromTextArray(
+        headers: const [
+          'Oferta',
+          'Tipo',
+          'Productos',
+          'Tickets',
+          'Descuento',
+          'Ventas netas',
+        ],
+        data: rows
+            .map(
+              (row) => [
+                row.name,
+                viewModel.offerTypeLabel(row.promoType),
+                qtyFormat.format(row.quantity),
+                row.tickets.toString(),
+                moneyFormat.format(row.discounts),
+                moneyFormat.format(row.netSales),
+              ],
+            )
+            .toList(growable: false),
+      ),
+    ];
   }
 
   static List<pw.Widget> _productSalesTable(List<ProductSalesReportRow> rows) {

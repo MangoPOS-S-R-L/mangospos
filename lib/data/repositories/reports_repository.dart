@@ -89,6 +89,210 @@ class ReportsRepository {
     return paymentRows;
   }
 
+  Map<String, dynamic> _emptyOffersSummary() => <String, dynamic>{
+        'offers_count': 0,
+        'total_quantity': 0.0,
+        'total_gross': 0.0,
+        'total_discounts': 0.0,
+        'total_net': 0.0,
+        'tickets_count': 0,
+        'offers': const <Map<String, dynamic>>[],
+      };
+
+  /// Resumen de "Ventas por oferta". Agrupa las líneas de venta con una
+  /// oferta/promoción atribuida (`order_items.promotion_id` — fuente de
+  /// verdad introducida en la migración 20260604_0001) y devuelve, por cada
+  /// oferta: cantidad de productos despachados, ventas brutas, descuento
+  /// otorgado, ventas netas y tickets.
+  ///
+  /// Scoping consistente con el reporte de ventas: solo cuenta líneas de
+  /// órdenes con pago COMPLETADO en el rango (las mismas que alimentan
+  /// `get_sales_summary_v2`), así los totales concilian. No requiere un RPC
+  /// nuevo: query directa PostgREST sobre el subconjunto pequeño de líneas
+  /// con oferta (sostenido por `idx_order_items_promotion_id`).
+  Future<Map<String, dynamic>> getOffersSummary({
+    required String businessId,
+    required DateTime from,
+    required DateTime to,
+  }) async {
+    final fromIso = AppTime.astToUtcIso(from);
+    final toIso = AppTime.astToUtcIso(to);
+
+    // 1. Órdenes con pago completado en el rango (revenue realizado). Misma
+    //    fuente que el resumen de ventas → los números concilian.
+    final paymentRows = await _loadScopedPaymentsForRange(
+      businessId: businessId,
+      from: from,
+      to: to,
+      select: 'order_id,status',
+    );
+    final paidOrderIds = <String>{};
+    for (final row in paymentRows) {
+      final status = row['status']?.toString();
+      // status null = legacy completado; cualquier valor != completed
+      // (void/cancelled) se descarta.
+      if (status != null && status != 'completed') continue;
+      final orderId = row['order_id']?.toString();
+      if (orderId != null && orderId.isNotEmpty) paidOrderIds.add(orderId);
+    }
+    if (paidOrderIds.isEmpty) return _emptyOffersSummary();
+
+    // 2. Líneas marcadas como oferta en `order_items.notes`. La atribución
+    //    de oferta vive como marcador de texto (fuente disponible en la base,
+    //    NO depende de una columna dedicada):
+    //      `[DEAL:<id>]`       → oferta/combo vendido desde el tile (id opcional)
+    //      `[PROMO_AUTO:<id>]` → promo automática aplicada a la línea
+    //    Dos queries `ilike` separadas (más confiables que un `.or` con
+    //    corchetes). business_id + created_at acotan antes del filtro de texto.
+    const itemSelect =
+        'id,order_id,notes,qty,quantity,subtotal,discounts,status';
+    Future<List<Map<String, dynamic>>> fetchMarked(String pattern) async {
+      return List<Map<String, dynamic>>.from(
+        await _client
+            .from('order_items')
+            .select(itemSelect)
+            .eq('business_id', businessId)
+            .neq('status', 'void')
+            .ilike('notes', pattern)
+            .gte('created_at', fromIso)
+            .lt('created_at', toIso)
+            .limit(50000),
+      );
+    }
+
+    final dealRows = await fetchMarked('%[DEAL:%');
+    final autoRows = await fetchMarked('%[PROMO_AUTO:%');
+    // Dedupe por id (un marcador excluye al otro, pero protegemos por si acaso).
+    final itemRows = <String, Map<String, dynamic>>{};
+    for (final row in [...dealRows, ...autoRows]) {
+      final id = row['id']?.toString();
+      if (id != null) itemRows[id] = row;
+    }
+    if (itemRows.isEmpty) return _emptyOffersSummary();
+
+    final dealMarker = RegExp(r'\[DEAL:([^\]]*)\]');
+    final autoMarker = RegExp(r'\[PROMO_AUTO:([^\]]*)\]');
+
+    // 3. Agregación por oferta, solo sobre líneas de órdenes pagadas.
+    final agg = <String, Map<String, dynamic>>{};
+    final paidTicketIds = <String>{};
+    final promotionIds = <String>{};
+    for (final row in itemRows.values) {
+      final orderId = row['order_id']?.toString();
+      if (orderId == null || !paidOrderIds.contains(orderId)) continue;
+      final notes = row['notes']?.toString() ?? '';
+
+      String? promoId;
+      var isDeal = false;
+      final dealMatch = dealMarker.firstMatch(notes);
+      if (dealMatch != null) {
+        isDeal = true;
+        promoId = dealMatch.group(1)?.trim();
+      } else {
+        final autoMatch = autoMarker.firstMatch(notes);
+        if (autoMatch != null) promoId = autoMatch.group(1)?.trim();
+      }
+
+      final hasId = promoId != null && promoId.isNotEmpty;
+      // Clave de agrupación: id de promoción si existe; si el DEAL no trae id,
+      // agrupamos los combos sin registrar bajo una clave sintética.
+      final key = hasId ? promoId : (isDeal ? '__deal__' : '__promo__');
+      if (hasId) promotionIds.add(promoId);
+
+      final qtyRaw = _toDouble(row['qty']);
+      final qty = qtyRaw != 0 ? qtyRaw : _toDouble(row['quantity']);
+      final subtotal = _toDouble(row['subtotal']);
+      final disc = _toDouble(row['discounts']);
+      // En líneas [DEAL:] el subtotal viene NETO (bruto - descuento); en el
+      // resto es bruto pre-descuento. Ver order_pricing_utils.dart §148.
+      final gross = isDeal ? subtotal + disc : subtotal;
+      final net = isDeal ? subtotal : subtotal - disc;
+
+      final bucket = agg.putIfAbsent(
+        key,
+        () => <String, dynamic>{
+          'is_deal': isDeal,
+          'quantity': 0.0,
+          'gross_sales': 0.0,
+          'discounts': 0.0,
+          'net_sales': 0.0,
+          'orders': <String>{},
+        },
+      );
+      bucket['quantity'] = (bucket['quantity'] as double) + qty;
+      bucket['gross_sales'] = (bucket['gross_sales'] as double) + gross;
+      bucket['discounts'] = (bucket['discounts'] as double) + disc;
+      bucket['net_sales'] = (bucket['net_sales'] as double) + net;
+      (bucket['orders'] as Set<String>).add(orderId);
+      paidTicketIds.add(orderId);
+    }
+    if (agg.isEmpty) return _emptyOffersSummary();
+
+    // 4. Metadatos (nombre/tipo) de las promociones con id.
+    final promoMeta = <String, Map<String, dynamic>>{};
+    if (promotionIds.isNotEmpty) {
+      final promoRows = await _selectInBatches(
+        table: 'promotions',
+        select: 'id,name,promo_type,discount_type',
+        column: 'id',
+        values: promotionIds.toList(growable: false),
+      );
+      for (final row in promoRows) {
+        final id = row['id']?.toString();
+        if (id != null) promoMeta[id] = row;
+      }
+    }
+
+    final offers = <Map<String, dynamic>>[];
+    var totalQuantity = 0.0;
+    var totalGross = 0.0;
+    var totalDiscounts = 0.0;
+    var totalNet = 0.0;
+    agg.forEach((key, bucket) {
+      final meta = promoMeta[key];
+      final qty = bucket['quantity'] as double;
+      final gross = bucket['gross_sales'] as double;
+      final disc = bucket['discounts'] as double;
+      final net = bucket['net_sales'] as double;
+      final tickets = (bucket['orders'] as Set<String>).length;
+      final isDeal = bucket['is_deal'] as bool;
+      totalQuantity += qty;
+      totalGross += gross;
+      totalDiscounts += disc;
+      totalNet += net;
+      final name = meta?['name']?.toString().trim();
+      final fallbackName = key == '__deal__'
+          ? 'Ofertas / combos'
+          : key == '__promo__'
+              ? 'Promoción automática'
+              : 'Oferta eliminada';
+      offers.add(<String, dynamic>{
+        'promotion_id': key.startsWith('__') ? '' : key,
+        'name': (name != null && name.isNotEmpty) ? name : fallbackName,
+        'promo_type':
+            meta?['promo_type']?.toString() ?? (isDeal ? 'bundle_price' : ''),
+        'discount_type': meta?['discount_type']?.toString() ?? '',
+        'quantity': qty,
+        'gross_sales': gross,
+        'discounts': disc,
+        'net_sales': net,
+        'tickets': tickets,
+      });
+    });
+    offers.sort((a, b) =>
+        (b['net_sales'] as double).compareTo(a['net_sales'] as double));
+
+    return <String, dynamic>{
+      'offers_count': offers.length,
+      'total_quantity': totalQuantity,
+      'total_gross': totalGross,
+      'total_discounts': totalDiscounts,
+      'total_net': totalNet,
+      'tickets_count': paidTicketIds.length,
+      'offers': offers,
+    };
+  }
+
   /// Resumen de ventas — usa RPC `get_sales_summary_v2` que agrega todo
   /// server-side en un solo round-trip. Antes hacía 8 queries
   /// secuenciales con LRM/voluntary-tip calculados en Dart; ahora

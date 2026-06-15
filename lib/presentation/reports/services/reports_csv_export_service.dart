@@ -185,6 +185,31 @@ class ReportsCsvExportService {
         addBreakdownSection('Ventas por zona', viewModel.getZoneRows());
         addBreakdownSection('Ventas por hora', viewModel.getHourlyRows());
         break;
+      case ReportCategory.offers:
+        addMetricSection(viewModel.getOffersMetricCards());
+        rows.add(['Ventas por oferta']);
+        rows.add([
+          'Oferta',
+          'Tipo',
+          'Productos despachados',
+          'Tickets',
+          'Ventas brutas',
+          'Descuento',
+          'Ventas netas',
+        ]);
+        for (final row in viewModel.getOfferSalesRows()) {
+          rows.add([
+            row.name,
+            viewModel.offerTypeLabel(row.promoType),
+            row.quantity.toStringAsFixed(2),
+            row.tickets.toString(),
+            row.grossSales.toStringAsFixed(2),
+            row.discounts.toStringAsFixed(2),
+            row.netSales.toStringAsFixed(2),
+          ]);
+        }
+        rows.add([]);
+        break;
       case ReportCategory.finances:
         addMetricSection(viewModel.getFinanceMetricCards());
         addBreakdownSection(

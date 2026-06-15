@@ -9,7 +9,7 @@ import '../../../core/utils/app_time.dart';
 import '../../../data/repositories/reports_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 
-enum ReportCategory { sales, purchases, finances, inventory, taxes, fiscal }
+enum ReportCategory { sales, offers, purchases, finances, inventory, taxes, fiscal }
 
 enum SalesReportRangePreset { today, yesterday, thisWeek, thisMonth, custom }
 
@@ -111,11 +111,34 @@ class ProductSalesReportRow {
   });
 }
 
+class OfferSalesReportRow {
+  final String promotionId;
+  final String name;
+  final String promoType;
+  final double quantity;
+  final double grossSales;
+  final double discounts;
+  final double netSales;
+  final int tickets;
+
+  const OfferSalesReportRow({
+    required this.promotionId,
+    required this.name,
+    required this.promoType,
+    required this.quantity,
+    required this.grossSales,
+    required this.discounts,
+    required this.netSales,
+    required this.tickets,
+  });
+}
+
 class ReportsState {
   final ReportCategory? selectedCategory;
   final bool loading;
   final String? error;
   final Map<String, dynamic>? salesSummary;
+  final Map<String, dynamic>? offersSummary;
   final Map<String, dynamic>? cashSummary;
   final Map<String, dynamic>? purchasesSummary;
   final Map<String, dynamic>? inventorySummary;
@@ -141,6 +164,7 @@ class ReportsState {
     this.loading = false,
     this.error,
     this.salesSummary,
+    this.offersSummary,
     this.cashSummary,
     this.purchasesSummary,
     this.inventorySummary,
@@ -175,6 +199,7 @@ class ReportsState {
     bool? loading,
     String? error,
     Map<String, dynamic>? salesSummary,
+    Map<String, dynamic>? offersSummary,
     Map<String, dynamic>? cashSummary,
     Map<String, dynamic>? purchasesSummary,
     Map<String, dynamic>? inventorySummary,
@@ -202,6 +227,7 @@ class ReportsState {
       loading: loading ?? this.loading,
       error: clearError ? null : (error ?? this.error),
       salesSummary: salesSummary ?? this.salesSummary,
+      offersSummary: offersSummary ?? this.offersSummary,
       cashSummary: cashSummary ?? this.cashSummary,
       purchasesSummary: purchasesSummary ?? this.purchasesSummary,
       inventorySummary: inventorySummary ?? this.inventorySummary,
@@ -363,6 +389,11 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
             productProjection: projection,
             fiscalSummary: fiscal ?? state.fiscalSummary,
           );
+        case ReportCategory.offers:
+          final summary = await _repository.getOffersSummary(
+            businessId: businessId, from: from, to: to);
+          if (myToken != _loadToken) return;
+          state = state.copyWith(offersSummary: summary);
         case ReportCategory.finances:
           final summary = await _repository.getCashSummary(
             businessId: businessId, from: from, to: to);
@@ -597,6 +628,29 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
           ReportItem(
             title: 'Items vendidos',
             description: 'Items cobrados en el rango: ${numberFormat.format(itemsSold)}',
+          ),
+        ];
+      case ReportCategory.offers:
+        final offersCount =
+            (state.offersSummary?['offers_count'] as num?)?.toInt() ?? 0;
+        final totalNet =
+            (state.offersSummary?['total_net'] as num?)?.toDouble() ?? 0;
+        final totalQty =
+            (state.offersSummary?['total_quantity'] as num?)?.toDouble() ?? 0;
+        final totalDiscounts =
+            (state.offersSummary?['total_discounts'] as num?)?.toDouble() ?? 0;
+        final currency = state.currency.formatter;
+        final numberFormat = NumberFormat('#,##0', 'en_US');
+        return [
+          ReportItem(
+            title: 'Ventas por oferta',
+            description:
+                'Ofertas con ventas: ${numberFormat.format(offersCount)} | Ventas netas: ${currency.format(totalNet)}',
+          ),
+          ReportItem(
+            title: 'Productos y descuentos',
+            description:
+                'Productos despachados: ${numberFormat.format(totalQty)} | Descuento otorgado: ${currency.format(totalDiscounts)}',
           ),
         ];
       case ReportCategory.purchases:
@@ -1021,6 +1075,85 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
           ),
         )
         .toList(growable: false);
+  }
+
+  /// Etiqueta legible del tipo de oferta (`promotions.promo_type`).
+  String offerTypeLabel(String promoType) {
+    switch (promoType) {
+      case 'percentage':
+        return 'Porcentaje';
+      case 'fixed':
+        return 'Monto fijo';
+      case 'bogo':
+        return 'BOGO / 2x1';
+      case 'bundle_price':
+        return 'Combo';
+      default:
+        return promoType.isEmpty ? 'Oferta' : promoType;
+    }
+  }
+
+  List<OfferSalesReportRow> getOfferSalesRows() {
+    final rows = (state.offersSummary?['offers'] as List?) ?? const [];
+    return rows
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .map(
+          (row) => OfferSalesReportRow(
+            promotionId: row['promotion_id']?.toString() ?? '',
+            name: row['name']?.toString() ?? 'Oferta',
+            promoType: row['promo_type']?.toString() ?? '',
+            quantity: (row['quantity'] as num?)?.toDouble() ?? 0,
+            grossSales: (row['gross_sales'] as num?)?.toDouble() ?? 0,
+            discounts: (row['discounts'] as num?)?.toDouble() ?? 0,
+            netSales: (row['net_sales'] as num?)?.toDouble() ?? 0,
+            tickets: (row['tickets'] as num?)?.toInt() ?? 0,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  List<SalesMetricCardData> getOffersMetricCards() {
+    final summary = state.offersSummary ?? const <String, dynamic>{};
+    final totalNet = (summary['total_net'] as num?)?.toDouble() ?? 0;
+    final totalQuantity = (summary['total_quantity'] as num?)?.toDouble() ?? 0;
+    final totalDiscounts = (summary['total_discounts'] as num?)?.toDouble() ?? 0;
+    final offersCount = (summary['offers_count'] as num?)?.toInt() ?? 0;
+    final ticketsCount = (summary['tickets_count'] as num?)?.toInt() ?? 0;
+
+    final currency = state.currency.formatter;
+    final numberFormat = NumberFormat('#,##0', 'en_US');
+    final decimalFormat = NumberFormat('#,##0.##', 'en_US');
+
+    return [
+      SalesMetricCardData(
+        title: 'Ventas por ofertas',
+        value: currency.format(totalNet),
+        subtitle: 'Ventas netas atribuidas a ofertas en el rango',
+        icon: Icons.local_offer_outlined,
+        color: const Color(0xFFD946A6),
+      ),
+      SalesMetricCardData(
+        title: 'Productos despachados',
+        value: decimalFormat.format(totalQuantity),
+        subtitle: 'Cantidad de productos que salieron con oferta',
+        icon: Icons.inventory_2_outlined,
+        color: const Color(0xFF059669),
+      ),
+      SalesMetricCardData(
+        title: 'Descuento otorgado',
+        value: currency.format(totalDiscounts),
+        subtitle: 'Total descontado por las ofertas aplicadas',
+        icon: Icons.percent_outlined,
+        color: const Color(0xFFDC2626),
+      ),
+      SalesMetricCardData(
+        title: 'Ofertas con ventas',
+        value: numberFormat.format(offersCount),
+        subtitle: '$ticketsCount tickets incluyeron una oferta',
+        icon: Icons.sell_outlined,
+        color: const Color(0xFF2563EB),
+      ),
+    ];
   }
 
   String breakdownFilterLabel(SalesBreakdownFilter filter) {
@@ -1613,6 +1746,8 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
     switch (category) {
       case ReportCategory.sales:
         return 'Informe de ventas';
+      case ReportCategory.offers:
+        return 'Ventas por oferta';
       case ReportCategory.purchases:
         return 'Informe de compras';
       case ReportCategory.finances:
@@ -1630,6 +1765,8 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
     switch (category) {
       case ReportCategory.sales:
         return Icons.point_of_sale;
+      case ReportCategory.offers:
+        return Icons.local_offer;
       case ReportCategory.purchases:
         return Icons.shopping_cart;
       case ReportCategory.finances:
