@@ -53,3 +53,8 @@ sparkle_keys/
 /Osintgram/
 /SoIG/
 /sherlock/
+
+# Worktrees de git (repos embebidos): NO versionar dentro del repo. Crear un
+# worktree aquí (ej. .claude/worktrees/<rama>) y hacer `git add .` lo metía
+# como gitlink, rompiendo los clones del equipo.
+.claude/worktrees/
