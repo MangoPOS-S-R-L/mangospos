@@ -107,7 +107,13 @@
       "Bash(awk -F: '$1>=8380 && $1<=8480')",
       "Bash(git -C /Users/cristiangomez/dev/mangospos status)",
       "Bash(git -C /Users/cristiangomez/dev/mangospos branch -vv)",
-      "Bash(git -C /Users/cristiangomez/dev/mangospos worktree list)"
+      "Bash(git -C /Users/cristiangomez/dev/mangospos worktree list)",
+      "Bash(grep -E \"\\\\.\\(dart\\)$\")",
+      "Bash(grep -n \"menu_items.*FOREIGN KEY\\\\|categories.*FOREIGN KEY\" /Users/constantingomez/dev/mangospos/supabase/schema.sql 2>/dev/null || grep -n \"ADD CONSTRAINT.*menu_items\\\\|ADD CONSTRAINT.*categories\" /Users/cristiangomez/dev/mangospos/supabase/schema.sql | head -30)",
+      "Read(//Users/constantingomez/dev/mangospos/supabase/**)",
+      "Bash(curl -s --max-time 20 'https://supabase.mangopos.do/rest/v1/businesses?id=eq.__TRACKED_VAR__&select=id,name,currency,tax_mode' -H 'apikey: __TRACKED_VAR__' -H 'Authorization: Bearer __TRACKED_VAR__')",
+      "Bash(curl -s --max-time 20 'https://supabase.mangopos.do/rest/v1/categories?business_id=eq.__TRACKED_VAR__&select=id,name' -H 'apikey: __TRACKED_VAR__' -H 'Authorization: Bearer __TRACKED_VAR__')",
+      "Bash(curl -s --max-time 20 'https://supabase.mangopos.do/rest/v1/menu_items?business_id=eq.__TRACKED_VAR__&select=id' -H 'apikey: __TRACKED_VAR__' -H 'Authorization: Bearer __TRACKED_VAR__' -H 'Prefer: count=exact' -I)"
     ],
     "additionalDirectories": [
       "/tmp"
