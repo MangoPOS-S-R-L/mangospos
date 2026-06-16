@@ -32,6 +32,12 @@ class CashClosePrintService {
         ? await _loadSalesByAreaIfEnabled(sessionId)
         : const <Map<String, dynamic>>[];
 
+    // Desglose por producto dentro de cada área (toggle aparte). Mismo
+    // best-effort: si falla o está off, no aparece la sección.
+    final productsByArea = sessionId != null && sessionId.isNotEmpty
+        ? await _loadProductsByAreaIfEnabled(sessionId)
+        : const <Map<String, dynamic>>[];
+
     final bytes = _buildEscPos(
       input: input,
       result: result,
@@ -39,6 +45,7 @@ class CashClosePrintService {
       printedAt: printedAt,
       recountCount: recountCount,
       salesByArea: salesByArea,
+      productsByArea: productsByArea,
     );
 
     await _printThermalOrThrow(bytes, cashRegisterId: cashRegisterId);
@@ -90,6 +97,47 @@ class CashClosePrintService {
     }
   }
 
+  /// Lee el toggle `cash_close_print_products_by_area`; si está activo, trae el
+  /// desglose por área → productos (cantidad en unidades) de la ventana de la
+  /// sesión vía la RPC `get_products_by_production_area`. Devuelve `[]` si el
+  /// toggle está off o ante cualquier error (no rompe el cierre).
+  Future<List<Map<String, dynamic>>> _loadProductsByAreaIfEnabled(
+    String sessionId,
+  ) async {
+    try {
+      final businessId = await resolveBusinessIdOrNull(_client, 'auto');
+      if (businessId == null) return const [];
+      final enabled = await PosSettingsRepository(_client)
+          .getCashClosePrintProductsByArea(businessId);
+      if (!enabled) return const [];
+
+      final session = await _client
+          .from('cash_register_sessions')
+          .select('opened_at, closed_at')
+          .eq('id', sessionId)
+          .maybeSingle();
+      final openedAt = session?['opened_at']?.toString();
+      if (openedAt == null || openedAt.isEmpty) return const [];
+      final closedAt = (session?['closed_at']?.toString().isNotEmpty == true)
+          ? session!['closed_at'].toString()
+          : DateTime.now().toUtc().toIso8601String();
+
+      final resp = await _client.rpc('get_products_by_production_area', params: {
+        '_business_id': businessId,
+        '_from': openedAt,
+        '_to': closedAt,
+      });
+      if (resp is! List) return const [];
+      return resp
+          .whereType<Object?>()
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList(growable: false);
+    } catch (e) {
+      debugPrint('[CashClosePrint] desglose productos por área falló: $e');
+      return const [];
+    }
+  }
+
   List<int> _buildEscPos({
     required CashCloseInput input,
     required CashCloseResult result,
@@ -97,6 +145,7 @@ class CashClosePrintService {
     required DateTime printedAt,
     int recountCount = 0,
     List<Map<String, dynamic>> salesByArea = const [],
+    List<Map<String, dynamic>> productsByArea = const [],
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
     gen.initialize();
@@ -204,6 +253,9 @@ class CashClosePrintService {
     // Desglose de ventas por área de producción (toggle por negocio). Va
     // tras los movimientos y antes de los datos del cajero/firma.
     _renderSalesByAreaSection(gen, salesByArea);
+
+    // Desglose por área → cada producto con su cantidad (toggle aparte).
+    _renderProductsByAreaSection(gen, productsByArea);
 
     gen.text('Cajero: ${input.cashierName}');
     gen.text(
@@ -357,6 +409,50 @@ class CashClosePrintService {
     gen.setBold(true);
     gen.textRow('Total areas', formatRD(total));
     gen.setBold(false);
+    gen.doubleSeparator();
+  }
+
+  /// Desglose por área de producción → cada producto con su cantidad
+  /// (unidades) en el periodo de la sesión. Cada área es un subtítulo y debajo
+  /// van sus productos. Se omite por completo si la lista está vacía (toggle
+  /// off o sin ventas con área en el periodo).
+  void _renderProductsByAreaSection(
+    EscPosGenerator gen,
+    List<Map<String, dynamic>> productsByArea,
+  ) {
+    if (productsByArea.isEmpty) return;
+    gen.setBold(true);
+    gen.text('DESGLOSE POR AREA DE PRODUCCION');
+    gen.setBold(false);
+
+    for (final area in productsByArea) {
+      final products = area['products'];
+      if (products is! List || products.isEmpty) continue;
+
+      final label = (area['label']?.toString().trim().isNotEmpty == true)
+          ? area['label'].toString().trim()
+          : 'Sin area';
+
+      gen.separator();
+      gen.setBold(true);
+      gen.text(label);
+      gen.setBold(false);
+
+      for (final raw in products) {
+        if (raw is! Map) continue;
+        final p = Map<String, dynamic>.from(raw);
+        final name = (p['product']?.toString().trim().isNotEmpty == true)
+            ? p['product'].toString().trim()
+            : '—';
+        final qty = (p['quantity'] as num?)?.toDouble() ?? 0;
+        final qtyLabel = qty == qty.roundToDouble()
+            ? qty.toStringAsFixed(0)
+            : qty.toStringAsFixed(2);
+        // Nombre acotado a 28 chars para no romper el papel de 80mm.
+        final shortName = name.length > 28 ? '${name.substring(0, 25)}...' : name;
+        gen.textRow(shortName, '$qtyLabel unidades');
+      }
+    }
     gen.doubleSeparator();
   }
 }
