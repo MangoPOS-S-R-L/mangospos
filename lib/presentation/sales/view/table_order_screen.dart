@@ -4829,6 +4829,15 @@ class _CartView extends ConsumerWidget {
           usdSettings = null;
         }
 
+        // Modelo de factura (estándar vs compacto) elegido en ajustes.
+        bool invoiceCompact = false;
+        try {
+          invoiceCompact = (await ref
+                  .read(posSettingsRepositoryProvider)
+                  .getInvoiceTemplate(businessId)) ==
+              PosSettingsRepository.invoiceTemplateCompact;
+        } catch (_) {}
+
         // PRD F2: si algún payment fue por transferencia con cuenta
         // bancaria asignada, cargar el mapa para que el ticket muestre
         // banco/titular debajo de la línea de pago. Si no hay
@@ -4877,6 +4886,7 @@ class _CartView extends ConsumerWidget {
                 footerBlocks: profileForPrint.profile?.effectiveFooterBlocks,
                 bankAccountsByPaymentId: bankAccountsByPaymentId,
                 discountDisplayMode: discountDisplayMode,
+                compact: invoiceCompact,
                 openCashDrawer: shouldOpenDrawer,
               )
             : PrintTicketService.generatePrecheck(
@@ -4897,6 +4907,7 @@ class _CartView extends ConsumerWidget {
                 receiptItemDisplayMode: receiptItemDisplayMode,
                 taxBreakdown: printTaxBreakdown,
                 discountDisplayMode: discountDisplayMode,
+                compact: invoiceCompact,
               );
       }
 

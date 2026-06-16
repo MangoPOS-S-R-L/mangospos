@@ -91,17 +91,18 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
       });
     }
 
-    final activeOrders = _activeOrders(vm.visibleActiveItems, vm.dismissedOrders);
+    final activeOrders = _activeOrders(
+      vm.visibleActiveItems,
+      vm.completeOnPayment,
+    );
     final queueItems = activeOrders.fold<int>(
       0,
       (sum, o) => sum + o.items.where((i) => i.status != 'ready').length,
     );
-    final ready = vm.readyItems;
-    final completedToday = ready.where((i) {
-      final d = i.readyAt ?? i.createdAt;
-      final now = DateTime.now();
-      return d.year == now.year && d.month == now.month && d.day == now.day;
-    }).length;
+    // "Completados Hoy" sale de la cocina (ready_at de hoy), no del tablero
+    // vivo: así sigue contando aunque la comanda ya se haya pagado/despachado.
+    final completedTodayItems = vm.completedTodayItems;
+    final completedToday = _groupOrdersFromItems(completedTodayItems).length;
 
     final isMobile = ResponsiveHelper.isMobile(context);
     final padding = isMobile ? 12.0 : 24.0;
@@ -119,7 +120,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
               activeCount: activeOrders.length,
               queueItems: queueItems,
               completedToday: completedToday,
-              readyItems: ready,
+              completedItems: completedTodayItems,
             ),
             SizedBox(height: isMobile ? 12 : 18),
             Expanded(
@@ -147,14 +148,18 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
   // TABLERO
   // ============================================================
 
-  /// Agrupa los ítems activos por orden. Una comanda permanece en el tablero
-  /// mientras tenga trabajo (pending/preparing) o esté lista pero sin
-  /// despachar; los ítems ya listos se muestran tachados al fondo para dar
-  /// contexto. Solo sale del tablero al despacharla ("Marcar todo listo"),
-  /// que la agrega a [dismissed].
+  /// Agrupa los ítems activos por orden.
+  ///
+  /// - Modo "sale al pagar" ([completeOnPayment] true): solo se muestran las
+  ///   comandas con trabajo pendiente (pending/preparing). Al cocinarlas o
+  ///   pagarlas salen solas del tablero.
+  /// - Modo "esperar al cocinero" ([completeOnPayment] false): la fuente ya es
+  ///   `kds_open_orders` (órdenes sin sello de cocina), así que se muestran
+  ///   TODAS — incluso pagadas — hasta que el cocinero presione "Marcar todo
+  ///   listo".
   List<KitchenOrder> _activeOrders(
     List<KitchenItem> items,
-    Set<String> dismissed,
+    bool completeOnPayment,
   ) {
     final map = <String, List<KitchenItem>>{};
     for (final item in items) {
@@ -167,8 +172,9 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
       final hasOpen = list.any(
         (i) => i.status == 'pending' || i.status == 'preparing',
       );
-      // Sin trabajo pendiente y ya despachada → fuera del tablero.
-      if (!hasOpen && dismissed.contains(entry.key)) continue;
+      // En modo "sale al pagar", una comanda sin trabajo pendiente ya está
+      // cocinada/pagada → fuera del tablero.
+      if (completeOnPayment && !hasOpen) continue;
 
       // No-listos primero; dentro de cada grupo, por antigüedad.
       list.sort((a, b) {
@@ -460,7 +466,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
     required int activeCount,
     required int queueItems,
     required int completedToday,
-    required List<KitchenItem> readyItems,
+    required List<KitchenItem> completedItems,
   }) {
     final isMobile = ResponsiveHelper.isMobile(context);
     final gap = isMobile ? 8.0 : 16.0;
@@ -490,7 +496,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
             icon: Icons.check_circle_outline,
             title: completedToday.toString(),
             subtitle: isMobile ? 'Hoy' : 'Completados Hoy',
-            onTap: () => _showCompletedTodayDialog(context, readyItems),
+            onTap: () => _showCompletedTodayDialog(context, completedItems),
           ),
         ),
       ],
@@ -564,14 +570,13 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
     );
   }
 
-  void _showCompletedTodayDialog(BuildContext context, List<KitchenItem> ready) {
-    final now = DateTime.now();
-    final completedTodayItems = ready.where((i) {
-      final d = i.readyAt ?? i.createdAt;
-      return d.year == now.year && d.month == now.month && d.day == now.day;
-    }).toList(growable: false);
-
-    final orders = _groupOrdersFromItems(completedTodayItems);
+  void _showCompletedTodayDialog(
+    BuildContext context,
+    List<KitchenItem> completedItems,
+  ) {
+    // `completedItems` ya viene acotado a "hoy" por la vista kds_completed_today
+    // (día local de RD), así que solo agrupamos por comanda.
+    final orders = _groupOrdersFromItems(completedItems);
 
     showDialog(
       context: context,

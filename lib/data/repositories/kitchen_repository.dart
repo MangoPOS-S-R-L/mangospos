@@ -45,6 +45,81 @@ class KitchenRepository {
     }
   }
 
+  /// Ítems del KDS en modo "esperar al cocinero" (kds_complete_on_payment =
+  /// false). Trae los ítems de órdenes cuya cocina NO está terminada
+  /// (`orders.kitchen_done_at IS NULL`), INCLUIDOS los ya pagados, vía la vista
+  /// `kds_open_orders`. Así una orden pagada sigue visible hasta que el
+  /// cocinero la marque. Misma forma de columnas que `getActiveItems`.
+  Future<List<KitchenItem>> getOpenItems({
+    String? businessId,
+    String? areaCode,
+  }) async {
+    try {
+      const selectColumns =
+          'id,order_id,order_number,product_name,quantity,notes,status,created_at,started_at,ready_at,table_name,waiter_name,business_id,area_code,area_name,is_takeout';
+      var query = _client.from('kds_open_orders').select(selectColumns);
+      if (businessId != null && businessId.isNotEmpty) {
+        query = query.eq('business_id', businessId);
+      }
+      if (areaCode != null && areaCode.isNotEmpty) {
+        query = query.eq('area_code', areaCode);
+      }
+      final data = await query;
+      final items = List<Map<String, dynamic>>.from(data)
+          .map(KitchenItem.fromMap)
+          .toList()
+        ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      return items;
+    } catch (e) {
+      throw Exception('Error al obtener items de cocina (abiertas): $e');
+    }
+  }
+
+  /// Ítems que la cocina TERMINÓ HOY (`order_items.ready_at` de hoy), vía la
+  /// vista `kds_completed_today`. Independiente del estado vivo del tablero:
+  /// sobrevive al pago y al despacho, así que alimenta el stat/diálogo
+  /// "Completados Hoy" de forma confiable en ambos modos. Devuelve `[]` ante
+  /// cualquier error (el stat es opcional, no debe romper la pantalla).
+  Future<List<KitchenItem>> getCompletedTodayItems({String? businessId}) async {
+    try {
+      const selectColumns =
+          'id,order_id,order_number,product_name,quantity,notes,status,created_at,started_at,ready_at,table_name,waiter_name,business_id,area_code,area_name,is_takeout';
+      var query = _client.from('kds_completed_today').select(selectColumns);
+      if (businessId != null && businessId.isNotEmpty) {
+        query = query.eq('business_id', businessId);
+      }
+      final data = await query;
+      return List<Map<String, dynamic>>.from(data)
+          .map(KitchenItem.fromMap)
+          .toList(growable: false);
+    } catch (e) {
+      return const [];
+    }
+  }
+
+  /// Sella la cocina de una orden como terminada: la saca del KDS en modo
+  /// "esperar al cocinero" (`kitchen_done_at`). También sella `ready_at` en los
+  /// ítems que no lo tengan —SIN tocar su `status` (p. ej. ítems ya 'paid')—
+  /// para dejar registrado cuándo la cocina los completó. No afecta el pago.
+  Future<void> markOrderKitchenDone(String orderId) async {
+    final now = DateTime.now().toIso8601String();
+    try {
+      await _client
+          .from('order_items')
+          .update({'ready_at': now})
+          .eq('order_id', orderId)
+          .isFilter('ready_at', null)
+          .neq('status', 'void');
+    } catch (_) {
+      // El sello por-ítem es best-effort; lo importante es la orden.
+    }
+    await _client
+        .from('orders')
+        .update({'kitchen_done_at': now})
+        .eq('id', orderId)
+        .isFilter('kitchen_done_at', null);
+  }
+
   /// Obtener órdenes agrupadas
   Future<List<KitchenOrder>> getActiveOrders({
     String? businessId,

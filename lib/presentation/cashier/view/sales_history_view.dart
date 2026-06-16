@@ -928,6 +928,10 @@ mixin _PaymentActionsMixin {
       final discountDisplayMode = await ref
           .read(posSettingsRepositoryProvider)
           .getDiscountDisplayMode(businessId);
+      final invoiceCompact = (await ref
+              .read(posSettingsRepositoryProvider)
+              .getInvoiceTemplate(businessId)) ==
+          PosSettingsRepository.invoiceTemplateCompact;
 
       // Build per-tax breakdown for the reprint receipt
       final reprintTaxBreakdown = <({String label, double amount})>[];
@@ -1080,6 +1084,7 @@ mixin _PaymentActionsMixin {
         ecfSecurityCode: ecfSecurityCode,
         ecfSignedAt: ecfSignedAt,
         discountDisplayMode: discountDisplayMode,
+        compact: invoiceCompact,
       );
 
       await printRepo.printEscPos(

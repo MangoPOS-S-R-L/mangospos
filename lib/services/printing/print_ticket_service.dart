@@ -403,6 +403,11 @@ class PrintTicketService {
     /// la semántica completa de `'pre_discount'` vs `'post_discount'`.
     /// Default `'pre_discount'` (comportamiento histórico).
     String discountDisplayMode = 'pre_discount',
+    /// Modelo compacto (mismo setting `invoice_print_template` que la factura):
+    /// ítems detallados pero apretados, sin asteriscos en el título y con
+    /// espaciado mínimo. La pre-cuenta sigue el mismo modo elegido por el
+    /// negocio.
+    bool compact = false,
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
     final consolidatedItems = _buildPrintableItems(
@@ -411,7 +416,14 @@ class PrintTicketService {
     );
 
     gen.initialize();
-    gen.lineFeed(2);
+
+    // En compacto se omiten los saltos en blanco decorativos (los separadores
+    // se conservan) para que la pre-cuenta salga tan apretada como la factura.
+    void gap([int n = 1]) {
+      if (!compact) gen.lineFeed(n);
+    }
+
+    gen.lineFeed(compact ? 1 : 2);
 
     // ════════════════════════════════════════════
     // HEADER (mismo orden/visibilidad que la factura)
@@ -430,22 +442,25 @@ class PrintTicketService {
       rnc: businessRnc,
     );
 
-    gen.lineFeed();
-    _thinSeparator(gen);
-    gen.lineFeed();
+    if (!compact) {
+      gen.lineFeed();
+      _thinSeparator(gen);
+      gen.lineFeed();
+    }
 
     // ════════════════════════════════════════════
-    // TÍTULO DEL DOCUMENTO
+    // TÍTULO DEL DOCUMENTO (en compacto sin asteriscos: "*** X ***" → "X")
     // ════════════════════════════════════════════
+    final displayTitle = compact ? title.replaceAll('*', '').trim() : title;
     gen.setTextSize(width: 2, height: 2);
     gen.setBold(true);
-    gen.textCentered(title);
+    gen.textCentered(displayTitle);
     gen.setBold(false);
     gen.setTextSize();
 
-    gen.lineFeed();
+    gap();
     _thickSeparator(gen);
-    gen.lineFeed();
+    gap();
 
     // ════════════════════════════════════════════
     // INFORMACIÓN DE LA ORDEN
@@ -476,17 +491,20 @@ class PrintTicketService {
       gen.textRow('CLIENTE:', trimmedCustomer);
     }
 
-    gen.lineFeed();
+    gap();
     _thinSeparator(gen);
 
     // ════════════════════════════════════════════
     // ITEMS - PRODUCTOS (SIN QTY)
     // ════════════════════════════════════════════
     gen.setBold(true);
-    gen.textRow('DESCRIPCIÓN', 'TOTAL');
+    gen.textRow(
+      compact ? 'Cant. Descripción' : 'DESCRIPCIÓN',
+      compact ? 'Precio' : 'TOTAL',
+    );
     gen.setBold(false);
     _thinSeparator(gen);
-    gen.lineFeed(); // línea en blanco debajo del encabezado
+    gap(); // línea en blanco debajo del encabezado
 
     for (int i = 0; i < consolidatedItems.length; i++) {
       final item = consolidatedItems[i];
@@ -496,54 +514,78 @@ class PrintTicketService {
       // incluye base + modifiers para que cuadre con SUBTOTAL.
       final baseUnitPrice = item.unitPrice;
 
-      // Nombre del producto en negrita
-      gen.setBold(true);
-      gen.text(item.productName);
-      gen.setBold(false);
-
-      // Cantidad x precio unitario base ......... TOTAL CON MODIFICADORES
+      // Impuestos por item: NO se muestran aquí (solo consolidados en TOTALES);
+      // el snapshot en `order_item_tax_lines` se mantiene para la factura.
       final displayQty = _formatQty(item.quantity);
+      final cleanNote = cleanOrderItemNote(item.notes);
+      final baseTotal = itemDisplayBaseTotal(order, item);
 
-      final leftPart = '$displayQty x RD\$ ${_formatMoney(baseUnitPrice)}';
-      final rightPart = 'RD\$ ${_formatMoney(itemDisplayBaseTotal(order, item))}';
-      gen.dotRow(leftPart, rightPart);
-
-      // Indicador para llevar (takeout)
-      if (item.isTakeout) {
-        gen.setBold(true);
-        gen.text('  [PARA LLEVAR]');
-        gen.setBold(false);
-      }
-
-      // Modificadores con indentación
-      if (item.modifiers.isNotEmpty) {
+      if (compact) {
+        // Una sola línea: "1x Nombre …………… total" (sin "#"). Modificadores
+        // (con precio) y nota indentados debajo; un renglón en blanco separa
+        // cada ítem.
+        gen.dotRow(
+          '${displayQty}x ${item.productName}',
+          'RD\$ ${_formatMoney(baseTotal)}',
+        );
+        if (item.isTakeout) {
+          gen.setBold(true);
+          gen.text('   [PARA LLEVAR]');
+          gen.setBold(false);
+        }
         for (final mod in item.modifiers) {
           final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
           final modTotal = mod.price * itemQty * mod.qty;
-          final priceSuffix = modTotal > 0
-              ? ' (+RD\$ ${_formatMoney(modTotal)})'
-              : '';
-          gen.text('  + ${mod.name}$priceSuffix');
+          gen.dotRow(
+            '   Modificador: ${mod.name}',
+            'RD\$ ${_formatMoney(modTotal)}',
+          );
         }
-      }
-
-      // Desglose de impuestos por item: REMOVIDO por preferencia del
-      // cliente — los impuestos solo se muestran consolidados en la
-      // sección TOTALES al final del ticket. El snapshot persistido en
-      // `order_item_tax_lines` se sigue manteniendo para la factura
-      // fiscal y el sumatorio del bloque TOTALES.
-
-      // Notas especiales destacadas
-      final cleanNote = cleanOrderItemNote(item.notes);
-      if (cleanNote.isNotEmpty) {
+        if (cleanNote.isNotEmpty) {
+          gen.text('   NOTA: $cleanNote');
+        }
+        gen.lineFeed(); // espacio entre ítems
+      } else {
+        // Nombre del producto en negrita
         gen.setBold(true);
-        gen.text('  NOTA: $cleanNote');
+        gen.text(item.productName);
         gen.setBold(false);
-      }
 
-      // Espacio ligero entre items
-      if (i < consolidatedItems.length - 1) {
-        gen.lineFeed();
+        // Cantidad x precio unitario base ......... TOTAL CON MODIFICADORES
+        final leftPart = '$displayQty x RD\$ ${_formatMoney(baseUnitPrice)}';
+        final rightPart = 'RD\$ ${_formatMoney(baseTotal)}';
+        gen.dotRow(leftPart, rightPart);
+
+        // Indicador para llevar (takeout)
+        if (item.isTakeout) {
+          gen.setBold(true);
+          gen.text('  [PARA LLEVAR]');
+          gen.setBold(false);
+        }
+
+        // Modificadores con indentación
+        if (item.modifiers.isNotEmpty) {
+          for (final mod in item.modifiers) {
+            final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
+            final modTotal = mod.price * itemQty * mod.qty;
+            final priceSuffix = modTotal > 0
+                ? ' (+RD\$ ${_formatMoney(modTotal)})'
+                : '';
+            gen.text('  + ${mod.name}$priceSuffix');
+          }
+        }
+
+        // Notas especiales destacadas
+        if (cleanNote.isNotEmpty) {
+          gen.setBold(true);
+          gen.text('  NOTA: $cleanNote');
+          gen.setBold(false);
+        }
+
+        // Espacio ligero entre items
+        if (i < consolidatedItems.length - 1) {
+          gen.lineFeed();
+        }
       }
     }
 
@@ -552,7 +594,7 @@ class PrintTicketService {
     // ════════════════════════════════════════════
     // TOTALES
     // ════════════════════════════════════════════
-    gen.lineFeed();
+    gap();
 
     // Totales salen de los items ORIGINALES (no consolidados) para que el
     // subtotal absorba el centavo de redondeo por-item y coincida exactamente
@@ -647,18 +689,20 @@ class PrintTicketService {
       }
     }
 
-    gen.lineFeed();
+    gap();
     _thickSeparator(gen);
-    gen.lineFeed();
+    gap();
 
     // ════════════════════════════════════════════
     // TOTAL FINAL - Tamaño grande
     // ════════════════════════════════════════════
+    if (compact) gen.lineFeed(); // espacio (reducido) arriba del TOTAL
     gen.setBold(true);
     gen.setTextSize(width: 2, height: 2);
     gen.textRow('TOTAL:', 'RD\$ ${_formatMoney(printableGrandTotal)}');
     gen.setTextSize();
     gen.setBold(false);
+    if (compact) gen.lineFeed(); // espacio (reducido) abajo del TOTAL
 
     // Post-discount mode: descuento como nota informativa debajo del
     // total grande, no como línea sustractiva.
@@ -712,7 +756,7 @@ class PrintTicketService {
     gen.textCentered('Por favor verifique los datos');
     gen.textCentered('antes de proceder al pago');
 
-    gen.lineFeed(4);
+    gen.lineFeed(compact ? 2 : 4);
     gen.cut();
 
     return PrintTicket(type: 'precheck', escPosCommands: gen.getCommands());
@@ -807,11 +851,26 @@ class PrintTicketService {
     /// business tiene `open_drawer_on_cash = true`. Si la impresora no
     /// tiene gaveta RJ-11 conectada, el comando se ignora silenciosamente.
     bool openCashDrawer = false,
+    /// Modelo COMPACTO: cada ítem en una sola línea ("2x Nombre …… 500.00"),
+    /// sin la línea de precio unitario ni el nombre en renglón aparte, TOTAL en
+    /// tamaño normal (no 2x) y sin saltos entre ítems. Mantiene todos los datos fiscales
+    /// (NCF/e-NCF, RNC, desglose de impuestos, QR). Pensado para cuentas con
+    /// muchos productos. Conserva los datos fiscales completos (NCF/e-NCF, RNC,
+    /// desglose de impuestos, QR). Lo elige el negocio en ajustes de impresión.
+    bool compact = false,
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
 
     gen.initialize();
-    gen.lineFeed(2);
+
+    // En el modelo compacto, los saltos en blanco puramente decorativos se
+    // omiten (las líneas separadoras se conservan, pero sin espacio alrededor)
+    // para que el ticket salga tan apretado como un recibo simple.
+    void gap([int n = 1]) {
+      if (!compact) gen.lineFeed(n);
+    }
+
+    gen.lineFeed(compact ? 1 : 2);
 
     _renderHeaderBlocks(
       gen,
@@ -827,20 +886,24 @@ class PrintTicketService {
       rnc: businessRnc,
     );
 
-    gen.lineFeed();
-    _thinSeparator(gen);
-    gen.lineFeed();
+    if (!compact) {
+      gen.lineFeed();
+      _thinSeparator(gen);
+      gen.lineFeed();
+    }
 
-    // Title
+    // Title. En compacto quitamos los asteriscos decorativos del título
+    // ("*** FACTURA ***" → "FACTURA").
+    final displayTitle = compact ? title.replaceAll('*', '').trim() : title;
     gen.setTextSize(width: 2, height: 2);
     gen.setBold(true);
-    gen.textCentered(title);
+    gen.textCentered(displayTitle);
     gen.setBold(false);
     gen.setTextSize();
 
-    gen.lineFeed();
+    gap();
     _thickSeparator(gen);
-    gen.lineFeed();
+    gap();
 
     // Bloque del comprobante fiscal:
     // - e-CF (Exx): VA PRIMERO (estandar DGII Norma General 01-2020).
@@ -908,15 +971,18 @@ class PrintTicketService {
       gen.textRow('MESERO:', waiterName);
     }
 
-    gen.lineFeed();
+    gap();
     _thinSeparator(gen);
 
     // Items
     gen.setBold(true);
-    gen.textRow('DESCRIPCIÓN', 'TOTAL');
+    gen.textRow(
+      compact ? 'Cant. Descripción' : 'DESCRIPCIÓN',
+      compact ? 'Precio' : 'TOTAL',
+    );
     gen.setBold(false);
     _thinSeparator(gen);
-    gen.lineFeed();
+    gap();
 
     final consolidatedItems = _buildPrintableItems(
       items,
@@ -931,53 +997,80 @@ class PrintTicketService {
         preferStoredItemTotals: preferStoredItemTotals,
       );
 
-      gen.setBold(true);
-      gen.text(item.productName);
-      gen.setBold(false);
-
       final displayQty = _formatQty(item.quantity);
       final lineTotal = _resolvePrintableItemTotal(
         order,
         item,
         preferStoredItemTotals: preferStoredItemTotals,
       );
+      final cleanNote = cleanOrderItemNote(item.notes);
 
-      final leftPart = '$displayQty x RD\$ ${_formatMoney(unitPrice)}';
-      final rightPart = 'RD\$ ${_formatMoney(lineTotal)}';
-      gen.dotRow(leftPart, rightPart);
-
-      // Indicador para llevar (takeout)
-      if (item.isTakeout) {
-        gen.setBold(true);
-        gen.text('  [PARA LLEVAR]');
-        gen.setBold(false);
-      }
-
-      if (item.modifiers.isNotEmpty) {
+      if (compact) {
+        // Una sola línea: "1x Nombre …………… total" (sin "#"). Los
+        // modificadores (con precio) y la nota van indentados debajo, y un
+        // renglón en blanco separa cada ítem.
+        gen.dotRow(
+          '${displayQty}x ${item.productName}',
+          'RD\$ ${_formatMoney(lineTotal)}',
+        );
+        if (item.isTakeout) {
+          gen.setBold(true);
+          gen.text('   [PARA LLEVAR]');
+          gen.setBold(false);
+        }
         for (final mod in item.modifiers) {
           final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
           final modTotal = mod.price * itemQty * mod.qty;
-          final priceSuffix = modTotal > 0
-              ? ' (+RD\$ ${_formatMoney(modTotal)})'
-              : '';
-          gen.text('  + ${mod.name}$priceSuffix');
+          gen.dotRow(
+            '   Modificador: ${mod.name}',
+            'RD\$ ${_formatMoney(modTotal)}',
+          );
         }
-      }
-
-      final cleanNote = cleanOrderItemNote(item.notes);
-      if (cleanNote.isNotEmpty) {
+        if (cleanNote.isNotEmpty) {
+          gen.text('   NOTA: $cleanNote');
+        }
+        gen.lineFeed(); // espacio entre ítems
+      } else {
         gen.setBold(true);
-        gen.text('  NOTA: $cleanNote');
+        gen.text(item.productName);
         gen.setBold(false);
-      }
 
-      if (i < consolidatedItems.length - 1) {
-        gen.lineFeed();
+        final leftPart = '$displayQty x RD\$ ${_formatMoney(unitPrice)}';
+        final rightPart = 'RD\$ ${_formatMoney(lineTotal)}';
+        gen.dotRow(leftPart, rightPart);
+
+        // Indicador para llevar (takeout)
+        if (item.isTakeout) {
+          gen.setBold(true);
+          gen.text('  [PARA LLEVAR]');
+          gen.setBold(false);
+        }
+
+        if (item.modifiers.isNotEmpty) {
+          for (final mod in item.modifiers) {
+            final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
+            final modTotal = mod.price * itemQty * mod.qty;
+            final priceSuffix = modTotal > 0
+                ? ' (+RD\$ ${_formatMoney(modTotal)})'
+                : '';
+            gen.text('  + ${mod.name}$priceSuffix');
+          }
+        }
+
+        if (cleanNote.isNotEmpty) {
+          gen.setBold(true);
+          gen.text('  NOTA: $cleanNote');
+          gen.setBold(false);
+        }
+
+        if (i < consolidatedItems.length - 1) {
+          gen.lineFeed();
+        }
       }
     }
 
     _thinSeparator(gen);
-    gen.lineFeed();
+    gap();
 
     // Totals
     // Ver comentario en generatePrecheck: usamos los items ORIGINALES para
@@ -1102,15 +1195,17 @@ class PrintTicketService {
       }
     }
 
-    gen.lineFeed();
+    gap();
     _thickSeparator(gen);
-    gen.lineFeed();
+    gap();
 
+    if (compact) gen.lineFeed(); // espacio (reducido) arriba del TOTAL
     gen.setBold(true);
     gen.setTextSize(width: 2, height: 2);
     gen.textRow('TOTAL:', 'RD\$ ${_formatMoney(effectiveTotal)}');
     gen.setTextSize();
     gen.setBold(false);
+    if (compact) gen.lineFeed(); // espacio (reducido) abajo del TOTAL
 
     // Post-discount mode: el descuento sale como nota informativa
     // debajo del total grande, no como línea sustractiva en el sum.
@@ -1128,9 +1223,9 @@ class PrintTicketService {
     // tasa sí sale en pre-cuenta para transparencia previa al pago.
     _renderUsdEquivalent(gen, effectiveTotal, usdSettings, showRate: false);
 
-    gen.lineFeed();
+    gap();
     _thickSeparator(gen);
-    gen.lineFeed();
+    gap();
 
     // Payments
     if (payments.isNotEmpty) {
@@ -1219,13 +1314,13 @@ class PrintTicketService {
 
     // Footer: bloques en orden segun footerBlocks (o defaults canonicos
     // si null). El renderer skipea bloques sin contenido.
-    gen.lineFeed(2);
+    gen.lineFeed(compact ? 1 : 2);
     _renderFooterBlocks(
       gen,
       blocks: footerBlocks ?? TicketBlocks.defaultFooter,
       footerMessage: footerMessage,
     );
-    gen.lineFeed(4);
+    gen.lineFeed(compact ? 2 : 4);
     gen.cut();
     // Drawer kick va DESPUÉS del corte para que el cajero saque el
     // recibo y la gaveta se abra simultáneamente. Si la impresora no

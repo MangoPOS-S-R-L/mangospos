@@ -27,6 +27,18 @@ final discountDisplayModeProvider =
   return repo.getDiscountDisplayMode(businessId);
 });
 
+/// Provider del modelo de factura impresa por negocio. Los flujos de cobro
+/// hacen `ref.read` para decidir si imprimen el layout compacto. Default
+/// `standard` cuando no hay businessId o la columna aún no existe.
+final invoiceTemplateProvider =
+    FutureProvider.family<String, String>((ref, businessId) async {
+  if (businessId.isEmpty) {
+    return PosSettingsRepository.invoiceTemplateStandard;
+  }
+  final repo = ref.read(posSettingsRepositoryProvider);
+  return repo.getInvoiceTemplate(businessId);
+});
+
 /// Provider de la lista de routes ocultos del header por business. El
 /// shell hace `ref.watch` para refiltrar destinos cuando el owner cambia
 /// la config en ajustes. Default `[]` si la columna aún no existe.
@@ -267,6 +279,13 @@ class PosSettingsRepository {
   /// revision). Ambos modos son a ciegas durante el conteo.
   static const String cashCloseDetailed = 'detailed';
 
+  /// Modelo de factura ESTÁNDAR (layout detallado actual).
+  static const String invoiceTemplateStandard = 'standard';
+
+  /// Modelo de factura COMPACTO: ítems en una línea, fuente/espaciado mínimos,
+  /// TOTAL en tamaño normal. Mantiene los datos fiscales. Para cuentas largas.
+  static const String invoiceTemplateCompact = 'compact';
+
   final SupabaseClient _client;
   final BusinessSettingsOfflineCache _settingsCache =
       BusinessSettingsOfflineCache();
@@ -321,6 +340,38 @@ class PosSettingsRepository {
     await _client.from('business_settings').upsert({
       'business_id': businessId,
       'cash_close_mode': normalized,
+    }, onConflict: 'business_id');
+  }
+
+  /// Modelo de factura impresa elegido por el negocio. Default `standard`
+  /// cuando la columna no existe (pre-migración) o la query falla — preserva
+  /// el layout histórico para quienes no toquen el ajuste.
+  Future<String> getInvoiceTemplate(String businessId) async {
+    String parse(Map<String, dynamic>? row) {
+      final raw = row?['invoice_print_template']?.toString();
+      return raw == invoiceTemplateCompact
+          ? invoiceTemplateCompact
+          : invoiceTemplateStandard;
+    }
+
+    try {
+      return parse(await _fetchAndCacheRow(businessId));
+    } catch (_) {
+      return parse(await _cachedRow(businessId));
+    }
+  }
+
+  Future<void> setInvoiceTemplate({
+    required String businessId,
+    required String template,
+  }) async {
+    final normalized = template == invoiceTemplateCompact
+        ? invoiceTemplateCompact
+        : invoiceTemplateStandard;
+
+    await _client.from('business_settings').upsert({
+      'business_id': businessId,
+      'invoice_print_template': normalized,
     }, onConflict: 'business_id');
   }
 
@@ -394,6 +445,30 @@ class PosSettingsRepository {
     await _client.from('business_settings').upsert({
       'business_id': businessId,
       'cash_close_print_products_by_area': enabled,
+    }, onConflict: 'business_id');
+  }
+
+  /// KDS — qué saca una comanda del tablero de cocina:
+  /// TRUE (default): al pagar, la comanda sale del KDS automáticamente.
+  /// FALSE: la comanda se queda aunque esté pagada, hasta que un cocinero la
+  /// marque como lista. Tolerante a que la columna aún no exista (cae a TRUE,
+  /// el comportamiento histórico).
+  Future<bool> getKdsCompleteOnPayment(String businessId) async {
+    try {
+      final row = await _fetchAndCacheRow(businessId);
+      return row?['kds_complete_on_payment'] != false;
+    } catch (_) {
+      return (await _cachedRow(businessId))?['kds_complete_on_payment'] != false;
+    }
+  }
+
+  Future<void> setKdsCompleteOnPayment({
+    required String businessId,
+    required bool enabled,
+  }) async {
+    await _client.from('business_settings').upsert({
+      'business_id': businessId,
+      'kds_complete_on_payment': enabled,
     }, onConflict: 'business_id');
   }
 

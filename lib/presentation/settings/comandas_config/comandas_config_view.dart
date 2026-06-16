@@ -31,6 +31,7 @@ class ComandasConfigView extends ConsumerStatefulWidget {
 class _ComandasConfigViewState extends ConsumerState<ComandasConfigView> {
   String? _resolvedBusinessId;
   BusinessFeatures _features = BusinessFeatures.defaults;
+  bool _completeOnPayment = true;
   bool _loading = true;
   bool _saving = false;
   String? _error;
@@ -46,10 +47,12 @@ class _ComandasConfigViewState extends ConsumerState<ComandasConfigView> {
       final id = await BusinessResolver.ensure(widget.businessId);
       final repo = ref.read(posSettingsRepositoryProvider);
       final features = await repo.getBusinessFeatures(id);
+      final completeOnPayment = await repo.getKdsCompleteOnPayment(id);
       if (!mounted) return;
       setState(() {
         _resolvedBusinessId = id;
         _features = features;
+        _completeOnPayment = completeOnPayment;
         _loading = false;
       });
     } catch (e) {
@@ -84,6 +87,35 @@ class _ComandasConfigViewState extends ConsumerState<ComandasConfigView> {
       if (!mounted) return;
       setState(() {
         _features = previous;
+        _saving = false;
+        _error = 'No se pudo guardar el cambio: $e';
+      });
+    }
+  }
+
+  Future<void> _setCompleteOnPayment(bool enabled) async {
+    if (_saving ||
+        _resolvedBusinessId == null ||
+        enabled == _completeOnPayment) {
+      return;
+    }
+    final previous = _completeOnPayment;
+    setState(() {
+      _completeOnPayment = enabled;
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await ref.read(posSettingsRepositoryProvider).setKdsCompleteOnPayment(
+            businessId: _resolvedBusinessId!,
+            enabled: enabled,
+          );
+      if (!mounted) return;
+      setState(() => _saving = false);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _completeOnPayment = previous;
         _saving = false;
         _error = 'No se pudo guardar el cambio: $e';
       });
@@ -149,6 +181,20 @@ class _ComandasConfigViewState extends ConsumerState<ComandasConfigView> {
           onChanged: _saving
               ? null
               : (v) => _setBanner(takeout: v),
+        ),
+        const SizedBox(height: 24),
+        const _SectionLabel('Comportamiento en el KDS'),
+        const SizedBox(height: 8),
+        _BannerSwitch(
+          icon: Icons.point_of_sale_outlined,
+          title: 'Sacar la comanda del KDS al pagar',
+          subtitle:
+              'Activado (por defecto): al cobrar una orden sale sola del '
+              'tablero de cocina. Desactivado: la orden se queda en cocina '
+              '—aunque esté pagada— hasta que un cocinero la marque con '
+              '«Marcar todo listo».',
+          value: _completeOnPayment,
+          onChanged: _saving ? null : _setCompleteOnPayment,
         ),
       ],
     );

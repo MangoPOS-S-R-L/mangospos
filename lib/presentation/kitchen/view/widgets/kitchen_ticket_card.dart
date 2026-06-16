@@ -17,7 +17,19 @@ String _formatQty(double qty) {
   return qty.toStringAsFixed(2);
 }
 
-bool _isDone(KitchenItem item) => item.status == 'ready';
+/// Un ítem se considera "hecho" en cocina si está listo/servido, o si está
+/// pagado pero ya tenía `ready_at` (se cocinó antes de cobrar). En modo
+/// "esperar al cocinero" pueden llegar ítems 'paid'/'served' al tablero.
+bool _isDone(KitchenItem item) =>
+    item.status == 'ready' ||
+    item.status == 'served' ||
+    (item.status == 'paid' && item.readyAt != null);
+
+/// Solo se puede marcar a mano (bump) un ítem que la cocina aún está
+/// trabajando. Un ítem ya pagado sin cocinar se completa con "Marcar todo
+/// listo" (no se puede cambiar su status sin afectar el cobro).
+bool _canBump(KitchenItem item) =>
+    item.status == 'pending' || item.status == 'preparing';
 
 /// 🧾 Comanda del tablero de cocina (tema claro, colores MangoPOS).
 ///
@@ -90,7 +102,7 @@ class KitchenTicketCard extends StatelessWidget {
                   _ItemRow(
                     item: item,
                     showTakeoutBadge: !allTakeout && item.isTakeout,
-                    onTap: _isDone(item) ? null : () => onBumpItem(item.id),
+                    onTap: _canBump(item) ? () => onBumpItem(item.id) : null,
                   ),
               ],
             ),

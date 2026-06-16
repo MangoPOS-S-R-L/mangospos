@@ -34,6 +34,7 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
   List<String> _closurePrinterIds = const [];
   String _receiptItemDisplayMode = PosSettingsRepository.receiptItemsGrouped;
   String _discountDisplayMode = PosSettingsRepository.discountPreDiscount;
+  String _invoiceTemplate = PosSettingsRepository.invoiceTemplateStandard;
   // Slice B: multi-copia automática (sin picker) por tipo de comprobante.
   bool _precheckMultiCopy = false;
   bool _receiptMultiCopy = false;
@@ -68,6 +69,9 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
     final discountDisplayMode = businessId.isEmpty
         ? PosSettingsRepository.discountPreDiscount
         : await settingsRepo.getDiscountDisplayMode(businessId);
+    final invoiceTemplate = businessId.isEmpty
+        ? PosSettingsRepository.invoiceTemplateStandard
+        : await settingsRepo.getInvoiceTemplate(businessId);
     // Slice B: leer flags multi-copia.
     final multiCopy = businessId.isEmpty
         ? (precheck: false, receipt: false)
@@ -85,6 +89,7 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
       _closurePrinterIds = bootstrap.closurePrinterIds;
       _receiptItemDisplayMode = receiptItemDisplayMode;
       _discountDisplayMode = discountDisplayMode;
+      _invoiceTemplate = invoiceTemplate;
       _precheckMultiCopy = multiCopy.precheck;
       _receiptMultiCopy = multiCopy.receipt;
       _openDrawerOnCash = openDrawerOnCash;
@@ -286,6 +291,30 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
     }
   }
 
+  Future<void> _updateInvoiceTemplate(String template) async {
+    final businessId = _resolvedBusinessId;
+    if (businessId.isEmpty) {
+      AppToast.info(context, 'No se pudo resolver el negocio activo.');
+      return;
+    }
+
+    setState(() => _busy = true);
+    try {
+      await ref
+          .read(posSettingsRepositoryProvider)
+          .setInvoiceTemplate(businessId: businessId, template: template);
+      ref.invalidate(invoiceTemplateProvider(businessId));
+      if (!mounted) return;
+      setState(() => _invoiceTemplate = template);
+      AppToast.success(context, 'Modelo de factura guardado.');
+    } catch (_) {
+      if (!mounted) return;
+      AppToast.error(context, 'No se pudo guardar el modelo.');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   /// Abre el picker de impresoras y AGREGA la elegida a la asignación
   /// (no la reemplaza). Excluye del picker las que ya están asignadas.
   Future<void> _addPrinter({
@@ -399,6 +428,14 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
                         value: _discountDisplayMode,
                         busy: _busy,
                         onChanged: _updateDiscountDisplayMode,
+                      ),
+                    ),
+                    SizedBox(
+                      width: cardWidth,
+                      child: _InvoiceTemplateCard(
+                        value: _invoiceTemplate,
+                        busy: _busy,
+                        onChanged: _updateInvoiceTemplate,
                       ),
                     ),
                     SizedBox(
@@ -626,6 +663,78 @@ class _DiscountDisplayModeCard extends StatelessWidget {
                       'aparece como nota informativa.'
                 : 'Subtotal pre-descuento, ITBIS al % real, descuento como '
                       'línea sustractiva (matches el ticket histórico).',
+            style: const TextStyle(fontSize: 13, color: MangoColors.muted),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Selector del modelo de factura impresa: Estándar (layout detallado) o
+/// Compacta (ítems en una línea, fuente/espaciado mínimos, total condensado).
+/// Ambos mantienen los datos fiscales completos. Útil para cuentas largas.
+class _InvoiceTemplateCard extends StatelessWidget {
+  const _InvoiceTemplateCard({
+    required this.value,
+    required this.busy,
+    required this.onChanged,
+  });
+
+  final String value;
+  final bool busy;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final isCompact = value == PosSettingsRepository.invoiceTemplateCompact;
+    return PrintingCardFrame(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const PrintingSoftHeader(
+            leading: Icon(
+              Icons.receipt_long_outlined,
+              color: MangoColors.darkGray,
+            ),
+            title: 'Modelo de factura',
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Cómo se imprime la factura. La compacta mantiene todos los datos '
+            'fiscales (NCF, RNC, impuestos) pero más pequeña: ideal para '
+            'cuentas con muchos productos.',
+            style: TextStyle(fontSize: 13, color: MangoColors.muted),
+          ),
+          const SizedBox(height: 16),
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment<String>(
+                value: PosSettingsRepository.invoiceTemplateStandard,
+                label: Text('Estándar'),
+                icon: Icon(Icons.description_outlined),
+              ),
+              ButtonSegment<String>(
+                value: PosSettingsRepository.invoiceTemplateCompact,
+                label: Text('Compacta'),
+                icon: Icon(Icons.compress),
+              ),
+            ],
+            selected: {value},
+            onSelectionChanged: busy
+                ? null
+                : (selection) {
+                    if (selection.isNotEmpty) {
+                      onChanged(selection.first);
+                    }
+                  },
+          ),
+          const SizedBox(height: 14),
+          Text(
+            isCompact
+                ? 'Ítems en una sola línea, fuente y espaciado mínimos, total '
+                      'condensado. Mucho más corta en papel.'
+                : 'Layout detallado: nombre y precio por ítem, TOTAL grande.',
             style: const TextStyle(fontSize: 13, color: MangoColors.muted),
           ),
         ],

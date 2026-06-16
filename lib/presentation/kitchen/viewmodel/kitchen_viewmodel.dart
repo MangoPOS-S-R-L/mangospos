@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mangopos/data/repositories/kitchen_repository.dart';
+import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/data/models/kitchen_models.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
@@ -46,17 +47,13 @@ class KitchenViewModel extends ChangeNotifier {
   /// (no filtra, muestra items de cualquier área).
   String? _selectedAreaCode;
 
-  /// Órdenes ya "despachadas" desde el tablero (el chef presionó "Marcar todo
-  /// listo"). Sus ítems siguen en estado `ready` en BD — y por eso aún
-  /// vuelven en `kds_active_items` — pero no deben mostrarse como comandas
-  /// activas. Esto permite que una orden se quede en pantalla mientras el chef
-  /// marca ítems uno por uno y solo salga cuando la despacha explícitamente.
-  final Set<String> _dismissedOrders = <String>{};
-
-  /// En el primer load, las órdenes que ya están 100% listas se consideran
-  /// despachadas en una sesión anterior y se ocultan. Solo se hace una vez:
-  /// las que completes durante esta sesión se quedan hasta que las despaches.
-  bool _initialDismissDone = false;
+  /// Setting `kds_complete_on_payment`:
+  /// - TRUE (default): al pagar, la comanda sale del KDS. El tablero muestra
+  ///   solo órdenes con trabajo pendiente (vía `kds_active_items`).
+  /// - FALSE: la comanda se queda aunque esté pagada, hasta que el cocinero la
+  ///   marque ("Marcar todo listo"). El tablero usa `kds_open_orders`
+  ///   (órdenes con `kitchen_done_at IS NULL`).
+  bool _completeOnPayment = true;
 
   KitchenViewModel(this._repository, this._printingService);
 
@@ -65,8 +62,14 @@ class KitchenViewModel extends ChangeNotifier {
   List<KitchenArea> get availableAreas => _availableAreas;
   String? get selectedAreaCode => _selectedAreaCode;
 
-  /// Órdenes despachadas (ocultas del tablero aunque sus ítems sigan `ready`).
-  Set<String> get dismissedOrders => _dismissedOrders;
+  /// Ver [_completeOnPayment]. La vista lo usa para decidir cuándo una comanda
+  /// sale del tablero.
+  bool get completeOnPayment => _completeOnPayment;
+
+  /// Ítems que la cocina terminó HOY (vía `kds_completed_today`, basado en
+  /// `ready_at`). Independiente del tablero vivo — alimenta "Completados Hoy".
+  List<KitchenItem> _completedTodayItems = const [];
+  List<KitchenItem> get completedTodayItems => _completedTodayItems;
 
   /// Items que pasan el filtro de área seleccionada. Si no hay filtro
   /// activo, devuelve todos. Si el filtro está en un código y el item
@@ -100,15 +103,19 @@ class KitchenViewModel extends ChangeNotifier {
 
   Future<void> init() async {
     _isLoading = true;
-    // Reinicia el snapshot de despachadas: al abrir el tablero (o cambiar de
-    // negocio) las órdenes que ya estén 100% listas se reconsideran de cero.
-    _dismissedOrders.clear();
-    _initialDismissDone = false;
     notifyListeners();
     try {
       final client = Supabase.instance.client;
       _businessId = await resolveBusinessIdOrNull(client, 'auto');
       if (_businessId != null) {
+        // Leemos el modo del tablero antes del primer refresh para elegir la
+        // fuente correcta (kds_active_items vs kds_open_orders).
+        try {
+          _completeOnPayment = await PosSettingsRepository(client)
+              .getKdsCompleteOnPayment(_businessId!);
+        } catch (_) {
+          _completeOnPayment = true;
+        }
         // Cargar áreas en paralelo con el refresh inicial. El dropdown del
         // filtro depende de esta lista — si la query falla, queda vacía y
         // el UI muestra solo "Todos".
@@ -145,9 +152,18 @@ class KitchenViewModel extends ChangeNotifier {
     }
     _refreshing = true;
     try {
-      final fetched = await _repository.getActiveItems(businessId: _businessId);
-      _items = _applyStatusOverrides(fetched);
-      _reconcileDismissed();
+      // Modo "sale al pagar" → kds_active_items (solo pendientes/listos).
+      // Modo "esperar al cocinero" → kds_open_orders (incluye pagadas hasta
+      // que la cocina las marque). En paralelo traemos los completados de hoy
+      // (independiente del tablero) para el stat "Completados Hoy".
+      final results = await Future.wait([
+        _completeOnPayment
+            ? _repository.getActiveItems(businessId: _businessId)
+            : _repository.getOpenItems(businessId: _businessId),
+        _repository.getCompletedTodayItems(businessId: _businessId),
+      ]);
+      _items = _applyStatusOverrides(results[0]);
+      _completedTodayItems = results[1];
       notifyListeners();
     } catch (e) {
       debugPrint('Error refreshing kitchen items: $e');
@@ -204,8 +220,9 @@ class KitchenViewModel extends ChangeNotifier {
   }
 
   /// Despacha la comanda completa ("Marcar todo listo"): marca lo que falte
-  /// como listo, imprime el ticket LISTO con la orden completa y la saca del
-  /// tablero.
+  /// como listo, sella la cocina como terminada (la saca del tablero en modo
+  /// "esperar al cocinero"), imprime el ticket LISTO con la orden completa y la
+  /// quita del tablero.
   Future<void> markOrderReady(String orderId) async {
     // Items que aún faltaban (los que esta acción transiciona a 'ready').
     final openItems = _items
@@ -225,9 +242,10 @@ class KitchenViewModel extends ChangeNotifier {
         .map((item) => item.id)
         .toList(growable: false);
 
-    // Optimista: marcar listos + ocultar la orden del tablero de inmediato.
-    _applyLocalOrderStatus(orderId, from: {'pending', 'preparing'}, to: 'ready');
-    _dismissedOrders.add(orderId);
+    // Optimista: sacar la orden del tablero de inmediato.
+    _items = _items
+        .where((item) => item.orderId != orderId)
+        .toList(growable: false);
     notifyListeners();
 
     try {
@@ -237,6 +255,9 @@ class KitchenViewModel extends ChangeNotifier {
       for (final item in openItems) {
         await _repository.updateItemStatus(itemId: item.id, status: 'ready');
       }
+      // Sello de cocina terminada: saca la orden del KDS en modo "esperar al
+      // cocinero" y deja constancia en modo "sale al pagar".
+      await _repository.markOrderKitchenDone(orderId);
       if (_businessId != null && allActiveIds.isNotEmpty) {
         try {
           await _printingService.printReadyOrderTicket(
@@ -255,32 +276,6 @@ class KitchenViewModel extends ChangeNotifier {
       _clearOverrides(affectedIds);
       _scheduleRefresh(immediate: true);
     }
-  }
-
-  /// Reconcilia el set de órdenes despachadas tras cada fetch:
-  /// - 1ª vez: oculta las órdenes que ya están 100% listas (despachadas antes
-  ///   de abrir el tablero) para no reflotar comandas viejas.
-  /// - Siempre: si una orden vuelve a tener trabajo (pending/preparing), deja
-  ///   de estar despachada y reaparece.
-  void _reconcileDismissed() {
-    if (!_initialDismissDone) {
-      final byOrder = <String, List<KitchenItem>>{};
-      for (final item in _items) {
-        byOrder.putIfAbsent(item.orderId, () => []).add(item);
-      }
-      byOrder.forEach((orderId, list) {
-        final allReady =
-            list.isNotEmpty && list.every((i) => i.status == 'ready');
-        if (allReady) _dismissedOrders.add(orderId);
-      });
-      _initialDismissDone = true;
-    }
-
-    final openOrderIds = _items
-        .where((i) => i.status == 'pending' || i.status == 'preparing')
-        .map((i) => i.orderId)
-        .toSet();
-    _dismissedOrders.removeWhere(openOrderIds.contains);
   }
 
   void _subscribeRealtime(SupabaseClient client, String businessId) {
