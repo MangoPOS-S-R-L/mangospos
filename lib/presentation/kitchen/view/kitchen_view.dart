@@ -3,9 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/presentation/kitchen/viewmodel/kitchen_viewmodel.dart';
+import 'package:mangopos/presentation/kitchen/view/widgets/kitchen_ticket_card.dart';
 import 'package:mangopos/data/models/kitchen_models.dart';
 import 'package:mangopos/services/session/session_controller.dart';
-import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/app/theme/mango_tokens.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
@@ -29,16 +29,9 @@ class KitchenView extends ConsumerStatefulWidget {
   ConsumerState<KitchenView> createState() => _KitchenViewState();
 }
 
-class _KitchenViewState extends ConsumerState<KitchenView>
-    with TickerProviderStateMixin {
-  TabController? _mobileTabController;
+class _KitchenViewState extends ConsumerState<KitchenView> {
   bool autoUpdate = true;
   String? _lastBusinessId;
-  String updateInterval = '10 Segundo';
-  String filterType = 'Todos';
-  String dateFilter = 'Hoy';
-  String orderFilter = 'Mostrar Todo Pedidos';
-  String waiterFilter = 'Mostrar Todo Mesero';
 
   /// Poll periódico del tablero. El KDS depende de Realtime sobre
   /// `order_items`, pero esa tabla puede no estar en la publicación
@@ -87,7 +80,6 @@ class _KitchenViewState extends ConsumerState<KitchenView>
   Widget build(BuildContext context) {
     final session = ref.watch(sessionProvider);
     final vm = ref.watch(kitchenViewModelProvider);
-    final pending = vm.pendingItems;
 
     if (session.activeBusinessId != null &&
         session.activeBusinessId != _lastBusinessId) {
@@ -98,10 +90,13 @@ class _KitchenViewState extends ConsumerState<KitchenView>
         }
       });
     }
-    final preparing = vm.preparingItems;
+
+    final activeOrders = _activeOrders(vm.visibleActiveItems, vm.dismissedOrders);
+    final queueItems = activeOrders.fold<int>(
+      0,
+      (sum, o) => sum + o.items.where((i) => i.status != 'ready').length,
+    );
     final ready = vm.readyItems;
-    final pendingOrders = _groupOrdersByStatus(vm.items, 'pending');
-    final preparingOrders = _groupOrdersByStatus(vm.items, 'preparing');
     final completedToday = ready.where((i) {
       final d = i.readyAt ?? i.createdAt;
       final now = DateTime.now();
@@ -109,11 +104,6 @@ class _KitchenViewState extends ConsumerState<KitchenView>
     }).length;
 
     final isMobile = ResponsiveHelper.isMobile(context);
-    // En móvil instanciamos un TabController para alternar entre las 2
-    // columnas (En Espera / En Preparación) — no caben lado a lado.
-    if (isMobile) {
-      _mobileTabController ??= TabController(length: 2, vsync: this);
-    }
     final padding = isMobile ? 12.0 : 24.0;
 
     return Scaffold(
@@ -126,90 +116,20 @@ class _KitchenViewState extends ConsumerState<KitchenView>
             _buildHeader(context),
             SizedBox(height: isMobile ? 12 : 20),
             _buildStatsRow(
-              pendingCount: pending.length,
-              preparingCount: preparing.length,
+              activeCount: activeOrders.length,
+              queueItems: queueItems,
               completedToday: completedToday,
               readyItems: ready,
             ),
             SizedBox(height: isMobile ? 12 : 18),
-            if (isMobile) ...[
-              TabBar(
-                controller: _mobileTabController,
-                labelColor: AppColors.foreground,
-                unselectedLabelColor: AppColors.mutedForeground,
-                indicatorColor: AppColors.primary,
-                labelStyle: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                ),
-                tabs: [
-                  Tab(text: 'En Espera (${pendingOrders.length})'),
-                  Tab(text: 'Preparación (${preparingOrders.length})'),
-                ],
-              ),
-              const SizedBox(height: 8),
-            ],
             Expanded(
-              child: vm.isLoading
+              child: vm.isLoading && activeOrders.isEmpty
                   ? Center(
                       child: CircularProgressIndicator(
                         color: AppColors.primary,
                       ),
                     )
-                  : isMobile
-                      ? TabBarView(
-                          controller: _mobileTabController,
-                          children: [
-                            _buildOrderColumn(
-                              title: 'En Espera',
-                              color: AppColors.warning,
-                              orders: pendingOrders,
-                              actionLabel: 'Preparar',
-                              hideHeader: true,
-                              onAction: (orderId) => ref
-                                  .read(kitchenViewModelProvider)
-                                  .startPreparingOrder(orderId),
-                            ),
-                            _buildOrderColumn(
-                              title: 'En Preparacion',
-                              color: AppColors.info,
-                              orders: preparingOrders,
-                              actionLabel: 'Listo',
-                              hideHeader: true,
-                              onAction: (orderId) => ref
-                                  .read(kitchenViewModelProvider)
-                                  .markOrderReady(orderId),
-                            ),
-                          ],
-                        )
-                      : Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(
-                              child: _buildOrderColumn(
-                                title: 'En Espera',
-                                color: AppColors.warning,
-                                orders: pendingOrders,
-                                actionLabel: 'Preparar',
-                                onAction: (orderId) => ref
-                                    .read(kitchenViewModelProvider)
-                                    .startPreparingOrder(orderId),
-                              ),
-                            ),
-                            const SizedBox(width: 20),
-                            Expanded(
-                              child: _buildOrderColumn(
-                                title: 'En Preparacion',
-                                color: AppColors.info,
-                                orders: preparingOrders,
-                                actionLabel: 'Listo',
-                                onAction: (orderId) => ref
-                                    .read(kitchenViewModelProvider)
-                                    .markOrderReady(orderId),
-                              ),
-                            ),
-                          ],
-                        ),
+                  : _buildBoard(activeOrders),
             ),
           ],
         ),
@@ -220,9 +140,166 @@ class _KitchenViewState extends ConsumerState<KitchenView>
   @override
   void dispose() {
     _stopPolling();
-    _mobileTabController?.dispose();
     super.dispose();
   }
+
+  // ============================================================
+  // TABLERO
+  // ============================================================
+
+  /// Agrupa los ítems activos por orden. Una comanda permanece en el tablero
+  /// mientras tenga trabajo (pending/preparing) o esté lista pero sin
+  /// despachar; los ítems ya listos se muestran tachados al fondo para dar
+  /// contexto. Solo sale del tablero al despacharla ("Marcar todo listo"),
+  /// que la agrega a [dismissed].
+  List<KitchenOrder> _activeOrders(
+    List<KitchenItem> items,
+    Set<String> dismissed,
+  ) {
+    final map = <String, List<KitchenItem>>{};
+    for (final item in items) {
+      map.putIfAbsent(item.orderId, () => []).add(item);
+    }
+
+    final orders = <KitchenOrder>[];
+    for (final entry in map.entries) {
+      final list = entry.value;
+      final hasOpen = list.any(
+        (i) => i.status == 'pending' || i.status == 'preparing',
+      );
+      // Sin trabajo pendiente y ya despachada → fuera del tablero.
+      if (!hasOpen && dismissed.contains(entry.key)) continue;
+
+      // No-listos primero; dentro de cada grupo, por antigüedad.
+      list.sort((a, b) {
+        final ad = a.status == 'ready' ? 1 : 0;
+        final bd = b.status == 'ready' ? 1 : 0;
+        if (ad != bd) return ad - bd;
+        return a.createdAt.compareTo(b.createdAt);
+      });
+
+      final first = list.reduce(
+        (a, b) => a.createdAt.isBefore(b.createdAt) ? a : b,
+      );
+      orders.add(
+        KitchenOrder(
+          orderId: entry.key,
+          orderNumber: first.orderNumber,
+          tableName: first.tableName,
+          waiterName: first.waiterName,
+          createdAt: first.createdAt,
+          items: list,
+        ),
+      );
+    }
+
+    // Con trabajo pendiente primero (y entre ellas, las más viejas/urgentes
+    // arriba); las que ya están listas esperando despacho, al final.
+    orders.sort((a, b) {
+      final ao = a.items.any((i) => i.status != 'ready') ? 0 : 1;
+      final bo = b.items.any((i) => i.status != 'ready') ? 0 : 1;
+      if (ao != bo) return ao - bo;
+      return a.createdAt.compareTo(b.createdAt);
+    });
+    return orders;
+  }
+
+  Widget _buildBoard(List<KitchenOrder> orders) {
+    if (orders.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 64,
+              height: 64,
+              decoration: BoxDecoration(
+                color: AppColors.success.withValues(alpha: 0.12),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.done_all_rounded,
+                size: 32,
+                color: AppColors.success,
+              ),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              'No hay comandas activas',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: AppColors.foreground,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Las nuevas órdenes aparecerán aquí automáticamente.',
+              style: TextStyle(
+                fontSize: 13,
+                color: AppColors.mutedForeground,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final isMobile = ResponsiveHelper.isMobile(context);
+    final gap = isMobile ? 12.0 : 16.0;
+
+    // Masonry por columnas: cada card crece según su contenido (sin recortes
+    // ni scroll interno). Repartimos las comandas en columnas balanceadas y
+    // hacemos scroll vertical del tablero completo.
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const targetWidth = 360.0;
+        final columnCount = isMobile
+            ? 1
+            : ((constraints.maxWidth + gap) / (targetWidth + gap))
+                .floor()
+                .clamp(1, 6);
+
+        final columns = List.generate(columnCount, (_) => <KitchenOrder>[]);
+        for (var i = 0; i < orders.length; i++) {
+          columns[i % columnCount].add(orders[i]);
+        }
+
+        return SingleChildScrollView(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var c = 0; c < columnCount; c++) ...[
+                if (c > 0) SizedBox(width: gap),
+                Expanded(
+                  child: Column(
+                    children: [
+                      for (final order in columns[c]) ...[
+                        KitchenTicketCard(
+                          order: order,
+                          onBumpItem: (itemId) => ref
+                              .read(kitchenViewModelProvider)
+                              .markReady(itemId),
+                          onCompleteOrder: (orderId) => ref
+                              .read(kitchenViewModelProvider)
+                              .markOrderReady(orderId),
+                        ),
+                        SizedBox(height: gap),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // ============================================================
+  // HEADER / TOOLBAR
+  // ============================================================
 
   Widget _buildHeader(BuildContext context) {
     final isMobile = ResponsiveHelper.isMobile(context);
@@ -277,10 +354,7 @@ class _KitchenViewState extends ConsumerState<KitchenView>
           ),
         ] else ...[
           // Toolbar normalizado: todos los chips/botones a 44 de alto, mismo
-          // borde y border-radius. Antes había drift visual (auto-refresh
-          // padding v:8, filtro v:4, Actualizar v:12, iconos 38) — cada
-          // elemento tenía una altura distinta. Ahora SizedBox(height:44)
-          // los alinea + padding horizontal constante 14.
+          // borde y border-radius.
           _ToolbarChip(
             child: Row(
               children: [
@@ -319,28 +393,8 @@ class _KitchenViewState extends ConsumerState<KitchenView>
               ],
             ),
           ),
-          const SizedBox(width: 8),
-          _iconButton(Icons.keyboard_arrow_up),
-          const SizedBox(width: 6),
-          _iconButton(Icons.keyboard_arrow_down),
         ],
       ],
-    );
-  }
-
-  /// Botón cuadrado (44×44) para acciones secundarias del toolbar. Misma
-  /// altura que [_ToolbarChip] para que todos los elementos alineen
-  /// horizontalmente.
-  Widget _iconButton(IconData icon) {
-    return Container(
-      width: 44,
-      height: 44,
-      decoration: BoxDecoration(
-        color: AppColors.card,
-        borderRadius: BorderRadius.circular(AppRadius.card),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Icon(icon, color: AppColors.mutedForeground),
     );
   }
 
@@ -398,9 +452,13 @@ class _KitchenViewState extends ConsumerState<KitchenView>
     );
   }
 
+  // ============================================================
+  // STATS
+  // ============================================================
+
   Widget _buildStatsRow({
-    required int pendingCount,
-    required int preparingCount,
+    required int activeCount,
+    required int queueItems,
     required int completedToday,
     required List<KitchenItem> readyItems,
   }) {
@@ -411,18 +469,18 @@ class _KitchenViewState extends ConsumerState<KitchenView>
         Expanded(
           child: _buildStatCard(
             color: AppColors.warning,
-            icon: Icons.timer_outlined,
-            title: pendingCount.toString(),
-            subtitle: 'En Espera',
+            icon: Icons.receipt_long_outlined,
+            title: activeCount.toString(),
+            subtitle: isMobile ? 'Activas' : 'Comandas activas',
           ),
         ),
         SizedBox(width: gap),
         Expanded(
           child: _buildStatCard(
             color: AppColors.info,
-            icon: Icons.schedule,
-            title: preparingCount.toString(),
-            subtitle: isMobile ? 'Preparando' : 'En Preparacion',
+            icon: Icons.restaurant_menu,
+            title: queueItems.toString(),
+            subtitle: isMobile ? 'En cola' : 'Ítems en cola',
           ),
         ),
         SizedBox(width: gap),
@@ -595,7 +653,7 @@ class _KitchenViewState extends ConsumerState<KitchenView>
                         )
                       : ListView.separated(
                           itemCount: orders.length,
-                          separatorBuilder: (_, __) => const SizedBox(height: 12),
+                          separatorBuilder: (_, _) => const SizedBox(height: 12),
                           itemBuilder: (context, index) {
                             final order = orders[index];
                             final completedAt = order.items
@@ -766,286 +824,6 @@ class _KitchenViewState extends ConsumerState<KitchenView>
         items: list,
       );
     }).toList()..sort((a, b) => a.createdAt.compareTo(b.createdAt));
-  }
-
-  List<KitchenOrder> _groupOrdersByStatus(
-    List<KitchenItem> items,
-    String status,
-  ) {
-    final filtered = items.where((i) => i.status == status);
-    final map = <String, List<KitchenItem>>{};
-    for (final item in filtered) {
-      map.putIfAbsent(item.orderId, () => []).add(item);
-    }
-    return map.entries.map((entry) {
-      final list = entry.value;
-      list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
-      final first = list.first;
-      return KitchenOrder(
-        orderId: entry.key,
-        orderNumber: first.orderNumber,
-        tableName: first.tableName,
-        waiterName: first.waiterName,
-        createdAt: first.createdAt,
-        items: list,
-      );
-    }).toList()..sort((a, b) => a.createdAt.compareTo(b.createdAt));
-  }
-
-  Widget _buildOrderColumn({
-    required String title,
-    required Color color,
-    required List<KitchenOrder> orders,
-    required String actionLabel,
-    required void Function(String orderId) onAction,
-    bool hideHeader = false,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (!hideHeader) ...[
-          Row(
-            children: [
-              Container(
-                width: 10,
-                height: 10,
-                decoration:
-                    BoxDecoration(color: color, shape: BoxShape.circle),
-              ),
-              const SizedBox(width: 8),
-              Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(width: 8),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(AppRadius.full),
-                ),
-                child: Text(
-                  orders.length.toString(),
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: color,
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-        ],
-        Expanded(
-          child: orders.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.inbox_outlined, size: 32, color: AppColors.mutedForeground),
-                      const SizedBox(height: 8),
-                      Text(
-                        'No hay pedidos',
-                        style: TextStyle(color: AppColors.mutedForeground, fontSize: 13),
-                      ),
-                    ],
-                  ),
-                )
-              : ListView.separated(
-                  itemCount: orders.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 16),
-                  itemBuilder: (_, i) => _buildOrderCard(
-                    orders[i],
-                    color: color,
-                    actionLabel: actionLabel,
-                    onAction: onAction,
-                  ),
-                ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildOrderCard(
-    KitchenOrder order, {
-    required Color color,
-    required String actionLabel,
-    required void Function(String orderId) onAction,
-  }) {
-    final diff = DateTime.now().difference(order.createdAt).inMinutes;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.card,
-        borderRadius: BorderRadius.circular(AppRadius.card),
-        border: Border.all(color: AppColors.border),
-        boxShadow: AppShadows.cardElevated,
-      ),
-      child: Column(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              border: Border(
-                left: BorderSide(color: color, width: 4),
-                bottom: BorderSide(color: AppColors.border),
-              ),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(AppRadius.card),
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    (order.tableName ?? 'Mesa').replaceAll('Mesa ', ''),
-                    style: TextStyle(
-                      color: color,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        order.orderNumber.isEmpty ? 'ORD' : order.orderNumber,
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          Icon(Icons.access_time, size: 14, color: color),
-                          const SizedBox(width: 6),
-                          Text(
-                            '$diff min',
-                            style: TextStyle(color: color, fontSize: 12),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                ElevatedButton(
-                  onPressed: () => onAction(order.orderId),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: color,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 10,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(AppRadius.md),
-                    ),
-                  ),
-                  child: Text(actionLabel),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              children: order.items.map((item) {
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 26,
-                        height: 26,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: AppColors.muted,
-                          borderRadius: BorderRadius.circular(AppRadius.sm),
-                        ),
-                        child: Text(
-                          _formatQty(item.quantity),
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                Flexible(
-                                  child: Text(
-                                    item.productName,
-                                    style: const TextStyle(fontSize: 13),
-                                  ),
-                                ),
-                                if (item.isTakeout) ...[
-                                  const SizedBox(width: 8),
-                                  _TakeoutBadge(),
-                                ],
-                              ],
-                            ),
-                            if (item.notes != null && item.notes!.isNotEmpty)
-                              Text(
-                                item.notes!,
-                                style: TextStyle(
-                                  color: AppColors.destructive,
-                                  fontSize: 11,
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              }).toList(),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _TakeoutBadge extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: MangoColors.infoBlue.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(AppRadius.full),
-        border: Border.all(
-          color: MangoColors.infoBlue.withValues(alpha: 0.4),
-        ),
-      ),
-      child: const Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            Icons.shopping_bag_outlined,
-            size: 11,
-            color: MangoColors.infoBlue,
-          ),
-          SizedBox(width: 3),
-          Text(
-            'Para llevar',
-            style: TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.w700,
-              color: MangoColors.infoBlue,
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }
 

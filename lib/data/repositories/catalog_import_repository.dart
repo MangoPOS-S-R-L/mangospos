@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/utils/catalog_csv_parser.dart';
 import 'products_repository.dart';
@@ -104,6 +105,10 @@ class CatalogImportRepository {
       final inserted = await _client
           .from('categories')
           .insert({
+            // categories.id es NOT NULL sin default en la BD; hay que
+            // generarlo (igual que addCategory y los seeds). Sin esto el
+            // import fallaba con 23502 en cada categoría nueva.
+            'id': const Uuid().v4(),
             'business_id': businessId,
             'name': name,
             'position': nextCatPosition++,
@@ -134,14 +139,19 @@ class CatalogImportRepository {
       try {
         final categoryId = await resolveCategoryId(row.category);
 
-        // Impuesto: por nombre del CSV, si no por el default elegido.
-        String? taxId;
-        final taxName = row.tax?.trim().toLowerCase();
-        if (taxName != null && taxName.isNotEmpty) {
-          taxId = taxesByName[taxName] ?? defaultTaxId;
-        } else {
-          taxId = defaultTaxId;
+        // Impuestos: uno o varios por nombre del CSV (los no reconocidos se
+        // ignoran). Si la fila no trae ninguno, se usa el default elegido.
+        final taxIds = <String>{};
+        for (final raw in row.taxes) {
+          final id = taxesByName[raw.trim().toLowerCase()];
+          if (id != null) taxIds.add(id);
         }
+        if (taxIds.isEmpty && defaultTaxId != null) {
+          taxIds.add(defaultTaxId);
+        }
+
+        // Modo de impuesto: el de la fila si viene; si no, el global del import.
+        final rowTaxMode = row.taxMode ?? taxMode;
 
         // barcode: el del CSV, o el sku si es numérico (igual que el seed).
         final barcode = (row.barcode?.trim().isNotEmpty ?? false)
@@ -153,11 +163,14 @@ class CatalogImportRepository {
           name: row.name,
           price: row.price,
           categoryId: categoryId,
-          taxMode: taxMode,
+          taxMode: rowTaxMode,
           sku: sku,
           cost: row.cost,
           barcode: barcode,
-          taxIds: taxId != null ? [taxId] : const [],
+          description: row.description,
+          printAreaCode: row.printAreaCode,
+          isActive: row.isActive ?? true,
+          taxIds: taxIds.toList(growable: false),
         );
         created++;
       } catch (e) {

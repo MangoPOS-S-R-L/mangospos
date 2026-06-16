@@ -15,6 +15,30 @@ bool _notesHasDealMarker(String? notes) {
       .any((line) => line.startsWith('[DEAL:') && line.endsWith(']'));
 }
 
+/// Convierte las notas internas de un item en texto legible (UI y tickets):
+/// oculta los marcadores técnicos ([DEAL:...], [PROMO_AUTO:...], [CORTESIA:...])
+/// y, si era una línea de OFERTA sin otra nota, muestra "Oferta aplicada".
+/// Devuelve '' cuando no queda nada visible (el caller no debe imprimir "NOTA:").
+String cleanOrderItemNote(String? raw) {
+  if (raw == null || raw.trim().isEmpty) return '';
+  var isDeal = false;
+  final visible = <String>[];
+  for (final line in raw.split('\n').map((l) => l.trim())) {
+    if (line.isEmpty) continue;
+    if (line.startsWith('[DEAL') && line.endsWith(']')) {
+      isDeal = true;
+      continue;
+    }
+    if ((line.startsWith('[PROMO_AUTO:') || line.startsWith('[CORTESIA:')) &&
+        line.endsWith(']')) {
+      continue;
+    }
+    visible.add(line);
+  }
+  if (isDeal && visible.isEmpty) return 'Oferta aplicada';
+  return visible.join(' · ');
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Resolve service rate from order-level DB values
 // ─────────────────────────────────────────────────────────────────────────────

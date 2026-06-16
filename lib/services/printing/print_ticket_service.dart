@@ -320,9 +320,10 @@ class PrintTicketService {
         }
       }
 
-      if (item.notes != null && item.notes!.isNotEmpty) {
+      final cleanNote = cleanOrderItemNote(item.notes);
+      if (cleanNote.isNotEmpty) {
         gen.setBold(true);
-        _writeWrappedLine(gen, '   NOTA: ${item.notes}', 48);
+        _writeWrappedLine(gen, '   NOTA: $cleanNote', 48);
         gen.setBold(false);
       }
 
@@ -533,9 +534,10 @@ class PrintTicketService {
       // fiscal y el sumatorio del bloque TOTALES.
 
       // Notas especiales destacadas
-      if (item.notes != null && item.notes!.isNotEmpty) {
+      final cleanNote = cleanOrderItemNote(item.notes);
+      if (cleanNote.isNotEmpty) {
         gen.setBold(true);
-        gen.text('  NOTA: ${item.notes}');
+        gen.text('  NOTA: $cleanNote');
         gen.setBold(false);
       }
 
@@ -962,9 +964,10 @@ class PrintTicketService {
         }
       }
 
-      if (item.notes != null && item.notes!.isNotEmpty) {
+      final cleanNote = cleanOrderItemNote(item.notes);
+      if (cleanNote.isNotEmpty) {
         gen.setBold(true);
-        gen.text('  NOTA: ${item.notes}');
+        gen.text('  NOTA: $cleanNote');
         gen.setBold(false);
       }
 

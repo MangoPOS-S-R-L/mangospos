@@ -16,7 +16,11 @@ class CatalogImportRow {
     this.sku,
     this.barcode,
     this.category,
-    this.tax,
+    this.taxes = const [],
+    this.taxMode,
+    this.printAreaCode,
+    this.description,
+    this.isActive,
   });
 
   /// Número de línea en el archivo (1-based, contando el header) para reportes.
@@ -28,9 +32,26 @@ class CatalogImportRow {
   final String? barcode;
   final String? category;
 
-  /// Nombre del impuesto tal como viene en el CSV (se resuelve contra los
-  /// impuestos del negocio en el repo). Null = usar el impuesto por defecto.
-  final String? tax;
+  /// Nombres de los impuestos del CSV (uno o varios, separados por coma, `;`
+  /// o `|`). Se resuelven contra los impuestos del negocio en el repo.
+  /// Vacío = usar el impuesto por defecto del import.
+  final List<String> taxes;
+
+  /// Modo de impuesto por producto: 'inclusive' | 'exclusive' (col "modo
+  /// impuesto"). Null = usar el modo global del import.
+  final String? taxMode;
+
+  /// Área de producción (col "area de produccion" → menu_items.print_area_code).
+  final String? printAreaCode;
+
+  /// Descripción del producto.
+  final String? description;
+
+  /// Activo (col "activo": Si/No). Null = default (activo).
+  final bool? isActive;
+
+  /// Primer impuesto (compat). Usa [taxes] para el set completo.
+  String? get tax => taxes.isEmpty ? null : taxes.first;
 }
 
 /// Error de parseo de una fila (se omite de las filas válidas).
@@ -61,6 +82,17 @@ class CatalogCsvParser {
     'barcode': ['barcode', 'codigo de barras', 'codigo barras', 'ean', 'upc'],
     'category': ['category', 'categoria', 'cat', 'rubro'],
     'tax': ['tax', 'impuesto', 'itbis', 'iva'],
+    'tax_mode': ['tax_mode', 'modo impuesto', 'modo de impuesto', 'modo_impuesto'],
+    'print_area': [
+      'print_area',
+      'print_area_code',
+      'area de produccion',
+      'area produccion',
+      'area de prod',
+      'area',
+    ],
+    'description': ['description', 'descripcion'],
+    'active': ['active', 'activo', 'is_active', 'activa'],
   };
 
   /// Parsea [content] (texto del CSV completo, incluyendo header).
@@ -137,7 +169,11 @@ class CatalogCsvParser {
         sku: at('sku'),
         barcode: at('barcode'),
         category: at('category'),
-        tax: at('tax'),
+        taxes: _parseTaxes(at('tax')),
+        taxMode: _parseTaxMode(at('tax_mode')),
+        printAreaCode: at('print_area'),
+        description: at('description'),
+        isActive: _parseBool(at('active')),
       ));
     }
 
@@ -218,5 +254,36 @@ class CatalogCsvParser {
       s = s.replaceAll(',', '.');
     }
     return double.tryParse(s);
+  }
+
+  /// Separa uno o varios impuestos de una celda ("ITBIS, Propina"). Acepta
+  /// coma (preferida), punto y coma o barra vertical como separador.
+  static List<String> _parseTaxes(String? raw) {
+    if (raw == null) return const [];
+    return raw
+        .split(RegExp(r'[,;|]'))
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  /// 'inclusive' | 'exclusive' por producto. Tolera ES ("incluido"/"excluido").
+  static String? _parseTaxMode(String? raw) {
+    if (raw == null) return null;
+    final s = raw.trim().toLowerCase();
+    if (s.contains('incl')) return 'inclusive';
+    if (s.contains('excl')) return 'exclusive';
+    return null;
+  }
+
+  /// Sí/No → bool. Null si no se reconoce.
+  static bool? _parseBool(String? raw) {
+    if (raw == null) return null;
+    final s = raw.trim().toLowerCase();
+    if (['si', 'sí', 'true', '1', 'activo', 'activa', 'yes', 'x'].contains(s)) {
+      return true;
+    }
+    if (['no', 'false', '0', 'inactivo', 'inactiva'].contains(s)) return false;
+    return null;
   }
 }

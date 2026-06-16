@@ -54,6 +54,11 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
   late TextEditingController _courtesyReasonController;
   late TextEditingController _discountController;
 
+  // Marcador técnico de oferta ([DEAL:uuid]): se oculta del campo de notas
+  // editable (se muestra "Oferta aplicada") y se re-añade al guardar, para no
+  // romper la detección de oferta del motor de precios.
+  String? _dealMarker;
+
   late double _quantity;
   late bool _isTakeout;
   late bool _isCourtesy;
@@ -65,6 +70,7 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
   void initState() {
     super.initState();
     final parsedNotes = _splitStoredNotes(widget.item.notes);
+    _dealMarker = parsedNotes.dealMarker;
     _notesController = TextEditingController(text: parsedNotes.notes);
     _courtesyReasonController = TextEditingController(
       text: parsedNotes.courtesyReason ?? '',
@@ -280,6 +286,10 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
         ? _courtesyReasonController.text.trim()
         : '';
     final noteParts = <String>[];
+    // Preservar el marcador de oferta (se ocultó del campo editable).
+    if (_dealMarker != null && _dealMarker!.isNotEmpty) {
+      noteParts.add(_dealMarker!);
+    }
     if (baseNotes.isNotEmpty) {
       noteParts.add(baseNotes);
     }
@@ -635,6 +645,36 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                           fontWeight: FontWeight.w500,
                         ),
                       ),
+                      if (_dealMarker != null) ...[
+                        const SizedBox(height: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFFF1E6),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: const Color(0xFFFCD9BD)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: const [
+                              Icon(Icons.local_offer,
+                                  size: 16, color: kPrimary),
+                              SizedBox(width: 6),
+                              Text(
+                                'Oferta aplicada',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: kPrimary,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 8),
                       TextField(
                         controller: _notesController,
@@ -1057,7 +1097,16 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     if (widget.item.taxMode == 'inclusive') {
       return _estimatedSubtotal() * fullRate;
     }
-    return rawAmount * fullRate;
+    // Exclusive: el impuesto va sobre la base NETA (después del descuento /
+    // oferta 4x3), igual que el cobro real del backend (28% de 750 = 210, NO
+    // de 1000 = 280). Antes usaba el bruto y mostraba impuesto y "Total
+    // estimado del item" inflados en ítems con descuento. Solo afecta el
+    // preview del diálogo; el cobro lo computa el trigger backend y ya era
+    // correcto.
+    final netAmount = (rawAmount - _effectiveDiscount())
+        .clamp(0, double.infinity)
+        .toDouble();
+    return netAmount * fullRate;
   }
 
   double _fullAmountForQuantity(double quantity) {
@@ -1096,9 +1145,11 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     return _enteredDiscount().clamp(0, _fullAmountForQuantity(_quantity));
   }
 
-  ({String notes, String? courtesyReason}) _splitStoredNotes(String? rawNotes) {
+  ({String notes, String? courtesyReason, String? dealMarker}) _splitStoredNotes(
+    String? rawNotes,
+  ) {
     if (rawNotes == null || rawNotes.trim().isEmpty) {
-      return (notes: '', courtesyReason: null);
+      return (notes: '', courtesyReason: null, dealMarker: null);
     }
 
     final lines = rawNotes
@@ -1108,6 +1159,7 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
         .toList();
 
     String? courtesyReason;
+    String? dealMarker;
     final visibleNotes = <String>[];
 
     for (final line in lines) {
@@ -1115,12 +1167,19 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
         courtesyReason = line
             .substring(_courtesyPrefix.length, line.length - 1)
             .trim();
+      } else if (line.startsWith('[DEAL:') && line.endsWith(']')) {
+        // Marcador de oferta: no es nota humana, se oculta del campo editable.
+        dealMarker = line;
       } else {
         visibleNotes.add(line);
       }
     }
 
-    return (notes: visibleNotes.join('\n'), courtesyReason: courtesyReason);
+    return (
+      notes: visibleNotes.join('\n'),
+      courtesyReason: courtesyReason,
+      dealMarker: dealMarker,
+    );
   }
 }
 

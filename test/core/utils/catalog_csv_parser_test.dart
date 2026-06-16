@@ -81,4 +81,40 @@ void main() {
       expect(r.rows.length, 1);
     });
   });
+
+  group('Campos extra (impuestos múltiples, modo, área, activo)', () {
+    test('varios impuestos + modo + área + descripción + activo', () {
+      final table = <List<String?>>[
+        [
+          'Nombre',
+          'Precio',
+          'Impuesto',
+          'Modo Impuesto',
+          'Area de Produccion',
+          'Descripcion',
+          'Activo',
+        ],
+        ['Cerveza', '200', 'ITBIS, Propina', 'inclusive', 'bar', 'Fria', 'No'],
+      ];
+      final row = CatalogCsvParser.fromRows(table).rows.single;
+      expect(row.name, 'Cerveza');
+      expect(row.taxes, ['ITBIS', 'Propina']);
+      expect(row.tax, 'ITBIS'); // compat: primer impuesto
+      expect(row.taxMode, 'inclusive');
+      expect(row.printAreaCode, 'bar');
+      expect(row.description, 'Fria');
+      expect(row.isActive, false);
+    });
+
+    test('impuesto único + modo excluido + activo Si', () {
+      final table = <List<String?>>[
+        ['nombre', 'precio', 'impuesto', 'modo impuesto', 'activo'],
+        ['Agua', '15', 'EXENTO', 'excluido', 'Si'],
+      ];
+      final row = CatalogCsvParser.fromRows(table).rows.single;
+      expect(row.taxes, ['EXENTO']);
+      expect(row.taxMode, 'exclusive');
+      expect(row.isActive, true);
+    });
+  });
 }

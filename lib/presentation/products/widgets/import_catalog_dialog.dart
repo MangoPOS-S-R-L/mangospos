@@ -125,13 +125,17 @@ class _ImportCatalogDialogState extends ConsumerState<ImportCatalogDialog> {
       _progressTotal = rows.length;
     });
 
+    // Si el archivo trae impuestos por producto, el default global no aplica:
+    // las filas sin impuesto quedan sin impuesto (fiel al archivo).
+    final fileHasTaxes = rows.any((r) => r.taxes.isNotEmpty);
+
     final repo = CatalogImportRepository(Supabase.instance.client);
     try {
       final result = await repo.importRows(
         businessId: businessId,
         rows: rows,
         taxMode: _taxMode,
-        defaultTaxId: _defaultTaxId,
+        defaultTaxId: fileHasTaxes ? null : _defaultTaxId,
         onProgress: (done, total) {
           if (!mounted) return;
           setState(() {
@@ -177,7 +181,10 @@ class _ImportCatalogDialogState extends ConsumerState<ImportCatalogDialog> {
             const SizedBox(height: 8),
             const Text(
               '• nombre, precio (obligatorias)\n'
-              '• costo, sku, barcode, categoria, impuesto (opcionales)',
+              '• costo, sku, barcode, categoria (opcionales)\n'
+              '• impuesto (uno o varios separados por coma), modo impuesto '
+              '(incluido/excluido), area de produccion, descripcion, activo '
+              '(Si/No) (opcionales)',
               style: TextStyle(height: 1.4),
             ),
             const SizedBox(height: 12),
@@ -194,6 +201,10 @@ class _ImportCatalogDialogState extends ConsumerState<ImportCatalogDialog> {
         );
       case _Stage.parsed:
         final p = _parsed!;
+        // Si el archivo ya trae impuesto/modo POR PRODUCTO, los controles
+        // globales no deben dictar nada — se ocultan (la info del archivo manda).
+        final fileHasTaxes = p.rows.any((r) => r.taxes.isNotEmpty);
+        final fileHasTaxMode = p.rows.any((r) => r.taxMode != null);
         return Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -206,36 +217,67 @@ class _ImportCatalogDialogState extends ConsumerState<ImportCatalogDialog> {
               Text('⚠ ${p.errors.length} filas con error (se omiten)',
                   style: const TextStyle(color: Colors.orange)),
             const Divider(height: 24),
-            const Text('Impuesto por defecto',
-                style: TextStyle(fontWeight: FontWeight.w600)),
-            const SizedBox(height: 4),
-            DropdownButton<String?>(
-              isExpanded: true,
-              value: _defaultTaxId,
-              hint: const Text('Sin impuesto'),
-              items: [
-                const DropdownMenuItem<String?>(
-                    value: null, child: Text('Sin impuesto')),
-                ..._taxes.map((t) => DropdownMenuItem<String?>(
-                      value: t['id'].toString(),
+            if (fileHasTaxes || fileHasTaxMode)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.check_circle,
+                        size: 16, color: Colors.green),
+                    const SizedBox(width: 6),
+                    Expanded(
                       child: Text(
-                          '${t['name']} (${(t['rate'] as num?)?.toString() ?? '0'}%)'),
-                    )),
-              ],
-              onChanged: (v) => setState(() => _defaultTaxId = v),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                const Text('Precios incluyen impuesto'),
-                const Spacer(),
-                Switch(
-                  value: _taxMode == 'inclusive',
-                  onChanged: (v) =>
-                      setState(() => _taxMode = v ? 'inclusive' : 'exclusive'),
+                        fileHasTaxes && fileHasTaxMode
+                            ? 'Los impuestos y el modo se toman del archivo (por producto).'
+                            : fileHasTaxes
+                                ? 'Los impuestos se toman del archivo (por producto).'
+                                : 'El modo de impuesto se toma del archivo (por producto).',
+                        style: const TextStyle(
+                            fontSize: 12, color: Colors.black54),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            // "Impuesto por defecto": solo cuando el archivo NO trae impuesto
+            // (es el fallback para filas sin impuesto).
+            if (!fileHasTaxes) ...[
+              const Text('Impuesto por defecto',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 4),
+              DropdownButton<String?>(
+                isExpanded: true,
+                value: _defaultTaxId,
+                hint: const Text('Sin impuesto'),
+                items: [
+                  const DropdownMenuItem<String?>(
+                      value: null, child: Text('Sin impuesto')),
+                  ..._taxes.map((t) => DropdownMenuItem<String?>(
+                        value: t['id'].toString(),
+                        child: Text(
+                            '${t['name']} (${(t['rate'] as num?)?.toString() ?? '0'}%)'),
+                      )),
+                ],
+                onChanged: (v) => setState(() => _defaultTaxId = v),
+              ),
+            ],
+            // "Precios incluyen impuesto": solo cuando el archivo NO trae el
+            // modo por producto.
+            if (!fileHasTaxMode) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  const Text('Precios incluyen impuesto'),
+                  const Spacer(),
+                  Switch(
+                    value: _taxMode == 'inclusive',
+                    onChanged: (v) => setState(
+                        () => _taxMode = v ? 'inclusive' : 'exclusive'),
+                  ),
+                ],
+              ),
+            ],
             if (_error != null) ...[
               const SizedBox(height: 8),
               Text(_error!, style: const TextStyle(color: Colors.red)),

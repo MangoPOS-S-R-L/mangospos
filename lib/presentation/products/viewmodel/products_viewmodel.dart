@@ -6,10 +6,9 @@ import 'package:mangopos/data/models/category.dart' as model;
 import 'package:mangopos/data/repositories/category_repository.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
-import 'package:excel/excel.dart';
-import 'package:path_provider/path_provider.dart';
 
 import '../../../core/storage/image_upload_helper.dart';
+import '../../../core/utils/export/report_exporter.dart';
 import '../../../data/repositories/products_repository.dart';
 import '../../../data/repositories/printing_v2_repository.dart';
 
@@ -629,31 +628,24 @@ class ProductsViewModel extends ChangeNotifier {
 
   Future<void> downloadTemplate() async {
     try {
-      final excel = Excel.createExcel();
-      final sheet = excel['Sheet1'];
-      sheet.appendRow([
-        TextCellValue('Nombre'),
-        TextCellValue('Precio'),
-        TextCellValue('Costo'),
-        TextCellValue('SKU'),
-        TextCellValue('Codigo de Barras'),
-        TextCellValue('Categoria'),
-        TextCellValue('Impuesto'),
-      ]);
-      
-      var directory = await getDownloadsDirectory();
-      if (directory == null) {
-        directory = await getApplicationDocumentsDirectory();
-      }
-      final filePath = '${directory.path}/plantilla_productos.xlsx';
-      final file = File(filePath);
-      
-      final bytes = excel.encode();
-      if (bytes != null) {
-        await file.writeAsBytes(bytes);
-      }
-      
-      _error = 'Plantilla guardada en: $filePath';
+      final ok = await ReportExporter.exportExcel(
+        filename: 'plantilla_productos',
+        sheetName: 'Plantilla',
+        headers: const [
+          'Nombre',
+          'Precio',
+          'Costo',
+          'SKU',
+          'Codigo de Barras',
+          'Categoria',
+          'Impuesto',
+        ],
+        rows: const [],
+      );
+
+      _error = ok
+          ? 'Plantilla descargada.'
+          : 'No se pudo descargar; se copió al portapapeles.';
       notifyListeners();
     } catch (e) {
       debugPrint('Error downloading template: $e');
@@ -664,46 +656,83 @@ class ProductsViewModel extends ChangeNotifier {
 
   Future<void> exportProductsToExcel() async {
     try {
-      final excel = Excel.createExcel();
-      final sheet = excel['Sheet1'];
-      sheet.appendRow([
-        TextCellValue('ID'),
-        TextCellValue('Nombre'),
-        TextCellValue('Precio'),
-        TextCellValue('Costo'),
-        TextCellValue('SKU'),
-        TextCellValue('Codigo de Barras'),
-        TextCellValue('Categoria'),
-        TextCellValue('Activo'),
-      ]);
-      
-      for (var product in _products) {
-        final categoryName = _asMap(product['categories'])['name']?.toString() ?? '';
-        sheet.appendRow([
-          TextCellValue(product['id']?.toString() ?? ''),
-          TextCellValue(product['name']?.toString() ?? ''),
-          TextCellValue(product['price']?.toString() ?? '0'),
-          TextCellValue(product['cost']?.toString() ?? '0'),
-          TextCellValue(product['sku']?.toString() ?? ''),
-          TextCellValue(product['barcode']?.toString() ?? ''),
-          TextCellValue(categoryName),
-          TextCellValue(product['is_active'] == true ? 'Si' : 'No'),
+      // Export COMPLETO: toda la información del producto, incluida el área de
+      // producción. Las 7 primeras columnas (Nombre, Precio, Costo, SKU,
+      // Codigo de Barras, Categoria, Impuesto) usan los nombres EXACTOS que
+      // entiende el import (CatalogCsvParser) para que el round-trip siga
+      // funcionando — el resto de columnas el import las ignora. El impuesto va
+      // por NOMBRE; 'Nombre' va antes que 'Descripcion' a propósito (ambos son
+      // alias de 'name' en el parser; toma el primero).
+      // Ver lib/core/utils/catalog_csv_parser.dart.
+      String siNo(dynamic v) => v == true ? 'Si' : 'No';
+
+      final rows = <List<String>>[];
+      for (final product in _products) {
+        final categoryName =
+            _asMap(product['categories'])['name']?.toString() ?? '';
+        // TODOS los impuestos vinculados, separados por ", " (el import los
+        // resuelve por nombre y soporta varios). En CSV la celda se entrecomilla
+        // automáticamente, así que la coma no rompe el formato. Vacío = default.
+        final taxLinks = product['menu_item_taxes'];
+        final taxName = (taxLinks is List)
+            ? taxLinks
+                  .map(
+                    (l) => _asMap(_asMap(l)['taxes'])['name']?.toString() ?? '',
+                  )
+                  .where((n) => n.isNotEmpty)
+                  .join(', ')
+            : '';
+        rows.add([
+          // ── Compatibles con el import (NO cambiar nombres ni orden) ──
+          product['name']?.toString() ?? '',
+          product['price']?.toString() ?? '0',
+          product['cost']?.toString() ?? '',
+          product['sku']?.toString() ?? '',
+          product['barcode']?.toString() ?? '',
+          categoryName,
+          taxName,
+          // ── Resto de la información (solo lectura para el import) ──
+          product['print_area_code']?.toString() ?? '',
+          product['description']?.toString() ?? '',
+          product['tax_mode']?.toString() ?? '',
+          siNo(product['is_active']),
+          siNo(product['is_beverage']),
+          siNo(product['has_prep']),
+          product['prep_minutes']?.toString() ?? '',
+          product['sold_by_type']?.toString() ?? '',
+          product['image_url']?.toString() ?? '',
+          product['id']?.toString() ?? '',
         ]);
       }
-      
-      var directory = await getDownloadsDirectory();
-      if (directory == null) {
-        directory = await getApplicationDocumentsDirectory();
-      }
-      final filePath = '${directory.path}/productos.xlsx';
-      final file = File(filePath);
-      
-      final bytes = excel.encode();
-      if (bytes != null) {
-        await file.writeAsBytes(bytes);
-      }
-      
-      _error = 'Productos exportados a: $filePath';
+
+      final ok = await ReportExporter.exportExcel(
+        filename: 'productos',
+        sheetName: 'Productos',
+        headers: const [
+          'Nombre',
+          'Precio',
+          'Costo',
+          'SKU',
+          'Codigo de Barras',
+          'Categoria',
+          'Impuesto',
+          'Area de Produccion',
+          'Descripcion',
+          'Modo Impuesto',
+          'Activo',
+          'Es Bebida',
+          'Tiene Preparacion',
+          'Prep (min)',
+          'Vendido por',
+          'Imagen',
+          'ID',
+        ],
+        rows: rows,
+      );
+
+      _error = ok
+          ? 'Productos exportados (${rows.length}).'
+          : 'No se pudo descargar; se copió al portapapeles como respaldo.';
       notifyListeners();
     } catch (e) {
       debugPrint('Error exporting products: $e');

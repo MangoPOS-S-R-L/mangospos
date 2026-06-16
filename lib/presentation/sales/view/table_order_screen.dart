@@ -52,8 +52,6 @@ import 'package:mangopos/presentation/sales/widgets/transfer_session_dialog.dart
 import 'package:mangopos/data/models/table_status.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'package:mangopos/presentation/sales/view/widgets/order_screen/order_items_list.dart'
-    show cleanOrderItemNote;
 import 'package:mangopos/presentation/sales/view/widgets/product_detail_modal.dart';
 import 'package:mangopos/presentation/sales/view/table_selector_modal.dart';
 import 'payment_split_screen.dart';
