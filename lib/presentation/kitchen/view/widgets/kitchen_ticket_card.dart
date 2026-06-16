@@ -80,7 +80,8 @@ class KitchenTicketCard extends StatelessWidget {
 
           Divider(height: 1, thickness: 1, color: AppColors.border),
 
-          // Lista de ítems — crece con el contenido.
+          // Lista de ítems — al marcar uno como listo queda tachado al fondo,
+          // visible, hasta que se complete la orden. Crece con el contenido.
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
             child: Column(
@@ -406,44 +407,23 @@ class _Footer extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 10),
-          // Acción primaria con el degradado de marca MangoPOS.
+          // Acción primaria — color sólido de marca MangoPOS.
           SizedBox(
             width: double.infinity,
             height: 48,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [AppColors.primary, AppColors.primaryGradientEnd],
-                ),
-                borderRadius: BorderRadius.circular(AppRadius.md),
-              ),
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: onComplete,
+            child: FilledButton.icon(
+              onPressed: onComplete,
+              style: FilledButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(AppRadius.md),
-                  child: const Center(
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.done_all_rounded,
-                          size: 20,
-                          color: Colors.white,
-                        ),
-                        SizedBox(width: 8),
-                        Text(
-                          'Marcar todo listo',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w800,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
                 ),
+              ),
+              icon: const Icon(Icons.done_all_rounded, size: 20),
+              label: const Text(
+                'Marcar todo listo',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
               ),
             ),
           ),

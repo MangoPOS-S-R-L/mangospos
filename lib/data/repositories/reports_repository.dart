@@ -875,6 +875,29 @@ class ReportsRepository {
       modifiersByItem[itemId] = [...(modifiersByItem[itemId] ?? []), mod];
     }
 
+    // Líneas de impuesto per-impuesto (fuente de verdad del desglose fiscal).
+    // Cada impuesto configurado (ITBIS, Ley, otros) guarda su propia línea con
+    // su monto exacto, en vez del combinado `tax_rate=28` de order_items.
+    final taxLineRows = await _selectInBatches(
+      table: 'order_item_tax_lines',
+      select: 'order_item_id, tax_id, tax_name, tax_rate, amount',
+      column: 'order_item_id',
+      values: itemIds,
+    );
+    final taxLinesByItem = <String, List<Map<String, dynamic>>>{};
+    for (final row in taxLineRows) {
+      final id = row['order_item_id']?.toString();
+      if (id == null) continue;
+      (taxLinesByItem[id] ??= <Map<String, dynamic>>[]).add(row);
+    }
+    // IDs de impuestos marcados como cargo de servicio (propina de ley): se
+    // bucketean aparte del ITBIS, igual que el path heurístico.
+    final serviceFeeTaxIds = taxes
+        .where((t) => t['is_service_fee'] == true)
+        .map((t) => t['id']?.toString())
+        .whereType<String>()
+        .toSet();
+
     final orderRows = await _selectInBatches(
       table: ReportsQueries.tableOrders,
       select: 'id, subtotal, service_fee, total, status_ext, origin:table_sessions!inner(origin)',
@@ -944,11 +967,80 @@ class ReportsRepository {
       // actual paid gross using the CONFIGURED tax rates so that the effective
       // ITBIS rate always equals the configured rate (e.g. 18 %).
       final s = summarizeItemPricing(order, item, forcedOrigin: order.origin);
-      final paidGross = (s.subtotal + s.tax + s.serviceFee) * factor;
+      // RESTAR EL DESCUENTO (ofertas 4x3, manuales, cortesías): el gross pagado
+      // es lo que el cliente realmente pagó = subtotal + tax + serviceFee −
+      // descuento (= s.total). Antes NO se restaba, así que la base incluía el
+      // bruto pre-oferta y descuadraba con el impuesto (que sí va sobre el
+      // neto), diluyendo la tasa e inflando "Total facturado".
+      final paidGross =
+          (s.subtotal + s.tax + s.serviceFee - s.discounts) * factor;
       final qty = item.quantity * factor;
 
       grossSalesWithTax += paidGross;
       totalQuantity += qty;
+
+      // ── FUENTE DE VERDAD: order_item_tax_lines (per-impuesto) ──────────────
+      // Si el item tiene líneas, derivamos CADA impuesto exacto de ahí (ITBIS,
+      // Ley y cualquier otro de config), sin el truco 28→18 ni el gate de
+      // serviceFeeEnabled. Refleja lo realmente cobrado. Órdenes legacy sin
+      // líneas caen al heurístico de abajo.
+      final taxLines = taxLinesByItem[itemId] ?? const <Map<String, dynamic>>[];
+      if (taxLines.isNotEmpty) {
+        double itemTaxTotal = 0;
+        double itemServiceFee = 0;
+        for (final tl in taxLines) {
+          final amt = (_toDouble(tl['amount']) * factor * 100).round() / 100;
+          if (amt.abs() < 0.005) continue;
+          itemTaxTotal += amt;
+          final taxId = tl['tax_id']?.toString() ?? '';
+          if (serviceFeeTaxIds.contains(taxId)) itemServiceFee += amt;
+        }
+
+        if (itemTaxTotal.abs() < 0.005) {
+          exemptSales += paidGross; // tiene líneas pero todas en 0 → exento
+          continue;
+        }
+
+        final base = ((paidGross - itemTaxTotal) * 100).round() / 100;
+        taxableSales += base;
+        totalTaxCollected += itemTaxTotal - itemServiceFee;
+
+        for (final tl in taxLines) {
+          final amt = (_toDouble(tl['amount']) * factor * 100).round() / 100;
+          if (amt.abs() < 0.005) continue;
+          final taxId = tl['tax_id']?.toString() ?? '';
+          if (serviceFeeTaxIds.contains(taxId)) continue; // va al __service_fee__
+          final lineRate = _toDouble(tl['tax_rate']);
+          final lineName = tl['tax_name']?.toString().trim();
+          final key = taxId.isNotEmpty
+              ? taxId
+              : '${lineName ?? ''}|${lineRate.toStringAsFixed(2)}';
+          final bucket = breakdown.putIfAbsent(
+            key,
+            () => {
+              'label': (lineName?.isNotEmpty == true) ? lineName : 'Impuesto',
+              'rate': lineRate,
+              'amount': 0.0,
+              'taxable_amount': 0.0,
+              'gross_amount': 0.0,
+              'quantity': 0.0,
+              'count': 0,
+            },
+          );
+          bucket['amount'] = _toDouble(bucket['amount']) + amt;
+          bucket['taxable_amount'] = _toDouble(bucket['taxable_amount']) + base;
+          bucket['gross_amount'] = _toDouble(bucket['gross_amount']) + paidGross;
+          bucket['quantity'] = _toDouble(bucket['quantity']) + qty;
+          bucket['count'] = (bucket['count'] as int) + 1;
+        }
+
+        if (itemServiceFee.abs() >= 0.005) {
+          totalServiceFee += itemServiceFee;
+          serviceFeeBaseTotal += base;
+          ordersWithServiceFee.add(orderId);
+        }
+        continue;
+      }
 
       // Correcting combined rate stored as single tax_rate (e.g. 28 → 18 ITBIS)
       final effectiveItbisRate = item.taxRate >= 27.9 ? 18.0 : item.taxRate;
