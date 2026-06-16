@@ -52,6 +52,7 @@ import '../../presentation/inventory/view/inventory_lots_view.dart';
 import '../../presentation/inventory/view/inventory_low_stock_view.dart';
 import '../../presentation/inventory/view/inventory_rotation_view.dart';
 import '../../presentation/inventory/view/inventory_valuation_view.dart';
+import '../../presentation/inventory/view/consolidated_inventory_view.dart';
 import '../../presentation/inventory/view/inventory_outflow_view.dart';
 import '../../presentation/inventory/view/suppliers_view.dart';
 import '../../presentation/inventory/view/warehouses_view.dart';
@@ -748,6 +749,10 @@ class AppRouter {
           GoRoute(
             path: AppRoutes.inventoryTransfers,
             builder: (context, state) => const TransfersView(),
+          ),
+          GoRoute(
+            path: AppRoutes.inventoryConsolidated,
+            builder: (context, state) => const ConsolidatedInventoryView(),
           ),
           GoRoute(
             path: AppRoutes.inventoryProduction,

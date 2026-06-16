@@ -185,6 +185,13 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
                   available: true,
                 ),
                 _HubCard(
+                  icon: Icons.store_mall_directory_outlined,
+                  title: 'Inventario multisucursal',
+                  subtitle: 'Stock total de todas las sucursales (almacén principal)',
+                  route: AppRoutes.inventoryConsolidated,
+                  available: true,
+                ),
+                _HubCard(
                   icon: Icons.precision_manufacturing_outlined,
                   title: 'Producción',
                   subtitle:

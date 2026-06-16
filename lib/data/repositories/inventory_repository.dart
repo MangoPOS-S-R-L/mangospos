@@ -546,6 +546,21 @@ class InventoryRepository {
     return List<Map<String, dynamic>>.from(response);
   }
 
+  /// Inventario multisucursal (panel de totales): stock de cada producto
+  /// —emparejado por SKU— en todas las sucursales del mismo dueño, con desglose
+  /// por sucursal + total + valuación. Devuelve el JSON crudo del RPC
+  /// (`{branches: [...], products: [...]}`).
+  Future<Map<String, dynamic>> getConsolidatedInventory({
+    required String businessId,
+  }) async {
+    final response = await _client.rpc(
+      'get_consolidated_inventory',
+      params: {'_anchor_business_id': businessId},
+    );
+    if (response is Map) return Map<String, dynamic>.from(response);
+    return <String, dynamic>{'branches': <dynamic>[], 'products': <dynamic>[]};
+  }
+
   /// Análisis de rotación: outflow, velocidad y clase (star/active/slow/dormant)
   /// por insumo en una ventana de [daysBack] días (default 30).
   Future<List<Map<String, dynamic>>> getInventoryRotation({

@@ -120,10 +120,12 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
       final discountDisplayMode = await ref
           .read(posSettingsRepositoryProvider)
           .getDiscountDisplayMode(businessId);
-      final invoiceCompact = (await ref
-              .read(posSettingsRepositoryProvider)
-              .getInvoiceTemplate(businessId)) ==
-          PosSettingsRepository.invoiceTemplateCompact;
+      String invoiceTpl = PosSettingsRepository.invoiceTemplateStandard;
+      try {
+        invoiceTpl = await ref
+            .read(posSettingsRepositoryProvider)
+            .getInvoiceTemplate(businessId);
+      } catch (_) {}
 
       final ticket = PrintTicketService.generatePrecheck(
         order: checkOrder,
@@ -139,7 +141,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
         receiptItemDisplayMode: receiptMode,
         taxBreakdown: taxBreakdown,
         discountDisplayMode: discountDisplayMode,
-        compact: invoiceCompact,
+        template: invoiceTpl,
       );
 
       await printRepo.printEscPos(

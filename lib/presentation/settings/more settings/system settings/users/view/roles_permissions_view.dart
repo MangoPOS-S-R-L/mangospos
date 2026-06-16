@@ -72,10 +72,18 @@ class _SettingsRolesViewState extends ConsumerState<SettingsRolesView> {
       title: 'Ventas por salon / manual',
       permissions: [
         _PermissionRow('ventas.mesas', 'Mesas (abrir/mover/unir)'),
+        _PermissionRow(
+          'ventas.mesas.liberar',
+          'Mesas (liberar / anular la cuenta)',
+        ),
         _PermissionRow('ventas.orden', 'Orden (agregar/editar/enviar)'),
         _PermissionRow(
           'ventas.orden.eliminar',
           'Orden (eliminar producto de la cuenta)',
+        ),
+        _PermissionRow(
+          'ventas.orden.descuento',
+          'Orden (aplicar descuento / cortesía)',
         ),
         _PermissionRow('ventas.cuenta', 'Cuenta (split manual/equitativo)'),
       ],
@@ -779,8 +787,12 @@ const Map<String, Map<String, List<String>>> _codeMap = {
       'ventas.mesas.abrir',
       'ventas.mesas.mover_unir',
       'ventas.mesas.marcar_pagando',
-      'ventas.mesas.liberar'
     ],
+  },
+  // Independiente de abrir/mover: permite decidir si un mesero puede liberar
+  // (anular la cuenta y soltar) una mesa sin PIN de supervisor.
+  'ventas.mesas.liberar': {
+    'graba/mod': ['ventas.mesas.liberar'],
   },
   'ventas.orden': {
     'acceso': ['ventas.orden.ver_total'],
@@ -789,12 +801,16 @@ const Map<String, Map<String, List<String>>> _codeMap = {
       'ventas.orden.agregar_item',
       'ventas.orden.editar_item',
       'ventas.orden.enviar_cocina',
-      'ventas.orden.descuento_aplicar'
     ],
     'anula': ['ventas.orden.anular', 'ventas.orden.reabrir'],
   },
   'ventas.orden.eliminar': {
     'graba/mod': ['ventas.orden.eliminar_item'],
+  },
+  // Independiente de agregar/editar: controla descuentos y cortesías por igual
+  // (ambos usan el mismo permiso 'ventas.orden.descuento_aplicar').
+  'ventas.orden.descuento': {
+    'graba/mod': ['ventas.orden.descuento_aplicar'],
   },
   'ventas.cuenta': {
     'acceso': ['ventas.cuenta.split_manual', 'ventas.cuenta.split_equiv'],

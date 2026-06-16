@@ -282,9 +282,14 @@ class PosSettingsRepository {
   /// Modelo de factura ESTÁNDAR (layout detallado actual).
   static const String invoiceTemplateStandard = 'standard';
 
-  /// Modelo de factura COMPACTO: ítems en una línea, fuente/espaciado mínimos,
-  /// TOTAL en tamaño normal. Mantiene los datos fiscales. Para cuentas largas.
+  /// Modelo de factura COMPACTO: 1 línea por ítem ("1x Nombre …… precio") con
+  /// renglón en blanco entre ítems y cabecera "Cant. Descripción / Precio".
   static const String invoiceTemplateCompact = 'compact';
+
+  /// Modelo de factura SIMPLE (estilo KAELUS): "# N: Nombre qty X precio ……
+  /// total" con líneas seguidas (sin blanco entre ítems), sin cabecera de
+  /// columnas. Detallado pero corrido. Mantiene los datos fiscales.
+  static const String invoiceTemplateSimple = 'simple';
 
   final SupabaseClient _client;
   final BusinessSettingsOfflineCache _settingsCache =
@@ -349,9 +354,9 @@ class PosSettingsRepository {
   Future<String> getInvoiceTemplate(String businessId) async {
     String parse(Map<String, dynamic>? row) {
       final raw = row?['invoice_print_template']?.toString();
-      return raw == invoiceTemplateCompact
-          ? invoiceTemplateCompact
-          : invoiceTemplateStandard;
+      if (raw == invoiceTemplateCompact) return invoiceTemplateCompact;
+      if (raw == invoiceTemplateSimple) return invoiceTemplateSimple;
+      return invoiceTemplateStandard;
     }
 
     try {
@@ -365,8 +370,10 @@ class PosSettingsRepository {
     required String businessId,
     required String template,
   }) async {
-    final normalized = template == invoiceTemplateCompact
-        ? invoiceTemplateCompact
+    final normalized =
+        (template == invoiceTemplateCompact ||
+            template == invoiceTemplateSimple)
+        ? template
         : invoiceTemplateStandard;
 
     await _client.from('business_settings').upsert({

@@ -2598,10 +2598,15 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   Future<void> applyDiscountPercentToItems({
     required List<String> itemIds,
     required double percent,
+    bool preAuthorized = false,
   }) async {
-    if (!ref
-        .read(sessionProvider.notifier)
-        .hasPermission('ventas.orden.descuento_aplicar')) {
+    // [preAuthorized] lo usa la pantalla cuando ya validó el acceso
+    // (permiso del usuario o PIN de supervisor de respaldo). El chequeo
+    // de permiso queda como red de seguridad para cualquier otro llamador.
+    if (!preAuthorized &&
+        !ref
+            .read(sessionProvider.notifier)
+            .hasPermission('ventas.orden.descuento_aplicar')) {
       state = state.copyWith(
         error: 'No tienes permiso para aplicar descuentos.',
       );
@@ -2671,10 +2676,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   Future<void> applyCourtesyToItems({
     required List<String> itemIds,
     required String reason,
+    bool preAuthorized = false,
   }) async {
-    if (!ref
-        .read(sessionProvider.notifier)
-        .hasPermission('ventas.orden.descuento_aplicar')) {
+    // Ver nota en applyDiscountPercentToItems: la pantalla autoriza con
+    // permiso o PIN de respaldo; aquí solo queda la red de seguridad.
+    if (!preAuthorized &&
+        !ref
+            .read(sessionProvider.notifier)
+            .hasPermission('ventas.orden.descuento_aplicar')) {
       state = state.copyWith(
         error: 'No tienes permiso para aplicar cortesías.',
       );

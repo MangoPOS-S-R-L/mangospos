@@ -403,17 +403,18 @@ class PrintTicketService {
     /// la semántica completa de `'pre_discount'` vs `'post_discount'`.
     /// Default `'pre_discount'` (comportamiento histórico).
     String discountDisplayMode = 'pre_discount',
-    /// Modelo compacto (mismo setting `invoice_print_template` que la factura):
-    /// ítems detallados pero apretados, sin asteriscos en el título y con
-    /// espaciado mínimo. La pre-cuenta sigue el mismo modo elegido por el
-    /// negocio.
-    bool compact = false,
+    /// Modelo de impresión (mismo setting `invoice_print_template` que la
+    /// factura): 'standard', 'compact' (1 línea + blanco) o 'simple' (estilo
+    /// KAELUS: "# N:" con líneas seguidas). La pre-cuenta sigue el modo elegido.
+    String template = 'standard',
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
     final consolidatedItems = _buildPrintableItems(
       items,
       receiptItemDisplayMode: receiptItemDisplayMode,
     );
+    final compact = template != 'standard';
+    final simple = template == 'simple';
 
     gen.initialize();
 
@@ -497,13 +498,15 @@ class PrintTicketService {
     // ════════════════════════════════════════════
     // ITEMS - PRODUCTOS (SIN QTY)
     // ════════════════════════════════════════════
-    gen.setBold(true);
-    gen.textRow(
-      compact ? 'Cant. Descripción' : 'DESCRIPCIÓN',
-      compact ? 'Precio' : 'TOTAL',
-    );
-    gen.setBold(false);
-    _thinSeparator(gen);
+    if (!simple) {
+      gen.setBold(true);
+      gen.textRow(
+        compact ? 'Cant. Descripción' : 'DESCRIPCIÓN',
+        compact ? 'Precio' : 'TOTAL',
+      );
+      gen.setBold(false);
+      _thinSeparator(gen);
+    }
     gap(); // línea en blanco debajo del encabezado
 
     for (int i = 0; i < consolidatedItems.length; i++) {
@@ -520,7 +523,31 @@ class PrintTicketService {
       final cleanNote = cleanOrderItemNote(item.notes);
       final baseTotal = itemDisplayBaseTotal(order, item);
 
-      if (compact) {
+      if (compact && simple) {
+        // v3 SIMPLE (estilo KAELUS): "# N: Nombre qty X precio …… total",
+        // líneas SEGUIDAS (sin blanco), modificadores con precio.
+        gen.dotRow(
+          '# ${i + 1}: ${item.productName} $displayQty X ${_formatMoney(baseUnitPrice)}',
+          'RD\$ ${_formatMoney(baseTotal)}',
+        );
+        if (item.isTakeout) {
+          gen.setBold(true);
+          gen.text('   [PARA LLEVAR]');
+          gen.setBold(false);
+        }
+        for (final mod in item.modifiers) {
+          final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
+          final modTotal = mod.price * itemQty * mod.qty;
+          gen.dotRow(
+            '   Modificador: ${mod.name}',
+            'RD\$ ${_formatMoney(modTotal)}',
+          );
+        }
+        if (cleanNote.isNotEmpty) {
+          gen.text('   NOTA: $cleanNote');
+        }
+        // Líneas seguidas: sin renglón en blanco entre ítems.
+      } else if (compact) {
         // Una sola línea: "1x Nombre …………… total" (sin "#"). Modificadores
         // (con precio) y nota indentados debajo; un renglón en blanco separa
         // cada ítem.
@@ -851,15 +878,19 @@ class PrintTicketService {
     /// business tiene `open_drawer_on_cash = true`. Si la impresora no
     /// tiene gaveta RJ-11 conectada, el comando se ignora silenciosamente.
     bool openCashDrawer = false,
-    /// Modelo COMPACTO: cada ítem en una sola línea ("2x Nombre …… 500.00"),
-    /// sin la línea de precio unitario ni el nombre en renglón aparte, TOTAL en
-    /// tamaño normal (no 2x) y sin saltos entre ítems. Mantiene todos los datos fiscales
-    /// (NCF/e-NCF, RNC, desglose de impuestos, QR). Pensado para cuentas con
-    /// muchos productos. Conserva los datos fiscales completos (NCF/e-NCF, RNC,
-    /// desglose de impuestos, QR). Lo elige el negocio en ajustes de impresión.
-    bool compact = false,
+    /// Modelo de impresión: 'standard' (detallado, espaciado amplio),
+    /// 'compact' (1 línea por ítem "1x Nombre …… precio" + renglón en blanco
+    /// entre ítems) o 'simple' (estilo KAELUS: "# N: Nombre qty X precio ……
+    /// total" con líneas seguidas, sin blanco). Las tres conservan TODOS los
+    /// datos fiscales (NCF/e-NCF, RNC, desglose de impuestos, QR).
+    String template = 'standard',
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
+    // `compact` = familia de layout apretado (compact + simple): sin
+    // asteriscos, espaciado mínimo, TOTAL con poco aire. `simple` además usa
+    // el formato de ítem "# N:" con líneas seguidas (sin blanco entre ítems).
+    final compact = template != 'standard';
+    final simple = template == 'simple';
 
     gen.initialize();
 
@@ -975,13 +1006,15 @@ class PrintTicketService {
     _thinSeparator(gen);
 
     // Items
-    gen.setBold(true);
-    gen.textRow(
-      compact ? 'Cant. Descripción' : 'DESCRIPCIÓN',
-      compact ? 'Precio' : 'TOTAL',
-    );
-    gen.setBold(false);
-    _thinSeparator(gen);
+    if (!simple) {
+      gen.setBold(true);
+      gen.textRow(
+        compact ? 'Cant. Descripción' : 'DESCRIPCIÓN',
+        compact ? 'Precio' : 'TOTAL',
+      );
+      gen.setBold(false);
+      _thinSeparator(gen);
+    }
     gap();
 
     final consolidatedItems = _buildPrintableItems(
@@ -1005,7 +1038,31 @@ class PrintTicketService {
       );
       final cleanNote = cleanOrderItemNote(item.notes);
 
-      if (compact) {
+      if (compact && simple) {
+        // v3 SIMPLE (estilo KAELUS): "# N: Nombre qty X precio …… total",
+        // líneas SEGUIDAS (sin blanco entre ítems), modificadores con precio.
+        gen.dotRow(
+          '# ${i + 1}: ${item.productName} $displayQty X ${_formatMoney(unitPrice)}',
+          'RD\$ ${_formatMoney(lineTotal)}',
+        );
+        if (item.isTakeout) {
+          gen.setBold(true);
+          gen.text('   [PARA LLEVAR]');
+          gen.setBold(false);
+        }
+        for (final mod in item.modifiers) {
+          final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
+          final modTotal = mod.price * itemQty * mod.qty;
+          gen.dotRow(
+            '   Modificador: ${mod.name}',
+            'RD\$ ${_formatMoney(modTotal)}',
+          );
+        }
+        if (cleanNote.isNotEmpty) {
+          gen.text('   NOTA: $cleanNote');
+        }
+        // Líneas seguidas: sin renglón en blanco entre ítems.
+      } else if (compact) {
         // Una sola línea: "1x Nombre …………… total" (sin "#"). Los
         // modificadores (con precio) y la nota van indentados debajo, y un
         // renglón en blanco separa cada ítem.

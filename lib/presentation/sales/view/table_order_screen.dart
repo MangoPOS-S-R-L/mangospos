@@ -545,6 +545,29 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
           'Esto anulará la orden actual y liberará la mesa. ¿Deseas continuar?',
       confirmLabel: 'Liberar',
       goToZonesOnSuccess: true,
+      bypassPermission: 'ventas.mesas.liberar',
+    );
+  }
+
+  /// Autoriza una acción sensible: el dueño y quien tenga [permission] pasan
+  /// directo; cualquier otro puede autorizar con PIN de Supervisor/Administrador
+  /// como respaldo. Devuelve false si el usuario cancela el PIN.
+  Future<bool> _authorizeWithPermissionOrPin(
+    BuildContext context, {
+    required String permission,
+    required String pinTitle,
+    required String pinSubtitle,
+  }) async {
+    if (ref.read(sessionProvider).isOwner) return true;
+    if (ref.read(sessionProvider.notifier).hasPermission(permission)) {
+      return true;
+    }
+    return showPinVerificationModal(
+      context,
+      ref,
+      level: PinAccessLevel.supervisor,
+      title: pinTitle,
+      subtitle: pinSubtitle,
     );
   }
 
@@ -626,15 +649,19 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     required String content,
     required String confirmLabel,
     bool goToZonesOnSuccess = false,
+    String? bypassPermission,
   }) async {
     final orderState = ref.read(currentOrderProvider);
     if (orderState.order == null) return;
 
-    // Solo el owner del negocio se salta el PIN. Cualquier otro rol
-    // (admin, supervisor, cajero, mesero…) debe escribir PIN de
-    // supervisor/admin para anular o liberar la mesa.
+    // El owner del negocio se salta el PIN. Quien tenga [bypassPermission]
+    // (p. ej. un mesero con 'ventas.mesas.liberar') también pasa directo.
+    // Cualquier otro rol debe escribir PIN de Supervisor/Administrador
+    // como respaldo para anular o liberar la mesa.
     final isOwner = ref.read(sessionProvider).isOwner;
-    if (!isOwner) {
+    final hasBypassPermission = bypassPermission != null &&
+        ref.read(sessionProvider.notifier).hasPermission(bypassPermission);
+    if (!isOwner && !hasBypassPermission) {
       final authorized = await showPinVerificationModal(
         context,
         ref,
@@ -830,6 +857,15 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       return;
     }
 
+    final authorized = await _authorizeWithPermissionOrPin(
+      context,
+      permission: 'ventas.orden.descuento_aplicar',
+      pinTitle: 'Autorización para descuento',
+      pinSubtitle:
+          'Se requiere PIN de Supervisor o Administrador para aplicar descuentos.',
+    );
+    if (!authorized || !context.mounted) return;
+
     final result = await showDialog<_DiscountDialogResult>(
       context: context,
       builder: (_) =>
@@ -855,6 +891,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
           .applyDiscountPercentToItems(
             itemIds: targetIds,
             percent: result.percent,
+            preAuthorized: true,
           );
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -886,6 +923,15 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       return;
     }
 
+    final authorized = await _authorizeWithPermissionOrPin(
+      context,
+      permission: 'ventas.orden.descuento_aplicar',
+      pinTitle: 'Autorización para cortesía',
+      pinSubtitle:
+          'Se requiere PIN de Supervisor o Administrador para aplicar cortesías.',
+    );
+    if (!authorized || !context.mounted) return;
+
     final result = await showDialog<_CourtesyDialogResult>(
       context: context,
       builder: (_) =>
@@ -900,6 +946,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
           .applyCourtesyToItems(
             itemIds: result.selectedItemIds,
             reason: result.reason,
+            preAuthorized: true,
           );
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -4830,12 +4877,11 @@ class _CartView extends ConsumerWidget {
         }
 
         // Modelo de factura (estándar vs compacto) elegido en ajustes.
-        bool invoiceCompact = false;
+        String invoiceTpl = PosSettingsRepository.invoiceTemplateStandard;
         try {
-          invoiceCompact = (await ref
-                  .read(posSettingsRepositoryProvider)
-                  .getInvoiceTemplate(businessId)) ==
-              PosSettingsRepository.invoiceTemplateCompact;
+          invoiceTpl = await ref
+              .read(posSettingsRepositoryProvider)
+              .getInvoiceTemplate(businessId);
         } catch (_) {}
 
         // PRD F2: si algún payment fue por transferencia con cuenta
@@ -4886,7 +4932,7 @@ class _CartView extends ConsumerWidget {
                 footerBlocks: profileForPrint.profile?.effectiveFooterBlocks,
                 bankAccountsByPaymentId: bankAccountsByPaymentId,
                 discountDisplayMode: discountDisplayMode,
-                compact: invoiceCompact,
+                template: invoiceTpl,
                 openCashDrawer: shouldOpenDrawer,
               )
             : PrintTicketService.generatePrecheck(
@@ -4907,7 +4953,7 @@ class _CartView extends ConsumerWidget {
                 receiptItemDisplayMode: receiptItemDisplayMode,
                 taxBreakdown: printTaxBreakdown,
                 discountDisplayMode: discountDisplayMode,
-                compact: invoiceCompact,
+                template: invoiceTpl,
               );
       }
 

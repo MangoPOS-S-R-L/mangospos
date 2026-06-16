@@ -210,12 +210,11 @@ Future<void> _printQuickSaleComprobante(
         .getReceiptItemDisplayMode(businessId);
   } catch (_) {}
 
-  var invoiceCompact = false;
+  var invoiceTpl = PosSettingsRepository.invoiceTemplateStandard;
   try {
-    invoiceCompact = (await ref
-            .read(posSettingsRepositoryProvider)
-            .getInvoiceTemplate(businessId)) ==
-        PosSettingsRepository.invoiceTemplateCompact;
+    invoiceTpl = await ref
+        .read(posSettingsRepositoryProvider)
+        .getInvoiceTemplate(businessId);
   } catch (_) {}
 
   try {
@@ -235,7 +234,7 @@ Future<void> _printQuickSaleComprobante(
       customerTaxId: customerTaxId,
       title: '*** FACTURA ***',
       receiptItemDisplayMode: itemMode,
-      compact: invoiceCompact,
+      template: invoiceTpl,
     );
     await printRepo.printEscPos(printer: printer, data: ticket.escPosCommands);
   } catch (e) {

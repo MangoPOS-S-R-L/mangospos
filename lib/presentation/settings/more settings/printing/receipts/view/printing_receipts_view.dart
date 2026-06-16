@@ -688,6 +688,7 @@ class _InvoiceTemplateCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isCompact = value == PosSettingsRepository.invoiceTemplateCompact;
+    final isSimple = value == PosSettingsRepository.invoiceTemplateSimple;
     return PrintingCardFrame(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -719,6 +720,11 @@ class _InvoiceTemplateCard extends StatelessWidget {
                 label: Text('Compacta'),
                 icon: Icon(Icons.compress),
               ),
+              ButtonSegment<String>(
+                value: PosSettingsRepository.invoiceTemplateSimple,
+                label: Text('Simple'),
+                icon: Icon(Icons.notes_outlined),
+              ),
             ],
             selected: {value},
             onSelectionChanged: busy
@@ -731,7 +737,10 @@ class _InvoiceTemplateCard extends StatelessWidget {
           ),
           const SizedBox(height: 14),
           Text(
-            isCompact
+            isSimple
+                ? 'Líneas seguidas, sin encabezado de columnas: "# 1: Producto '
+                      '2 X 100 ... 200". La más corta posible en papel.'
+                : isCompact
                 ? 'Ítems en una sola línea, fuente y espaciado mínimos, total '
                       'condensado. Mucho más corta en papel.'
                 : 'Layout detallado: nombre y precio por ítem, TOTAL grande.',
