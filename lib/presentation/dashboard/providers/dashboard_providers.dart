@@ -7,8 +7,11 @@
 //   - Datos derivados de session via `sessionProvider.activeBusinessId`.
 //   - Auto-refresca cuando el usuario cambia de business (la family invalida).
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/offline/dashboard_kpis_offline_cache.dart';
+import '../../../core/offline/offline_pos_service.dart';
 import '../../../data/models/dashboard_models.dart';
 import '../../../data/repositories/inventory_repository.dart';
 import '../../inventory/viewmodel/inventory_viewmodel.dart'
@@ -94,12 +97,50 @@ final dashboardKpisProvider =
   final yesterdayTo = yesterdayFrom.add(now.difference(todayFrom));
 
   final repo = ref.watch(salesRepositoryProvider);
-  final rows = await repo.getDashboardKpis(
-    businessId: businessId,
-    todayFrom: todayFrom,
-    todayTo: todayTo,
-    yesterdayFrom: yesterdayFrom,
-    yesterdayTo: yesterdayTo,
-  );
-  return DashboardKpis.fromRpcRows(rows);
+  final cache = DashboardKpisOfflineCache();
+
+  try {
+    // Online: fuente de verdad (RPC). Cacheamos el snapshot para servirlo sin
+    // conexión más adelante.
+    final rows = await repo.getDashboardKpis(
+      businessId: businessId,
+      todayFrom: todayFrom,
+      todayTo: todayTo,
+      yesterdayFrom: yesterdayFrom,
+      yesterdayTo: yesterdayTo,
+    );
+    final kpis = DashboardKpis.fromRpcRows(rows);
+    await cache.save(businessId: businessId, kpisMap: kpis.toCacheMap());
+    return kpis;
+  } catch (e) {
+    // Sin conexión (o RPC falló): último snapshot sincronizado + las ventas
+    // hechas offline hoy (cola local). Así la tira no se rompe y refleja la
+    // actividad offline. Si no hay snapshot, partimos de cero y mostramos solo
+    // lo offline.
+    debugPrint('dashboardKpisProvider offline fallback: $e');
+    final cached = await cache.load(businessId: businessId);
+    final base = cached != null
+        ? DashboardKpis.fromCacheMap(cached.kpisMap)
+        : DashboardKpis.empty;
+
+    final delta = await OfflinePosService().todayPendingSalesDelta(
+      businessId: businessId,
+      dayStart: todayFrom,
+      dayEnd: todayFrom.add(const Duration(days: 1)),
+    );
+
+    final mergedToday = base.today.plus(
+      income: delta.income,
+      itemsSold: delta.itemsSold,
+      ordersTotal: delta.ordersTotal,
+      ordersCompleted: delta.ordersCompleted,
+      ordersInProgress: delta.ordersInProgress,
+    );
+
+    return DashboardKpis(
+      today: mergedToday,
+      yesterday: base.yesterday,
+      cachedAt: cached?.savedAt ?? now,
+    );
+  }
 });

@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../core/utils/sorting_utils.dart';
 import '../../../data/models/sales_models.dart';
 import '../../../data/repositories/zones_repository.dart';
 import '../../../services/session/session_controller.dart';
@@ -87,12 +88,22 @@ class _TransferSessionDialogState
   List<Map<String, dynamic>> _tables = const [];
   String? _loadError;
 
+  /// Buscador de mesa destino: filtra el listado por nombre/código/zona.
+  final TextEditingController _searchCtrl = TextEditingController();
+  String _tableQuery = '';
+
   bool _submitting = false;
 
   @override
   void initState() {
     super.initState();
     _loadTables();
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
   }
 
   Future<void> _loadTables() async {
@@ -305,10 +316,32 @@ class _TransferSessionDialogState
                     : '2. Mesa destino',
               ),
               const SizedBox(height: 8),
+              if (!_loadingTables && _loadError == null && _tables.isNotEmpty)
+                _TableSearchField(
+                  controller: _searchCtrl,
+                  onChanged: (val) => setState(() {
+                    _tableQuery = val;
+                    // Si el filtro oculta la mesa seleccionada, deselecciónala
+                    // para no transferir a una mesa fuera de vista (click
+                    // erróneo). El botón "Transferir" se deshabilita hasta que
+                    // se elija una mesa visible.
+                    if (_selectedTable != null &&
+                        !_TablesList.matchesQuery(_selectedTable!, val)) {
+                      _selectedTable = null;
+                    }
+                  }),
+                  onClear: () {
+                    _searchCtrl.clear();
+                    setState(() => _tableQuery = '');
+                  },
+                ),
+              if (!_loadingTables && _loadError == null && _tables.isNotEmpty)
+                const SizedBox(height: 8),
               _TablesList(
                 loading: _loadingTables,
                 error: _loadError,
                 tables: _tables,
+                query: _tableQuery,
                 selectedId: _selectedTable?['id']?.toString(),
                 onSelect: (table) {
                   setState(() => _selectedTable = table);
@@ -362,6 +395,59 @@ class _SectionHeader extends StatelessWidget {
         fontWeight: FontWeight.w700,
         color: Color(0xFF374151),
         letterSpacing: 0.3,
+      ),
+    );
+  }
+}
+
+/// Campo de búsqueda de la mesa destino. Filtra por título de mesa, código
+/// o zona. Muestra una "X" para limpiar cuando hay texto.
+class _TableSearchField extends StatelessWidget {
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClear;
+  const _TableSearchField({
+    required this.controller,
+    required this.onChanged,
+    required this.onClear,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    const orange = Color(0xFFF97316);
+    return TextField(
+      controller: controller,
+      onChanged: onChanged,
+      textInputAction: TextInputAction.search,
+      style: const TextStyle(fontSize: 14),
+      decoration: InputDecoration(
+        isDense: true,
+        hintText: 'Buscar mesa o zona…',
+        hintStyle: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 14),
+        prefixIcon: const Icon(Icons.search, size: 20, color: Color(0xFF6B7280)),
+        suffixIcon: controller.text.isEmpty
+            ? null
+            : IconButton(
+                icon: const Icon(Icons.close, size: 18, color: Color(0xFF6B7280)),
+                splashRadius: 18,
+                tooltip: 'Limpiar',
+                onPressed: onClear,
+              ),
+        contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+        filled: true,
+        fillColor: const Color(0xFFFAFAFA),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: orange, width: 1.5),
+        ),
       ),
     );
   }
@@ -541,15 +627,42 @@ class _TablesList extends StatelessWidget {
   final bool loading;
   final String? error;
   final List<Map<String, dynamic>> tables;
+  final String query;
   final String? selectedId;
   final ValueChanged<Map<String, dynamic>> onSelect;
   const _TablesList({
     required this.loading,
     required this.error,
     required this.tables,
+    required this.query,
     required this.selectedId,
     required this.onSelect,
   });
+
+  /// Título visible de una mesa (label si existe, si no su código).
+  static String _titleOf(Map<String, dynamic> t) {
+    final label = (t['label'] as String?)?.trim();
+    final code = (t['code'] as String?)?.trim() ?? '';
+    return label != null && label.isNotEmpty ? label : code;
+  }
+
+  static String _zoneOf(Map<String, dynamic> t) {
+    final zone = t['zones'] is Map ? t['zones'] as Map : const {};
+    final name = (zone['name'] as String?)?.trim();
+    return name != null && name.isNotEmpty ? name : 'Sin zona';
+  }
+
+  /// Predicado del buscador: una mesa coincide si el query aparece en su
+  /// título, su código o su zona. Query vacío ⇒ coincide siempre. Único
+  /// punto de verdad para el filtro de la lista y la limpieza de selección.
+  static bool matchesQuery(Map<String, dynamic> t, String query) {
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return true;
+    final code = (t['code'] as String?)?.toLowerCase() ?? '';
+    return _titleOf(t).toLowerCase().contains(q) ||
+        code.contains(q) ||
+        _zoneOf(t).toLowerCase().contains(q);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -588,16 +701,38 @@ class _TablesList extends StatelessWidget {
       );
     }
 
+    // Buscador: filtra por título de mesa, código o nombre de zona.
+    final filtered = query.trim().isEmpty
+        ? tables
+        : tables.where((t) => matchesQuery(t, query)).toList(growable: false);
+
+    if (filtered.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFAFAFA),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFFE5E7EB)),
+        ),
+        child: Text(
+          'Sin resultados para «${query.trim()}».',
+          style: const TextStyle(color: Color(0xFF6B7280)),
+        ),
+      );
+    }
+
     // Agrupar por zona para que el picker tenga contexto.
     final grouped = <String, List<Map<String, dynamic>>>{};
-    for (final t in tables) {
-      final zone = t['zones'] is Map ? t['zones'] as Map : {};
-      final zoneName = (zone['name'] as String?)?.trim().isNotEmpty == true
-          ? zone['name'] as String
-          : 'Sin zona';
-      grouped.putIfAbsent(zoneName, () => []).add(t);
+    for (final t in filtered) {
+      grouped.putIfAbsent(_zoneOf(t), () => []).add(t);
     }
-    final zoneNames = grouped.keys.toList(growable: false)..sort();
+    // Orden natural: zonas por nombre y, dentro de cada zona, las mesas por
+    // su título ("Mesa 2" antes que "Mesa 10").
+    final zoneNames = grouped.keys.toList(growable: false)
+      ..sort(SortingUtils.naturalCompare);
+    for (final list in grouped.values) {
+      list.sort((a, b) => SortingUtils.naturalCompare(_titleOf(a), _titleOf(b)));
+    }
 
     return ConstrainedBox(
       constraints: const BoxConstraints(maxHeight: 280),

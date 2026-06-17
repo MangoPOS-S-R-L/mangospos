@@ -1634,6 +1634,24 @@ class ReportsRepository {
         serviceFee = orderLevelServiceFee + derivedSvc;
       }
 
+      // Fallback CONFIG: si el comprobante quedó SIN impuesto (itbis_amount
+      // guardado en 0 y sin tax lines en los ítems — caso split-bill donde el
+      // trigger 0007 dejó order.tax=0 al emitir) PERO el total trae impuesto
+      // embebido (total > subtotal), derivamos ITBIS/LEY repartiendo ese gap
+      // por las tasas CONFIGURADAS del negocio (lo que tiene en Configuración y
+      // lo que ya imprime la factura). Reparto exacto → subtotal+itbis+ley=total.
+      // Solo display: NO toca fiscal_documents.
+      if (pureItbis.abs() < 0.005 &&
+          serviceFee.abs() < 0.005 &&
+          total > subtotal + 0.005 &&
+          (configuredTaxOnlyRate + configuredServiceFeeRate) > 0) {
+        final gap = ((total - subtotal) * 100).roundToDouble() / 100;
+        final itbisShare =
+            configuredTaxOnlyRate / (configuredTaxOnlyRate + configuredServiceFeeRate);
+        pureItbis = (gap * itbisShare * 100).roundToDouble() / 100;
+        serviceFee = gap - pureItbis;
+      }
+
       // Comprobante de cortesía/comp o anulado de facto (total <= 0): no se
       // cobró nada, así que no aporta impuesto ni base. Sin esto, una orden
       // con descuento 100% (subtotales y tax negativos en los items) hace
@@ -1679,22 +1697,26 @@ class ReportsRepository {
         bucket['count'] = (bucket['count'] as int) + 1;
       }
 
-      // El DETALLE por comprobante refleja los valores GUARDADOS en la DB (que
-      // cuadran: subtotal + itbis_amount + service_fee = total). NO recalcular
-      // el ITBIS desde items —daba un split distinto al guardado y descuadraba
-      // la vista (136.72 + 26.69 + 13.67 = 177 vs total 175). La DB es la fuente
-      // de verdad (corregida por la migración + backfill).
-      final storedRate = configuredTaxOnlyRate > 0 ? configuredTaxOnlyRate : 18.0;
+      // El DETALLE por comprobante muestra el MISMO ITBIS y LEY que el resumen
+      // (pureItbis / serviceFee, derivados de los ítems o de la config arriba),
+      // NO el itbis_amount GUARDADO: en split-bill ese guardado quedó en 0 y el
+      // detalle salía sin impuestos por venta. La LEY va en `service_fee` (su
+      // columna). Base = taxableBase para que subtotal+itbis+ley=total exacto.
+      // Solo display.
+      final detailRate = configuredTaxOnlyRate > 0 ? configuredTaxOnlyRate : 18.0;
       enrichedDocs.add({
-        ...doc, // conserva subtotal, itbis_amount, service_fee y total guardados
-        'tax_breakdown': itbis.abs() > 0.005
+        ...doc,
+        'subtotal': taxableBase,
+        'itbis_amount': pureItbis,
+        'service_fee': serviceFee,
+        'tax_breakdown': pureItbis.abs() > 0.005
             ? <Map<String, dynamic>>[
                 {
-                  'rate_key': storedRate.toStringAsFixed(4),
-                  'label': taxNameByRate[storedRate.toStringAsFixed(4)] ?? 'ITBIS',
-                  'rate': storedRate,
-                  'tax_amount': itbis,
-                  'base': subtotal,
+                  'rate_key': detailRate.toStringAsFixed(4),
+                  'label': taxNameByRate[detailRate.toStringAsFixed(4)] ?? 'ITBIS',
+                  'rate': detailRate,
+                  'tax_amount': pureItbis,
+                  'base': taxableBase,
                 }
               ]
             : const <Map<String, dynamic>>[],

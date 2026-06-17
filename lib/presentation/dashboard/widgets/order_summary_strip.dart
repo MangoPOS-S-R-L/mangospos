@@ -34,7 +34,76 @@ class OrderSummaryStrip extends ConsumerWidget {
       error: (_, _) => _ErrorBox(
         onRetry: () => ref.invalidate(dashboardKpisProvider),
       ),
-      data: (kpis) => _KpiGrid(kpis: kpis, currency: currency),
+      data: (kpis) => _KpiContent(kpis: kpis, currency: currency),
+    );
+  }
+}
+
+/// Tira de KPIs + (si los datos vienen del caché offline) un aviso de "sin
+/// conexión" encima.
+class _KpiContent extends StatelessWidget {
+  final DashboardKpis kpis;
+  final BusinessCurrency currency;
+  const _KpiContent({required this.kpis, required this.currency});
+
+  @override
+  Widget build(BuildContext context) {
+    if (!kpis.isOffline) {
+      return _KpiGrid(kpis: kpis, currency: currency);
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _OfflineBanner(cachedAt: kpis.cachedAt!),
+        const SizedBox(height: 10),
+        _KpiGrid(kpis: kpis, currency: currency),
+      ],
+    );
+  }
+}
+
+class _OfflineBanner extends StatelessWidget {
+  final DateTime cachedAt;
+  const _OfflineBanner({required this.cachedAt});
+
+  String get _label {
+    final diff = DateTime.now().difference(cachedAt);
+    if (diff.inMinutes < 1) return 'Sin conexión · datos locales del día';
+    if (diff.inMinutes < 60) {
+      return 'Sin conexión · actualizado hace ${diff.inMinutes} min';
+    }
+    if (diff.inHours < 24) {
+      return 'Sin conexión · actualizado hace ${diff.inHours} h';
+    }
+    return 'Sin conexión · actualizado hace ${diff.inDays} d';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7ED),
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: const Color(0xFFFED7AA)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.cloud_off_rounded,
+              size: 16, color: Color(0xFFB45309)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              _label,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF92400E),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

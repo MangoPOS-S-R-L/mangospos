@@ -86,11 +86,37 @@ class _ZoneFloorMapState extends State<ZoneFloorMap> {
 
   void _resetZoom() => _tc.value = Matrix4.identity();
 
+  /// Tamaño del lienzo lógico. Por defecto el de diseño
+  /// ([kFloorCanvasWidth] x [kFloorCanvasHeight]), pero CRECE para contener
+  /// cualquier mesa cuyo nodo exceda ese lienzo — típicamente mesas sin
+  /// posicionar que el auto-layout coloca en filas más allá de los 900px de
+  /// alto. Así el plano nunca recorta mesas (antes quedaban fuera del
+  /// `ClipRRect` y no se veían ni con zoom). En el caso común (todas las
+  /// mesas posicionadas dentro del lienzo de diseño) devuelve el tamaño fijo
+  /// y el render es idéntico al anterior.
+  Size _canvasSize() {
+    var maxX = kFloorCanvasWidth;
+    var maxY = kFloorCanvasHeight;
+    for (final entry in widget.tables.asMap().entries) {
+      final node = floorNodeSize(entry.value);
+      final pos = floorTablePosition(entry.value, entry.key);
+      maxX = math.max(maxX, pos.dx + node.width);
+      maxY = math.max(maxY, pos.dy + node.height);
+    }
+    const pad = 56.0; // aire para sombras/rotación en el borde
+    return Size(
+      maxX > kFloorCanvasWidth ? maxX + pad : kFloorCanvasWidth,
+      maxY > kFloorCanvasHeight ? maxY + pad : kFloorCanvasHeight,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (widget.tables.isEmpty) {
       return const Center(child: Text('No hay mesas en esta zona'));
     }
+
+    final canvas = _canvasSize();
 
     return LayoutBuilder(
       builder: (context, outer) {
@@ -106,11 +132,10 @@ class _ZoneFloorMapState extends State<ZoneFloorMap> {
                   padding: const EdgeInsets.all(16),
                   child: Center(
                     child: AspectRatio(
-                      aspectRatio: kFloorCanvasWidth / kFloorCanvasHeight,
+                      aspectRatio: canvas.width / canvas.height,
                       child: LayoutBuilder(
                         builder: (context, constraints) {
-                          final scale =
-                              constraints.maxWidth / kFloorCanvasWidth;
+                          final scale = constraints.maxWidth / canvas.width;
                           return Container(
                             decoration: BoxDecoration(
                               color: const Color(0xFFF1F3F9),

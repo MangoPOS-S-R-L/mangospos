@@ -79,6 +79,40 @@ class _OfflineSyncSkip implements Exception {
   String toString() => 'OfflineSyncSkip: $reason';
 }
 
+/// Delta de KPIs del día calculado SOLO a partir de operaciones offline aún
+/// no sincronizadas (cola local). Se suma sobre el último snapshot
+/// sincronizado para mostrar el dashboard correcto sin conexión.
+class OfflineKpiDelta {
+  final double income;
+  final double itemsSold;
+  final int ordersTotal;
+  final int ordersInProgress;
+  final int ordersCompleted;
+
+  const OfflineKpiDelta({
+    required this.income,
+    required this.itemsSold,
+    required this.ordersTotal,
+    required this.ordersInProgress,
+    required this.ordersCompleted,
+  });
+
+  static const empty = OfflineKpiDelta(
+    income: 0,
+    itemsSold: 0,
+    ordersTotal: 0,
+    ordersInProgress: 0,
+    ordersCompleted: 0,
+  );
+
+  bool get isEmpty =>
+      income == 0 &&
+      itemsSold == 0 &&
+      ordersTotal == 0 &&
+      ordersInProgress == 0 &&
+      ordersCompleted == 0;
+}
+
 class OfflinePosService {
   OfflinePosService._();
 
@@ -526,6 +560,86 @@ class OfflinePosService {
     // de sincronizar" sino "pendientes de revisión manual". Se cuentan
     // aparte con [deadActionsCount] para no dejar el badge pegado.
     return queue.where((item) => !_isSettled(item)).length;
+  }
+
+  /// Suma las ventas del día que viven SOLO en la cola local (offline, aún no
+  /// sincronizadas) para el dashboard sin conexión. Se calcula sobre el último
+  /// snapshot online; por eso solo cuenta acciones NO settled (las settled ya
+  /// están reflejadas en el server/snapshot).
+  ///
+  /// [dayStart]/[dayEnd] = ventana local del día (00:00 hoy → 00:00 mañana).
+  ///
+  /// Nota: en modo Hub (F3) las ops se enrutan al Hub y no quedan en esta cola,
+  /// así que este delta es para modo cloud/solo. Los conteos de órdenes son
+  /// aproximados (la cola es por-operación, no por-orden); el ingreso y los
+  /// items, que es lo que se muestra como headline, sí son exactos.
+  Future<OfflineKpiDelta> todayPendingSalesDelta({
+    required String businessId,
+    required DateTime dayStart,
+    required DateTime dayEnd,
+  }) async {
+    if (businessId.isEmpty) return OfflineKpiDelta.empty;
+    final queue = await _readQueue(businessId);
+
+    double income = 0;
+    double itemsSold = 0;
+    final touchedOrders = <String>{};
+    final paidOrders = <String>{};
+    final voidedOrders = <String>{};
+
+    for (final action in queue) {
+      if (_isSettled(action)) continue; // ya sincronizada → ya está en el snapshot
+
+      final when = _actionLocalTime(action);
+      if (when == null || when.isBefore(dayStart) || !when.isBefore(dayEnd)) {
+        continue;
+      }
+
+      final type = action['type']?.toString();
+      final orderId = action['order_id']?.toString();
+      switch (type) {
+        case 'process_payment':
+          final amount = (action['amount'] as num?)?.toDouble() ?? 0;
+          final change = (action['change_amount'] as num?)?.toDouble() ?? 0;
+          income += amount - change;
+          if (orderId != null && orderId.isNotEmpty) {
+            paidOrders.add(orderId);
+            touchedOrders.add(orderId);
+          }
+          break;
+        case 'add_item':
+          itemsSold += (action['qty'] as num?)?.toDouble() ??
+              (action['quantity'] as num?)?.toDouble() ??
+              0;
+          if (orderId != null && orderId.isNotEmpty) touchedOrders.add(orderId);
+          break;
+        case 'void_order':
+          if (orderId != null && orderId.isNotEmpty) voidedOrders.add(orderId);
+          break;
+        case 'confirm_local_order':
+        case 'send_to_kitchen':
+          if (orderId != null && orderId.isNotEmpty) touchedOrders.add(orderId);
+          break;
+      }
+    }
+
+    final liveOrders = touchedOrders.difference(voidedOrders);
+    final completed = paidOrders.difference(voidedOrders);
+    return OfflineKpiDelta(
+      income: income,
+      itemsSold: itemsSold,
+      ordersTotal: liveOrders.length,
+      ordersCompleted: completed.length,
+      ordersInProgress: liveOrders.difference(completed).length,
+    );
+  }
+
+  /// Fecha local de una acción de la cola: usa `paid_at` (pagos) si existe, si
+  /// no `queued_at`. Null si no se puede parsear.
+  DateTime? _actionLocalTime(Map<String, dynamic> action) {
+    final raw = (action['paid_at'] ?? action['queued_at'])?.toString();
+    if (raw == null || raw.isEmpty) return null;
+    return DateTime.tryParse(raw)?.toLocal();
   }
 
   /// Cantidad de acciones en dead-letter (agotaron reintentos). El shell

@@ -196,6 +196,32 @@ class DashboardKpiSnapshot {
       itemsSold: (map['items_sold'] as num?)?.toDouble() ?? 0,
     );
   }
+
+  /// Serializa para el caché offline (mismas keys que [fromMap]).
+  Map<String, dynamic> toMap() => {
+        'income': income,
+        'orders_total': ordersTotal,
+        'orders_in_progress': ordersInProgress,
+        'orders_completed': ordersCompleted,
+        'items_sold': itemsSold,
+      };
+
+  /// Devuelve una copia sumando un delta (ventas hechas offline). Lo usa el
+  /// provider para fusionar el snapshot cacheado con la actividad de la cola.
+  DashboardKpiSnapshot plus({
+    double income = 0,
+    int ordersTotal = 0,
+    int ordersInProgress = 0,
+    int ordersCompleted = 0,
+    double itemsSold = 0,
+  }) =>
+      DashboardKpiSnapshot(
+        income: this.income + income,
+        ordersTotal: this.ordersTotal + ordersTotal,
+        ordersInProgress: this.ordersInProgress + ordersInProgress,
+        ordersCompleted: this.ordersCompleted + ordersCompleted,
+        itemsSold: this.itemsSold + itemsSold,
+      );
 }
 
 /// Bundle con HOY + AYER (mismo tramo del día) para alimentar la KPI
@@ -206,12 +232,23 @@ class DashboardKpis {
   final DashboardKpiSnapshot today;
   final DashboardKpiSnapshot yesterday;
 
-  const DashboardKpis({required this.today, required this.yesterday});
+  /// Si != null, los datos provienen del caché offline (capturados en
+  /// [cachedAt]). null = datos frescos del servidor. La UI usa esto para
+  /// mostrar el aviso de "sin conexión / actualizado hace …".
+  final DateTime? cachedAt;
+
+  const DashboardKpis({
+    required this.today,
+    required this.yesterday,
+    this.cachedAt,
+  });
 
   static const empty = DashboardKpis(
     today: DashboardKpiSnapshot.empty,
     yesterday: DashboardKpiSnapshot.empty,
   );
+
+  bool get isOffline => cachedAt != null;
 
   /// Construye desde el listado crudo del RPC (hasta 2 filas, una por
   /// periodo). Falta de fila = `empty` para ese lado.
@@ -226,6 +263,38 @@ class DashboardKpis {
     }
     return DashboardKpis(today: today, yesterday: yesterday);
   }
+
+  /// Serializa para el caché offline.
+  Map<String, dynamic> toCacheMap() => {
+        'today': today.toMap(),
+        'yesterday': yesterday.toMap(),
+      };
+
+  /// Reconstruye desde un snapshot cacheado. [cachedAt] marca el dato como
+  /// offline.
+  factory DashboardKpis.fromCacheMap(
+    Map<String, dynamic> map, {
+    DateTime? cachedAt,
+  }) {
+    return DashboardKpis(
+      today: DashboardKpiSnapshot.fromMap(
+          Map<String, dynamic>.from(map['today'] as Map? ?? const {})),
+      yesterday: DashboardKpiSnapshot.fromMap(
+          Map<String, dynamic>.from(map['yesterday'] as Map? ?? const {})),
+      cachedAt: cachedAt,
+    );
+  }
+
+  DashboardKpis copyWith({
+    DashboardKpiSnapshot? today,
+    DashboardKpiSnapshot? yesterday,
+    DateTime? cachedAt,
+  }) =>
+      DashboardKpis(
+        today: today ?? this.today,
+        yesterday: yesterday ?? this.yesterday,
+        cachedAt: cachedAt ?? this.cachedAt,
+      );
 
   /// Delta % vs ayer, para un selector dado.
   /// Devuelve null cuando ayer fue 0 (división indefinida → "—" en UI).
