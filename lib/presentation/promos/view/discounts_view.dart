@@ -134,6 +134,10 @@ class _DiscountsViewState extends ConsumerState<DiscountsView> {
                               : item.daysOfWeek
                                   .map((day) => _weekdayLabels[day] ?? '$day')
                                   .join(', '),
+                          timeLabel:
+                              (item.startTime == null || item.endTime == null)
+                              ? null
+                              : '${item.startTime!.format(context)} - ${item.endTime!.format(context)}',
                           minPurchaseLabel: currency.format(item.minPurchase),
                           endDateLabel: item.endDate == null
                               ? null
@@ -297,6 +301,8 @@ class _DiscountsViewState extends ConsumerState<DiscountsView> {
           rewardQuantity: result.rewardQuantity,
           startDate: result.startDate,
           endDate: result.endDate,
+          startTime: result.startTime,
+          endTime: result.endTime,
           isActive: result.isActive,
         );
       } else {
@@ -319,6 +325,8 @@ class _DiscountsViewState extends ConsumerState<DiscountsView> {
           rewardQuantity: result.rewardQuantity,
           startDate: result.startDate,
           endDate: result.endDate,
+          startTime: result.startTime,
+          endTime: result.endTime,
         );
       }
     } catch (_) {
@@ -630,6 +638,8 @@ class _PromotionDraft {
   final int? rewardQuantity;
   final DateTime startDate;
   final DateTime endDate;
+  final TimeOfDay? startTime;
+  final TimeOfDay? endTime;
 
   const _PromotionDraft({
     this.id,
@@ -651,6 +661,8 @@ class _PromotionDraft {
     required this.rewardQuantity,
     required this.startDate,
     required this.endDate,
+    this.startTime,
+    this.endTime,
   });
 }
 
@@ -695,6 +707,9 @@ class _PromotionDialogState extends State<_PromotionDialog> {
   final Set<String> _selectedProductIds = <String>{};
   DateTime _startDate = DateTime.now();
   DateTime _endDate = DateTime.now().add(const Duration(days: 30));
+  // Happy hour: franja horaria diaria opcional. Ambas null = aplica todo el día.
+  TimeOfDay? _startTime;
+  TimeOfDay? _endTime;
 
   bool get _isEditing => widget.existing != null;
 
@@ -732,6 +747,8 @@ class _PromotionDialogState extends State<_PromotionDialog> {
       ..addAll(e.targetIds);
     if (e.startDate != null) _startDate = e.startDate!;
     if (e.endDate != null) _endDate = e.endDate!;
+    _startTime = e.startTime;
+    _endTime = e.endTime;
   }
 
   @override
@@ -996,6 +1013,87 @@ class _PromotionDialogState extends State<_PromotionDialog> {
                   ),
                 ],
               ),
+              const SizedBox(height: 16),
+              const Text(
+                'Franja horaria (happy hour)',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF0F172A),
+                ),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Opcional. Déjala en "Todo el día" para que aplique a cualquier hora.',
+                style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+              ),
+              SwitchListTile.adaptive(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Todo el día'),
+                value: _startTime == null && _endTime == null,
+                onChanged: (allDay) {
+                  setState(() {
+                    if (allDay) {
+                      _startTime = null;
+                      _endTime = null;
+                    } else {
+                      _startTime = const TimeOfDay(hour: 17, minute: 0);
+                      _endTime = const TimeOfDay(hour: 19, minute: 0);
+                    }
+                  });
+                },
+              ),
+              if (_startTime != null || _endTime != null) ...[
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () async {
+                          final picked = await showTimePicker(
+                            context: context,
+                            initialTime: _startTime ??
+                                const TimeOfDay(hour: 17, minute: 0),
+                          );
+                          if (picked == null) return;
+                          setState(() => _startTime = picked);
+                        },
+                        icon: const Icon(Icons.schedule, size: 18),
+                        label: Text(
+                          'Desde ${(_startTime ?? const TimeOfDay(hour: 17, minute: 0)).format(context)}',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () async {
+                          final picked = await showTimePicker(
+                            context: context,
+                            initialTime: _endTime ??
+                                const TimeOfDay(hour: 19, minute: 0),
+                          );
+                          if (picked == null) return;
+                          setState(() => _endTime = picked);
+                        },
+                        icon: const Icon(Icons.schedule, size: 18),
+                        label: Text(
+                          'Hasta ${(_endTime ?? const TimeOfDay(hour: 19, minute: 0)).format(context)}',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                if (_startTime != null &&
+                    _endTime != null &&
+                    (_endTime!.hour * 60 + _endTime!.minute) <
+                        (_startTime!.hour * 60 + _startTime!.minute)) ...[
+                  const SizedBox(height: 6),
+                  const Text(
+                    'La franja cruza la medianoche (termina al día siguiente).',
+                    style: TextStyle(fontSize: 12, color: Color(0xFFB45309)),
+                  ),
+                ],
+              ],
               const SizedBox(height: 12),
               SwitchListTile.adaptive(
                 contentPadding: EdgeInsets.zero,
@@ -1121,6 +1219,25 @@ class _PromotionDialogState extends State<_PromotionDialog> {
         return;
       }
     }
+    // Happy hour: o ambas horas o ninguna; y no pueden ser iguales (sería una
+    // franja vacía). end < start = cruza la medianoche, eso sí es válido.
+    if ((_startTime == null) != (_endTime == null)) {
+      AppToast.warning(
+        context,
+        'Configura la hora de inicio y de fin, o usa "Todo el día".',
+      );
+      return;
+    }
+    if (_startTime != null &&
+        _endTime != null &&
+        _startTime!.hour == _endTime!.hour &&
+        _startTime!.minute == _endTime!.minute) {
+      AppToast.warning(
+        context,
+        'La hora de inicio y de fin no pueden ser iguales.',
+      );
+      return;
+    }
 
     final promoType = _promoType;
     final draft = _PromotionDraft(
@@ -1151,6 +1268,8 @@ class _PromotionDialogState extends State<_PromotionDialog> {
           : null,
       startDate: _startDate,
       endDate: _endDate,
+      startTime: _startTime,
+      endTime: _endTime,
     );
 
     Navigator.of(context).pop(draft);
@@ -1578,6 +1697,7 @@ class _PromoCard extends StatelessWidget {
   final String valueLabel;
   final String scopeLabel;
   final String daysLabel;
+  final String? timeLabel;
   final String minPurchaseLabel;
   final String? endDateLabel;
   final List<String> targetNames;
@@ -1588,6 +1708,7 @@ class _PromoCard extends StatelessWidget {
     required this.valueLabel,
     required this.scopeLabel,
     required this.daysLabel,
+    this.timeLabel,
     required this.minPurchaseLabel,
     this.endDateLabel,
     required this.targetNames,
@@ -1695,6 +1816,8 @@ class _PromoCard extends StatelessWidget {
             children: [
               _MetaItem(icon: Icons.sell_outlined, text: scopeLabel),
               _MetaItem(icon: Icons.event_outlined, text: daysLabel),
+              if (timeLabel != null)
+                _MetaItem(icon: Icons.access_time, text: timeLabel!),
               if (endDateLabel != null)
                 _MetaItem(
                   icon: Icons.schedule_outlined,

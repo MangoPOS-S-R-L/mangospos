@@ -3842,6 +3842,21 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     return parts.join('\n');
   }
 
+  /// Convierte un `time` de Postgres ("HH:mm:ss" / "HH:mm") a minutos desde
+  /// medianoche, para comparar la franja horaria del happy hour. Devuelve null
+  /// si no hay valor o no es parseable (=> sin restricción horaria).
+  int? _promoTimeToMinutes(dynamic value) {
+    final raw = value?.toString();
+    if (raw == null || raw.isEmpty) return null;
+    final parts = raw.split(':');
+    if (parts.length < 2) return null;
+    final hour = int.tryParse(parts[0]);
+    final minute = int.tryParse(parts[1]);
+    if (hour == null || minute == null) return null;
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+    return hour * 60 + minute;
+  }
+
   Future<bool> _applyAutomaticPromotionsIfNeeded() async {
     final order = state.order;
     final businessId = _activeBusinessId;
@@ -3859,7 +3874,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     final promosRaw = await Supabase.instance.client
         .from('promotions')
         .select(
-          'id,name,promo_type,discount_type,discount_value,min_purchase,target_scope,applies_to,target_ids,days_of_week,auto_apply,is_active,start_date,end_date,buy_quantity,pay_quantity,reward_quantity,priority,stackable',
+          'id,name,promo_type,discount_type,discount_value,min_purchase,target_scope,applies_to,target_ids,days_of_week,auto_apply,is_active,start_date,end_date,start_time,end_time,buy_quantity,pay_quantity,reward_quantity,priority,stackable',
         )
         .eq('business_id', businessId)
         .eq('is_active', true)
@@ -3887,7 +3902,19 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
               (start == null || !now.isBefore(start)) &&
               (end == null || !now.isAfter(end.add(const Duration(days: 1))));
           final inWeekday = days.isEmpty || days.contains(weekday);
-          return inDateRange && inWeekday;
+          // Happy hour: franja horaria diaria (hora local de la caja). Solo se
+          // evalúa si AMBAS horas están definidas; si no, aplica todo el día.
+          // Si end < start, la franja cruza la medianoche (ej. 22:00 → 02:00).
+          final startMin = _promoTimeToMinutes(promo['start_time']);
+          final endMin = _promoTimeToMinutes(promo['end_time']);
+          var inTimeWindow = true;
+          if (startMin != null && endMin != null && startMin != endMin) {
+            final nowMin = now.hour * 60 + now.minute;
+            inTimeWindow = startMin < endMin
+                ? (nowMin >= startMin && nowMin < endMin)
+                : (nowMin >= startMin || nowMin < endMin);
+          }
+          return inDateRange && inWeekday && inTimeWindow;
         })
         .toList(growable: false);
 

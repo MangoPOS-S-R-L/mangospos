@@ -36,6 +36,10 @@ enum SalesBreakdownFilter {
   hourly,
 }
 
+/// Filtro de tipo en el reporte de ofertas: todas, solo combos/ofertas de tile
+/// (`[DEAL:]`) o solo promociones automáticas (`[PROMO_AUTO:]`).
+enum OfferTypeFilter { all, deal, promo }
+
 class ReportItem {
   final String title;
   final String description;
@@ -111,25 +115,45 @@ class ProductSalesReportRow {
   });
 }
 
-class OfferSalesReportRow {
-  final String promotionId;
-  final String name;
-  final String promoType;
+/// Una fila del listado detallado de ofertas (una por cada vez que se aplicó
+/// una oferta a una línea): Fecha · Oferta · Producto · Cantidad · Monto.
+class OfferDetailLine {
+  /// Fecha/hora local (AST) en que se registró la línea; null si no se pudo
+  /// parsear el timestamp del servidor.
+  final DateTime? dateTime;
+  final String offerName;
+  final String productName;
   final double quantity;
-  final double grossSales;
-  final double discounts;
-  final double netSales;
-  final int tickets;
 
-  const OfferSalesReportRow({
-    required this.promotionId,
-    required this.name,
-    required this.promoType,
+  /// Valor a precio de menú de la línea = cantidad × precio unitario.
+  final double valorMenu;
+
+  /// Descuento otorgado por la oferta en la línea (lo que se regaló).
+  final double descuento;
+
+  /// True si la línea es un combo/oferta vendida desde el tile (`[DEAL:]`);
+  /// false si es una promoción automática (`[PROMO_AUTO:]`).
+  final bool isDeal;
+
+  const OfferDetailLine({
+    required this.dateTime,
+    required this.offerName,
+    required this.productName,
     required this.quantity,
-    required this.grossSales,
-    required this.discounts,
-    required this.netSales,
-    required this.tickets,
+    required this.valorMenu,
+    required this.descuento,
+    required this.isDeal,
+  });
+}
+
+/// Cantidad total despachada de un producto en oferta (pivote del listado).
+class OfferProductTotal {
+  final String productName;
+  final double quantity;
+
+  const OfferProductTotal({
+    required this.productName,
+    required this.quantity,
   });
 }
 
@@ -153,6 +177,12 @@ class ReportsState {
   final String? fiscalTypeFilter;
   final String productSalesQuery;
   final String? productSalesCategoryFilter;
+
+  // Filtros del reporte de ofertas (null/all/'' = sin filtrar).
+  final String? offerOfferFilter;
+  final String? offerProductFilter;
+  final OfferTypeFilter offerTypeFilter;
+  final String offerSearchQuery;
 
   /// Moneda del negocio activo. Single source of truth para formateo de
   /// montos en todos los reportes — elimina el hardcoded `RD$` que vivía
@@ -179,6 +209,10 @@ class ReportsState {
     this.fiscalTypeFilter,
     this.productSalesQuery = '',
     this.productSalesCategoryFilter,
+    this.offerOfferFilter,
+    this.offerProductFilter,
+    this.offerTypeFilter = OfferTypeFilter.all,
+    this.offerSearchQuery = '',
     this.currency = BusinessCurrency.fallbackDop,
   });
 
@@ -214,9 +248,15 @@ class ReportsState {
     String? fiscalTypeFilter,
     String? productSalesQuery,
     String? productSalesCategoryFilter,
+    String? offerOfferFilter,
+    String? offerProductFilter,
+    OfferTypeFilter? offerTypeFilter,
+    String? offerSearchQuery,
     BusinessCurrency? currency,
     bool clearFiscalTypeFilter = false,
     bool clearProductSalesCategoryFilter = false,
+    bool clearOfferOfferFilter = false,
+    bool clearOfferProductFilter = false,
     bool clearError = false,
     bool clearCategory = false,
   }) {
@@ -246,6 +286,14 @@ class ReportsState {
       productSalesCategoryFilter: clearProductSalesCategoryFilter
           ? null
           : (productSalesCategoryFilter ?? this.productSalesCategoryFilter),
+      offerOfferFilter: clearOfferOfferFilter
+          ? null
+          : (offerOfferFilter ?? this.offerOfferFilter),
+      offerProductFilter: clearOfferProductFilter
+          ? null
+          : (offerProductFilter ?? this.offerProductFilter),
+      offerTypeFilter: offerTypeFilter ?? this.offerTypeFilter,
+      offerSearchQuery: offerSearchQuery ?? this.offerSearchQuery,
       currency: currency ?? this.currency,
     );
   }
@@ -391,7 +439,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
           );
         case ReportCategory.offers:
           final summary = await _repository.getOffersSummary(
-            businessId: businessId, from: from, to: to);
+              businessId: businessId, from: from, to: to);
           if (myToken != _loadToken) return;
           state = state.copyWith(offersSummary: summary);
         case ReportCategory.finances:
@@ -1077,84 +1125,122 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         .toList(growable: false);
   }
 
-  /// Etiqueta legible del tipo de oferta (`promotions.promo_type`).
-  String offerTypeLabel(String promoType) {
-    switch (promoType) {
-      case 'percentage':
-        return 'Porcentaje';
-      case 'fixed':
-        return 'Monto fijo';
-      case 'bogo':
-        return 'BOGO / 2x1';
-      case 'bundle_price':
-        return 'Combo';
-      default:
-        return promoType.isEmpty ? 'Oferta' : promoType;
-    }
-  }
-
-  List<OfferSalesReportRow> getOfferSalesRows() {
-    final rows = (state.offersSummary?['offers'] as List?) ?? const [];
+  /// Todas las líneas de oferta del rango, sin aplicar filtros de la pestaña.
+  /// Fuente: `lines` de [ReportsRepository.getOffersSummary].
+  List<OfferDetailLine> _allOfferLines() {
+    final rows = (state.offersSummary?['lines'] as List?) ?? const [];
     return rows
         .map((row) => Map<String, dynamic>.from(row as Map))
         .map(
-          (row) => OfferSalesReportRow(
-            promotionId: row['promotion_id']?.toString() ?? '',
-            name: row['name']?.toString() ?? 'Oferta',
-            promoType: row['promo_type']?.toString() ?? '',
+          (row) => OfferDetailLine(
+            dateTime: AppTime.tryParseServerToAst(row['created_at']),
+            offerName: row['offer_name']?.toString() ?? 'Oferta',
+            productName: row['product_name']?.toString() ?? 'Producto',
             quantity: (row['quantity'] as num?)?.toDouble() ?? 0,
-            grossSales: (row['gross_sales'] as num?)?.toDouble() ?? 0,
-            discounts: (row['discounts'] as num?)?.toDouble() ?? 0,
-            netSales: (row['net_sales'] as num?)?.toDouble() ?? 0,
-            tickets: (row['tickets'] as num?)?.toInt() ?? 0,
+            valorMenu: (row['valor_menu'] as num?)?.toDouble() ?? 0,
+            descuento: (row['descuento'] as num?)?.toDouble() ?? 0,
+            isDeal: row['is_deal'] == true,
           ),
         )
         .toList(growable: false);
   }
 
-  List<SalesMetricCardData> getOffersMetricCards() {
-    final summary = state.offersSummary ?? const <String, dynamic>{};
-    final totalNet = (summary['total_net'] as num?)?.toDouble() ?? 0;
-    final totalQuantity = (summary['total_quantity'] as num?)?.toDouble() ?? 0;
-    final totalDiscounts = (summary['total_discounts'] as num?)?.toDouble() ?? 0;
-    final offersCount = (summary['offers_count'] as num?)?.toInt() ?? 0;
-    final ticketsCount = (summary['tickets_count'] as num?)?.toInt() ?? 0;
-
-    final currency = state.currency.formatter;
-    final numberFormat = NumberFormat('#,##0', 'en_US');
-    final decimalFormat = NumberFormat('#,##0.##', 'en_US');
-
-    return [
-      SalesMetricCardData(
-        title: 'Ventas por ofertas',
-        value: currency.format(totalNet),
-        subtitle: 'Ventas netas atribuidas a ofertas en el rango',
-        icon: Icons.local_offer_outlined,
-        color: const Color(0xFFD946A6),
-      ),
-      SalesMetricCardData(
-        title: 'Productos despachados',
-        value: decimalFormat.format(totalQuantity),
-        subtitle: 'Cantidad de productos que salieron con oferta',
-        icon: Icons.inventory_2_outlined,
-        color: const Color(0xFF059669),
-      ),
-      SalesMetricCardData(
-        title: 'Descuento otorgado',
-        value: currency.format(totalDiscounts),
-        subtitle: 'Total descontado por las ofertas aplicadas',
-        icon: Icons.percent_outlined,
-        color: const Color(0xFFDC2626),
-      ),
-      SalesMetricCardData(
-        title: 'Ofertas con ventas',
-        value: numberFormat.format(offersCount),
-        subtitle: '$ticketsCount tickets incluyeron una oferta',
-        icon: Icons.sell_outlined,
-        color: const Color(0xFF2563EB),
-      ),
-    ];
+  /// Listado detallado de ofertas tras aplicar los filtros de la pestaña
+  /// (oferta, producto, tipo y búsqueda por texto), en orden cronológico.
+  List<OfferDetailLine> getOfferDetailRows() {
+    final offer = state.offerOfferFilter;
+    final product = state.offerProductFilter;
+    final type = state.offerTypeFilter;
+    final search = state.offerSearchQuery.trim().toLowerCase();
+    return _allOfferLines().where((line) {
+      if (offer != null && line.offerName != offer) return false;
+      if (product != null && line.productName != product) return false;
+      if (type == OfferTypeFilter.deal && !line.isDeal) return false;
+      if (type == OfferTypeFilter.promo && line.isDeal) return false;
+      if (search.isNotEmpty) {
+        final hay = '${line.offerName} ${line.productName}'.toLowerCase();
+        if (!hay.contains(search)) return false;
+      }
+      return true;
+    }).toList(growable: false);
   }
+
+  /// Conteo de cantidad despachada por producto (pivote) sobre lo filtrado.
+  List<OfferProductTotal> getOfferProductTotals() {
+    final totals = <String, double>{};
+    for (final line in getOfferDetailRows()) {
+      totals[line.productName] = (totals[line.productName] ?? 0) + line.quantity;
+    }
+    final list = totals.entries
+        .map((e) =>
+            OfferProductTotal(productName: e.key, quantity: e.value))
+        .toList()
+      ..sort((a, b) => b.quantity.compareTo(a.quantity));
+    return list;
+  }
+
+  /// Opciones para el selector "Por oferta" (todos los nombres del rango).
+  List<String> offerNameOptions() {
+    final set = <String>{for (final l in _allOfferLines()) l.offerName};
+    final list = set.toList()..sort();
+    return list;
+  }
+
+  /// Opciones para el selector "Por producto".
+  List<String> offerProductOptions() {
+    final set = <String>{for (final l in _allOfferLines()) l.productName};
+    final list = set.toList()..sort();
+    return list;
+  }
+
+  /// True si hay algún filtro de ofertas activo.
+  bool get hasOfferFilters =>
+      state.offerOfferFilter != null ||
+      state.offerProductFilter != null ||
+      state.offerTypeFilter != OfferTypeFilter.all ||
+      state.offerSearchQuery.trim().isNotEmpty;
+
+  void setOfferOfferFilter(String? offerName) {
+    state = state.copyWith(
+      offerOfferFilter: offerName,
+      clearOfferOfferFilter: offerName == null,
+    );
+  }
+
+  void setOfferProductFilter(String? productName) {
+    state = state.copyWith(
+      offerProductFilter: productName,
+      clearOfferProductFilter: productName == null,
+    );
+  }
+
+  void setOfferTypeFilter(OfferTypeFilter type) {
+    state = state.copyWith(offerTypeFilter: type);
+  }
+
+  void setOfferSearchQuery(String query) {
+    state = state.copyWith(offerSearchQuery: query);
+  }
+
+  void clearOfferFilters() {
+    state = state.copyWith(
+      clearOfferOfferFilter: true,
+      clearOfferProductFilter: true,
+      offerTypeFilter: OfferTypeFilter.all,
+      offerSearchQuery: '',
+    );
+  }
+
+  /// Valor total a precio de menú de lo filtrado.
+  double get offersTotalValorMenu =>
+      getOfferDetailRows().fold<double>(0, (s, l) => s + l.valorMenu);
+
+  /// Descuento total otorgado en lo filtrado (lo regalado).
+  double get offersTotalDescuento =>
+      getOfferDetailRows().fold<double>(0, (s, l) => s + l.descuento);
+
+  double get offersTotalQuantity =>
+      getOfferDetailRows().fold<double>(0, (s, l) => s + l.quantity);
 
   String breakdownFilterLabel(SalesBreakdownFilter filter) {
     switch (filter) {

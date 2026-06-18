@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:intl/intl.dart';
 
 import '../viewmodel/reports_viewmodel.dart';
 
@@ -186,28 +187,46 @@ class ReportsCsvExportService {
         addBreakdownSection('Ventas por hora', viewModel.getHourlyRows());
         break;
       case ReportCategory.offers:
-        addMetricSection(viewModel.getOffersMetricCards());
-        rows.add(['Ventas por oferta']);
+        final offerDate = DateFormat('dd/MM/yyyy HH:mm:ss');
+        // Pivote: cantidad por producto.
+        rows.add(['Productos en oferta']);
+        rows.add(['Producto', 'Cantidad']);
+        for (final row in viewModel.getOfferProductTotals()) {
+          rows.add([row.productName, row.quantity.toStringAsFixed(2)]);
+        }
         rows.add([
-          'Oferta',
-          'Tipo',
-          'Productos despachados',
-          'Tickets',
-          'Ventas brutas',
-          'Descuento',
-          'Ventas netas',
+          'Suma total',
+          viewModel.offersTotalQuantity.toStringAsFixed(2),
         ]);
-        for (final row in viewModel.getOfferSalesRows()) {
+        rows.add([]);
+        // Detalle: una fila por cada vez que se aplicó una oferta.
+        rows.add(['Detalle de ofertas']);
+        rows.add([
+          'Fecha',
+          'Oferta',
+          'Producto',
+          'Cantidad',
+          'Valor a precio de menú',
+          'Descuento otorgado',
+        ]);
+        for (final row in viewModel.getOfferDetailRows()) {
           rows.add([
-            row.name,
-            viewModel.offerTypeLabel(row.promoType),
+            row.dateTime != null ? offerDate.format(row.dateTime!) : '',
+            row.offerName,
+            row.productName,
             row.quantity.toStringAsFixed(2),
-            row.tickets.toString(),
-            row.grossSales.toStringAsFixed(2),
-            row.discounts.toStringAsFixed(2),
-            row.netSales.toStringAsFixed(2),
+            row.valorMenu.toStringAsFixed(2),
+            row.descuento.toStringAsFixed(2),
           ]);
         }
+        rows.add([
+          'Total',
+          '',
+          '',
+          viewModel.offersTotalQuantity.toStringAsFixed(2),
+          viewModel.offersTotalValorMenu.toStringAsFixed(2),
+          viewModel.offersTotalDescuento.toStringAsFixed(2),
+        ]);
         rows.add([]);
         break;
       case ReportCategory.finances:

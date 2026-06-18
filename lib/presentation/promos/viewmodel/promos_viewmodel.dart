@@ -83,6 +83,8 @@ class PromosViewModel extends ChangeNotifier {
     int? rewardQuantity,
     required DateTime startDate,
     required DateTime endDate,
+    TimeOfDay? startTime,
+    TimeOfDay? endTime,
   }) async {
     final businessId = _state.businessId;
     if (businessId == null) {
@@ -113,6 +115,8 @@ class PromosViewModel extends ChangeNotifier {
         rewardQuantity: rewardQuantity,
         startDate: startDate,
         endDate: endDate,
+        startTime: startTime,
+        endTime: endTime,
       );
       _state = _state.copyWith(saving: false);
       await refresh();
@@ -146,6 +150,8 @@ class PromosViewModel extends ChangeNotifier {
     int? rewardQuantity,
     required DateTime startDate,
     required DateTime endDate,
+    TimeOfDay? startTime,
+    TimeOfDay? endTime,
     required bool isActive,
   }) async {
     final businessId = _state.businessId;
@@ -177,6 +183,8 @@ class PromosViewModel extends ChangeNotifier {
         rewardQuantity: rewardQuantity,
         startDate: startDate,
         endDate: endDate,
+        startTime: startTime,
+        endTime: endTime,
         isActive: isActive,
       );
       _state = _state.copyWith(saving: false);

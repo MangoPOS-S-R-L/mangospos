@@ -137,9 +137,9 @@ class ReportsExportService {
         ];
       case ReportCategory.offers:
         return [
-          _metricsTable(viewModel.getOffersMetricCards()),
+          ..._offerProductTotalsTable(viewModel),
           pw.SizedBox(height: 16),
-          ..._offersTable(viewModel),
+          ..._offersDetailTable(viewModel),
         ];
       case ReportCategory.finances:
         return [
@@ -227,38 +227,70 @@ class ReportsExportService {
     );
   }
 
-  static List<pw.Widget> _offersTable(ReportsViewModel viewModel) {
-    final rows = viewModel.getOfferSalesRows();
+  /// Pivote: cantidad despachada por producto, con la suma total al final.
+  static List<pw.Widget> _offerProductTotalsTable(ReportsViewModel viewModel) {
+    final rows = viewModel.getOfferProductTotals();
+    if (rows.isEmpty) return [];
+    final qtyFormat = NumberFormat('#,##0.##', 'en_US');
+    final data = rows
+        .map((row) => [row.productName, qtyFormat.format(row.quantity)])
+        .toList();
+    data.add(['Suma total', qtyFormat.format(viewModel.offersTotalQuantity)]);
+    return [
+      pw.Text(
+        'Productos en oferta',
+        style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
+      ),
+      pw.SizedBox(height: 6),
+      pw.TableHelper.fromTextArray(
+        headers: const ['Producto', 'Cantidad'],
+        data: data,
+      ),
+    ];
+  }
+
+  /// Listado detallado: una fila por cada vez que se aplicó una oferta.
+  static List<pw.Widget> _offersDetailTable(ReportsViewModel viewModel) {
+    final rows = viewModel.getOfferDetailRows();
     if (rows.isEmpty) return [];
     final qtyFormat = NumberFormat('#,##0.##', 'en_US');
     final moneyFormat = NumberFormat('#,##0.00', 'en_US');
+    final dateFormat = DateFormat('dd/MM/yyyy HH:mm:ss');
     return [
       pw.Text(
-        'Ventas por oferta',
+        'Detalle de ofertas',
         style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
       ),
       pw.SizedBox(height: 6),
       pw.TableHelper.fromTextArray(
         headers: const [
+          'Fecha',
           'Oferta',
-          'Tipo',
-          'Productos',
-          'Tickets',
-          'Descuento',
-          'Ventas netas',
+          'Producto',
+          'Cantidad',
+          'Valor a precio de menú',
+          'Descuento otorgado',
         ],
-        data: rows
-            .map(
-              (row) => [
-                row.name,
-                viewModel.offerTypeLabel(row.promoType),
-                qtyFormat.format(row.quantity),
-                row.tickets.toString(),
-                moneyFormat.format(row.discounts),
-                moneyFormat.format(row.netSales),
-              ],
-            )
-            .toList(growable: false),
+        data: [
+          ...rows.map(
+            (row) => [
+              row.dateTime != null ? dateFormat.format(row.dateTime!) : '',
+              row.offerName,
+              row.productName,
+              qtyFormat.format(row.quantity),
+              moneyFormat.format(row.valorMenu),
+              moneyFormat.format(row.descuento),
+            ],
+          ),
+          [
+            'Total',
+            '',
+            '',
+            qtyFormat.format(viewModel.offersTotalQuantity),
+            moneyFormat.format(viewModel.offersTotalValorMenu),
+            moneyFormat.format(viewModel.offersTotalDescuento),
+          ],
+        ],
       ),
     ];
   }

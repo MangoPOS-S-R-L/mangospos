@@ -1,3 +1,5 @@
+import 'package:flutter/material.dart' show TimeOfDay;
+
 class PromotionSummary {
   final String id;
   final String name;
@@ -18,6 +20,10 @@ class PromotionSummary {
   final int? rewardQuantity;
   final DateTime? startDate;
   final DateTime? endDate;
+  // Happy hour: franja horaria diaria opcional (hora local). null en ambos =
+  // aplica todo el día. Si endTime < startTime, la franja cruza la medianoche.
+  final TimeOfDay? startTime;
+  final TimeOfDay? endTime;
   final bool isActive;
   final DateTime createdAt;
 
@@ -41,6 +47,8 @@ class PromotionSummary {
     required this.rewardQuantity,
     required this.startDate,
     required this.endDate,
+    this.startTime,
+    this.endTime,
     required this.isActive,
     required this.createdAt,
   });
@@ -60,6 +68,20 @@ class PromotionSummary {
     DateTime? parseDate(dynamic value) {
       if (value == null) return null;
       return DateTime.tryParse(value.toString());
+    }
+
+    // Postgres devuelve `time` como "HH:mm:ss" (a veces "HH:mm"). Lo leemos
+    // como hora de pared, sin conversión de zona horaria.
+    TimeOfDay? parseTime(dynamic value) {
+      final raw = value?.toString();
+      if (raw == null || raw.isEmpty) return null;
+      final parts = raw.split(':');
+      if (parts.length < 2) return null;
+      final hour = int.tryParse(parts[0]);
+      final minute = int.tryParse(parts[1]);
+      if (hour == null || minute == null) return null;
+      if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+      return TimeOfDay(hour: hour, minute: minute);
     }
 
     List<String> parseStringList(dynamic value) {
@@ -113,6 +135,8 @@ class PromotionSummary {
       rewardQuantity: toNullableInt(map['reward_quantity']),
       startDate: parseDate(map['start_date']),
       endDate: parseDate(map['end_date']),
+      startTime: parseTime(map['start_time']),
+      endTime: parseTime(map['end_time']),
       isActive: map['is_active'] != false,
       createdAt: parseDate(map['created_at']) ?? DateTime.now(),
     );

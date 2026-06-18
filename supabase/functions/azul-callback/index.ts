@@ -427,7 +427,7 @@ const RESULT_VIEWS: Record<string, ResultView> = {
     icon: "✅",
     color: "#16A34A",
     title: "¡Tarjeta registrada!",
-    body: "Tu tarjeta quedó verificada. Vuelve a la app de MangoPOS — aparecerá automáticamente.",
+    body: "Tu tarjeta quedó verificada y ya aparece en MangoPOS. Ya puedes cerrar esta pestaña.",
   },
   declined: {
     icon: "⚠️",
@@ -455,11 +455,12 @@ function renderResultPage(result: string, reason: string): Response {
   const reasonLine = reason
     ? `<p class="reason">${e(decodeURIComponent(reason))}</p>`
     : "";
-  // En éxito cerramos la pestaña sola (vuelve a la app). Funciona si fue abierta
-  // por la app (window.open en web). Si el navegador lo bloquea, queda el botón;
-  // en el navegador in-app de móvil el usuario toca "Listo".
+  // En éxito intentamos cerrar la pestaña sola. Funciona en el navegador in-app
+  // de móvil y en pestañas abiertas por window.open (POS web). En el navegador
+  // EXTERNO de una app de escritorio, Chrome BLOQUEA window.close() (la pestaña
+  // no la abrió un script) → por eso el mensaje deja claro que se cierra a mano.
   const autoClose = result === "approved"
-    ? `<script>setTimeout(function(){try{window.close();}catch(e){}},1800);</script>`
+    ? `<script>function mpClose(){try{window.close();}catch(e){}}mpClose();setTimeout(mpClose,1200);</script>`
     : "";
   const html = `<!DOCTYPE html>
 <html lang="es"><head>
@@ -485,8 +486,8 @@ function renderResultPage(result: string, reason: string): Response {
   <h1>${e(v.title)}</h1>
   <p>${e(v.body)}</p>
   ${reasonLine}
-  <button onclick="try{window.close();}catch(e){}">Volver a MangoPOS</button>
-  <p class="hint">Si no se cierra sola, cierra esta ventana y vuelve a la app.</p>
+  <button onclick="try{window.close();}catch(e){}">Cerrar esta pestaña</button>
+  <p class="hint">Si la pestaña no se cierra sola, ciérrala a mano — el registro ya quedó completo y tu tarjeta ya está en la app.</p>
 </div>${autoClose}</body></html>`;
   return htmlResponse(html);
 }

@@ -873,6 +873,20 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
     }
   }
 
+  /// Convierte un `time` de Postgres ("HH:mm:ss" / "HH:mm") a minutos desde
+  /// medianoche para evaluar la franja horaria (happy hour). null = sin valor.
+  int? _promoTimeToMinutes(dynamic value) {
+    final raw = value?.toString();
+    if (raw == null || raw.isEmpty) return null;
+    final parts = raw.split(':');
+    if (parts.length < 2) return null;
+    final hour = int.tryParse(parts[0]);
+    final minute = int.tryParse(parts[1]);
+    if (hour == null || minute == null) return null;
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+    return hour * 60 + minute;
+  }
+
   /// Carga las OFERTAS vendibles como tiles del catálogo (pestaña "Ofertas").
   /// Cada oferta activa + auto-aplicar que apunta a producto(s) genera un tile
   /// por producto; al tocarlo se agregan las líneas del producto (ver
@@ -895,10 +909,13 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
           .select(
             'id,name,promo_type,discount_type,discount_value,'
             'target_scope,applies_to,target_ids,buy_quantity,pay_quantity,'
-            'is_active',
+            'start_time,end_time,is_active',
           )
           .eq('business_id', businessId)
           .eq('is_active', true);
+
+      final now = DateTime.now();
+      final nowMin = now.hour * 60 + now.minute;
 
       final tiles = <MenuProduct>[];
       for (final raw in List<Map<String, dynamic>>.from(promosRaw)) {
@@ -907,6 +924,18 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
         if (scope != 'product') continue;
         final promoId = raw['id']?.toString();
         if (promoId == null) continue;
+
+        // Happy hour: si la oferta tiene franja horaria, ocúltala fuera de ese
+        // rango (hora local). end < start => cruza la medianoche.
+        final startMin = _promoTimeToMinutes(raw['start_time']);
+        final endMin = _promoTimeToMinutes(raw['end_time']);
+        if (startMin != null && endMin != null && startMin != endMin) {
+          final inWindow = startMin < endMin
+              ? (nowMin >= startMin && nowMin < endMin)
+              : (nowMin >= startMin || nowMin < endMin);
+          if (!inWindow) continue;
+        }
+
         final type =
             (raw['promo_type'] ?? raw['discount_type'])?.toString() ??
             'percentage';

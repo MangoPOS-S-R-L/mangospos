@@ -95,8 +95,12 @@ class ReportsRepository {
         'total_gross': 0.0,
         'total_discounts': 0.0,
         'total_net': 0.0,
+        'total_valor_menu': 0.0,
+        'total_descuento': 0.0,
         'tickets_count': 0,
         'offers': const <Map<String, dynamic>>[],
+        'lines': const <Map<String, dynamic>>[],
+        'product_totals': const <Map<String, dynamic>>[],
       };
 
   /// Resumen de "Ventas por oferta". Agrupa las líneas de venta con una
@@ -145,7 +149,8 @@ class ReportsRepository {
     //    Dos queries `ilike` separadas (más confiables que un `.or` con
     //    corchetes). business_id + created_at acotan antes del filtro de texto.
     const itemSelect =
-        'id,order_id,notes,qty,quantity,subtotal,discounts,status';
+        'id,order_id,notes,qty,quantity,unit_price,subtotal,discounts,status,'
+        'product_name,created_at';
     Future<List<Map<String, dynamic>>> fetchMarked(String pattern) async {
       return List<Map<String, dynamic>>.from(
         await _client
@@ -177,6 +182,12 @@ class ReportsRepository {
     final agg = <String, Map<String, dynamic>>{};
     final paidTicketIds = <String>{};
     final promotionIds = <String>{};
+    // Detalle línea por línea (una fila por cada vez que se aplicó una oferta)
+    // para el listado tipo planilla. El nombre de la oferta se resuelve más
+    // abajo, cuando ya tenemos la metadata de las promociones.
+    final lineRecords = <Map<String, dynamic>>[];
+    // Cantidad total despachada por producto (pivote del listado).
+    final productTotals = <String, double>{};
     for (final row in itemRows.values) {
       final orderId = row['order_id']?.toString();
       if (orderId == null || !paidOrderIds.contains(orderId)) continue;
@@ -207,6 +218,32 @@ class ReportsRepository {
       // resto es bruto pre-descuento. Ver order_pricing_utils.dart §148.
       final gross = isDeal ? subtotal + disc : subtotal;
       final net = isDeal ? subtotal : subtotal - disc;
+
+      // Dos métricas por línea, ambas confiables:
+      //   - valor a precio de menú = cantidad × precio unitario (lo que valía a
+      //     precio normal lo que salió en oferta).
+      //   - descuento otorgado = lo que la oferta regaló (`discounts`).
+      // NO usamos subtotal/tax: en esta base quedan en 0 o negativos en las
+      // líneas con oferta (las promos automáticas guardan la unidad GRATIS con
+      // discounts = precio completo, dejando subtotal/tax/total negativos). El
+      // "monto pagado" no se puede reconstruir desde la línea marcada porque la
+      // unidad pagada vive en otra línea sin marca de oferta.
+      final unitPrice = _toDouble(row['unit_price']);
+      final valorMenu = qty * unitPrice;
+      final productName =
+          (row['product_name']?.toString().trim().isNotEmpty ?? false)
+              ? row['product_name'].toString().trim()
+              : 'Producto';
+      lineRecords.add(<String, dynamic>{
+        'created_at': row['created_at']?.toString(),
+        'key': key,
+        'is_deal': isDeal,
+        'product_name': productName,
+        'quantity': qty,
+        'valor_menu': valorMenu < 0 ? 0.0 : valorMenu,
+        'descuento': disc,
+      });
+      productTotals[productName] = (productTotals[productName] ?? 0) + qty;
 
       final bucket = agg.putIfAbsent(
         key,
@@ -282,14 +319,60 @@ class ReportsRepository {
     offers.sort((a, b) =>
         (b['net_sales'] as double).compareTo(a['net_sales'] as double));
 
+    // Resuelve el nombre visible de la oferta igual que en los buckets.
+    String resolveOfferName(String? key, bool isDeal) {
+      final meta = key == null ? null : promoMeta[key];
+      final name = meta?['name']?.toString().trim();
+      if (name != null && name.isNotEmpty) return name;
+      if (key == '__deal__') return 'Ofertas / combos';
+      if (key == '__promo__') return 'Promoción automática';
+      return isDeal ? 'Ofertas / combos' : 'Oferta eliminada';
+    }
+
+    var totalValorMenu = 0.0;
+    var totalDescuento = 0.0;
+    final lines = <Map<String, dynamic>>[];
+    for (final rec in lineRecords) {
+      final valorMenu = rec['valor_menu'] as double;
+      final descuento = rec['descuento'] as double;
+      totalValorMenu += valorMenu;
+      totalDescuento += descuento;
+      lines.add(<String, dynamic>{
+        'created_at': rec['created_at'],
+        'offer_name':
+            resolveOfferName(rec['key'] as String?, rec['is_deal'] as bool),
+        'product_name': rec['product_name'],
+        'quantity': rec['quantity'],
+        'valor_menu': valorMenu,
+        'descuento': descuento,
+        'is_deal': rec['is_deal'],
+      });
+    }
+    // Orden cronológico ascendente (ISO8601 UTC → compara como texto), igual
+    // que la planilla del usuario.
+    lines.sort((a, b) => (a['created_at']?.toString() ?? '')
+        .compareTo(b['created_at']?.toString() ?? ''));
+
+    // Pivote por producto, de mayor a menor cantidad.
+    final productTotalsList = productTotals.entries
+        .map((e) =>
+            <String, dynamic>{'product_name': e.key, 'quantity': e.value})
+        .toList()
+      ..sort((a, b) =>
+          (b['quantity'] as double).compareTo(a['quantity'] as double));
+
     return <String, dynamic>{
       'offers_count': offers.length,
       'total_quantity': totalQuantity,
       'total_gross': totalGross,
       'total_discounts': totalDiscounts,
       'total_net': totalNet,
+      'total_valor_menu': totalValorMenu,
+      'total_descuento': totalDescuento,
       'tickets_count': paidTicketIds.length,
       'offers': offers,
+      'lines': lines,
+      'product_totals': productTotalsList,
     };
   }
 

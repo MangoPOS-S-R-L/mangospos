@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart' show TimeOfDay;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../presentation/promos/state/promos_state.dart';
@@ -13,11 +14,19 @@ class PromosRepository {
     return double.tryParse(value?.toString() ?? '') ?? 0;
   }
 
+  // Serializa una hora de pared a "HH:mm:00" para la columna `time` (sin tz).
+  String? _fmtTime(TimeOfDay? value) {
+    if (value == null) return null;
+    final hh = value.hour.toString().padLeft(2, '0');
+    final mm = value.minute.toString().padLeft(2, '0');
+    return '$hh:$mm:00';
+  }
+
   Future<List<PromotionSummary>> getPromotions(String businessId) async {
     final response = await _client
         .from(PromosQueries.tablePromotions)
         .select(
-          'id, name, description, discount_type, discount_value, min_purchase, applies_to, promo_type, target_scope, target_ids, days_of_week, auto_apply, priority, stackable, buy_quantity, pay_quantity, reward_quantity, start_date, end_date, is_active, created_at',
+          'id, name, description, discount_type, discount_value, min_purchase, applies_to, promo_type, target_scope, target_ids, days_of_week, auto_apply, priority, stackable, buy_quantity, pay_quantity, reward_quantity, start_date, end_date, start_time, end_time, is_active, created_at',
         )
         .eq('business_id', businessId)
         .order('priority', ascending: false)
@@ -88,6 +97,8 @@ class PromosRepository {
     int? rewardQuantity,
     required DateTime startDate,
     required DateTime endDate,
+    TimeOfDay? startTime,
+    TimeOfDay? endTime,
   }) async {
     await _client
         .from(PromosQueries.tablePromotions)
@@ -112,6 +123,8 @@ class PromosRepository {
             'reward_quantity': rewardQuantity,
             'start_date': startDate.toUtc().toIso8601String(),
             'end_date': endDate.toUtc().toIso8601String(),
+            'start_time': _fmtTime(startTime),
+            'end_time': _fmtTime(endTime),
             'is_active': true,
           }..removeWhere((key, value) {
             if (value == null) return true;
@@ -145,6 +158,8 @@ class PromosRepository {
     int? rewardQuantity,
     required DateTime startDate,
     required DateTime endDate,
+    TimeOfDay? startTime,
+    TimeOfDay? endTime,
     required bool isActive,
   }) async {
     await _client
@@ -170,6 +185,9 @@ class PromosRepository {
           'reward_quantity': rewardQuantity,
           'start_date': startDate.toUtc().toIso8601String(),
           'end_date': endDate.toUtc().toIso8601String(),
+          // Explícito (puede ser null) para permitir volver a "todo el día".
+          'start_time': _fmtTime(startTime),
+          'end_time': _fmtTime(endTime),
           'is_active': isActive,
         })
         .eq('id', id);

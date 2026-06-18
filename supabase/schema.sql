@@ -3100,6 +3100,8 @@ CREATE TABLE IF NOT EXISTS "public"."promotions" (
     "start_date" timestamp with time zone,
     "end_date" timestamp with time zone,
     "days_of_week" integer[],
+    "start_time" time without time zone,
+    "end_time" time without time zone,
     "is_active" boolean DEFAULT true,
     "created_at" timestamp with time zone DEFAULT "now"(),
     CONSTRAINT "promotions_applies_to_check" CHECK (("applies_to" = ANY (ARRAY['all'::"text", 'category'::"text", 'product'::"text"]))),
