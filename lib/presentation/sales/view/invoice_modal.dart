@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:mangopos/core/currency/business_currency_provider.dart';
 import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
@@ -70,7 +72,7 @@ List<OrderItem> _buildInvoiceItems(
   return expanded;
 }
 
-class InvoiceModal extends StatelessWidget {
+class InvoiceModal extends ConsumerWidget {
   final Order order;
   final List<OrderItem> items;
   final List<Payment> payments;
@@ -119,8 +121,8 @@ class InvoiceModal extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    final currency = NumberFormat('#,##0.00', 'en_US');
+  Widget build(BuildContext context, WidgetRef ref) {
+    final currency = currentBusinessCurrencyOrFallback(ref).formatter;
     final dateFormat = DateFormat('dd/MM/yyyy HH:mm:ss');
 
     final baseItems = checkId == null
@@ -287,7 +289,7 @@ class InvoiceModal extends StatelessWidget {
                                           m.price * itemQty * m.qty;
                                       return Text(
                                         modTotal > 0
-                                            ? '+ ${m.name} (+RD\$ ${currency.format(modTotal)})'
+                                            ? '+ ${m.name} (+${currency.format(modTotal)})'
                                             : '+ ${m.name}',
                                         style: const TextStyle(
                                           fontSize: 12,
@@ -299,7 +301,7 @@ class InvoiceModal extends StatelessWidget {
                               ),
                             ),
                             Text(
-                              'RD\$ ${currency.format(itemDisplayTotal(order, item))}',
+                              currency.format(itemDisplayTotal(order, item)),
                             ),
                           ],
                         ),
@@ -339,7 +341,7 @@ class InvoiceModal extends StatelessWidget {
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Text('Método: ${_getMethodLabel(p)}'),
-                          Text('RD\$ ${currency.format(p.amount)}'),
+                          Text(currency.format(p.amount)),
                         ],
                       ),
                     ),
@@ -366,7 +368,7 @@ class InvoiceModal extends StatelessWidget {
                               ),
                             ),
                             Text(
-                              'RD\$ ${currency.format(change)}',
+                              currency.format(change),
                               style: TextStyle(
                                 color: const Color(0xFF22C55E),
                                 fontWeight: FontWeight.bold,
@@ -468,7 +470,7 @@ class _DetailRow extends StatelessWidget {
   }
 }
 
-class _SummaryRow extends StatelessWidget {
+class _SummaryRow extends ConsumerWidget {
   final String label;
   final double value;
   final bool isBold;
@@ -482,8 +484,8 @@ class _SummaryRow extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    final currency = NumberFormat('#,##0.00', 'en_US');
+  Widget build(BuildContext context, WidgetRef ref) {
+    final currency = currentBusinessCurrencyOrFallback(ref).formatter;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
@@ -497,7 +499,7 @@ class _SummaryRow extends StatelessWidget {
             ),
           ),
           Text(
-            'RD\$ ${currency.format(value)}',
+            currency.format(value),
             style: TextStyle(
               fontSize: fontSize,
               fontWeight: isBold ? FontWeight.bold : FontWeight.normal,

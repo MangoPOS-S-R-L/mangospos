@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_tokens.dart';
+import 'package:mangopos/core/business/country_profile.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/models/billing_plan.dart';
 import 'package:mangopos/presentation/auth/register/business_registration_catalog.dart';
@@ -27,30 +28,12 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
   late final TextEditingController _phoneCtl;
   late String _country;
   late String _businessType;
-  late String _currency;
   late String _businessSize;
 
   static const _steps = <AuthShellStep>[
     AuthShellStep(title: 'Crear cuenta', complete: true),
     AuthShellStep(title: 'Agregar negocio'),
     AuthShellStep(title: 'Activando'),
-  ];
-
-  static const _countries = <String>[
-    'República Dominicana',
-    'Estados Unidos',
-    'México',
-    'Colombia',
-    'Perú',
-    'Chile',
-    'Argentina',
-    'España',
-  ];
-
-  static const _currencyOptions = <String>[
-    'Peso Dominicano (DOP)',
-    'Dólar estadounidense (USD)',
-    'Peso Mexicano (MXN)',
   ];
 
   static const _businessSizeOptions = <String>[
@@ -69,11 +52,10 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
     _branchCtl = TextEditingController(text: state.branchName);
     _addressCtl = TextEditingController(text: state.address);
     _phoneCtl = TextEditingController(text: state.phone);
-    _country = _countries.contains(state.country)
-        ? state.country
-        : _countries.first;
+    // El país define la moneda base (ver CountryProfile). Normalizamos a un
+    // nombre válido del catálogo; default República Dominicana.
+    _country = CountryProfile.fromName(state.country).name;
     _businessType = state.businessType;
-    _currency = _currencyOptions.first;
     _businessSize = _businessSizeOptions[1];
     // Subdominio se autogenera en el viewmodel a partir del nombre.
     notifier.setSubdomain('');
@@ -182,16 +164,20 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
                         _FieldLabel('País'),
                         DropdownButtonFormField<String>(
                           initialValue: _country,
-                          items: _countries
-                              .map(
-                                (country) => DropdownMenuItem(
-                                  value: country,
-                                  child: Text(country),
+                          isExpanded: true,
+                          items: [
+                            for (final c in CountryProfile.all)
+                              DropdownMenuItem(
+                                value: c.name,
+                                child: Text(
+                                  c.name,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
-                              )
-                              .toList(),
+                              ),
+                          ],
                           onChanged: (value) {
                             if (value == null) return;
+                            // El país define la moneda — se deriva al guardar.
                             setState(() => _country = value);
                           },
                           decoration: _inputDecoration(
@@ -207,24 +193,22 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _FieldLabel('Moneda'),
-                        DropdownButtonFormField<String>(
-                          initialValue: _currency,
-                          items: _currencyOptions
-                              .map(
-                                (currency) => DropdownMenuItem(
-                                  value: currency,
-                                  child: Text(currency),
-                                ),
-                              )
-                              .toList(),
-                          onChanged: (value) {
-                            if (value == null) return;
-                            setState(() => _currency = value);
-                          },
+                        _FieldLabel('Moneda (según el país)'),
+                        // Solo lectura: la moneda base se deriva del país.
+                        InputDecorator(
                           decoration: _inputDecoration(
-                            hint: 'Elige la divisa',
+                            hint: '',
                             icon: Icons.monetization_on_outlined,
+                          ),
+                          child: Builder(
+                            builder: (_) {
+                              final currency =
+                                  CountryProfile.fromName(_country).currency;
+                              return Text(
+                                '${currency.name} (${currency.code})',
+                                overflow: TextOverflow.ellipsis,
+                              );
+                            },
                           ),
                         ),
                       ],
@@ -425,7 +409,12 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
                     const SizedBox(height: 8),
                     _DetailRow(label: 'País', value: _country),
                     const SizedBox(height: 8),
-                    _DetailRow(label: 'Moneda', value: _currency),
+                    _DetailRow(
+                      label: 'Moneda',
+                      value:
+                          '${CountryProfile.fromName(_country).currency.name} '
+                          '(${CountryProfile.fromName(_country).currencyCode})',
+                    ),
                     const SizedBox(height: 8),
                     _DetailRow(label: 'Tamaño', value: _businessSize),
                   ],

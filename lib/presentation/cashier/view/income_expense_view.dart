@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/currency/business_currency_provider.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/core/utils/app_time.dart';
@@ -406,6 +407,7 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
         cashierName: cashierName,
         sessionId: sessionId,
         when: DateTime.now(),
+        currency: currentBusinessCurrencyOrFallback(ref),
       );
 
       await repo.printEscPos(

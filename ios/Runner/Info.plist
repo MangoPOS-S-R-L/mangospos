@@ -55,8 +55,21 @@
 	<string>MangoPOS necesita Bluetooth para conectarse a impresoras termicas.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>MangoPOS necesita acceso a la red local para comunicarse con impresoras y el agente de impresion.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_mangoprint._tcp</string>
+		<string>_pdl-datastream._tcp</string>
+		<string>_ipp._tcp</string>
+		<string>_printer._tcp</string>
+	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>MangoPOS necesita la camara para escanear codigos QR.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>MangoPOS necesita acceso a tus fotos para subir el logo del negocio y las imagenes de los productos.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>MangoPOS necesita guardar en tus fotos los comprobantes y reportes generados.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

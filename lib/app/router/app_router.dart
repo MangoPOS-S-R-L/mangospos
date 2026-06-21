@@ -42,6 +42,7 @@ import '../../presentation/cashier/view/cash_closures_view.dart';
 import '../../presentation/cashier/view/income_expense_view.dart';
 import '../../presentation/cashier/view/sales_history_view.dart';
 import '../../presentation/kitchen/view/kitchen_view.dart';
+import '../../presentation/reservations/view/reservations_view.dart';
 import '../../presentation/customers/view/customers_view.dart';
 import '../../presentation/customers/view/customer_detail_view.dart';
 import '../../presentation/inventory/view/inventory_hub_view.dart';
@@ -503,8 +504,7 @@ class AppRouter {
           ),
           GoRoute(
             path: AppRoutes.reservations,
-            builder: (context, state) =>
-                const _Placeholder('Tables/Reservations'),
+            builder: (context, state) => const ReservationsView(),
           ),
           GoRoute(
             path: AppRoutes.customers,
@@ -921,22 +921,6 @@ class PrintingShellView extends StatelessWidget {
       body: child,
     );
   }
-}
-
-// Placeholder temporal para los módulos que aún no tienen vista real
-class _Placeholder extends StatelessWidget {
-  final String label;
-  const _Placeholder(this.label);
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    body: Center(
-      child: Text(
-        label,
-        style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-      ),
-    ),
-  );
 }
 
 ReportCategory? _reportCategoryFromQuery(String? value) {

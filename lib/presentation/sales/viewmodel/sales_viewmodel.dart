@@ -111,6 +111,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   // optimista en vuelo. Mientras el server no confirme esa qty, una recarga
   // stale (qty vieja) NO revierte la línea — se mantiene la optimista.
   final Map<String, double> _pendingItemQty = {};
+  // Overrides fiscales por sub-cuenta elegidos por el cajero en el header
+  // (tipo de comprobante y cliente/RNC del check). Se REAPLICAN tras cada
+  // recarga porque el bundle de la BD viva puede no devolver `requested_ncf_type`
+  // / `customer_rnc` (divergencia), lo que hacía revertir la selección a B02 al
+  // recargar (p. ej. al asignar cliente). `containsKey` = el cajero lo fijó;
+  // valor null en NCF = volver al default del business. Se podan al cambiar de
+  // orden o cuando el check ya no existe. La BD sigue siendo la fuente durable.
+  final Map<String, String?> _checkNcfOverride = {};
+  final Map<String, ({String? id, String? name, String? rnc})>
+  _checkCustomerOverride = {};
   bool _syncInFlight = false;
   String? _taxSettingsBusinessId;
   DateTime? _lastTaxLoad;
@@ -1400,9 +1410,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     required String checkId,
     required String customerId,
     required String customerName,
+    String? customerTaxId,
   }) async {
     final order = state.order;
     if (order == null) return;
+
+    // Recordar la asignación para reaplicarla tras los reload (ver
+    // _checkCustomerOverride): el reload del bundle puede no traer customer_rnc.
+    _checkCustomerOverride[checkId] = (
+      id: customerId,
+      name: customerName,
+      rnc: customerTaxId,
+    );
 
     try {
       await ref
@@ -1411,13 +1430,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             checkId: checkId,
             customerId: customerId,
             customerName: customerName,
+            customerRnc: customerTaxId,
           );
       // Reflejar de inmediato en el check local para que el chip del header
-      // y los tabs muestren el nombre sin esperar al reload del bundle.
+      // y los tabs muestren el nombre/RNC sin esperar al reload del bundle.
       final updatedChecks = state.checks
           .map(
             (c) => c.id == checkId
-                ? c.copyWith(customerId: customerId, customerName: customerName)
+                ? c.copyWith(
+                    customerId: customerId,
+                    customerName: customerName,
+                    customerRnc: customerTaxId,
+                  )
                 : c,
           )
           .toList(growable: false);
@@ -1437,6 +1461,46 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   void updateFiscalType(String type) {
     _hasManualFiscalTypeSelection = true;
     state = state.copyWith(fiscalType: _normalizeFiscalTypeValue(type));
+  }
+
+  /// Asigna (o limpia, con [type] vacío) el tipo de comprobante de una
+  /// sub-cuenta puntual en vez de la orden completa. Se usa cuando el cajero
+  /// tiene una sub-cuenta seleccionada en el header: en una cuenta dividida
+  /// cada check puede emitir un comprobante distinto (p. ej. dividida en 3
+  /// con 2 Crédito Fiscal + 1 Consumidor Final). El override se guarda en
+  /// `order_checks.requested_ncf_type` y lo consume el cobro por sub-cuenta;
+  /// el bundle lo re-hidrata en recargas. La orden general conserva su tipo.
+  Future<void> setFiscalTypeForCheck(String checkId, String type) async {
+    final normalized = _normalizeFiscalTypeValue(type);
+    final newValue = normalized.isEmpty ? null : normalized;
+
+    // Recordar la elección para reaplicarla tras los reload (ver
+    // _checkNcfOverride): así no revierte a B02 aunque el bundle no devuelva
+    // requested_ncf_type.
+    _checkNcfOverride[checkId] = newValue;
+
+    // Reflejar de inmediato en el check local para que el dropdown del header
+    // muestre el cambio sin esperar al reload del bundle.
+    final updatedChecks = state.checks
+        .map(
+          (c) => c.id == checkId
+              ? (newValue == null
+                    ? c.copyWith(clearNcfType: true)
+                    : c.copyWith(requestedNcfType: newValue))
+              : c,
+        )
+        .toList(growable: false);
+    state = state.copyWith(checks: updatedChecks);
+
+    try {
+      await ref
+          .read(salesRepositoryProvider)
+          .setCheckNcfType(checkId: checkId, ncfType: newValue);
+    } catch (e) {
+      state = state.copyWith(
+        error: 'Error al asignar comprobante a la subcuenta: $e',
+      );
+    }
   }
 
   Future<void> updateCurrentSessionNote(String? note) async {
@@ -3569,6 +3633,38 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         // Soltar guardas de items que el server ya no trae (borrados).
         final serverIds = items.map((i) => i.id).toSet();
         _pendingItemQty.removeWhere((id, _) => !serverIds.contains(id));
+      }
+    }
+
+    // Reaplicar los overrides fiscales por sub-cuenta (tipo de comprobante y
+    // cliente/RNC) que el cajero fijó en el header. El bundle de la BD viva
+    // puede no devolver requested_ncf_type / customer_rnc; sin esto la
+    // selección revertía a B02 / perdía el RNC al recargar (p. ej. al asignar
+    // cliente). Podamos overrides de checks que ya no existen (cerrados o de
+    // otra orden).
+    if (_checkNcfOverride.isNotEmpty || _checkCustomerOverride.isNotEmpty) {
+      final checkIds = checks.map((c) => c.id).toSet();
+      _checkNcfOverride.removeWhere((id, _) => !checkIds.contains(id));
+      _checkCustomerOverride.removeWhere((id, _) => !checkIds.contains(id));
+      if (_checkNcfOverride.isNotEmpty || _checkCustomerOverride.isNotEmpty) {
+        checks = checks.map((c) {
+          var nc = c;
+          if (_checkNcfOverride.containsKey(c.id)) {
+            final v = _checkNcfOverride[c.id];
+            nc = v == null
+                ? nc.copyWith(clearNcfType: true)
+                : nc.copyWith(requestedNcfType: v);
+          }
+          final cust = _checkCustomerOverride[c.id];
+          if (cust != null) {
+            nc = nc.copyWith(
+              customerId: cust.id,
+              customerName: cust.name,
+              customerRnc: cust.rnc,
+            );
+          }
+          return nc;
+        }).toList(growable: false);
       }
     }
 

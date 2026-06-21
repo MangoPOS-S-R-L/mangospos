@@ -23,6 +23,7 @@ class PaymentSplitDialog extends ConsumerStatefulWidget {
   final String? checkId;
   final String? customerId;
   final String? customerName;
+  final String? customerRnc;
   final String? fiscalType;
 
   /// Hook que corre DESPUÉS de que el pago fue confirmado pero ANTES de
@@ -45,6 +46,7 @@ class PaymentSplitDialog extends ConsumerStatefulWidget {
     this.checkId,
     this.customerId,
     this.customerName,
+    this.customerRnc,
     this.fiscalType,
     this.onConfirmed,
   });
@@ -77,6 +79,7 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
         widget.checkId,
         widget.customerId,
         widget.fiscalType,
+        widget.customerRnc,
       );
       final vm = ref.read(paymentSplitProvider(key).notifier);
       // F4: NCF asignado offline (si lo hubo) para imprimir el comprobante.
@@ -269,6 +272,7 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
       widget.checkId,
       widget.customerId,
       widget.fiscalType,
+      widget.customerRnc,
     ));
     final state = ref.watch(provider);
     final vm = ref.read(provider.notifier);

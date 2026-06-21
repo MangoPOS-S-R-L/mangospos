@@ -20,6 +20,13 @@ class ShellDestination {
   /// [isDestinationFeatureEnabled]. Ej.: 'kitchen' oculta Cocina/KDS en retail.
   final String? requiresFeature;
 
+  /// Add-on de pago que la PLATAFORMA debe haber activado para el negocio
+  /// (fila en `business_modules`). `null` = no es add-on. Se evalúa con
+  /// [isDestinationModuleEnabled] contra el set de módulos activos. A
+  /// diferencia de [requiresFeature] (que el dueño controla en Ajustes), esto
+  /// solo lo activa MangoPOS desde el panel administrativo. Ej.: 'reservations'.
+  final String? requiresModule;
+
   const ShellDestination({
     required this.label,
     required this.route,
@@ -28,6 +35,7 @@ class ShellDestination {
     this.permissionCode,
     this.inactivePaths,
     this.requiresFeature,
+    this.requiresModule,
   }) : assert(
           svgAsset != null || materialIcon != null,
           'Debe proporcionarse svgAsset o materialIcon',
@@ -61,6 +69,15 @@ const List<ShellDestination> kPrimaryDestinations = [
     svgAsset: 'assets/icons/cocina_principal.svg',
     permissionCode: 'kds.acceso',
     requiresFeature: 'kitchen',
+  ),
+  // Add-on: solo visible si la plataforma activó 'reservations' para el
+  // negocio (business_modules) Y el rol tiene 'reservas.acceso'.
+  ShellDestination(
+    label: 'Reservas',
+    route: AppRoutes.reservations,
+    materialIcon: Icons.event_seat,
+    permissionCode: 'reservas.acceso',
+    requiresModule: 'reservations',
   ),
   ShellDestination(
     label: 'Productos',
@@ -97,6 +114,17 @@ bool isDestinationFeatureEnabled(
     default:
       return true;
   }
+}
+
+/// ¿El destino está habilitado según los add-ons activados por la plataforma?
+/// Destinos sin `requiresModule` siempre pasan. [enabledModules] es el set de
+/// claves activas en `business_modules`; mientras carga es `{}` → el add-on
+/// queda OCULTO (un módulo de pago no se muestra hasta confirmar activación).
+bool isDestinationModuleEnabled(
+    ShellDestination d, Set<String> enabledModules) {
+  final required = d.requiresModule;
+  if (required == null) return true;
+  return enabledModules.contains(required);
 }
 
 /// Decide si un destino está "activo" para una ruta actual dada.

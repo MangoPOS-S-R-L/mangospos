@@ -12,6 +12,7 @@ import 'package:go_router/go_router.dart';
 import '../../app/router/routes.dart';
 import '../../app/theme/mango_colors.dart';
 import '../../core/business/business_features_provider.dart';
+import '../../core/business/business_modules_provider.dart';
 import '../../core/offline/offline_queue_status_provider.dart';
 import '../../core/utils/app_toast.dart';
 import '../../data/repositories/pos_settings_repository.dart';
@@ -230,6 +231,7 @@ class _MobileDrawer extends ConsumerWidget {
                     final disabledRoutes =
                         disabledAsync.valueOrNull ?? const <String>[];
                     final features = ref.watchBusinessFeatures();
+                    final modules = ref.watchEnabledModules();
                     return kPrimaryDestinations.where((d) {
                       final code = d.permissionCode;
                       final hasPerm =
@@ -237,7 +239,9 @@ class _MobileDrawer extends ConsumerWidget {
                       final hidden = disabledRoutes.contains(d.route);
                       final featureOk =
                           isDestinationFeatureEnabled(d, features);
-                      return hasPerm && !hidden && featureOk;
+                      final moduleOk =
+                          isDestinationModuleEnabled(d, modules);
+                      return hasPerm && !hidden && featureOk && moduleOk;
                     }).map(
                       (d) => _DrawerNavTile(
                         destination: d,

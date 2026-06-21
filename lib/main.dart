@@ -37,6 +37,7 @@ import 'app/theme/ui_scale.dart';
 import 'services/session/session_controller.dart';
 import 'core/cache/cache_manager.dart';
 import 'core/network/supabase_config.dart';
+import 'core/network/network_keep_alive_service.dart';
 import 'core/agent/mobile_print_agent.dart';
 import 'core/agent/windows_firewall.dart';
 import 'core/services/local_print_service.dart';
@@ -45,6 +46,10 @@ import 'env/env.dart';
 
 /// Global mobile print agent instance (Android/iOS only).
 final MobilePrintAgent _mobileAgent = MobilePrintAgent();
+
+/// Mantiene viva la red para impresión (wakelock iOS/Windows) y revalida el
+/// agente LAN al volver a foreground. No-op en Android (lo cubre WifiLock).
+final NetworkKeepAliveService _networkKeepAlive = NetworkKeepAliveService();
 
 const String agentHost = '127.0.0.1';
 
@@ -587,8 +592,11 @@ Future<void> _bootstrapApp() async {
 /// Servicios que no necesitan bloquear el arranque de la UI.
 Future<void> _initializeBackgroundServices() async {
   try {
-    // Auto-updater
-    if (!kIsWeb && (Platform.isMacOS || Platform.isWindows)) {
+    // Auto-updater (Sparkle/WinSparkle).
+    // Solo Windows: en macOS la distribución es vía Mac App Store, cuyo sandbox
+    // prohíbe el mecanismo de auto-update propio (Sparkle). En Mac las
+    // actualizaciones las maneja la App Store, así que NO invocamos autoUpdater.
+    if (!kIsWeb && Platform.isWindows) {
       try {
         const feedURL = 'https://mangopos.com/appcast.xml';
         await autoUpdater.setFeedURL(feedURL);
@@ -605,21 +613,37 @@ Future<void> _initializeBackgroundServices() async {
     }
 
     // Printer agent
-    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
-      // Mobile: start the built-in Dart agent
+    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS || Platform.isMacOS)) {
+      // Mobile + macOS: usar el agente Dart en-proceso (BLE + TCP directo).
+      // En macOS no podemos spawnear el agente Node externo porque el sandbox
+      // de la Mac App Store lo prohíbe; el agente en-proceso cubre impresión
+      // por red/BLE y además puede actuar de relay LAN, todo sandbox-safe.
       final agentUrl = await _mobileAgent.start(port: agentPort);
       if (agentUrl != null) {
         LocalPrintService.primeBaseUrl(agentUrl);
-        debugPrint('[Agent] Mobile agent running at $agentUrl');
+        debugPrint('[Agent] In-process agent running at $agentUrl');
         unawaited(_publishAgentUrlToDb());
       }
     } else if (!kIsWeb) {
-      // Desktop: launch the Node.js agent (puede tardar hasta 8s con los pings)
+      // Desktop (Windows/Linux): launch the Node.js agent (puede tardar hasta
+      // 8s con los pings).
       await _ensurePrinterAgentStarted();
       LocalPrintService.primeBaseUrl('http://$agentHost:$agentPort');
       unawaited(_publishAgentUrlToDb());
     }
     unawaited(LocalPrintService().warmup());
+
+    // Keep-alive de red para impresión: en iOS mantiene la pantalla viva
+    // (evita que el WiFi baje a ahorro) y revalida el agente LAN al volver a
+    // foreground; en Windows evita la suspensión del sistema. En Android es
+    // no-op (el WifiLock nativo del heartbeat ya cubre el radio).
+    if (!kIsWeb && (Platform.isIOS || Platform.isWindows)) {
+      unawaited(
+        _networkKeepAlive.enable(
+          onResume: _revalidatePrintConnectivityOnResume,
+        ),
+      );
+    }
 
     // Sprint 2.2 — Sondeo mDNS en paralelo para detectar print hubs
     // disponibles en la LAN. Casos:
@@ -643,6 +667,25 @@ Future<void> _initializeBackgroundServices() async {
       error: e,
       stackTrace: st,
     );
+  }
+}
+
+/// Revalida la conectividad de impresión cuando la app vuelve a foreground
+/// (lo dispara [NetworkKeepAliveService] solo en iOS, donde los sockets se
+/// suspenden en background). Best-effort: cualquier fallo se traga, nunca
+/// bloquea ni rompe el flujo de impresión.
+Future<void> _revalidatePrintConnectivityOnResume() async {
+  try {
+    // El agente en-proceso puede haber perdido el socket al suspenderse:
+    // start() es idempotente (no-op si sigue vivo) y lo re-levanta si murió.
+    if (!kIsWeb && (Platform.isIOS || Platform.isMacOS)) {
+      await _mobileAgent.start(port: agentPort);
+    }
+    // Re-resolver baseUrl (pudo cambiar la IP/red) y re-descubrir hubs mDNS.
+    unawaited(LocalPrintService().warmup());
+    unawaited(_discoverHubsViaMdns());
+  } catch (e) {
+    debugPrint('[KeepAlive] revalidación onResume falló (ignorado): $e');
   }
 }
 

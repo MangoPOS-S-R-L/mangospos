@@ -9,6 +9,7 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/breakpoints.dart';
 import 'package:mangopos/app/theme/sizes.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
+import 'package:mangopos/core/currency/business_currency_provider.dart';
 import 'package:mangopos/core/business/business_features_provider.dart';
 import 'package:mangopos/core/business/business_model.dart';
 import 'package:mangopos/presentation/sales/viewmodel/retail_carts_provider.dart';
@@ -824,6 +825,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
             checkId: selectedCheckId,
             customerId: customerId,
             customerName: customerName,
+            customerTaxId: customerTaxId,
           );
     } else {
       await ref
@@ -1426,7 +1428,7 @@ class _MobileCartBar extends ConsumerWidget {
     );
     final total = pricingSummary.total;
     final hasItems = itemCount > 0;
-    final currency = NumberFormat('#,##0.00', 'en_US');
+    final currency = currentBusinessCurrencyOrFallback(ref).formatter;
 
     return Material(
       color: Colors.white,
@@ -1516,7 +1518,7 @@ class _MobileCartBar extends ConsumerWidget {
                       const SizedBox(height: 2),
                       Text(
                         hasItems
-                            ? 'RD\$ ${currency.format(total)}'
+                            ? currency.format(total)
                             : 'Toca para ver el ticket',
                         style: TextStyle(
                           fontSize: 16,
@@ -1571,7 +1573,7 @@ class _MobileCartBar extends ConsumerWidget {
   }
 }
 
-class _VoidOrderDialog extends StatefulWidget {
+class _VoidOrderDialog extends ConsumerStatefulWidget {
   final String title;
   final String content;
   final String confirmLabel;
@@ -1589,10 +1591,10 @@ class _VoidOrderDialog extends StatefulWidget {
   });
 
   @override
-  State<_VoidOrderDialog> createState() => _VoidOrderDialogState();
+  ConsumerState<_VoidOrderDialog> createState() => _VoidOrderDialogState();
 }
 
-class _VoidOrderDialogState extends State<_VoidOrderDialog> {
+class _VoidOrderDialogState extends ConsumerState<_VoidOrderDialog> {
   final TextEditingController _reasonCtrl = TextEditingController();
 
   @override
@@ -1603,7 +1605,7 @@ class _VoidOrderDialogState extends State<_VoidOrderDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final currency = NumberFormat('#,##0.00', 'en_US');
+    final currency = currentBusinessCurrencyOrFallback(ref).formatter;
 
     return AlertDialog(
       title: Text(widget.title),
@@ -1636,7 +1638,7 @@ class _VoidOrderDialogState extends State<_VoidOrderDialog> {
                     'Cantidad abierta: ${widget.openItemsQty.toStringAsFixed(widget.openItemsQty % 1 == 0 ? 0 : 2)}',
                   ),
                   Text(
-                    'Total abierto: RD\$ ${currency.format(widget.totalAmount)}',
+                    'Total abierto: ${currency.format(widget.totalAmount)}',
                   ),
                 ],
               ),
@@ -2019,6 +2021,22 @@ class _CartView extends ConsumerWidget {
       }
     }
 
+    // Comprobante por sub-cuenta: capturamos el override del check ANTES del
+    // reload. `reloadOrderNow` rehidrata los checks desde el bundle y, si la
+    // BD viva no devuelve `requested_ncf_type`, perderíamos la selección que
+    // el cajero acaba de hacer en el header (el estado local ya la tiene: la
+    // setea el dropdown de forma síncrona). Lo usamos como respaldo abajo.
+    String? requestedCheckNcf;
+    if (checkId != null) {
+      for (final c in ref.read(currentOrderProvider).checks) {
+        if (c.id == checkId) {
+          final ov = c.requestedNcfType?.trim();
+          if (ov != null && ov.isNotEmpty) requestedCheckNcf = ov;
+          break;
+        }
+      }
+    }
+
     // FRESH antes de cobrar: recargamos la orden del server para no cobrar /
     // imprimir factura/precuenta con ítems stale (Realtime pudo perder
     // eventos, u otra caja agregó ítems). No-op offline o en orden local; el
@@ -2027,6 +2045,54 @@ class _CartView extends ConsumerWidget {
     if (!context.mounted) return;
 
     var currentOrderState = ref.read(currentOrderProvider);
+
+    // Tipo de comprobante efectivo para este cobro. En cuentas divididas el
+    // override de la sub-cuenta manda: tras el reload preferimos el valor del
+    // check ya rehidratado y, si el bundle no lo trajo, el capturado arriba;
+    // si no hay override, cae al tipo de la orden. Así una cuenta dividida en
+    // 3 puede emitir, p. ej., 2 Crédito Fiscal + 1 Consumidor Final.
+    if (checkId != null) {
+      for (final c in currentOrderState.checks) {
+        if (c.id == checkId) {
+          final ov = c.requestedNcfType?.trim();
+          if (ov != null && ov.isNotEmpty) requestedCheckNcf = ov;
+          break;
+        }
+      }
+    }
+    final String finalFiscalType = (checkId != null && requestedCheckNcf != null)
+        ? requestedCheckNcf
+        : currentOrderState.fiscalType;
+
+    // Cliente y RNC EFECTIVOS para validar/emitir. En una sub-cuenta mandan
+    // los del propio check (order_checks.customer_id/customer_rnc); si el
+    // check no los tiene, caen a los de la orden. Se recalcula tras asignar
+    // cliente (onAssignClient puede setearlo en la sub-cuenta o en la orden).
+    ({String? id, String? rnc, String? name}) resolveFiscalCustomer(
+      CurrentOrderState st,
+    ) {
+      if (checkId != null) {
+        for (final c in st.checks) {
+          if (c.id != checkId) continue;
+          final rnc = c.customerRnc?.trim();
+          return (
+            id: (c.customerId?.isNotEmpty ?? false)
+                ? c.customerId
+                : (customerId ?? st.customerId),
+            rnc: (rnc != null && rnc.isNotEmpty) ? rnc : st.customerTaxId,
+            name: (c.customerName?.isNotEmpty ?? false)
+                ? c.customerName
+                : (customerName ?? st.customerName),
+          );
+        }
+      }
+      return (
+        id: customerId ?? st.customerId,
+        rnc: st.customerTaxId,
+        name: customerName ?? st.customerName,
+      );
+    }
+
     final fiscalConfigError = _buildFiscalConfigError(currentOrderState);
     if (fiscalConfigError != null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -2038,22 +2104,28 @@ class _CartView extends ConsumerWidget {
       return;
     }
 
+    // Decisión de "requiere RNC" sobre el tipo EFECTIVO (override de la
+    // sub-cuenta si lo hay), no el de la orden: si un check es Crédito Fiscal
+    // aunque la orden sea Consumidor Final, debe exigir cliente con RNC.
     final isFiscal =
-        currentOrderState.fiscalType == 'B01' ||
-        currentOrderState.fiscalType == '01' ||
-        currentOrderState.fiscalType == 'B14' ||
-        currentOrderState.fiscalType == '14' ||
-        currentOrderState.fiscalType == 'B15' ||
-        currentOrderState.fiscalType == '15' ||
-        currentOrderState.fiscalType == 'E31' ||
-        currentOrderState.fiscalType == '31';
+        finalFiscalType == 'B01' ||
+        finalFiscalType == '01' ||
+        finalFiscalType == 'B14' ||
+        finalFiscalType == '14' ||
+        finalFiscalType == 'B15' ||
+        finalFiscalType == '15' ||
+        finalFiscalType == 'E31' ||
+        finalFiscalType == '31';
 
     if (isFiscal) {
-      // Usamos los valores del estado para la validación inicial
-      if (currentOrderState.customerId == null ||
-          currentOrderState.customerId!.isEmpty ||
-          currentOrderState.customerTaxId == null ||
-          currentOrderState.customerTaxId!.trim().isEmpty) {
+      // Validamos contra el cliente/RNC EFECTIVO (de la sub-cuenta si aplica).
+      var fc = resolveFiscalCustomer(currentOrderState);
+      bool customerMissing(({String? id, String? rnc, String? name}) c) =>
+          c.id == null ||
+          c.id!.isEmpty ||
+          c.rnc == null ||
+          c.rnc!.trim().isEmpty;
+      if (customerMissing(fc)) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
@@ -2067,12 +2139,11 @@ class _CartView extends ConsumerWidget {
 
         if (!context.mounted) return;
 
-        // RE-LEER estado después de la asignación
+        // RE-LEER estado después de la asignación y re-resolver (el cliente
+        // pudo asignarse a la sub-cuenta o a la orden).
         currentOrderState = ref.read(currentOrderProvider);
-        if (currentOrderState.customerId == null ||
-            currentOrderState.customerId!.isEmpty ||
-            currentOrderState.customerTaxId == null ||
-            currentOrderState.customerTaxId!.trim().isEmpty) {
+        fc = resolveFiscalCustomer(currentOrderState);
+        if (customerMissing(fc)) {
           return; // Sigue sin cliente o sin RNC válido
         }
       }
@@ -2085,10 +2156,10 @@ class _CartView extends ConsumerWidget {
     // de pisarlos con el cliente general de la mesa — antes el recibo/cobro
     // de cada sub-cuenta salía con el nombre general. Fallback al estado
     // general cuando el check no tiene cliente asignado o se paga todo.
-    final finalCustomerId = customerId ?? currentOrderState.customerId;
-    final finalCustomerName = customerName ?? currentOrderState.customerName;
-    final finalFiscalType = currentOrderState.fiscalType;
-    final finalCustomerTaxId = currentOrderState.customerTaxId;
+    final fiscalCustomer = resolveFiscalCustomer(currentOrderState);
+    final finalCustomerId = fiscalCustomer.id;
+    final finalCustomerName = fiscalCustomer.name;
+    final finalCustomerTaxId = fiscalCustomer.rnc;
     final finalCustomerLegalName = currentOrderState.customerLegalName;
     final prePaymentItems = checkId == null
         ? List<OrderItem>.from(currentOrderState.items)
@@ -2187,6 +2258,7 @@ class _CartView extends ConsumerWidget {
         checkId: checkId,
         customerId: finalCustomerId,
         customerName: finalCustomerName,
+        customerRnc: finalCustomerTaxId,
         fiscalType: finalFiscalType,
         // onConfirmed corre con el modal de pago AÚN MONTADO. Aquí
         // hacemos la impresión y mostramos el popup de "Imprimir copia"
@@ -2873,7 +2945,7 @@ class _CartView extends ConsumerWidget {
       pendingOrderItems,
     ).total;
 
-    final currency = NumberFormat('#,##0.00', 'en_US');
+    final currency = currentBusinessCurrencyOrFallback(ref).formatter;
 
     // Group items for display.
     // El orden se invierte para que los productos agregados más recientemente
@@ -3040,8 +3112,17 @@ class _CartView extends ConsumerWidget {
                               final activeSequences = orderState.fiscalSequences
                                   .where((sequence) => sequence.activo)
                                   .toList(growable: false);
+                              // En cuentas divididas cada sub-cuenta puede
+                              // emitir un comprobante distinto: si hay una
+                              // seleccionada con override, ese manda; si no,
+                              // cae al tipo de la orden (default del business).
+                              final checkNcfOverride =
+                                  selectedCheck?.requestedNcfType;
                               final selectedFiscalType = _normalizeFiscalType(
-                                orderState.fiscalType,
+                                (checkNcfOverride != null &&
+                                        checkNcfOverride.trim().isNotEmpty)
+                                    ? checkNcfOverride
+                                    : orderState.fiscalType,
                               );
                               final initialValue =
                                   activeSequences.any(
@@ -3056,9 +3137,17 @@ class _CartView extends ConsumerWidget {
                               return PopupMenuButton<String>(
                                 initialValue: initialValue,
                                 onSelected: (String newValue) {
-                                  ref
-                                      .read(currentOrderProvider.notifier)
-                                      .updateFiscalType(newValue);
+                                  final notifier = ref.read(
+                                    currentOrderProvider.notifier,
+                                  );
+                                  if (selectedCheckId != null) {
+                                    notifier.setFiscalTypeForCheck(
+                                      selectedCheckId,
+                                      newValue,
+                                    );
+                                  } else {
+                                    notifier.updateFiscalType(newValue);
+                                  }
                                 },
                                 tooltip: 'Tipo de comprobante',
                                 padding: EdgeInsets.zero,
@@ -3264,8 +3353,17 @@ class _CartView extends ConsumerWidget {
                                     .fiscalSequences
                                     .where((sequence) => sequence.activo)
                                     .toList(growable: false);
+                                // En cuentas divididas cada sub-cuenta puede
+                                // emitir un comprobante distinto: si hay una
+                                // seleccionada con override, ese manda; si no,
+                                // cae al tipo de la orden (default del business).
+                                final checkNcfOverride =
+                                    selectedCheck?.requestedNcfType;
                                 final selectedFiscalType = _normalizeFiscalType(
-                                  orderState.fiscalType,
+                                  (checkNcfOverride != null &&
+                                          checkNcfOverride.trim().isNotEmpty)
+                                      ? checkNcfOverride
+                                      : orderState.fiscalType,
                                 );
                                 final initialValue =
                                     activeSequences.any(
@@ -3280,9 +3378,17 @@ class _CartView extends ConsumerWidget {
                                 return PopupMenuButton<String>(
                                   initialValue: initialValue,
                                   onSelected: (String newValue) {
-                                    ref
-                                        .read(currentOrderProvider.notifier)
-                                        .updateFiscalType(newValue);
+                                    final notifier = ref.read(
+                                      currentOrderProvider.notifier,
+                                    );
+                                    if (selectedCheckId != null) {
+                                      notifier.setFiscalTypeForCheck(
+                                        selectedCheckId,
+                                        newValue,
+                                      );
+                                    } else {
+                                      notifier.updateFiscalType(newValue);
+                                    }
                                   },
                                   tooltip: 'Tipo de comprobante',
                                   padding: EdgeInsets.zero,
@@ -3744,20 +3850,20 @@ class _CartView extends ConsumerWidget {
             children: [
               _SummaryRow(
                 label: 'Subtotal',
-                value: 'RD\$ ${currency.format(displaySubtotal)}',
+                value: currency.format(displaySubtotal),
               ),
               for (final entry in reconciledBreakdown) ...[
                 const SizedBox(height: 8),
                 _SummaryRow(
                   label: entry.label,
-                  value: 'RD\$ ${currency.format(entry.amount)}',
+                  value: currency.format(entry.amount),
                 ),
               ],
               if (displayDiscounts > 0) ...[
                 const SizedBox(height: 8),
                 _SummaryRow(
                   label: 'Descuento',
-                  value: '- RD\$ ${currency.format(displayDiscounts)}',
+                  value: '- ${currency.format(displayDiscounts)}',
                   valueColor: const Color(0xFF16A34A),
                   valueWeight: FontWeight.w700,
                 ),
@@ -3765,7 +3871,7 @@ class _CartView extends ConsumerWidget {
               const SizedBox(height: 12),
               _SummaryRow(
                 label: 'Total',
-                value: 'RD\$ ${currency.format(displayTotal)}',
+                value: currency.format(displayTotal),
                 valueColor: _salesTotalColor,
                 valueWeight: FontWeight.w700,
               ),
@@ -3779,7 +3885,7 @@ class _CartView extends ConsumerWidget {
                   alignment: Alignment.centerRight,
                   child: Text(
                     'Incluye descuento aplicado de '
-                    'RD\$ ${currency.format(pricingSummary.discounts)}',
+                    '${currency.format(pricingSummary.discounts)}',
                     style: const TextStyle(
                       fontSize: 11,
                       color: Color(0xFF6B7280),
@@ -3966,7 +4072,7 @@ class _CartView extends ConsumerWidget {
                         Expanded(
                           child: _ActionButton(
                             label:
-                                'Pagar esta cuenta RD\$ ${currency.format(displayTotal)}',
+                                'Pagar esta cuenta ${currency.format(displayTotal)}',
                             background: _salesPayButton,
                             onPressed:
                                 !canCharge ||
@@ -3993,7 +4099,7 @@ class _CartView extends ConsumerWidget {
                         Expanded(
                           child: _ActionButton(
                             label:
-                                'Pagar todo lo pendiente RD\$ ${currency.format(pendingOrderTotal)}',
+                                'Pagar todo lo pendiente ${currency.format(pendingOrderTotal)}',
                             background: _salesPayButton,
                             onPressed:
                                 !canCharge ||
@@ -4036,7 +4142,7 @@ class _CartView extends ConsumerWidget {
                         Expanded(
                           child: _ActionButton(
                             label:
-                                'Pagar RD\$ ${currency.format(displayTotal)}',
+                                'Pagar ${currency.format(displayTotal)}',
                             background: _salesPayButton,
                             onPressed:
                                 !canCharge ||
@@ -4059,7 +4165,7 @@ class _CartView extends ConsumerWidget {
                     ),
                   ] else
                     _ActionButton(
-                      label: 'Pagar RD\$ ${currency.format(displayTotal)}',
+                      label: 'Pagar ${currency.format(displayTotal)}',
                       background: _salesPayButton,
                       onPressed:
                           !canCharge ||
@@ -4250,7 +4356,7 @@ class _CartView extends ConsumerWidget {
                         Expanded(
                           child: _ActionButton(
                             label:
-                                'Pagar esta cuenta RD\$ ${currency.format(displayTotal)}',
+                                'Pagar esta cuenta ${currency.format(displayTotal)}',
                             background: _salesPayButton,
                             onPressed:
                                 !canCharge ||
@@ -4277,7 +4383,7 @@ class _CartView extends ConsumerWidget {
                         Expanded(
                           child: _ActionButton(
                             label:
-                                'Pagar todo lo pendiente RD\$ ${currency.format(pendingOrderTotal)}',
+                                'Pagar todo lo pendiente ${currency.format(pendingOrderTotal)}',
                             background: _salesPayButton,
                             onPressed:
                                 !canCharge ||
@@ -4300,7 +4406,7 @@ class _CartView extends ConsumerWidget {
                     ),
                   ] else
                     _ActionButton(
-                      label: 'Pagar RD\$ ${currency.format(displayTotal)}',
+                      label: 'Pagar ${currency.format(displayTotal)}',
                       background: _salesPayButton,
                       onPressed:
                           !canCharge ||
@@ -4914,6 +5020,7 @@ class _CartView extends ConsumerWidget {
                     ? null
                     : DateTime.tryParse(data['issuedAt'].toString()),
                 usdSettings: usdSettings, // PRD 6
+                currency: currentBusinessCurrencyOrFallback(ref),
                 title: title,
                 receiptItemDisplayMode: receiptItemDisplayMode,
                 taxBreakdown: printTaxBreakdown,
@@ -4949,6 +5056,7 @@ class _CartView extends ConsumerWidget {
                 businessPhone: data['phone'] as String?,
                 businessRnc: data['rnc'] as String?,
                 usdSettings: usdSettings, // PRD 6
+                currency: currentBusinessCurrencyOrFallback(ref),
                 title: title,
                 receiptItemDisplayMode: receiptItemDisplayMode,
                 taxBreakdown: printTaxBreakdown,
@@ -5970,7 +6078,7 @@ class _CartLineItem extends ConsumerWidget {
     final totalItem = _uiItemDisplayAmount(
       currentOrder,
       item,
-    ).toStringAsFixed(2);
+    );
     final modifiers = item.modifiers;
 
     return Tooltip(
@@ -6130,7 +6238,7 @@ class _CartLineItem extends ConsumerWidget {
                                   ),
                                   child: Text(
                                     hasExtraCost
-                                        ? '$qtyLabel${modifier.name} (+RD\$ ${totalCost.toStringAsFixed(2)})'
+                                        ? '$qtyLabel${modifier.name} (+${currentBusinessCurrencyOrFallback(ref).formatAmount(totalCost)})'
                                         : '$qtyLabel${modifier.name}',
                                     style: TextStyle(
                                       fontSize: 11,
@@ -6152,7 +6260,8 @@ class _CartLineItem extends ConsumerWidget {
                 Padding(
                   padding: const EdgeInsets.only(top: 2),
                   child: Text(
-                    'RD\$ $totalItem',
+                    currentBusinessCurrencyOrFallback(ref)
+                        .formatAmount(totalItem),
                     style: const TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
@@ -6355,7 +6464,7 @@ class _SecondaryActionButton extends StatelessWidget {
 // Selector de impresora
 // ---------------------------------------------------------------------------
 
-class _SentLineItem extends StatelessWidget {
+class _SentLineItem extends ConsumerWidget {
   final String name;
   final double qty;
   final double total;
@@ -6382,7 +6491,8 @@ class _SentLineItem extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final currency = currentBusinessCurrencyOrFallback(ref);
     final inkWell = InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
@@ -6471,7 +6581,7 @@ class _SentLineItem extends StatelessWidget {
             const SizedBox(width: 10),
             // Precio
             Text(
-              'RD\$ ${total.toStringAsFixed(2)}',
+              currency.formatAmount(total),
               style: const TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w700,
@@ -8645,7 +8755,8 @@ class _ProductsGrid extends ConsumerWidget {
                                 ),
                                 SizedBox(height: isCompact ? 2 : 6),
                                 Text(
-                                  'RD\$ ${product.price.toStringAsFixed(0)}',
+                                  currentBusinessCurrencyOrFallback(ref)
+                                      .formatAmount(product.price),
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
                                     color: _salesTotalColor,
@@ -8936,17 +9047,18 @@ class _SelectTableDialogState extends ConsumerState<_SelectTableDialog> {
   }
 }
 
-class _ComboSelectionDialog extends StatefulWidget {
+class _ComboSelectionDialog extends ConsumerStatefulWidget {
   final MenuProduct product;
   final List<Map<String, dynamic>> groups;
 
   const _ComboSelectionDialog({required this.product, required this.groups});
 
   @override
-  State<_ComboSelectionDialog> createState() => _ComboSelectionDialogState();
+  ConsumerState<_ComboSelectionDialog> createState() =>
+      _ComboSelectionDialogState();
 }
 
-class _ComboSelectionDialogState extends State<_ComboSelectionDialog> {
+class _ComboSelectionDialogState extends ConsumerState<_ComboSelectionDialog> {
   final Map<String, String> _selectedByGroup = <String, String>{};
 
   @override
@@ -9023,7 +9135,7 @@ class _ComboSelectionDialogState extends State<_ComboSelectionDialog> {
                             ),
                             subtitle: priceDelta > 0
                                 ? Text(
-                                    'Extra RD\$ ${priceDelta.toStringAsFixed(2)}',
+                                    'Extra ${currentBusinessCurrencyOrFallback(ref).formatAmount(priceDelta)}',
                                   )
                                 : null,
                             onChanged: (value) {
@@ -9085,7 +9197,7 @@ class _ComboSelectionDialogState extends State<_ComboSelectionDialog> {
   }
 }
 
-class _ModifiersSelectionDialog extends StatefulWidget {
+class _ModifiersSelectionDialog extends ConsumerStatefulWidget {
   final MenuProduct product;
   final List<Map<String, dynamic>> groups;
 
@@ -9095,11 +9207,12 @@ class _ModifiersSelectionDialog extends StatefulWidget {
   });
 
   @override
-  State<_ModifiersSelectionDialog> createState() =>
+  ConsumerState<_ModifiersSelectionDialog> createState() =>
       _ModifiersSelectionDialogState();
 }
 
-class _ModifiersSelectionDialogState extends State<_ModifiersSelectionDialog> {
+class _ModifiersSelectionDialogState
+    extends ConsumerState<_ModifiersSelectionDialog> {
   final Map<String, Set<String>> _selectedByGroup = <String, Set<String>>{};
 
   @override
@@ -9123,11 +9236,7 @@ class _ModifiersSelectionDialogState extends State<_ModifiersSelectionDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final currency = NumberFormat.currency(
-      locale: 'en_US',
-      symbol: 'RD\$',
-      decimalDigits: 2,
-    );
+    final currency = currentBusinessCurrencyOrFallback(ref).formatter;
 
     return Dialog(
       backgroundColor: _salesSurface,
@@ -9491,17 +9600,17 @@ class _DiscountDialogResult {
   });
 }
 
-class _DiscountDialog extends StatefulWidget {
+class _DiscountDialog extends ConsumerStatefulWidget {
   final List<OrderItem> items;
   final Order? order;
 
   const _DiscountDialog({required this.items, this.order});
 
   @override
-  State<_DiscountDialog> createState() => _DiscountDialogState();
+  ConsumerState<_DiscountDialog> createState() => _DiscountDialogState();
 }
 
-class _DiscountDialogState extends State<_DiscountDialog> {
+class _DiscountDialogState extends ConsumerState<_DiscountDialog> {
   _DiscountScope _scope = _DiscountScope.table;
   final TextEditingController _percentController = TextEditingController(
     text: '10',
@@ -9594,7 +9703,7 @@ class _DiscountDialogState extends State<_DiscountDialog> {
                         value: checked,
                         title: Text(item.productName),
                         subtitle: Text(
-                          'Cant: ${_formatQty(item.quantity)} • RD\$${_effectiveItemTotal(widget.order, item).toStringAsFixed(2)}',
+                          'Cant: ${_formatQty(item.quantity)} • ${currentBusinessCurrencyOrFallback(ref).formatAmount(_effectiveItemTotal(widget.order, item))}',
                         ),
                         onChanged: (_) {
                           setState(() {
@@ -9688,17 +9797,17 @@ class _CourtesyDialogResult {
   });
 }
 
-class _CourtesyDialog extends StatefulWidget {
+class _CourtesyDialog extends ConsumerStatefulWidget {
   final List<OrderItem> items;
   final Order? order;
 
   const _CourtesyDialog({required this.items, this.order});
 
   @override
-  State<_CourtesyDialog> createState() => _CourtesyDialogState();
+  ConsumerState<_CourtesyDialog> createState() => _CourtesyDialogState();
 }
 
-class _CourtesyDialogState extends State<_CourtesyDialog> {
+class _CourtesyDialogState extends ConsumerState<_CourtesyDialog> {
   final Set<String> _selectedItemIds = <String>{};
   final TextEditingController _reasonController = TextEditingController();
   String? _error;
@@ -9773,7 +9882,7 @@ class _CourtesyDialogState extends State<_CourtesyDialog> {
                       value: checked,
                       title: Text(item.productName),
                       subtitle: Text(
-                        'Cant: ${_formatQty(item.quantity)} • RD\$${_effectiveItemTotal(widget.order, item).toStringAsFixed(2)}',
+                        'Cant: ${_formatQty(item.quantity)} • ${currentBusinessCurrencyOrFallback(ref).formatAmount(_effectiveItemTotal(widget.order, item))}',
                       ),
                       onChanged: (_) {
                         setState(() {

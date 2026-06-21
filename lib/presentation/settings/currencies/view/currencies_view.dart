@@ -5,6 +5,7 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
 
+import '../widgets/business_currency_settings_card.dart';
 import '../widgets/usd_display_settings_card.dart';
 
 class CurrenciesView extends ConsumerStatefulWidget {
@@ -81,10 +82,12 @@ class _CurrenciesViewState extends ConsumerState<CurrenciesView> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // Moneda base del negocio (la que se cobra y reporta).
+          BusinessCurrencySettingsCard(businessId: _businessId!),
+          const SizedBox(height: 16),
           // PRD 6 — Sub-sección "Moneda Secundaria (USD Display)".
           UsdDisplaySettingsCard(businessId: _businessId!),
           const SizedBox(height: 16),
-          // Espacio reservado para futuras monedas (EUR, multi-tasa, etc.)
         ],
       ),
     );

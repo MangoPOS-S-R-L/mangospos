@@ -12,9 +12,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../app/router/routes.dart';
 import '../../../app/theme/mango_colors.dart';
 import '../../../core/utils/app_toast.dart';
 import '../../../data/models/owner_profile.dart';
@@ -74,6 +76,13 @@ class _MyAccountScreenState extends ConsumerState<MyAccountScreen> {
         foregroundColor: MangoColors.darkGray,
         elevation: 0,
         scrolledUnderElevation: 1,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          tooltip: 'Regresar',
+          onPressed: () => Navigator.of(context).canPop()
+              ? Navigator.of(context).pop()
+              : context.go(AppRoutes.settings),
+        ),
       ),
       body: FutureBuilder<OwnerProfile>(
         future: _future,

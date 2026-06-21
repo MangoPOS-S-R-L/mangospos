@@ -1,6 +1,7 @@
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mangopos/core/business/country_profile.dart';
 import 'package:mangopos/core/business/retail_profile_defaults.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/env/supabase_flutter.dart';
@@ -296,6 +297,22 @@ class RegisterStep2ViewModel extends Notifier<RegisterStep2State> {
           );
         } catch (_) {
           // Configuración no crítica: el registro continúa.
+        }
+      }
+
+      // País elegido en el Step 2 → fija la `currency_code` DERIVADA (modo
+      // legacy: no se persiste country_code). Best-effort como el preset retail:
+      // si falla, el negocio queda en DO/DOP y el dueño lo cambia luego en
+      // Ajustes → Monedas. No abortar el registro por esto.
+      final countryProfile = CountryProfile.fromName(step2.country);
+      if (countryProfile.code != 'DO') {
+        try {
+          await PosSettingsRepository(supabase).setBusinessCountry(
+            businessId: business['id'] as String,
+            countryCode: countryProfile.code,
+          );
+        } catch (_) {
+          // Configuración no crítica: el registro continúa con DO/DOP.
         }
       }
 

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/currency/business_currency_provider.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
@@ -235,6 +236,7 @@ Future<void> _printQuickSaleComprobante(
       title: '*** FACTURA ***',
       receiptItemDisplayMode: itemMode,
       template: invoiceTpl,
+      currency: currentBusinessCurrencyOrFallback(ref),
     );
     await printRepo.printEscPos(printer: printer, data: ticket.escPosCommands);
   } catch (e) {

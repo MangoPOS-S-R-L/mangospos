@@ -1944,13 +1944,19 @@ class SalesRepository {
     required String checkId,
     required String customerId,
     required String customerName,
+    String? customerRnc,
   }) async {
     try {
+      // El RNC se persiste por sub-cuenta (order_checks.customer_rnc) para
+      // que `fn_process_payment_v3` lo herede al cobrar el check (param > check
+      // > default). Necesario para emitir Crédito Fiscal por sub-cuenta.
+      final rnc = customerRnc?.trim();
       await _client
           .from('order_checks')
           .update({
             'customer_id': customerId,
             'customer_name': customerName.trim(),
+            'customer_rnc': (rnc == null || rnc.isEmpty) ? null : rnc,
           })
           .eq('id', checkId);
     } catch (e) {

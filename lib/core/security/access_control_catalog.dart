@@ -311,6 +311,22 @@ const accessPermissions = <AccessPermission>[
     categoryLabel: 'Cocina',
     description: 'Reimprime comandas de cocina.',
   ),
+  // Reservas (add-on). El módulo además se gatea por business_modules, así que
+  // estos permisos solo aplican cuando la plataforma activó el add-on.
+  AccessPermission(
+    code: 'reservas.acceso',
+    label: 'Acceso a Reservas',
+    categoryId: 'restaurant',
+    categoryLabel: 'Restaurante',
+    description: 'Abre el módulo de reservas y la agenda del día.',
+  ),
+  AccessPermission(
+    code: 'reservas.gestionar',
+    label: 'Gestionar reservas',
+    categoryId: 'restaurant',
+    categoryLabel: 'Restaurante',
+    description: 'Crear, editar, sentar y cancelar reservas.',
+  ),
   AccessPermission(
     code: 'clientes.ver',
     label: 'Ver clientes',
@@ -758,6 +774,8 @@ final rolePresets = <String, RolePresetDefinition>{
       'kds.ver_comandas',
       'kds.cambiar_estado',
       'kds.reimprimir_comanda',
+      'reservas.acceso',
+      'reservas.gestionar',
       'clientes.ver',
       'clientes.crear_editar',
       'clientes.asignar_a_mesa',

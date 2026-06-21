@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/currency/business_currency_provider.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/presentation/cashier/state/blind_cash_close_models.dart';
@@ -1662,14 +1663,19 @@ class _MovementItem extends StatelessWidget {
             ],
           ),
         ),
-        Text(
-          '${isIncome ? '+' : '-'}RD\$ ${NumberFormat('#,##0').format(amount)}',
-          style: TextStyle(
-            fontSize: context.sp(15),
-            fontWeight: FontWeight.w800,
-            color: isIncome ? MangoColors.successGreen : Colors.red[600],
-            letterSpacing: -0.2,
-          ),
+        Consumer(
+          builder: (context, ref, _) {
+            final currency = currentBusinessCurrencyOrFallback(ref);
+            return Text(
+              '${isIncome ? '+' : '-'}${currency.symbol} ${NumberFormat('#,##0').format(amount)}',
+              style: TextStyle(
+                fontSize: context.sp(15),
+                fontWeight: FontWeight.w800,
+                color: isIncome ? MangoColors.successGreen : Colors.red[600],
+                letterSpacing: -0.2,
+              ),
+            );
+          },
         ),
       ],
     );

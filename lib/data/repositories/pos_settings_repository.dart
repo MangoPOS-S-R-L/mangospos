@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/business/country_profile.dart';
+import '../../core/currency/business_currency.dart';
 import '../../core/currency/usd_display_settings.dart';
 import '../../core/offline/business_settings_offline_cache.dart';
 
@@ -815,6 +817,63 @@ class PosSettingsRepository {
     } catch (_) {
       return parse(await _cachedRow(businessId));
     }
+  }
+
+  /// Moneda base del negocio (código ISO 4217 de `BusinessCurrency.catalog`).
+  /// Default `DOP` si la fila no existe (pre-migración) o la query falla —
+  /// preserva el comportamiento histórico (`RD$`). El símbolo, decimales y
+  /// locale los deriva el cliente desde el code.
+  Future<String> getCurrencyCode(String businessId) async {
+    String parse(Map<String, dynamic>? row) {
+      final raw = (row?['currency_code'] as String?)?.trim();
+      return (raw == null || raw.isEmpty) ? 'DOP' : raw.toUpperCase();
+    }
+
+    try {
+      return parse(await _fetchAndCacheRow(businessId));
+    } catch (_) {
+      return parse(await _cachedRow(businessId));
+    }
+  }
+
+  /// Guarda la moneda base. Solo persiste códigos del catálogo soportado;
+  /// uno desconocido cae a `DOP` para no violar el CHECK de la BD.
+  Future<void> setCurrencyCode({
+    required String businessId,
+    required String code,
+  }) async {
+    final normalized = code.trim().toUpperCase();
+    final safe = BusinessCurrency.catalog.containsKey(normalized)
+        ? normalized
+        : 'DOP';
+    await _client.from('business_settings').upsert({
+      'business_id': businessId,
+      'currency_code': safe,
+    }, onConflict: 'business_id');
+  }
+
+  /// País del negocio. MODO LEGACY: la columna `country_code` aún no existe en
+  /// la BD viva, así que el país NO se persiste — se DERIVA de `currency_code`
+  /// (mapeo inverso, lossy si varios países comparten moneda). Suficiente para
+  /// inicializar el selector. Cuando se implemente el pilar fiscal por país
+  /// (ver docs/PRD_FISCAL_COLOMBIA.md) se agrega la columna y se persiste real.
+  Future<String> getCountryCode(String businessId) async {
+    final currency = await getCurrencyCode(businessId);
+    return CountryProfile.fromCurrencyCode(currency).code;
+  }
+
+  /// Guarda la moneda base DERIVADA del país elegido. MODO LEGACY: solo
+  /// persiste `currency_code` (columna existente); no toca `country_code`.
+  /// Un país desconocido cae a `DO`/`DOP`.
+  Future<void> setBusinessCountry({
+    required String businessId,
+    required String countryCode,
+  }) async {
+    final profile = CountryProfile.fromCode(countryCode);
+    await _client.from('business_settings').upsert({
+      'business_id': businessId,
+      'currency_code': profile.currencyCode,
+    }, onConflict: 'business_id');
   }
 
   /// PRD 6 — Settings de moneda secundaria USD (display-only).

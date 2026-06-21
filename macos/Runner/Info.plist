@@ -28,9 +28,20 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.business</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>MangoPOS necesita Bluetooth para detectar e imprimir en impresoras térmicas inalámbricas.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>MangoPOS necesita Bluetooth para detectar e imprimir en impresoras térmicas inalámbricas.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>MangoPOS necesita acceso a la red local para detectar e imprimir en impresoras y hubs de impresión.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_mangoprint._tcp</string>
+		<string>_pdl-datastream._tcp</string>
+		<string>_ipp._tcp</string>
+		<string>_printer._tcp</string>
+	</array>
 </dict>
 </plist>

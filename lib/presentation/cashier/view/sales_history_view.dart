@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/app/widgets/date_range_modal.dart';
+import 'package:mangopos/core/currency/business_currency_provider.dart';
 import 'package:mangopos/core/printing/print_error_humanizer.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
@@ -1065,6 +1066,7 @@ mixin _PaymentActionsMixin {
         customerName: payment['customer_name']?.toString(),
         customerTaxId: payment['customer_tax_id']?.toString(),
         title: '*** REIMPRESION ***',
+        currency: currentBusinessCurrencyOrFallback(ref),
         receiptItemDisplayMode: receiptItemDisplayMode,
         taxBreakdown: reprintTaxBreakdown,
         preferStoredOrderTotals: true,

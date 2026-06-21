@@ -5,6 +5,7 @@ import 'package:mangopos/presentation/settings/more%20settings/printing/printers
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import 'package:mangopos/core/currency/business_currency_provider.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -142,6 +143,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
         taxBreakdown: taxBreakdown,
         discountDisplayMode: discountDisplayMode,
         template: invoiceTpl,
+        currency: currentBusinessCurrencyOrFallback(ref),
       );
 
       await printRepo.printEscPos(

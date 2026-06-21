@@ -163,6 +163,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   final String _orderId;
   final String? _checkId;
   final String? _customerId;
+  final String? _customerRnc;
   final String? _fiscalType;
   final String? _cashierSessionId;
   final Ref _ref;
@@ -180,11 +181,13 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     double total, {
     String? checkId,
     String? customerId,
+    String? customerRnc,
     String? fiscalType,
     String? cashierSessionId,
     required Ref ref,
   }) : _checkId = checkId,
        _customerId = customerId,
+       _customerRnc = customerRnc,
        _fiscalType = fiscalType,
        _cashierSessionId = cashierSessionId,
        _ref = ref,
@@ -476,8 +479,18 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
 
       final paidAtOffline = DateTime.now().toUtc();
       final paidAtIso = paidAtOffline.toIso8601String();
-      final customerRnc = _ref.read(currentOrderProvider).customerTaxId;
-      final ncfType = _ref.read(currentOrderProvider).fiscalType;
+      // `_customerRnc` ya viene resuelto por sub-cuenta desde el call site
+      // (RNC del cliente del check, con fallback al de la orden). Pasarlo
+      // explícito es robusto aunque la función viva no herede del check.
+      final customerRnc = _customerRnc;
+      // `_fiscalType` ya viene resuelto por sub-cuenta desde el call site
+      // (override del check si lo tiene). Solo caemos al tipo de la orden si
+      // no se pasó ninguno, para no perder el comprobante por sub-cuenta en
+      // el camino offline (la emisión online usa `_fiscalType` directo).
+      final ncfType =
+          (_fiscalType != null && _fiscalType.trim().isNotEmpty)
+          ? _fiscalType
+          : _ref.read(currentOrderProvider).fiscalType;
 
       // F4 (gated): un comprobante por cobro → asignamos el NCF UNA vez y lo
       // adjuntamos a la PRIMERA transacción. El trigger emite el fiscal_document
@@ -685,9 +698,9 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
             // sin chocar contra "CHECK_ALREADY_CLOSED".
             closeCheck: isLast && _checkId != null,
             customerId: _customerId,
-            customerRnc: isLast
-                ? _ref.read(currentOrderProvider).customerTaxId
-                : null,
+            // RNC resuelto por sub-cuenta (o de la orden) desde el call site.
+            // Solo aplica en la última transacción (la que emite el NCF).
+            customerRnc: isLast ? _customerRnc : null,
             fiscalType: _fiscalType,
             cashierSessionId: cashierSessionId,
             reference: null,
@@ -852,7 +865,7 @@ final paymentSplitProvider =
     StateNotifierProvider.family<
       PaymentSplitViewModel,
       PaymentSplitState,
-      (String, double, String?, String?, String?)
+      (String, double, String?, String?, String?, String?)
     >((ref, params) {
       final salesRepo = SalesRepositoryImproved(Supabase.instance.client);
 
@@ -866,6 +879,7 @@ final paymentSplitProvider =
         checkId: params.$3, // checkId
         customerId: params.$4, // customerId
         fiscalType: params.$5, // fiscalType
+        customerRnc: params.$6, // customerRnc
         cashierSessionId: sessionId,
         ref: ref,
       );

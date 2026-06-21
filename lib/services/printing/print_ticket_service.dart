@@ -7,6 +7,7 @@ import '../../data/models/order_item_tax_line.dart';
 import '../../data/models/sales_models.dart';
 import '../../data/models/payment_models.dart';
 import '../../core/utils/app_time.dart';
+import '../../core/currency/business_currency.dart';
 import '../../core/currency/usd_conversion.dart';
 import '../../core/currency/usd_display_settings.dart';
 import '../../data/utils/order_pricing_utils.dart';
@@ -14,6 +15,11 @@ import 'esc_pos_generator.dart';
 
 /// 🖨️ Servicio de generación de tickets
 class PrintTicketService {
+  /// Moneda activa del negocio para formatear montos en los tickets. Se fija
+  /// al inicio de cada método público de generación (síncrono, sin await entre
+  /// el set y su uso, así que no hay carrera dentro de una misma generación).
+  /// Default DOP preserva el comportamiento legacy (`RD$`).
+  static BusinessCurrency _currency = BusinessCurrency.fallbackDop;
   /// Total base de la línea (sin impuestos) para impresión de tickets.
   /// Usar este en lugar de `itemDisplayTotal` para que la suma de líneas
   /// coincida con el SUBTOTAL y el desglose de impuestos aparezca una sola
@@ -313,7 +319,7 @@ class PrintTicketService {
           final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
           final modTotal = mod.price * itemQty * mod.qty;
           final priceSuffix = modTotal > 0
-              ? ' (+RD\$ ${_formatMoney(modTotal)})'
+              ? ' (+${_formatMoney(modTotal)})'
               : '';
           final prefix = isComboChoice ? '   • ' : '   + ';
           _writeWrappedLine(gen, '$prefix${mod.name}$priceSuffix', 48);
@@ -407,7 +413,10 @@ class PrintTicketService {
     /// factura): 'standard', 'compact' (1 línea + blanco) o 'simple' (estilo
     /// KAELUS: "# N:" con líneas seguidas). La pre-cuenta sigue el modo elegido.
     String template = 'standard',
+    /// Moneda base del negocio. Default DOP preserva el formato `RD$` legacy.
+    BusinessCurrency? currency,
   }) {
+    _currency = currency ?? BusinessCurrency.fallbackDop;
     final gen = EscPosGenerator(paperWidth: 80);
     final consolidatedItems = _buildPrintableItems(
       items,
@@ -528,7 +537,7 @@ class PrintTicketService {
         // líneas SEGUIDAS (sin blanco), modificadores con precio.
         gen.dotRow(
           '# ${i + 1}: ${item.productName} $displayQty X ${_formatMoney(baseUnitPrice)}',
-          'RD\$ ${_formatMoney(baseTotal)}',
+          _formatMoney(baseTotal),
         );
         if (item.isTakeout) {
           gen.setBold(true);
@@ -540,7 +549,7 @@ class PrintTicketService {
           final modTotal = mod.price * itemQty * mod.qty;
           gen.dotRow(
             '   Modificador: ${mod.name}',
-            'RD\$ ${_formatMoney(modTotal)}',
+            _formatMoney(modTotal),
           );
         }
         if (cleanNote.isNotEmpty) {
@@ -553,7 +562,7 @@ class PrintTicketService {
         // cada ítem.
         gen.dotRow(
           '${displayQty}x ${item.productName}',
-          'RD\$ ${_formatMoney(baseTotal)}',
+          _formatMoney(baseTotal),
         );
         if (item.isTakeout) {
           gen.setBold(true);
@@ -565,7 +574,7 @@ class PrintTicketService {
           final modTotal = mod.price * itemQty * mod.qty;
           gen.dotRow(
             '   Modificador: ${mod.name}',
-            'RD\$ ${_formatMoney(modTotal)}',
+            _formatMoney(modTotal),
           );
         }
         if (cleanNote.isNotEmpty) {
@@ -579,8 +588,8 @@ class PrintTicketService {
         gen.setBold(false);
 
         // Cantidad x precio unitario base ......... TOTAL CON MODIFICADORES
-        final leftPart = '$displayQty x RD\$ ${_formatMoney(baseUnitPrice)}';
-        final rightPart = 'RD\$ ${_formatMoney(baseTotal)}';
+        final leftPart = '$displayQty x ${_formatMoney(baseUnitPrice)}';
+        final rightPart = _formatMoney(baseTotal);
         gen.dotRow(leftPart, rightPart);
 
         // Indicador para llevar (takeout)
@@ -596,7 +605,7 @@ class PrintTicketService {
             final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
             final modTotal = mod.price * itemQty * mod.qty;
             final priceSuffix = modTotal > 0
-                ? ' (+RD\$ ${_formatMoney(modTotal)})'
+                ? ' (+${_formatMoney(modTotal)})'
                 : '';
             gen.text('  + ${mod.name}$priceSuffix');
           }
@@ -663,32 +672,32 @@ class PrintTicketService {
       final discountForBase = isPostDiscountMode ? 0.0 : printableDiscounts;
       final subtotalBase =
           (printableGrandTotal + discountForBase) / (1 + declaredRate);
-      gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(subtotalBase)}');
+      gen.textRow('SUBTOTAL:', _formatMoney(subtotalBase));
       for (var i = 0; i < taxBreakdown.length; i++) {
         final rate = lineRates[i] ?? 0;
         final amount = subtotalBase * (rate / 100);
         if (amount.abs() < 0.005) continue;
         gen.textRow(
           '${taxBreakdown[i].label}:',
-          'RD\$ ${_formatMoney(amount)}',
+          _formatMoney(amount),
         );
       }
       if (!isPostDiscountMode && printableDiscounts > 0) {
         gen.textRow(
           'DESCUENTO:',
-          '-RD\$ ${_formatMoney(printableDiscounts)}',
+          '-${_formatMoney(printableDiscounts)}',
         );
       }
     } else {
       // Fallback legacy (sin tasa parseable o sin tax breakdown).
       final double printableSubtotal = printableSummary.subtotal;
-      gen.textRow('SUBTOTAL:', 'RD\$ ${_formatMoney(printableSubtotal)}');
+      gen.textRow('SUBTOTAL:', _formatMoney(printableSubtotal));
       if (taxBreakdown.isNotEmpty) {
         for (final entry in taxBreakdown) {
           if (entry.amount.abs() < 0.005) continue;
           gen.textRow(
             '${entry.label}:',
-            'RD\$ ${_formatMoney(entry.amount)}',
+            _formatMoney(entry.amount),
           );
         }
       } else {
@@ -701,17 +710,17 @@ class PrintTicketService {
               : '0';
           gen.textRow(
             'SERVICIO ($servicePct%):',
-            'RD\$ ${_formatMoney(printableServiceFee)}',
+            _formatMoney(printableServiceFee),
           );
         }
         if (printableTax > 0.005) {
-          gen.textRow('ITBIS:', 'RD\$ ${_formatMoney(printableTax)}');
+          gen.textRow('ITBIS:', _formatMoney(printableTax));
         }
       }
       if (printableDiscounts > 0) {
         gen.textRow(
           'DESCUENTO:',
-          '-RD\$ ${_formatMoney(printableDiscounts)}',
+          '-${_formatMoney(printableDiscounts)}',
         );
       }
     }
@@ -726,7 +735,7 @@ class PrintTicketService {
     if (compact) gen.lineFeed(); // espacio (reducido) arriba del TOTAL
     gen.setBold(true);
     gen.setTextSize(width: 2, height: 2);
-    gen.textRow('TOTAL:', 'RD\$ ${_formatMoney(printableGrandTotal)}');
+    gen.textRow('TOTAL:', _formatMoney(printableGrandTotal));
     gen.setTextSize();
     gen.setBold(false);
     if (compact) gen.lineFeed(); // espacio (reducido) abajo del TOTAL
@@ -736,8 +745,7 @@ class PrintTicketService {
     if (canRecompute && isPostDiscountMode && printableDiscounts > 0) {
       gen.lineFeed();
       gen.textCentered(
-        'Incluye descuento aplicado de '
-        'RD\$ ${_formatMoney(printableDiscounts)}',
+        'Incluye descuento aplicado de ${_formatMoney(printableDiscounts)}',
       );
     }
 
@@ -884,7 +892,10 @@ class PrintTicketService {
     /// total" con líneas seguidas, sin blanco). Las tres conservan TODOS los
     /// datos fiscales (NCF/e-NCF, RNC, desglose de impuestos, QR).
     String template = 'standard',
+    /// Moneda base del negocio. Default DOP preserva el formato `RD$` legacy.
+    BusinessCurrency? currency,
   }) {
+    _currency = currency ?? BusinessCurrency.fallbackDop;
     final gen = EscPosGenerator(paperWidth: 80);
     // `compact` = familia de layout apretado (compact + simple): sin
     // asteriscos, espaciado mínimo, TOTAL con poco aire. `simple` además usa
@@ -1043,7 +1054,7 @@ class PrintTicketService {
         // líneas SEGUIDAS (sin blanco entre ítems), modificadores con precio.
         gen.dotRow(
           '# ${i + 1}: ${item.productName} $displayQty X ${_formatMoney(unitPrice)}',
-          'RD\$ ${_formatMoney(lineTotal)}',
+          _formatMoney(lineTotal),
         );
         if (item.isTakeout) {
           gen.setBold(true);
@@ -1055,7 +1066,7 @@ class PrintTicketService {
           final modTotal = mod.price * itemQty * mod.qty;
           gen.dotRow(
             '   Modificador: ${mod.name}',
-            'RD\$ ${_formatMoney(modTotal)}',
+            _formatMoney(modTotal),
           );
         }
         if (cleanNote.isNotEmpty) {
@@ -1068,7 +1079,7 @@ class PrintTicketService {
         // renglón en blanco separa cada ítem.
         gen.dotRow(
           '${displayQty}x ${item.productName}',
-          'RD\$ ${_formatMoney(lineTotal)}',
+          _formatMoney(lineTotal),
         );
         if (item.isTakeout) {
           gen.setBold(true);
@@ -1080,7 +1091,7 @@ class PrintTicketService {
           final modTotal = mod.price * itemQty * mod.qty;
           gen.dotRow(
             '   Modificador: ${mod.name}',
-            'RD\$ ${_formatMoney(modTotal)}',
+            _formatMoney(modTotal),
           );
         }
         if (cleanNote.isNotEmpty) {
@@ -1092,8 +1103,8 @@ class PrintTicketService {
         gen.text(item.productName);
         gen.setBold(false);
 
-        final leftPart = '$displayQty x RD\$ ${_formatMoney(unitPrice)}';
-        final rightPart = 'RD\$ ${_formatMoney(lineTotal)}';
+        final leftPart = '$displayQty x ${_formatMoney(unitPrice)}';
+        final rightPart = _formatMoney(lineTotal);
         gen.dotRow(leftPart, rightPart);
 
         // Indicador para llevar (takeout)
@@ -1108,7 +1119,7 @@ class PrintTicketService {
             final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
             final modTotal = mod.price * itemQty * mod.qty;
             final priceSuffix = modTotal > 0
-                ? ' (+RD\$ ${_formatMoney(modTotal)})'
+                ? ' (+${_formatMoney(modTotal)})'
                 : '';
             gen.text('  + ${mod.name}$priceSuffix');
           }
@@ -1186,7 +1197,7 @@ class PrintTicketService {
       final discountForBase = isPostDiscountMode ? 0.0 : effectiveDiscounts;
       final subtotalBase =
           (effectiveTotal + discountForBase) / (1 + declaredRate);
-      gen.textRow(subtotalLabel, 'RD\$ ${_formatMoney(subtotalBase)}');
+      gen.textRow(subtotalLabel, _formatMoney(subtotalBase));
       for (var i = 0; i < taxBreakdown.length; i++) {
         final rate = lineRates[i] ?? 0;
         final amount = subtotalBase * (rate / 100);
@@ -1195,19 +1206,19 @@ class PrintTicketService {
         if (isElectronicCf && label.toLowerCase().contains('itbis')) {
           label = 'Total ITBIS';
         }
-        gen.textRow('$label:', 'RD\$ ${_formatMoney(amount)}');
+        gen.textRow('$label:', _formatMoney(amount));
       }
       if (!isPostDiscountMode && effectiveDiscounts > 0) {
         gen.textRow(
           'DESCUENTO:',
-          '-RD\$ ${_formatMoney(effectiveDiscounts)}',
+          '-${_formatMoney(effectiveDiscounts)}',
         );
       }
     } else {
       // Fallback legacy: imprimimos los valores del summary directo,
       // como antes. Aplica cuando no hay tax_lines parseables.
       final double effectiveSubtotal = effectiveTotals.subtotal;
-      gen.textRow(subtotalLabel, 'RD\$ ${_formatMoney(effectiveSubtotal)}');
+      gen.textRow(subtotalLabel, _formatMoney(effectiveSubtotal));
       if (taxBreakdown.isNotEmpty) {
         for (final entry in taxBreakdown) {
           if (entry.amount.abs() < 0.005) continue;
@@ -1215,7 +1226,7 @@ class PrintTicketService {
           if (isElectronicCf && label.toLowerCase().contains('itbis')) {
             label = 'Total ITBIS';
           }
-          gen.textRow('$label:', 'RD\$ ${_formatMoney(entry.amount)}');
+          gen.textRow('$label:', _formatMoney(entry.amount));
         }
       } else {
         final effectiveTax = effectiveTotals.tax;
@@ -1227,19 +1238,19 @@ class PrintTicketService {
               : '0';
           gen.textRow(
             'SERVICIO ($servicePct%):',
-            'RD\$ ${_formatMoney(effectiveServiceFee)}',
+            _formatMoney(effectiveServiceFee),
           );
         }
         if (effectiveTax > 0.005) {
           if (isElectronicCf) {
-            gen.textRow('Total ITBIS:', 'RD\$ ${_formatMoney(effectiveTax)}');
+            gen.textRow('Total ITBIS:', _formatMoney(effectiveTax));
           } else {
             final taxPct = effectiveSubtotal > 0
                 ? ((effectiveTax / effectiveSubtotal) * 100).toStringAsFixed(0)
                 : '18';
             gen.textRow(
               'ITBIS ($taxPct%):',
-              'RD\$ ${_formatMoney(effectiveTax)}',
+              _formatMoney(effectiveTax),
             );
           }
         }
@@ -1247,7 +1258,7 @@ class PrintTicketService {
       if (effectiveDiscounts > 0) {
         gen.textRow(
           'DESCUENTO:',
-          '-RD\$ ${_formatMoney(effectiveDiscounts)}',
+          '-${_formatMoney(effectiveDiscounts)}',
         );
       }
     }
@@ -1259,7 +1270,7 @@ class PrintTicketService {
     if (compact) gen.lineFeed(); // espacio (reducido) arriba del TOTAL
     gen.setBold(true);
     gen.setTextSize(width: 2, height: 2);
-    gen.textRow('TOTAL:', 'RD\$ ${_formatMoney(effectiveTotal)}');
+    gen.textRow('TOTAL:', _formatMoney(effectiveTotal));
     gen.setTextSize();
     gen.setBold(false);
     if (compact) gen.lineFeed(); // espacio (reducido) abajo del TOTAL
@@ -1269,8 +1280,7 @@ class PrintTicketService {
     if (canRecompute && isPostDiscountMode && effectiveDiscounts > 0) {
       gen.lineFeed();
       gen.textCentered(
-        'Incluye descuento aplicado de '
-        'RD\$ ${_formatMoney(effectiveDiscounts)}',
+        'Incluye descuento aplicado de ${_formatMoney(effectiveDiscounts)}',
       );
     }
 
@@ -1294,7 +1304,7 @@ class PrintTicketService {
 
       for (final p in payments) {
         final method = _getPaymentMethodName(p);
-        gen.textRow(method, 'RD\$ ${_formatMoney(p.amount)}');
+        gen.textRow(method, _formatMoney(p.amount));
         // Línea adicional cuando es transferencia y tenemos info del
         // banco destino — útil para que el cliente confirme y el
         // contador audite. Indentado 2 espacios para que se note como
@@ -1319,7 +1329,7 @@ class PrintTicketService {
       if (totalChange > 0) {
         gen.lineFeed();
         gen.setBold(true);
-        gen.textRow('CAMBIO:', 'RD\$ ${_formatMoney(totalChange)}');
+        gen.textRow('CAMBIO:', _formatMoney(totalChange));
         gen.setBold(false);
       }
     }
@@ -1634,7 +1644,7 @@ class PrintTicketService {
           final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
           final modTotal = m.price * itemQty * m.qty;
           return modTotal > 0
-              ? '${m.name} (+RD\$ ${_formatMoney(modTotal)})'
+              ? '${m.name} (+${_formatMoney(modTotal)})'
               : m.name;
         }).toList(),
       );
@@ -1652,13 +1662,13 @@ class PrintTicketService {
 
     gen.separator();
     // Estructura: Subtotal → impuestos → Descuentos → TOTAL (matchea la UI).
-    gen.textRow('Subtotal:', 'RD\$ ${_formatMoney(displaySubtotal)}');
+    gen.textRow('Subtotal:', _formatMoney(displaySubtotal));
 
     // Tax breakdown — labels normales.
     if (taxBreakdown.isNotEmpty) {
       for (final entry in taxBreakdown) {
         if (entry.amount.abs() < 0.005) continue;
-        gen.textRow(entry.label, 'RD\$ ${_formatMoney(entry.amount)}');
+        gen.textRow(entry.label, _formatMoney(entry.amount));
       }
     } else {
       if (effectiveTotals.serviceFee > 0) {
@@ -1668,7 +1678,7 @@ class PrintTicketService {
             : '0';
         gen.textRow(
           'Servicio ($servicePct%):',
-          'RD\$ ${_formatMoney(effectiveTotals.serviceFee)}',
+          _formatMoney(effectiveTotals.serviceFee),
         );
       }
       if (effectiveTotals.tax > 0.005) {
@@ -1677,7 +1687,7 @@ class PrintTicketService {
             : '18';
         gen.textRow(
           'ITBIS ($taxPct%):',
-          'RD\$ ${_formatMoney(effectiveTotals.tax)}',
+          _formatMoney(effectiveTotals.tax),
         );
       }
     }
@@ -1685,7 +1695,7 @@ class PrintTicketService {
     if (effectiveTotals.discounts > 0) {
       gen.textRow(
         'Descuentos:',
-        '-RD\$ ${_formatMoney(effectiveTotals.discounts)}',
+        '-${_formatMoney(effectiveTotals.discounts)}',
       );
     }
 
@@ -1694,7 +1704,7 @@ class PrintTicketService {
     gen.doubleSeparator();
     gen.setBold(true);
     gen.setTextSize(width: 2, height: 2);
-    gen.textRow('TOTAL:', 'RD\$ ${_formatMoney(displayTotal)}');
+    gen.textRow('TOTAL:', _formatMoney(displayTotal));
     gen.setTextSize();
     gen.setBold(false);
 
@@ -1758,31 +1768,31 @@ class PrintTicketService {
 
     gen.textRow(
       'Monto inicial:',
-      'RD\$ ${_formatMoney(summary['start_amount']!)}',
+      _formatMoney(summary['start_amount']!),
     );
-    gen.textRow('Ventas:', 'RD\$ ${_formatMoney(summary['sales']!)}');
-    gen.textRow('Depósitos:', 'RD\$ ${_formatMoney(summary['deposits']!)}');
-    gen.textRow('Gastos:', '-RD\$ ${_formatMoney(summary['expenses']!)}');
-    gen.textRow('Retiros:', '-RD\$ ${_formatMoney(summary['withdrawals']!)}');
+    gen.textRow('Ventas:', _formatMoney(summary['sales']!));
+    gen.textRow('Depósitos:', _formatMoney(summary['deposits']!));
+    gen.textRow('Gastos:', '-${_formatMoney(summary['expenses']!)}');
+    gen.textRow('Retiros:', '-${_formatMoney(summary['withdrawals']!)}');
 
     gen.doubleSeparator();
 
     gen.setBold(true);
     gen.setTextSize(width: 2, height: 2);
-    gen.textRow('ESPERADO:', 'RD\$ ${_formatMoney(summary['expected_cash']!)}');
+    gen.textRow('ESPERADO:', _formatMoney(summary['expected_cash']!));
     gen.setTextSize();
     gen.setBold(false);
 
     if (session.endAmount != null) {
       gen.lineFeed();
-      gen.textRow('Contado:', 'RD\$ ${_formatMoney(session.endAmount!)}');
+      gen.textRow('Contado:', _formatMoney(session.endAmount!));
 
       final diff = session.endAmount! - summary['expected_cash']!;
       if (diff != 0) {
         gen.setBold(true);
         gen.textRow(
           'Diferencia:',
-          '${diff > 0 ? '+' : ''}RD\$ ${_formatMoney(diff.abs())}',
+          '${diff > 0 ? '+' : ''}${_formatMoney(diff.abs())}',
         );
         gen.setBold(false);
       }
@@ -1851,7 +1861,10 @@ class PrintTicketService {
     String? approvedByName,
     String? sessionId,
     DateTime? when,
+    /// Moneda base del negocio. Default DOP preserva el formato `RD$` legacy.
+    BusinessCurrency? currency,
   }) {
+    _currency = currency ?? BusinessCurrency.fallbackDop;
     final gen = EscPosGenerator(paperWidth: 80);
     gen.initialize();
 
@@ -1907,7 +1920,7 @@ class PrintTicketService {
 
     gen.setBold(true);
     gen.setTextSize(width: 2, height: 2);
-    gen.textRow('MONTO:', '$prefix RD\$ ${_formatMoney(amount)}');
+    gen.textRow('MONTO:', '$prefix ${_formatMoney(amount)}');
     gen.setTextSize();
     gen.setBold(false);
     gen.lineFeed();
@@ -1959,24 +1972,11 @@ class PrintTicketService {
   }
 
   /// Formatear dinero con comas como separador de miles y punto para decimales
+  /// Formatea un monto con la moneda activa del negocio: símbolo, decimales
+  /// y agrupación de miles según [_currency]. (Antes asumía siempre `RD$` y 2
+  /// decimales; el símbolo se prefijaba en cada call site — ahora va aquí.)
   static String _formatMoney(double amount) {
-    final parts = amount.toStringAsFixed(2).split('.');
-    final intPart = parts[0];
-    final decPart = parts[1];
-
-    // Agregar comas cada 3 dígitos
-    String formatted = '';
-    int count = 0;
-    for (int i = intPart.length - 1; i >= 0; i--) {
-      if (count == 3) {
-        formatted = ',$formatted';
-        count = 0;
-      }
-      formatted = intPart[i] + formatted;
-      count++;
-    }
-
-    return '$formatted.$decPart';
+    return _currency.formatAmount(amount);
   }
 
   /// Separador delgado (líneas simples)
@@ -2036,7 +2036,7 @@ class PrintTicketService {
       gen.textRow('Total USD:', '~ $equivLabel');
       gen.setBold(false);
       if (showRate) {
-        gen.textRow('Tasa:', 'RD\$ ${rate.toStringAsFixed(4)}');
+        gen.textRow('Tasa:', '${_currency.symbol} ${rate.toStringAsFixed(4)}');
       }
     } catch (_) {
       // Silencioso: el ticket sigue saliendo sin el bloque USD.

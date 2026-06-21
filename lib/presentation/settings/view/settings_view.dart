@@ -11,10 +11,62 @@ import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/presentation/settings/widgets/system_update_dialog.dart';
 
-class SettingsView extends ConsumerWidget {
+class SettingsView extends ConsumerStatefulWidget {
   const SettingsView({super.key, this.businessId = ''});
 
   final String businessId;
+
+  @override
+  ConsumerState<SettingsView> createState() => _SettingsViewState();
+}
+
+class _SettingsViewState extends ConsumerState<SettingsView> {
+  final TextEditingController _searchController = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  /// Normaliza para búsqueda: minúsculas y sin acentos, de modo que
+  /// "informacion" encuentre "Información" y "monedas" encuentre "Monedas".
+  static String _normalize(String input) {
+    var s = input.toLowerCase().trim();
+    const from = 'áàäâãéèëêíìïîóòöôõúùüûñç';
+    const to = 'aaaaaeeeeiiiiooooouuuunc';
+    for (var i = 0; i < from.length; i++) {
+      s = s.replaceAll(from[i], to[i]);
+    }
+    return s;
+  }
+
+  /// Filtra las secciones por el texto de búsqueda. Si el título de la
+  /// sección coincide, se muestran todos sus ítems; de lo contrario solo
+  /// los ítems cuyo título o subtítulo coincidan. Secciones sin
+  /// coincidencias se omiten.
+  List<_SettingsSection> _filterSections(List<_SettingsSection> sections) {
+    final q = _normalize(_query);
+    if (q.isEmpty) return sections;
+    final result = <_SettingsSection>[];
+    for (final section in sections) {
+      final sectionMatches = _normalize(section.title).contains(q);
+      final items = sectionMatches
+          ? section.items
+          : section.items
+                .where(
+                  (o) =>
+                      _normalize(o.title).contains(q) ||
+                      _normalize(o.subtitle).contains(q),
+                )
+                .toList();
+      if (items.isNotEmpty) {
+        result.add(_SettingsSection(title: section.title, items: items));
+      }
+    }
+    return result;
+  }
 
   Future<void> _confirmAndClearSystemCache(BuildContext context) async {
     final confirmed = await showDialog<bool>(
@@ -91,7 +143,7 @@ class SettingsView extends ConsumerWidget {
 
   /// Selector del tamaño global de la interfaz. Aplica en vivo al seleccionar
   /// (se ve el reescalado al instante) y se guarda por dispositivo.
-  Future<void> _showUiScaleDialog(BuildContext context, WidgetRef ref) async {
+  Future<void> _showUiScaleDialog(BuildContext context) async {
     UiScaleOption selected = ref.read(uiScaleProvider);
     await showDialog<void>(
       context: context,
@@ -155,9 +207,11 @@ class SettingsView extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
+    final sections = _filterSections(_buildSections(context));
+    final isSearching = _normalize(_query).isNotEmpty;
     return Scaffold(
-      backgroundColor: _SettingsSurface.background,
+      backgroundColor: Colors.white,
       appBar: AppBar(
         backgroundColor: MangoColors.white,
         foregroundColor: _SettingsSurface.foreground,
@@ -189,13 +243,28 @@ class SettingsView extends ConsumerWidget {
             businessName: ref.watch(sessionProvider).activeBusinessName,
           ),
           const SizedBox(height: 18),
-          ..._sections(context, ref),
+          _SettingsSearchField(
+            controller: _searchController,
+            onChanged: (value) => setState(() => _query = value),
+            onClear: () => setState(() {
+              _searchController.clear();
+              _query = '';
+            }),
+          ),
+          const SizedBox(height: 18),
+          if (isSearching && sections.isEmpty)
+            _SettingsNoResults(query: _query.trim())
+          else
+            ...sections.expand((section) sync* {
+              yield section;
+              yield const SizedBox(height: 28);
+            }),
         ],
       ),
     );
   }
 
-  List<Widget> _sections(BuildContext context, WidgetRef ref) {
+  List<_SettingsSection> _buildSections(BuildContext context) {
     // Feature flag de inventario: si el negocio eligió "sin inventario",
     // toda la sección desaparece del menú de Ajustes para no saturar la
     // UI con módulos que no se van a usar.
@@ -363,7 +432,10 @@ class SettingsView extends ConsumerWidget {
             subtitle: 'Configuración de menús',
             icon: Icons.menu_book_rounded,
             color: const Color(0xFFFFF0D9),
-            route: AppRoutes.menuMenus.replaceFirst(':businessId', businessId),
+            route: AppRoutes.menuMenus.replaceFirst(
+              ':businessId',
+              widget.businessId,
+            ),
           ),
           // Recetas: solo cuando inventory_mode = advanced. El modo
           // 'basic' usa cardinalidad 1:1 menu→inventory auto-creada y
@@ -489,7 +561,7 @@ class SettingsView extends ConsumerWidget {
                 'Agranda la UI para pantallas de alta densidad (Toast Flex, etc.)',
             icon: Icons.format_size_rounded,
             color: const Color(0xFFEAF0FF),
-            onTap: () => _showUiScaleDialog(context, ref),
+            onTap: () => _showUiScaleDialog(context),
           ),
           if (ref.watch(sessionProvider).isOwner)
             const _SettingsOption(
@@ -913,10 +985,108 @@ class SettingsView extends ConsumerWidget {
           ),
         ],
       ),
-    ].expand((section) sync* {
-      yield section;
-      yield const SizedBox(height: 28);
-    }).toList();
+    ];
+  }
+}
+
+class _SettingsSearchField extends StatelessWidget {
+  const _SettingsSearchField({
+    required this.controller,
+    required this.onChanged,
+    required this.onClear,
+  });
+
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasText = controller.text.isNotEmpty;
+    return Container(
+      decoration: BoxDecoration(
+        color: MangoColors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _SettingsSurface.border),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x0D1C1917),
+            blurRadius: 12,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      child: TextField(
+        controller: controller,
+        onChanged: onChanged,
+        textInputAction: TextInputAction.search,
+        style: const TextStyle(fontSize: 14, color: _SettingsSurface.foreground),
+        decoration: InputDecoration(
+          isDense: true,
+          hintText: 'Buscar en ajustes…',
+          hintStyle: const TextStyle(fontSize: 14, color: _SettingsSurface.muted),
+          prefixIcon: const Icon(
+            Icons.search_rounded,
+            size: 20,
+            color: _SettingsSurface.muted,
+          ),
+          suffixIcon: hasText
+              ? IconButton(
+                  icon: const Icon(
+                    Icons.close_rounded,
+                    size: 18,
+                    color: _SettingsSurface.muted,
+                  ),
+                  tooltip: 'Limpiar',
+                  onPressed: onClear,
+                )
+              : null,
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 14,
+            vertical: 14,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SettingsNoResults extends StatelessWidget {
+  const _SettingsNoResults({required this.query});
+
+  final String query;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 48),
+      child: Column(
+        children: [
+          const Icon(
+            Icons.search_off_rounded,
+            size: 48,
+            color: _SettingsSurface.muted,
+          ),
+          const SizedBox(height: 14),
+          Text(
+            'Sin resultados para "$query"',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              color: _SettingsSurface.foreground,
+            ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Prueba con otra palabra o revisa la ortografía.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 13, color: _SettingsSurface.muted),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -1193,7 +1363,6 @@ class _SettingsOption {
 }
 
 class _SettingsSurface {
-  static const background = Color(0xFFF8F5F1);
   static const foreground = Color(0xFF1C1917);
   static const muted = Color(0xFF78716C);
   static const border = Color(0xFFE7E0D9);

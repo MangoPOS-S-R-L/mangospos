@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import '../../../core/currency/business_currency.dart';
+import '../../../core/currency/business_currency_provider.dart';
 import '../../../domain/models/ventas_table.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_text_styles.dart';
@@ -165,12 +168,17 @@ class _TableCardState extends State<TableCard> {
               crossAxisAlignment: CrossAxisAlignment.end,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  _formatCurrency(widget.table.total!),
-                  style: AppTextStyles.tableTotal.copyWith(
-                    color: AppColors.foreground,
-                  ),
-                  overflow: TextOverflow.ellipsis,
+                Consumer(
+                  builder: (context, ref, _) {
+                    final currency = currentBusinessCurrencyOrFallback(ref);
+                    return Text(
+                      _formatCurrency(currency, widget.table.total!),
+                      style: AppTextStyles.tableTotal.copyWith(
+                        color: AppColors.foreground,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    );
+                  },
                 ),
                 if (widget.table.customerName?.trim().isNotEmpty == true) ...[
                   const SizedBox(height: 4),
@@ -351,8 +359,10 @@ class _TableCardState extends State<TableCard> {
     return widget.table.status.label;
   }
 
-  /// Formatea el monto en pesos dominicanos
-  String _formatCurrency(double amount) {
-    return 'RD\$ ${NumberFormat('#,##0', 'en_US').format(amount)}';
+  /// Formatea el monto con el símbolo de la moneda del negocio. Mantiene el
+  /// formato compacto sin decimales (estilo tarjeta de mesa); solo cambia el
+  /// símbolo según la moneda configurada.
+  String _formatCurrency(BusinessCurrency currency, double amount) {
+    return '${currency.symbol} ${NumberFormat('#,##0', 'en_US').format(amount)}';
   }
 }

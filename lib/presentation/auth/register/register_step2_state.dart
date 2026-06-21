@@ -2,7 +2,11 @@ class RegisterStep2State {
   final String businessName;
   final String branchName;
   final String businessType;
+  /// País del negocio (nombre legible). La moneda base se DERIVA de aquí
+  /// (ver CountryProfile) y se persiste en `business_settings.currency_code`
+  /// al crear el negocio (modo legacy: country_code no se persiste aún).
   final String country;
+
   final String address;
   final String phone;
   final String subdomain;

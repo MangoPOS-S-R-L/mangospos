@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import 'package:mangopos/app/router/routes.dart';
+import 'package:mangopos/core/currency/business_currency.dart';
+import 'package:mangopos/core/currency/business_currency_provider.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_text_styles.dart';
 import 'package:mangopos/presentation/sales/state/delivery_state.dart';
@@ -406,12 +408,18 @@ class _DeliveryOrderCardState extends State<_DeliveryOrderCard> {
                           crossAxisAlignment: CrossAxisAlignment.end,
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Text(
-                              _formatCurrency(order.total),
-                              style: AppTextStyles.tableTotal.copyWith(
-                                color: AppColors.foreground,
-                              ),
-                              overflow: TextOverflow.ellipsis,
+                            Consumer(
+                              builder: (context, ref, _) {
+                                final currency =
+                                    currentBusinessCurrencyOrFallback(ref);
+                                return Text(
+                                  _formatCurrency(currency, order.total),
+                                  style: AppTextStyles.tableTotal.copyWith(
+                                    color: AppColors.foreground,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                );
+                              },
                             ),
                             if (order.customerName?.trim().isNotEmpty ==
                                 true) ...[
@@ -550,7 +558,7 @@ class _DeliveryOrderCardState extends State<_DeliveryOrderCard> {
     }
   }
 
-  String _formatCurrency(double amount) {
-    return 'RD\$ ${NumberFormat('#,##0', 'en_US').format(amount)}';
+  String _formatCurrency(BusinessCurrency currency, double amount) {
+    return '${currency.symbol} ${NumberFormat('#,##0', 'en_US').format(amount)}';
   }
 }

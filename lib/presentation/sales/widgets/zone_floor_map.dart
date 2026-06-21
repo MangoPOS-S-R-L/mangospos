@@ -1,8 +1,11 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+import '../../../core/currency/business_currency.dart';
+import '../../../core/currency/business_currency_provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../data/models/dining_table.dart';
 import '../../../data/models/table_status.dart';
@@ -326,7 +329,8 @@ class _TableCard extends StatelessWidget {
     required this.isCircle,
   });
 
-  String _money(double v) => 'RD\$ ${NumberFormat('#,##0', 'en_US').format(v)}';
+  String _money(BusinessCurrency currency, double v) =>
+      '${currency.symbol} ${NumberFormat('#,##0', 'en_US').format(v)}';
 
   @override
   Widget build(BuildContext context) {
@@ -436,15 +440,20 @@ class _TableCard extends StatelessWidget {
                   ],
                 ),
                 if (total != null)
-                  Text(
-                    _money(total),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.foreground,
-                    ),
+                  Consumer(
+                    builder: (context, ref, _) {
+                      final currency = currentBusinessCurrencyOrFallback(ref);
+                      return Text(
+                        _money(currency, total),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.foreground,
+                        ),
+                      );
+                    },
                   ),
               ],
             ],

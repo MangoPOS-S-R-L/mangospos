@@ -25,6 +25,7 @@ import '../billing/widgets/billing_guard.dart';
 import '../onboarding/pending_approval_guard.dart';
 import '../inventory/viewmodel/expiring_lots_badge_provider.dart';
 import '../../core/business/business_features_provider.dart';
+import '../../core/business/business_modules_provider.dart';
 import '../inventory/viewmodel/low_stock_badge_provider.dart';
 import '../sales/viewmodel/sales_viewmodel.dart';
 import 'mobile_shell.dart';
@@ -151,6 +152,7 @@ class _MainShellState extends ConsumerState<MainShell> {
                         final disabledRoutes = disabledAsync.valueOrNull ??
                             const <String>[];
                         final features = ref.watchBusinessFeatures();
+                        final modules = ref.watchEnabledModules();
                         final visible = kPrimaryDestinations.where((d) {
                           final code = d.permissionCode;
                           final hasPerm =
@@ -158,7 +160,9 @@ class _MainShellState extends ConsumerState<MainShell> {
                           final hidden = disabledRoutes.contains(d.route);
                           final featureOk =
                               isDestinationFeatureEnabled(d, features);
-                          return hasPerm && !hidden && featureOk;
+                          final moduleOk =
+                              isDestinationModuleEnabled(d, modules);
+                          return hasPerm && !hidden && featureOk && moduleOk;
                         }).toList(growable: false);
                         return Row(
                           mainAxisSize: MainAxisSize.min,

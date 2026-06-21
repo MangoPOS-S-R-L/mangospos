@@ -108,7 +108,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
     final padding = isMobile ? 12.0 : 24.0;
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: Colors.white,
       body: Padding(
         padding: EdgeInsets.all(padding),
         child: Column(

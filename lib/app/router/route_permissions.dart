@@ -29,6 +29,9 @@ const Map<String, String> routePermissions = <String, String>{
   '/kitchen': 'kds.acceso',
   '/cocina': 'kds.acceso',
 
+  // --- Reservas (add-on; el módulo además se gatea por business_modules) ---
+  '/reservations': 'reservas.acceso',
+
   // --- Clientes ---
   '/customers': 'clientes.ver',
   '/clientes': 'clientes.ver',

@@ -1,6 +1,8 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/currency/business_currency.dart';
+import '../../core/currency/business_currency_provider.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/core/utils/app_time.dart';
@@ -135,6 +137,7 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
                         child: _ActiveTablesWidget(
                           viewModel: vm,
                           isWide: isDesktopXL,
+                          currency: currentBusinessCurrencyOrFallback(ref),
                         ),
                       ),
                     ],
@@ -147,7 +150,11 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
                       SizedBox(height: gap),
                       _SalesChart(viewModel: vm, isMobile: isMobile),
                       SizedBox(height: gap),
-                      _ActiveTablesWidget(viewModel: vm, isWide: isDesktopXL),
+                      _ActiveTablesWidget(
+                        viewModel: vm,
+                        isWide: isDesktopXL,
+                        currency: currentBusinessCurrencyOrFallback(ref),
+                      ),
                     ],
                   ),
 
@@ -614,11 +621,11 @@ class _QuickActionsSection extends StatelessWidget {
                 '/reportes',
               ),
               (
-                Icons.campaign_outlined,
-                'Publicidad',
-                'Promociones activas',
+                Icons.event_seat,
+                'Reservas',
+                'Agenda de mesas',
                 AppColors.primary,
-                '/ajustes/publicidad',
+                AppRoutes.reservations,
               ),
             ];
             final item = items[index];
@@ -1142,7 +1149,12 @@ class _SalesChart extends StatelessWidget {
 class _ActiveTablesWidget extends StatelessWidget {
   final CashierViewModel viewModel;
   final bool isWide;
-  const _ActiveTablesWidget({required this.viewModel, this.isWide = false});
+  final BusinessCurrency currency;
+  const _ActiveTablesWidget({
+    required this.viewModel,
+    required this.currency,
+    this.isWide = false,
+  });
 
   String _formatDuration(Duration duration) {
     final hours = duration.inHours;
@@ -1254,7 +1266,7 @@ class _ActiveTablesWidget extends StatelessWidget {
           final s = visibleSessions[index];
           final total = viewModel.sessionTotals[s.id] ?? 0.0;
           final formattedTotal =
-              'RD\$ ${NumberFormat('#,##0', 'en_US').format(total)}';
+              '${currency.symbol} ${NumberFormat('#,##0', 'en_US').format(total)}';
           final duration = AppTime.nowAst().difference(
             AppTime.astFromInstant(s.openedAt),
           );
@@ -1283,7 +1295,7 @@ class _ActiveTablesWidget extends StatelessWidget {
                 ),
               ),
               formattedTotal:
-                  'RD\$ ${NumberFormat('#,##0', 'en_US').format(viewModel.sessionTotals[visibleSessions[i].id] ?? 0.0)}',
+                  '${currency.symbol} ${NumberFormat('#,##0', 'en_US').format(viewModel.sessionTotals[visibleSessions[i].id] ?? 0.0)}',
               onTap: () => context.go('/sales'),
             ),
             if (i < visibleSessions.length - 1) const SizedBox(height: 16),

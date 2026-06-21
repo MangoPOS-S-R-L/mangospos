@@ -47,17 +47,13 @@ class MachineId {
   }
 
   static Future<String?> _readMacOS() async {
-    // ioreg -rd1 -c IOPlatformExpertDevice imprime el bloque del device
-    // con el atributo IOPlatformUUID. Usamos awk para extraerlo.
-    final result = await Process.run(
-      '/bin/sh',
-      [
-        '-c',
-        "ioreg -rd1 -c IOPlatformExpertDevice | awk -F'\"' '/IOPlatformUUID/ {print \$4; exit}'",
-      ],
-    ).timeout(const Duration(seconds: 4));
-    if (result.exitCode != 0) return null;
-    return _normalize(result.stdout.toString());
+    // En la Mac App Store la app corre bajo App Sandbox, que deniega
+    // posix_spawn de procesos externos (`/bin/sh`, `ioreg`). Intentarlo solo
+    // genera una violación de sandbox en los logs y termina retornando null
+    // igual. Por eso no leemos el IOPlatformUUID por hardware: el caller
+    // (DeviceIdentity) cae a un UUID v4 persistido en SharedPreferences, que
+    // es estable mientras no se reinstale.
+    return null;
   }
 
   static Future<String?> _readWindows() async {
