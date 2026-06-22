@@ -33,6 +33,16 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- Foreground Service que conserva el proceso (y con él la conexión
+             GATT BLE de flutter_blue_plus) vivo en background. No posee el
+             socket: solo mantiene el proceso priorizado y muestra la
+             notificación persistente. Lo arranca/detiene el lado Dart vía el
+             channel mangopos/printer_fgs cuando hay ≥1 impresora BT activa. -->
+        <service
+            android:name=".PrinterForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
     </application>
 
     <!-- Network -->
@@ -50,12 +60,23 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
 
     <!-- Bluetooth (classic + BLE) -->
-    <uses-permission android:name="android.permission.BLUETOOTH"/>
-    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"/>
+    <!-- Legacy (≤ API 30): a partir de API 31 los reemplazan BLUETOOTH_SCAN/
+         CONNECT, así que se acotan con maxSdkVersion para no pedir permisos
+         redundantes en Android 12+. -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30"/>
     <!-- Android 12+ (API 31) -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation"/>
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE"/>
+
+    <!-- Foreground Service para mantener viva la conexión BLE con la impresora
+         (PRD BT F1). El proceso debe seguir vivo con la pantalla apagada / app
+         en background para que el socket GATT persista y reconecte en segundos.
+         FOREGROUND_SERVICE_CONNECTED_DEVICE es obligatorio en API 34+ para el
+         tipo `connectedDevice`. Ver PrinterForegroundService.kt. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
 
     <!-- Location (required for BLE scanning on Android < 12) -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>

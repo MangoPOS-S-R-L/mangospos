@@ -13,6 +13,7 @@ import 'package:mangopos/core/offline/offline_refreshers.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/presentation/shell/offline_logout_guard.dart';
 import 'package:mangopos/core/printing/printer_heartbeat_provider.dart';
+import 'package:mangopos/core/printing/ble_printer_connection_provider.dart';
 import 'package:mangopos/core/services/fullscreen/fullscreen_service.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
@@ -194,6 +195,11 @@ class _MainShellState extends ConsumerState<MainShell> {
                       // Verde = todas OK, amarillo = ≥1 offline, gris
                       // = aún sondeando o sin impresoras configuradas.
                       const _PrinterHeartbeatBadge(),
+
+                      // Badge de conexión BLE persistente (impresora BT). Solo
+                      // aparece cuando hay impresoras BT: azul=conectada,
+                      // amarillo=reconectando.
+                      const _BlePrinterBadge(),
 
                       // Vencimientos y stock bajo se movieron al menú del
                       // usuario (avatar) para aligerar el header.
@@ -1436,6 +1442,46 @@ class _UserMenuTile extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Badge del estado de la conexión BLE persistente con impresoras Bluetooth
+/// (PRD BT — observabilidad). Se oculta cuando no hay impresoras BT
+/// persistentes (idle); azul = conectada, amarillo = reconectando.
+class _BlePrinterBadge extends ConsumerWidget {
+  const _BlePrinterBadge();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final overall = ref.watch(blePrinterOverallProvider);
+    if (overall == BlePrinterOverall.idle) return const SizedBox.shrink();
+
+    final bool connected = overall == BlePrinterOverall.connected;
+    final Color bg =
+        connected ? const Color(0xFFDBEAFE) : const Color(0xFFFEF3C7);
+    final Color fg =
+        connected ? const Color(0xFF1E40AF) : const Color(0xFFB45309);
+    final IconData icon =
+        connected ? Icons.bluetooth_connected : Icons.bluetooth_searching;
+    final String tooltip = connected
+        ? 'Impresora Bluetooth conectada'
+        : 'Reconectando impresora Bluetooth…';
+
+    return Padding(
+      padding: const EdgeInsets.only(left: 8),
+      child: Tooltip(
+        message: tooltip,
+        waitDuration: const Duration(milliseconds: 400),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(icon, size: 18, color: fg),
+        ),
       ),
     );
   }

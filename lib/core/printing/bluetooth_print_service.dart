@@ -31,6 +31,59 @@ class BluetoothPrintService {
     debugPrint('[BluetoothPrint] $msg');
   }
 
+  /// Selecciona la characteristic de escritura usando el orden probado en
+  /// campo, compartido por [printRaw] (conexión per-job) y por el
+  /// `BlePrinterConnectionManager` (conexión persistente):
+  ///   1. Match priorizado contra [_knownServiceUuids].
+  ///   2. Fallback a cualquier `writeWithoutResponse` (lo que usan casi todas
+  ///      las térmicas BLE).
+  ///   3. Fallback a cualquier `write`.
+  /// Ignora las UUID en [_bannedCharacteristicUuids]. Devuelve `null` si la
+  /// impresora no expone ningún canal de escritura compatible.
+  static ({BluetoothCharacteristic char, String matchedVia})?
+      selectWriteCharacteristic(List<BluetoothService> services) {
+    // 1. Pase priorizado: matches contra _knownServiceUuids en orden.
+    for (final svcUuid in _knownServiceUuids) {
+      for (final svc in services) {
+        if (svc.uuid.str.toLowerCase() != svcUuid) continue;
+        for (final c in svc.characteristics) {
+          if (_bannedCharacteristicUuids.contains(c.uuid.str.toLowerCase())) {
+            continue;
+          }
+          if (c.properties.writeWithoutResponse || c.properties.write) {
+            return (char: c, matchedVia: 'known_service:$svcUuid');
+          }
+        }
+      }
+    }
+
+    // 2. Fallback: cualquier characteristic con writeWithoutResponse.
+    for (final svc in services) {
+      for (final c in svc.characteristics) {
+        if (_bannedCharacteristicUuids.contains(c.uuid.str.toLowerCase())) {
+          continue;
+        }
+        if (c.properties.writeWithoutResponse) {
+          return (char: c, matchedVia: 'fallback_wnr:${svc.uuid.str}');
+        }
+      }
+    }
+
+    // 3. Fallback: cualquier characteristic con write.
+    for (final svc in services) {
+      for (final c in svc.characteristics) {
+        if (_bannedCharacteristicUuids.contains(c.uuid.str.toLowerCase())) {
+          continue;
+        }
+        if (c.properties.write) {
+          return (char: c, matchedVia: 'fallback_w:${svc.uuid.str}');
+        }
+      }
+    }
+
+    return null;
+  }
+
   static Future<void> printRaw({
     required String remoteId,
     required List<int> data,
@@ -85,71 +138,17 @@ class BluetoothPrintService {
         _log('  svc ${svc.uuid.str} -> [$chars]');
       }
 
-      BluetoothCharacteristic? writeChar;
-      String? matchedVia;
-
-      // 1. Pase priorizado: matches contra _knownServiceUuids en orden.
-      for (final svcUuid in _knownServiceUuids) {
-        for (final svc in services) {
-          if (svc.uuid.str.toLowerCase() != svcUuid) continue;
-          for (final c in svc.characteristics) {
-            if (_bannedCharacteristicUuids.contains(c.uuid.str.toLowerCase())) {
-              continue;
-            }
-            if (c.properties.writeWithoutResponse || c.properties.write) {
-              writeChar = c;
-              matchedVia = 'known_service:$svcUuid';
-              break;
-            }
-          }
-          if (writeChar != null) break;
-        }
-        if (writeChar != null) break;
-      }
-
-      // 2. Fallback: cualquier characteristic con write, ignorando los
-      //    listados como banned. Preferimos writeWithoutResponse cuando
-      //    está disponible — es lo que casi todas las térmicas BLE usan.
-      if (writeChar == null) {
-        for (final svc in services) {
-          for (final c in svc.characteristics) {
-            if (_bannedCharacteristicUuids.contains(c.uuid.str.toLowerCase())) {
-              continue;
-            }
-            if (c.properties.writeWithoutResponse) {
-              writeChar = c;
-              matchedVia = 'fallback_wnr:${svc.uuid.str}';
-              break;
-            }
-          }
-          if (writeChar != null) break;
-        }
-      }
-      if (writeChar == null) {
-        for (final svc in services) {
-          for (final c in svc.characteristics) {
-            if (_bannedCharacteristicUuids.contains(c.uuid.str.toLowerCase())) {
-              continue;
-            }
-            if (c.properties.write) {
-              writeChar = c;
-              matchedVia = 'fallback_w:${svc.uuid.str}';
-              break;
-            }
-          }
-          if (writeChar != null) break;
-        }
-      }
-
-      if (writeChar == null) {
+      final selection = selectWriteCharacteristic(services);
+      if (selection == null) {
         _log('NO writable characteristic found. Aborting.');
         throw Exception(
           'La impresora Bluetooth no expone un canal de escritura compatible.',
         );
       }
+      final writeChar = selection.char;
 
       _log(
-        'selected char ${writeChar.uuid.str} via $matchedVia '
+        'selected char ${writeChar.uuid.str} via ${selection.matchedVia} '
         '(svc ${writeChar.serviceUuid.str})',
       );
 
